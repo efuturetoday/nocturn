@@ -1,0 +1,9 @@
+# secrets — never commit
+.env
+.env.*
+!.env.example
+
+# build output
+/nocturn
+/nocturnd
+*.test
