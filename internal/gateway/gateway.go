@@ -100,7 +100,7 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 // leak-scan / credential-inject / execute) cohesive while making a forgotten or
 // out-of-order gate unrepresentable. A free function, not a method, so it can be
 // generic over the effect's result type.
-func Do[T any](g *Guard, ctx context.Context, call capability.Call, intent string, effect func() (T, error)) (T, error) {
+func Do[T any](ctx context.Context, g *Guard, call capability.Call, intent string, effect func() (T, error)) (T, error) {
 	if err := g.Authorize(ctx, call, intent); err != nil {
 		var zero T
 		return zero, err

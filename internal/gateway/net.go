@@ -79,7 +79,7 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	// credential injection, and the request itself are unreachable on a denied
 	// call. Keeping them inside the closure makes the guarded pipeline cohesive
 	// and a bypass impossible by construction.
-	return Do(n.Guard, ctx, call, method+" "+req.URL, func() ([]byte, error) {
+	return Do(ctx, n.Guard, call, method+" "+req.URL, func() ([]byte, error) {
 		// Egress leak scan on the guest-built request (URL + headers + body), BEFORE
 		// the legitimate credential is stamped in below — so the host's own injected
 		// bearer is never flagged.
@@ -172,7 +172,7 @@ func rejectManualCredentials(req secret.Request) error {
 // no god-object, just a small method with its own dependency (a resolver).
 func (n *Net) Resolve(ctx context.Context, host string) ([]string, error) {
 	call := capability.Call{Capability: "dns.resolve", Attrs: map[string]string{"host": host}}
-	return Do(n.Guard, ctx, call, "resolve "+host, func() ([]string, error) {
+	return Do(ctx, n.Guard, call, "resolve "+host, func() ([]string, error) {
 		resolver := n.Resolver
 		if resolver == nil {
 			resolver = net.DefaultResolver

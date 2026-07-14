@@ -407,7 +407,7 @@ func TestDo_AllowedRunsEffect(t *testing.T) {
 	}}}
 
 	ran := false
-	out, err := gateway.Do(g, context.Background(), probeCall, "probe example.com", func() (string, error) {
+	out, err := gateway.Do(context.Background(), g, probeCall, "probe example.com", func() (string, error) {
 		ran = true
 		return "effect-ran", nil
 	})
@@ -425,7 +425,7 @@ func TestDo_DeniedNeverRunsEffect(t *testing.T) {
 	g := &gateway.Guard{Policy: capability.Policy{}} // no rule matches → deny
 
 	ran := false
-	out, err := gateway.Do(g, context.Background(), probeCall, "probe example.com", func() (string, error) {
+	out, err := gateway.Do(context.Background(), g, probeCall, "probe example.com", func() (string, error) {
 		ran = true
 		return "effect-ran", nil
 	})
