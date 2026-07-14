@@ -60,7 +60,7 @@ func main() {
 
 func chatCmd(args []string) error {
 	fs := flag.NewFlagSet("chat", flag.ExitOnError)
-	allowFetch := fs.Bool("allow-fetch", false, "auto-allow net.fetch (default: require approval)")
+	allowFetch := fs.Bool("allow-fetch", false, "auto-allow net.read reads (writes always require approval)")
 	useNtfy := fs.Bool("ntfy", false, "approve out of band via ntfy instead of this terminal")
 	ntfyURL := fs.String("ntfy-url", "https://ntfy.sh", "ntfy server base URL")
 	reqTopic := fs.String("req-topic", "", "ntfy topic for approval requests")
@@ -99,7 +99,9 @@ func chatCmd(args []string) error {
 	netCap := &gateway.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
-				{Capability: "net.fetch", HostGlob: capability.Wildcard, Effect: effect, Epoch: capability.Permanent},
+				{Capability: "http.read", HostGlob: capability.Wildcard, Effect: effect, Epoch: capability.Permanent},
+				// writes always require approval — never auto-allowed by --allow-fetch.
+				{Capability: "http.write", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 				{Capability: "dns.resolve", HostGlob: capability.Wildcard, Effect: effect, Epoch: capability.Permanent},
 			}},
 			Approvals: engine,

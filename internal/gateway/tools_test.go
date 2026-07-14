@@ -29,7 +29,7 @@ func TestTools_ExposesCapabilitiesWithSchemas(t *testing.T) {
 	n := &gateway.Net{Guard: &gateway.Guard{Policy: capability.Policy{}}}
 	tools := n.Tools()
 
-	for _, name := range []string{"net.fetch", "dns.resolve"} {
+	for _, name := range []string{"http.read", "http.write", "dns.resolve"} {
 		tl, ok := toolByName(tools, name)
 		if !ok {
 			t.Fatalf("Tools() is missing %q", name)
@@ -44,8 +44,8 @@ func TestTools_ExposesCapabilitiesWithSchemas(t *testing.T) {
 }
 
 func TestFetchTool_ValidatesArguments(t *testing.T) {
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}}
-	ft, _ := toolByName(n.Tools(), "net.fetch")
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
+	ft, _ := toolByName(n.Tools(), "http.read")
 
 	if _, err := ft.Invoke(context.Background(), `not json`); err == nil {
 		t.Fatal("malformed JSON args must error")
@@ -61,8 +61,8 @@ func TestFetchTool_Invoke_ReturnsBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}}
-	ft, _ := toolByName(n.Tools(), "net.fetch")
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
+	ft, _ := toolByName(n.Tools(), "http.read")
 
 	out, err := ft.Invoke(context.Background(), fmt.Sprintf(`{"url":%q}`, srv.URL))
 	if err != nil {

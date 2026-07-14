@@ -18,15 +18,23 @@ import (
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
-func allowFetch(hostGlob string) capability.Policy {
+func allowRead(hostGlob string) capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "net.fetch", HostGlob: hostGlob, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Capability: "http.read", HostGlob: hostGlob, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
 }
 
-func askFetch() capability.Policy {
+func askRead() capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "net.fetch", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+		{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+	}}
+}
+
+// allowReadWrite permits both http.read and http.write (for write/POST tests).
+func allowReadWrite() capability.Policy {
+	return capability.Policy{Rules: []capability.Rule{
+		{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Capability: "http.write", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
 }
 
@@ -72,7 +80,7 @@ func TestFetch_Allow_ReturnsBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}}
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
 	body, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
@@ -104,7 +112,7 @@ func TestFetch_HostAllowlist_DeniesOtherHost(t *testing.T) {
 	defer srv.Close()
 
 	// Only example.com is allowed; the test server's host is 127.0.0.1.
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch("example.com")}}
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead("example.com")}}
 	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("fetch to non-allowlisted host: err = %v, want ErrDenied", err)
@@ -117,7 +125,7 @@ func TestFetch_Ask_ApprovePerformsRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: askFetch(), Approvals: askEngine(true), TTL: time.Second}}
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: askRead(), Approvals: askEngine(true), TTL: time.Second}}
 	body, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
 		t.Fatalf("approved fetch: %v", err)
@@ -134,7 +142,7 @@ func TestFetch_Ask_DenyBlocksRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: askFetch(), Approvals: askEngine(false), TTL: time.Second}}
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: askRead(), Approvals: askEngine(false), TTL: time.Second}}
 	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
@@ -159,7 +167,7 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 
 	epochs := capability.NewEpochRegistry()
 	epoch := epochs.Open()
-	g := &gateway.Net{Guard: &gateway.Guard{Policy: askFetch(), Approvals: engine, Epochs: epochs, TTL: time.Second}}
+	g := &gateway.Net{Guard: &gateway.Guard{Policy: askRead(), Approvals: engine, Epochs: epochs, TTL: time.Second}}
 	ctx := capability.WithEpoch(context.Background(), epoch)
 
 	// first call: asked, ApprovedSession granted for this host, bound to epoch
@@ -206,10 +214,10 @@ func TestFetch_InjectsCredentialForBoundHost(t *testing.T) {
 	v := secret.NewStore()
 	v.Set("ms_graph", []byte("abc123"))
 	in := secret.NewInjector(v, secret.Binding{
-		Secret: "ms_graph", Host: hostFromURL(t, srv.URL), Header: "Authorization", Prefix: "Bearer ",
+		Secret: "ms_graph", Capability: "http.read", Host: hostFromURL(t, srv.URL), Header: "Authorization", Prefix: "Bearer ",
 	})
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}, Credentials: in}
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Credentials: in}
 	if _, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -230,10 +238,10 @@ func TestFetch_NoInjectForOtherHost(t *testing.T) {
 	v := secret.NewStore()
 	v.Set("ms_graph", []byte("abc123"))
 	in := secret.NewInjector(v, secret.Binding{
-		Secret: "ms_graph", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+		Secret: "ms_graph", Capability: "http.read", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
 	})
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}, Credentials: in}
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Credentials: in}
 	if _, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -249,7 +257,7 @@ func TestFetch_ManualCredential_Rejected(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
 	defer srv.Close()
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}}
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
 
 	u, _ := url.Parse(srv.URL)
 	if _, err := n.Fetch(context.Background(), secret.Request{URL: "http://user:pass@" + u.Host + "/"}); !errors.Is(err, gateway.ErrManualCredential) {
@@ -276,7 +284,7 @@ func TestFetch_PostSendsBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}}
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowReadWrite()}}
 	_, err := n.Fetch(context.Background(), secret.Request{
 		Method: "POST", URL: srv.URL, Body: []byte(`{"x":1}`),
 		Headers: map[string]string{"Content-Type": "application/json"},
@@ -286,6 +294,23 @@ func TestFetch_PostSendsBody(t *testing.T) {
 	}
 	if gotMethod != "POST" || gotCT != "application/json" || gotBody != `{"x":1}` {
 		t.Fatalf("server saw method=%q ct=%q body=%q", gotMethod, gotCT, gotBody)
+	}
+}
+
+// A write (POST → http.write) is gated separately: with only http.read allowed,
+// it is denied by default and never reaches the network.
+func TestFetch_Write_DeniedWithoutWriteRule(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
+	defer srv.Close()
+
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
+	_, err := n.Fetch(context.Background(), secret.Request{Method: "POST", URL: srv.URL, Body: []byte("x")})
+	if !errors.Is(err, gateway.ErrDenied) {
+		t.Fatalf("err = %v, want ErrDenied", err)
+	}
+	if hit {
+		t.Fatal("a write with no http.write rule must not reach the network")
 	}
 }
 
@@ -304,16 +329,16 @@ func TestFetchTool_Post(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}}
-	var fetch brain.Tool
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowReadWrite()}}
+	var write brain.Tool
 	for _, tl := range n.Tools() {
-		if tl.Name == "net.fetch" {
-			fetch = tl
+		if tl.Name == "http.write" {
+			write = tl
 		}
 	}
 
 	args := fmt.Sprintf(`{"url":%q,"method":"post","body":"hi","content_type":"text/plain"}`, srv.URL)
-	if _, err := fetch.Invoke(context.Background(), args); err != nil {
+	if _, err := write.Invoke(context.Background(), args); err != nil {
 		t.Fatalf("invoke: %v", err)
 	}
 	if gotMethod != "POST" || gotCT != "text/plain" || gotBody != "hi" {
@@ -321,7 +346,7 @@ func TestFetchTool_Post(t *testing.T) {
 	}
 
 	hit = false
-	if _, err := fetch.Invoke(context.Background(), fmt.Sprintf(`{"url":%q,"method":"TRACE"}`, srv.URL)); err == nil {
+	if _, err := write.Invoke(context.Background(), fmt.Sprintf(`{"url":%q,"method":"TRACE"}`, srv.URL)); err == nil {
 		t.Fatal("expected error for unsupported method")
 	}
 	if hit {

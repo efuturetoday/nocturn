@@ -120,7 +120,7 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 	epochs := capability.NewEpochRegistry()
 	guard := &gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
-			{Capability: "net.fetch", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+			{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 		}},
 		Approvals: engine,
 		Epochs:    epochs,

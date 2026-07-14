@@ -127,9 +127,9 @@ getestet, bevor die nächste kam:
 |---|---|
 | `host` | wazero-Host. `Run` (Zero-Authority), `RunWithLog` (ABI-Fenster), `RunWithBrokeredLog`, `RunWithHITLLog`. Test-Gäste in `testdata/` (`probe` Go-wasip1, `logprobe` handgeschriebenes WAT). |
 | `capability` | Reine Entscheidung. `Policy.Evaluate(Call, Env)` (deny>ask>allow, fail-closed). `EpochRegistry`, `RateLimiter`, `Window`. Konstante `Wildcard`, `Permanent`. |
-| `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Injector`/`Binding`/`Request` (host-owned, **domain-bound** Credential-Injektion — Cookie-Modell: injiziert nur bei Ziel-Host-Match). |
+| `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Injector`/`Binding`/`Request` (host-owned Credential-Injektion, **capability + host scoped** — Cookie-Modell: injiziert nur wenn beide matchen; `capMatches`/`hostMatches`). |
 | `hitl` | `Engine` (Request/Resolve, queue-then-execute), HMAC-`token`; Sub-Paket `hitl/ntfy` (`Publisher` push + `Listener` subscribe). |
-| `gateway` | `Guard.Authorize` (die eine Autorisierungs-Pipeline) + `Net` (Capability-Gruppe: `Fetch` — Methoden GET/POST/…, host-owned domain-bound Credential-Injektion, Manual-Cred-Reject; `Resolve`). `ErrDenied`, `ErrManualCredential`. |
+| `gateway` | `Guard.Authorize` (die eine Autorisierungs-Pipeline) + `Net` (Capability-Gruppe). Tools: **`http.read`** (GET/HEAD) / **`http.write`** (POST/PUT/PATCH/DELETE) — Tool = Capability = Autoritätseinheit (`capabilityForMethod`); `dns.resolve`. Capability+host-scoped Credential-Injektion, Manual-Cred-Reject. `ErrDenied`, `ErrManualCredential`. |
 | `brain` | Agentischer Loop. `Model`-Interface (Port), `Tool`/`ToolSpec`, `Run`, `OnToken` (Streaming). `Conversation` = reine Message-History (`NewConversation`/`Send`). |
 | `llm` | OpenAI-kompatibler Adapter (go-openai), native `tool_calls`, SSE-Streaming. |
 | `agent` | **Session-Lifecycle-Owner.** `Session` bündelt `brain.Conversation` + geteilten `gateway.Guard` + geteilte `EpochRegistry` + die aktuelle Epoche. `Ask` stempelt die Epoche via `capability.WithEpoch` in den ctx (→ Guard bindet Session-Grants daran); `Reset` schließt die Epoche (widerruft Grants) + öffnet frische Epoche + frische Conversation; `Close` schließt die Epoche. |

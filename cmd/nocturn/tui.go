@@ -384,7 +384,8 @@ func tuiCmd(_ []string) error {
 	netCap := &gateway.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
-				{Capability: "net.fetch", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Capability: "http.write", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 				{Capability: "dns.resolve", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 			}},
 			Approvals: engine,

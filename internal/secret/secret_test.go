@@ -33,19 +33,19 @@ func TestGuestView_CannotReadValue(t *testing.T) {
 	// There is intentionally no guest.Get(...) — presence is the only read.
 }
 
-// Host-owned, domain-bound injection: the secret is stamped into the outgoing
-// request at the border (with prefix) ONLY when the destination host matches the
-// binding — the guest never handled the token and never chose it.
-func TestInjector_StampsMatchingHostAtBorder(t *testing.T) {
+// Host-owned, capability+host-scoped injection: the secret is stamped into the
+// outgoing request at the border (with prefix) ONLY when BOTH the capability and
+// the destination host match — the guest never handled the token or chose it.
+func TestInjector_StampsMatchingAtBorder(t *testing.T) {
 	s := secret.NewStore()
 	s.Set("ms_graph", []byte("abc123"))
 	in := secret.NewInjector(s, secret.Binding{
-		Secret: "ms_graph", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+		Secret: "ms_graph", Capability: "http.read", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
 	})
 
 	// The guest built this request by URL only — no credential in sight.
 	req := &secret.Request{Method: "GET", URL: "https://graph.microsoft.com/v1.0/me"}
-	names, err := in.InjectMatching(req, "graph.microsoft.com")
+	names, err := in.InjectMatching(req, "http.read", "graph.microsoft.com")
 	if err != nil {
 		t.Fatalf("inject failed: %v", err)
 	}
@@ -63,11 +63,11 @@ func TestInjector_NonMatchingHost_NoInjection(t *testing.T) {
 	s := secret.NewStore()
 	s.Set("ms_graph", []byte("abc123"))
 	in := secret.NewInjector(s, secret.Binding{
-		Secret: "ms_graph", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+		Secret: "ms_graph", Capability: "*", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
 	})
 
 	req := &secret.Request{URL: "https://evil.example.com/"}
-	names, err := in.InjectMatching(req, "evil.example.com")
+	names, err := in.InjectMatching(req, "http.read", "evil.example.com")
 	if err != nil {
 		t.Fatalf("inject: %v", err)
 	}
@@ -79,18 +79,40 @@ func TestInjector_NonMatchingHost_NoInjection(t *testing.T) {
 	}
 }
 
-// A "*.suffix" binding matches sub-domains but not the bare domain.
+// A binding scoped to one capability does not ride on another, even to the right
+// host: a read-only token must not be sent on a write.
+func TestInjector_WrongCapability_NoInjection(t *testing.T) {
+	s := secret.NewStore()
+	s.Set("ms_graph", []byte("abc123"))
+	in := secret.NewInjector(s, secret.Binding{
+		Secret: "ms_graph", Capability: "http.read", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+	})
+
+	req := &secret.Request{}
+	names, err := in.InjectMatching(req, "http.write", "graph.microsoft.com")
+	if err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if _, present := req.Headers["Authorization"]; present {
+		t.Fatal("a credential bound to http.read must not ride on an http.write")
+	}
+	if names != nil {
+		t.Fatalf("injected = %v, want none", names)
+	}
+}
+
+// A "*.suffix" host binding matches sub-domains but not the bare domain.
 func TestInjector_WildcardSuffix(t *testing.T) {
 	s := secret.NewStore()
 	s.Set("k", []byte("v"))
-	in := secret.NewInjector(s, secret.Binding{Secret: "k", Host: "*.example.com", Header: "X-Token"})
+	in := secret.NewInjector(s, secret.Binding{Secret: "k", Capability: "*", Host: "*.example.com", Header: "X-Token"})
 
 	sub := &secret.Request{}
-	if _, err := in.InjectMatching(sub, "a.example.com"); err != nil || sub.Headers["X-Token"] != "v" {
+	if _, err := in.InjectMatching(sub, "http.read", "a.example.com"); err != nil || sub.Headers["X-Token"] != "v" {
 		t.Fatalf("sub-domain should match: err=%v header=%q", err, sub.Headers["X-Token"])
 	}
 	bare := &secret.Request{}
-	if _, err := in.InjectMatching(bare, "example.com"); err != nil {
+	if _, err := in.InjectMatching(bare, "http.read", "example.com"); err != nil {
 		t.Fatalf("bare: %v", err)
 	}
 	if _, present := bare.Headers["X-Token"]; present {
@@ -98,14 +120,14 @@ func TestInjector_WildcardSuffix(t *testing.T) {
 	}
 }
 
-// Fail closed: a binding that matches the host but whose secret is missing errors
-// instead of sending an unauthenticated request.
+// Fail closed: a binding that matches but whose secret is missing errors instead
+// of sending an unauthenticated request.
 func TestInjector_MissingSecret_FailsClosed(t *testing.T) {
 	s := secret.NewStore()
-	in := secret.NewInjector(s, secret.Binding{Secret: "absent", Host: "api.example.com", Header: "Authorization"})
+	in := secret.NewInjector(s, secret.Binding{Secret: "absent", Capability: "*", Host: "api.example.com", Header: "Authorization"})
 
 	req := &secret.Request{URL: "https://api.example.com"}
-	if _, err := in.InjectMatching(req, "api.example.com"); !errors.Is(err, secret.ErrNotFound) {
+	if _, err := in.InjectMatching(req, "http.read", "api.example.com"); !errors.Is(err, secret.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 	if _, present := req.Headers["Authorization"]; present {

@@ -68,9 +68,11 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	}
 	method = strings.ToUpper(method)
 
-	// method rides on the Call so a later policy can gate mutating verbs (e.g.
-	// "POST → Ask"); today gating is host-based, so this is only a hook.
-	call := capability.Call{Capability: "net.fetch", Attrs: map[string]string{"host": host, "method": method}}
+	// The capability — net.read for safe methods, net.write for mutating ones —
+	// is what the policy and credential bindings key on. The raw HTTP method
+	// never reaches the security layer.
+	capName := capabilityForMethod(method)
+	call := capability.Call{Capability: capName, Attrs: map[string]string{"host": host}}
 	if err := n.Guard.Authorize(ctx, call, method+" "+req.URL); err != nil {
 		return nil, err
 	}
@@ -78,9 +80,10 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	// Egress leak-scan seam (next shell): scan the guest-built request HERE
 	// (URL + body), before the legitimate credential is stamped in below.
 
-	// Host-owned, domain-bound credential injection: only a credential whose
-	// binding matches this destination host rides along (nil Injector = none).
-	if _, err := n.Credentials.InjectMatching(&req, host); err != nil {
+	// Host-owned, capability- and host-scoped credential injection: only a
+	// credential whose binding matches this capability AND destination host
+	// rides along (nil Injector = none).
+	if _, err := n.Credentials.InjectMatching(&req, capName, host); err != nil {
 		return nil, err
 	}
 
@@ -108,6 +111,20 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	// Ingress redaction seam (next shell): redact injected secrets that echo
 	// back before the body reaches the model.
 	return io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+}
+
+// capabilityForMethod maps an HTTP method to the capability that gates it: safe
+// (read) methods to http.read, mutating (write) methods to http.write. The
+// capability — not the raw verb — is what the policy and credential bindings key
+// on, keeping read/write a first-class authority and the HTTP method out of the
+// security layer.
+func capabilityForMethod(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return "http.read"
+	default:
+		return "http.write"
+	}
 }
 
 // rejectManualCredentials refuses a guest-built request that carries a
