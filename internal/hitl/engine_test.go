@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/efuturetoday/nocturn/internal/deadline"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 )
 
@@ -109,5 +110,30 @@ func TestEngine_ResolveRejectsGarbageToken(t *testing.T) {
 	e, _ := newEngine()
 	if err := e.Resolve("not-a-valid-token"); err == nil {
 		t.Fatal("garbage token must be rejected")
+	}
+}
+
+// While waiting for the human, Request pauses any execution budget on ctx, so the
+// wait is bounded by the ttl, not by that budget. Here the budget (40ms) is far
+// shorter than the human's latency (~120ms): without the pause the derived wait
+// ctx would fire at 40ms and deny; with it, the human's approval wins.
+func TestEngine_PausesBudgetDuringWait(t *testing.T) {
+	e, n := newEngine()
+	ctx, cancel := deadline.WithBudget(context.Background(), 40*time.Millisecond)
+	defer cancel()
+
+	res := make(chan hitl.Outcome, 1)
+	go func() {
+		out, _ := e.Request(ctx, "slow approval", choices, 2*time.Second)
+		res <- out
+	}()
+
+	opts := <-n.options
+	time.Sleep(120 * time.Millisecond) // let real time pass the 40ms budget
+	if err := e.Resolve(tokenFor(opts, hitl.Approved)); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if out := <-res; out != hitl.Approved {
+		t.Fatalf("got %v, want Approved — the budget must be paused during the wait", out)
 	}
 }

@@ -9,8 +9,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/efuturetoday/nocturn/internal/deadline"
 	"github.com/efuturetoday/nocturn/internal/sandbox"
 )
+
+// The guest deadline is a pausable budget, and a HostFunc must be able to find it
+// on its ctx — that is what lets hitl pause the deadline during an out-of-band
+// approval. This pins the load-bearing assumption that wazero passes the run
+// context (with its values) into host functions.
+func TestRun_HostFuncCtxCarriesBudget(t *testing.T) {
+	var sawPauser bool
+	host := sandbox.HostFunc{Name: "echo", Fn: func(ctx context.Context, req []byte) ([]byte, error) {
+		sawPauser = deadline.PauserFrom(ctx) != nil
+		return req, nil
+	}}
+	if _, err := sandbox.Run(context.Background(), echoGuest, sandbox.Config{
+		Stdin: []byte("x"),
+		Hosts: []sandbox.HostFunc{host},
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !sawPauser {
+		t.Fatal("HostFunc ctx did not carry the sandbox budget (PauserFrom == nil)")
+	}
+}
 
 //go:embed testdata/echo.wasm
 var echoGuest []byte

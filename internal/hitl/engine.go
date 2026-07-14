@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/efuturetoday/nocturn/internal/deadline"
 )
 
 // Outcome is the human's decision. The zero value is Denied — anything short of
@@ -105,6 +107,16 @@ func (e *Engine) Request(ctx context.Context, intent string, choices []Choice, t
 			Token:   sign(e.key, token{id: id, nonce: nonce, expires: expires.Unix(), outcome: c.Outcome}),
 		}
 	}
+	// The caller is now parked on a human. Pause any execution budget on ctx so
+	// this wait consumes the HITL TTL, not the guest/tool execution deadline; it
+	// resumes when the human answers (or on timeout/cancel). Placed before Notify
+	// so slow notify I/O (e.g. the ntfy push) is off-budget too; the defer also
+	// balances the notify-error early return below.
+	if p := deadline.PauserFrom(ctx); p != nil {
+		p.Pause()
+		defer p.Resume()
+	}
+
 	if err := e.notifier.Notify(intent, options); err != nil {
 		e.discard(id)
 		return Denied, err

@@ -20,6 +20,8 @@ import (
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"github.com/tetratelabs/wazero/sys"
+
+	"github.com/efuturetoday/nocturn/internal/deadline"
 )
 
 // hostModule is the single import module a guest sees; its members are the
@@ -73,7 +75,10 @@ func Run(ctx context.Context, guest []byte, cfg Config) (Result, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	// A pausable budget, not a plain timeout: while a host call is parked waiting
+	// for an out-of-band human approval, hitl pauses this deadline so the wait
+	// doesn't trap the (suspended) guest. It still bounds real execution time.
+	runCtx, cancel := deadline.WithBudget(ctx, timeout)
 	defer cancel()
 
 	var stdout, stderr bytes.Buffer
@@ -169,9 +174,10 @@ func finish(stdout, stderr []byte, err error, runCtx context.Context) (Result, e
 	}
 	// A cancelled or expired context traps the guest and surfaces as a special
 	// wazero ExitError (0xEFFFFFFF / 0xFFFFFFFF); report the context cause, not
-	// that opaque trap code.
-	if ce := runCtx.Err(); ce != nil {
-		return res, fmt.Errorf("sandbox: run halted: %w", ce)
+	// that opaque trap code. The budget cancels via context.WithCancelCause, so
+	// the real reason (DeadlineExceeded vs Canceled) is on the cause, not Err().
+	if runCtx.Err() != nil {
+		return res, fmt.Errorf("sandbox: run halted: %w", context.Cause(runCtx))
 	}
 	var exit *sys.ExitError
 	switch {
