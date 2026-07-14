@@ -127,7 +127,7 @@ getestet, bevor die nächste kam:
 |---|---|
 | `host` | wazero-Host. `Run` (Zero-Authority), `RunWithLog` (ABI-Fenster), `RunWithBrokeredLog`, `RunWithHITLLog`. Test-Gäste in `testdata/` (`probe` Go-wasip1, `logprobe` handgeschriebenes WAT). |
 | `capability` | Reine Entscheidung. `Policy.Evaluate(Call, Env)` (deny>ask>allow, fail-closed). `EpochRegistry`, `RateLimiter`, `Window`. Konstante `Wildcard`, `Permanent`. |
-| `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Inject`/`Binding`/`Request` (Credential-Konzern). |
+| `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Injector`/`Binding`/`Request` (host-owned, **domain-bound** Credential-Injektion — Cookie-Modell: injiziert nur bei Ziel-Host-Match). |
 | `hitl` | `Engine` (Request/Resolve, queue-then-execute), HMAC-`token`; Sub-Paket `hitl/ntfy` (`Publisher` push + `Listener` subscribe). |
 | `gateway` | `Guard.Authorize` (die eine Autorisierungs-Pipeline) + `Net` (Capability-Gruppe: `Fetch`, `Resolve`). `ErrDenied`. |
 | `brain` | Agentischer Loop. `Model`-Interface (Port), `Tool`/`ToolSpec`, `Run`, `OnToken` (Streaming). `Conversation` = reine Message-History (`NewConversation`/`Send`). |
@@ -488,7 +488,9 @@ live gg. iPhone verifiziert). M4-Rest (Leak-Scan) ist die **aktive** Aufgabe.
 - **M2 Signierte + attenuierte Skills** ⬜ — Ed25519, erzwungene Attenuation, Beispiel-
   Skill (TinyGo→wasm). *Skill-Schicht geparkt (Extism vs. eigener Host+Javy).*
 - **M3 Out-of-band-HITL** ✅ — Queue, signiertes Single-Use-Token, ntfy, nicht abschaltbar.
-- **M4 Vault + Leak-Scan** 🔷 — Vault-Injektion ✅; **Leak-Scan = aktiv**; Keychain ⬜.
+- **M4 Vault + Leak-Scan** 🔷 — Credential-Injektion ✅ **host-owned + domain-bound**
+  (Cookie-Modell: `secret.Injector`, `Binding.Host`, Manual-Cred-Reject); **Leak-Scan
+  = nächste Schale** (Backstop, ingress-fokussiert); Keychain ⬜; Single-Use/Zeroize ⬜.
 - **M5 Brain** ✅ — Loop (Variante A), LLM-Adapter, Tool-Calls durch Broker.
 - **M6 Tauri-Shell** ⬜ — Desktop-UI über Unix-Socket, Approval-Liste, kein Netz-Listener.
 - **M7 Policy + Härtung** 🔷 — Zeitfenster/Rate ✅ (Primitive), Metriken/SECURITY.md/Audit-

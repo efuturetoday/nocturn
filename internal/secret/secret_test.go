@@ -33,35 +33,82 @@ func TestGuestView_CannotReadValue(t *testing.T) {
 	// There is intentionally no guest.Get(...) — presence is the only read.
 }
 
-// Host-side injection: the secret is stamped into the outgoing request at the
-// border (with prefix), so the request is authenticated without the guest ever
-// handling the token.
-func TestInject_StampsSecretAtBorder(t *testing.T) {
+// Host-owned, domain-bound injection: the secret is stamped into the outgoing
+// request at the border (with prefix) ONLY when the destination host matches the
+// binding — the guest never handled the token and never chose it.
+func TestInjector_StampsMatchingHostAtBorder(t *testing.T) {
 	s := secret.NewStore()
 	s.Set("ms_graph", []byte("abc123"))
+	in := secret.NewInjector(s, secret.Binding{
+		Secret: "ms_graph", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+	})
 
-	// The guest built this request by NAME only — no credential in sight.
+	// The guest built this request by URL only — no credential in sight.
 	req := &secret.Request{Method: "GET", URL: "https://graph.microsoft.com/v1.0/me"}
-
-	err := secret.Inject(s, req, secret.Binding{Secret: "ms_graph", Header: "Authorization", Prefix: "Bearer "})
+	names, err := in.InjectMatching(req, "graph.microsoft.com")
 	if err != nil {
 		t.Fatalf("inject failed: %v", err)
 	}
 	if got := req.Headers["Authorization"]; got != "Bearer abc123" {
 		t.Fatalf("Authorization header = %q, want %q", got, "Bearer abc123")
 	}
+	if len(names) != 1 || names[0] != "ms_graph" {
+		t.Fatalf("injected names = %v, want [ms_graph]", names)
+	}
 }
 
-// Fail closed: injecting a missing secret errors instead of sending an
-// unauthenticated request.
-func TestInject_MissingSecret_FailsClosed(t *testing.T) {
+// A destination that does not match the binding's host gets NO credential — the
+// cookie-domain rule.
+func TestInjector_NonMatchingHost_NoInjection(t *testing.T) {
 	s := secret.NewStore()
-	req := &secret.Request{Method: "GET", URL: "https://api.example.com"}
+	s.Set("ms_graph", []byte("abc123"))
+	in := secret.NewInjector(s, secret.Binding{
+		Secret: "ms_graph", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+	})
 
-	if err := secret.Inject(s, req, secret.Binding{Secret: "absent", Header: "Authorization"}); !errors.Is(err, secret.ErrNotFound) {
+	req := &secret.Request{URL: "https://evil.example.com/"}
+	names, err := in.InjectMatching(req, "evil.example.com")
+	if err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if _, present := req.Headers["Authorization"]; present {
+		t.Fatal("no credential must be injected for a non-matching host")
+	}
+	if names != nil {
+		t.Fatalf("injected = %v, want none", names)
+	}
+}
+
+// A "*.suffix" binding matches sub-domains but not the bare domain.
+func TestInjector_WildcardSuffix(t *testing.T) {
+	s := secret.NewStore()
+	s.Set("k", []byte("v"))
+	in := secret.NewInjector(s, secret.Binding{Secret: "k", Host: "*.example.com", Header: "X-Token"})
+
+	sub := &secret.Request{}
+	if _, err := in.InjectMatching(sub, "a.example.com"); err != nil || sub.Headers["X-Token"] != "v" {
+		t.Fatalf("sub-domain should match: err=%v header=%q", err, sub.Headers["X-Token"])
+	}
+	bare := &secret.Request{}
+	if _, err := in.InjectMatching(bare, "example.com"); err != nil {
+		t.Fatalf("bare: %v", err)
+	}
+	if _, present := bare.Headers["X-Token"]; present {
+		t.Fatal("the bare domain must not match *.example.com")
+	}
+}
+
+// Fail closed: a binding that matches the host but whose secret is missing errors
+// instead of sending an unauthenticated request.
+func TestInjector_MissingSecret_FailsClosed(t *testing.T) {
+	s := secret.NewStore()
+	in := secret.NewInjector(s, secret.Binding{Secret: "absent", Host: "api.example.com", Header: "Authorization"})
+
+	req := &secret.Request{URL: "https://api.example.com"}
+	if _, err := in.InjectMatching(req, "api.example.com"); !errors.Is(err, secret.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 	if _, present := req.Headers["Authorization"]; present {
-		t.Fatal("no header must be set when the secret is missing")
+		t.Fatal("no header must be set when the bound secret is missing")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -69,7 +70,7 @@ func TestFetch_Allow_ReturnsBody(t *testing.T) {
 	defer srv.Close()
 
 	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}}
-	body, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}, nil)
+	body, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -86,7 +87,7 @@ func TestFetch_Deny_DoesNotHitNetwork(t *testing.T) {
 	defer srv.Close()
 
 	n := &gateway.Net{Guard: &gateway.Guard{Policy: capability.Policy{}}} // empty = deny-by-default
-	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}, nil)
+	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
 	}
@@ -101,7 +102,7 @@ func TestFetch_HostAllowlist_DeniesOtherHost(t *testing.T) {
 
 	// Only example.com is allowed; the test server's host is 127.0.0.1.
 	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch("example.com")}}
-	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}, nil)
+	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("fetch to non-allowlisted host: err = %v, want ErrDenied", err)
 	}
@@ -114,7 +115,7 @@ func TestFetch_Ask_ApprovePerformsRequest(t *testing.T) {
 	defer srv.Close()
 
 	n := &gateway.Net{Guard: &gateway.Guard{Policy: askFetch(), Approvals: askEngine(true), TTL: time.Second}}
-	body, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}, nil)
+	body, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
 		t.Fatalf("approved fetch: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestFetch_Ask_DenyBlocksRequest(t *testing.T) {
 	defer srv.Close()
 
 	n := &gateway.Net{Guard: &gateway.Guard{Policy: askFetch(), Approvals: askEngine(false), TTL: time.Second}}
-	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}, nil)
+	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
 	}
@@ -159,11 +160,11 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 	ctx := capability.WithEpoch(context.Background(), epoch)
 
 	// first call: asked, ApprovedSession granted for this host, bound to epoch
-	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}, nil); err != nil {
+	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}); err != nil {
 		t.Fatalf("first fetch: %v", err)
 	}
 	// second call to the same host: covered by the live session grant, no ask
-	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}, nil); err != nil {
+	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}); err != nil {
 		t.Fatalf("second fetch: %v", err)
 	}
 	if asked != 1 {
@@ -172,7 +173,7 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 
 	// close the epoch: the grant is revoked, so the same host is asked again.
 	epochs.Close(epoch)
-	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}, nil); err != nil {
+	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}); err != nil {
 		t.Fatalf("third fetch: %v", err)
 	}
 	if asked != 2 {
@@ -180,9 +181,18 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 	}
 }
 
-// The gateway injects the secret host-side; the caller's request carried no
-// credential, yet the server sees the bearer.
-func TestFetch_InjectsCredentialAtBoundary(t *testing.T) {
+func hostFromURL(t *testing.T, raw string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	return u.Hostname()
+}
+
+// The gateway injects the credential host-side for the bound destination; the
+// caller's request carried none, yet the server sees the bearer.
+func TestFetch_InjectsCredentialForBoundHost(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -192,15 +202,61 @@ func TestFetch_InjectsCredentialAtBoundary(t *testing.T) {
 
 	v := secret.NewStore()
 	v.Set("ms_graph", []byte("abc123"))
+	in := secret.NewInjector(v, secret.Binding{
+		Secret: "ms_graph", Host: hostFromURL(t, srv.URL), Header: "Authorization", Prefix: "Bearer ",
+	})
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}, Secrets: v}
-	_, err := n.Fetch(context.Background(),
-		secret.Request{URL: srv.URL}, // no credential in the caller's request
-		&secret.Binding{Secret: "ms_graph", Header: "Authorization", Prefix: "Bearer "})
-	if err != nil {
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}, Credentials: in}
+	if _, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if gotAuth != "Bearer abc123" {
 		t.Fatalf("server saw Authorization %q, want Bearer abc123", gotAuth)
+	}
+}
+
+// A credential bound to a different host does not ride along to this one.
+func TestFetch_NoInjectForOtherHost(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	v := secret.NewStore()
+	v.Set("ms_graph", []byte("abc123"))
+	in := secret.NewInjector(v, secret.Binding{
+		Secret: "ms_graph", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+	})
+
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}, Credentials: in}
+	if _, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if gotAuth != "" {
+		t.Fatalf("server saw Authorization %q, want none (credential bound to another host)", gotAuth)
+	}
+}
+
+// A guest-built request that carries its own credential — userinfo in the URL or
+// a sensitive header — is rejected before any network call.
+func TestFetch_ManualCredential_Rejected(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
+	defer srv.Close()
+
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}}
+
+	u, _ := url.Parse(srv.URL)
+	if _, err := n.Fetch(context.Background(), secret.Request{URL: "http://user:pass@" + u.Host + "/"}); !errors.Is(err, gateway.ErrManualCredential) {
+		t.Fatalf("userinfo: err = %v, want ErrManualCredential", err)
+	}
+	if _, err := n.Fetch(context.Background(),
+		secret.Request{URL: srv.URL, Headers: map[string]string{"Authorization": "Bearer x"}}); !errors.Is(err, gateway.ErrManualCredential) {
+		t.Fatalf("header: err = %v, want ErrManualCredential", err)
+	}
+	if hit {
+		t.Fatal("a request with a manual credential must not reach the network")
 	}
 }

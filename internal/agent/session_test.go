@@ -132,7 +132,7 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 		"net.fetch": {
 			ToolSpec: brain.ToolSpec{Name: "net.fetch"},
 			Invoke: func(ctx context.Context, _ string) (string, error) {
-				body, err := netCap.Fetch(ctx, secret.Request{URL: srv.URL}, nil)
+				body, err := netCap.Fetch(ctx, secret.Request{URL: srv.URL})
 				return string(body), err
 			},
 		},

@@ -40,7 +40,7 @@ func (n *Net) fetchTool() brain.Tool {
 			if a.URL == "" {
 				return "", errors.New("missing required field: url")
 			}
-			body, err := n.Fetch(ctx, secret.Request{URL: a.URL}, nil)
+			body, err := n.Fetch(ctx, secret.Request{URL: a.URL})
 			if err != nil {
 				return "", err
 			}
