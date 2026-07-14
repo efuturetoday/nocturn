@@ -128,10 +128,12 @@ getestet, bevor die nächste kam:
 |---|---|
 | `sandbox` | **Die wazero-Schicht: Zero-Authority-Boden + generelle Guest-Engine** (Interpreter/Skills). `Run(ctx, guest, Config)`: gehärtet (Memory-Cap + Wall-Clock-Deadline trappt Runaways, #422), WASI-stdio, Workspace `WithDirMount(/work)` (Allowlist-by-construction), gebrokerte `HostFunc`-Imports über **Standard-ABI** (`nocturn.<name>(reqPtr,reqLen)→packed(addr<<32\|size)`, Host alloziert Antwort im Gast via dessen `malloc`). Der Sandbox **gated nichts** — Effekte sind caller-gelieferte HostFuncs, die ans Gateway delegieren. WAT-Test-Gäste (`echo`/`loop`/`logprobe`). |
 | `capability` | Reine Entscheidung. `Policy.Evaluate(Call, Env)` (deny>ask>allow, fail-closed). `EpochRegistry`, `RateLimiter`, `Window`. Konstante `Wildcard`, `Permanent`. |
+| `deadline` | **Pausierbares Execution-Budget im Context** (`WithBudget`/`PauserFrom`/`Pauser`), stdlib-only. Wie `context.WithTimeout`, aber die Deadline lässt sich **pausieren** und ist per ctx-Value auffindbar (Muster wie `WithEpoch`); verkettet sich mit einem Eltern-Budget (Pause/Resume propagiert hoch). `hitl` pausiert es während einer Out-of-band-Freigabe → der Menschen-Wait zehrt **nicht** das Sandbox-/Brain-Timeout auf (nur die HITL-TTL begrenzt ihn), danach läuft es mit Restbudget weiter. Cancel via `WithCancelCause` → Grund über `context.Cause` (DeadlineExceeded vs Canceled); Esc/Ctrl-C/TTL trappen weiterhin sofort. |
 | `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Injector`/`Binding`/`Request` (host-owned Credential-Injektion, **capability + host scoped**; `capMatches`/`hostMatches`) + `Scanner` (bidirektionaler Leak-Scan: `ScanEgress`→`ErrLeaked`, `RedactIngress`→`[REDACTED]`; Tier1 exakter Vault-Wert encoding-robust + Tier2 gitleaks-Muster via Aho-Corasick + Entropy). |
 | `hitl` | `Engine` (Request/Resolve, queue-then-execute), HMAC-`token`; Sub-Paket `hitl/ntfy` (`Publisher` push + `Listener` subscribe). |
 | `gateway` | `Guard.Authorize` (die eine Autorisierungs-Pipeline) + `Net` (Capability-Gruppe). Tools: **`http.read`** (GET/HEAD) / **`http.write`** (POST/PUT/PATCH/DELETE) — Tool = Capability = Autoritätseinheit (`capabilityForMethod`); `dns.resolve`. Capability+host-scoped Credential-Injektion, Manual-Cred-Reject. `ErrDenied`, `ErrManualCredential`. |
 | `brain` | Agentischer Loop. `Model`-Interface (Port), `Tool`/`ToolSpec`, `Run`, `OnToken` (Streaming). `Conversation` = reine Message-History (`NewConversation`/`Send`). |
+| `script` | **Echter Interpreter auf der Sandbox: QuickJS (quickjs-ng) → wasm32-wasi**, embedded via `go:embed` (`qjs/nocturn-qjs.{c,wasm}`, Build `qjs/build.sh` mit wasi-sdk). `Runner.Run(ctx, source)` evaluiert JS-Source (stdin→eval→stdout); als Brain-Tool **`code.run`**. Der Gast deklariert **genau einen** Host-Import `nocturn.call(tool,args)` (+ `malloc`/`free`-Export für den packed-ptr-ABI); der Go-`dispatch` routet auf **dieselbe `brain.Tool`-Registry wie das Modell** (`Net.Tools()`) → jeder Effekt durch `Guard.Authorize` + HITL. Ein Gate = Reference-Monitor; neue Capability = Go-seitig, Interpreter unverändert. Reine Compute braucht null Caps; denied Effekt → JS-Exception (kein Host-Crash). |
 | `llm` | OpenAI-kompatibler Adapter (go-openai), native `tool_calls`, SSE-Streaming. |
 | `agent` | **Session-Lifecycle-Owner.** `Session` bündelt `brain.Conversation` + geteilten `gateway.Guard` + geteilte `EpochRegistry` + die aktuelle Epoche. `Ask` stempelt die Epoche via `capability.WithEpoch` in den ctx (→ Guard bindet Session-Grants daran); `Reset` schließt die Epoche (widerruft Grants) + öffnet frische Epoche + frische Conversation; `Close` schließt die Epoche. |
 
@@ -143,7 +145,7 @@ CGo), `go-openai` (**0 transitive Deps**), `golang.org/x/sys`. `cmd/`: `godotenv
 **charm** (bubbletea/lipgloss/bubbles) — nur Präsentation, berührt die **Trusted-
 TCB nicht**. **Verworfen:** langchaingo (290 Deps, bringt eigenen Agent-Loop der
 unsere Sicherheit umgeht).
-**Dev-Tools:** `wat2wasm` (brew wabt) für den WAT-Gast; `javy` (Spike).
+**Dev-Tools:** `wat2wasm` (brew wabt) für den WAT-Gast; **`wasi-sdk` + quickjs-ng-Checkout** zum Neubauen des Interpreter-`.wasm` (`internal/script/qjs/build.sh`, nur bei Shim-Änderung — das gebaute `.wasm` ist committet); `javy` (Spike). Kein Runtime-Dep: das Binary bleibt pure Go/wazero, kein CGo.
 
 ---
 
@@ -262,6 +264,10 @@ golangci-lint run         # (geplant)
 
 # Sandbox-WAT-Test-Gäste neu bauen (nach Änderung):
 wat2wasm internal/sandbox/testdata/echo.wat -o internal/sandbox/testdata/echo.wasm
+wat2wasm internal/script/testdata/gate.wat -o internal/script/testdata/gate.wasm
+
+# QuickJS-Interpreter-wasm neu bauen (nur bei Shim-Änderung; braucht wasi-sdk):
+internal/script/qjs/build.sh
 
 # Der Assistent (die TUI ist das ganze Interface, parameterlos):
 cp .env.example .env   # FREELLM_API_KEY eintragen
@@ -285,8 +291,28 @@ gestreamt**.
    TCB nicht; Streaming ins UI.
 2. **Secure-by-default `chat`** — `net.fetch = Ask` + Handy-Freigabe als Default.
 3. **Weitere Capabilities** (`ping`, Mail, Kalender) — Muster: kleiner Typ + `*Guard`.
-4. **Skill-Schicht** (Extism vs. eigener Host + Javy) — geparkte Weiche, beide gespiket.
-5. **Verteilung** (IronHub-Stil + Code-Signing), **tool_call_id**-Verfeinerung.
+   Kommen jetzt Modell **und** Skripten gleichzeitig zugute (ein Tool = beide Aufrufer).
+4. **Verteilung** (IronHub-Stil + Code-Signing), **tool_call_id**-Verfeinerung.
+5. **Skill-Signing/Attenuation** (M2-Rest, Ed25519) auf `script` aufsetzen; ggf. Preamble-
+   Wrapper (`nocturn.<toolName>`), `/work`-Input-Kanal, Timeout-vs-HITL-Feinung.
+
+**Erledigt (Scripting-Frontier):** **Echter Interpreter auf der Sandbox** — `internal/script`:
+QuickJS (quickjs-ng) → wasm32-wasi (wasi-sdk, embedded), Brain-Tool **`code.run`**. Effekte
+über **ein generisches Host-Gate** `nocturn.call(tool,args)` → Dispatcher auf `Net.Tools()` →
+`Guard.Authorize` + HITL. Damit ist die **M2-Weiche „Extism vs. eigener Host" zugunsten des
+eigenen Hosts (QuickJS, ein Gate) entschieden** — minimale TCB (Säule 4), Erweitern nur
+Go-seitig (Interpreter-`.wasm` unverändert). Race-clean getestet (Pure-Compute-Eval, Gate-
+Dispatch durch echten Interpreter, denied-Effekt = fangbare JS-Exception, Runaway getrappt,
+E2E gg. echtes `gateway.Net` + `httptest`).
+
+**Erledigt (HITL-Wait pausiert Deadlines):** neues `internal/deadline` (pausierbares Budget im
+ctx). `brain.ToolTimeout` und das Sandbox-Guest-Deadline nutzen jetzt `deadline.WithBudget`;
+`hitl.Engine.Request` pausiert das Budget während der Freigabe (vor `Notify`, damit auch Notify-I/O
+off-budget ist). Folge: eine langsame Out-of-band-Freigabe trappt den suspendierten Gast **nicht**
+mehr (nur die HITL-TTL begrenzt den Menschen-Wait); danach läuft das Restbudget weiter. Gilt auch
+für direkte Tools (`http.write`-Freigabe > 20 s). Esc/Ctrl-C/TTL trappen weiter sofort. Race-clean
+getestet inkl. Money-Test: Freigabe (400 ms) überlebt ein 200-ms-Sandbox-Budget, Skript vollendet.
+Fable-5-Review adressiert (brain `context.Cause`-Spiegel, `remaining=d`, untyped-nil-Pauser).
 
 **Erledigt (Refactor):** **Epoch verdrahtet** — `agent.Session` als expliziter
 Lifecycle-Owner; „Allow this session"-Grants sind epoch-gebunden und werden bei
