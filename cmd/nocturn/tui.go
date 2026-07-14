@@ -590,7 +590,7 @@ func tuiCmd(_ []string) error {
 	// governs normally. code.run is added after the runner exists so the
 	// interpreter can dispatch back into the Registry; a script may not re-enter
 	// it (the runner's dispatch refuses code.run).
-	runner := script.NewRunner(reg)
+	runner := script.New(reg)
 	runner.Timeout = 60 * time.Second
 	reg.Add(runner.Tool())
 

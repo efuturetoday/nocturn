@@ -39,7 +39,7 @@ func recordingTool(name, out string, gotArgs *string) brain.Tool {
 // tool's Invoke with its args, and the result flows back out.
 func TestRun_GateDispatchesToTool(t *testing.T) {
 	var gotArgs string
-	r := script.New(gateGuest, brain.NewRegistry([]brain.Tool{recordingTool("echo", "PONG", &gotArgs)}))
+	r := script.NewWithGuest(gateGuest, brain.NewRegistry([]brain.Tool{recordingTool("echo", "PONG", &gotArgs)}))
 
 	out, err := r.Run(context.Background(), `{"tool":"echo","args":{"v":42}}`)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestRun_GateDispatchesToTool(t *testing.T) {
 // sandbox surfaces to the guest as an "error: ..." string (the interpreter's
 // binding turns that into a JS exception) — the host never crashes.
 func TestRun_UnknownTool_SurfacesErrorToGuest(t *testing.T) {
-	r := script.New(gateGuest, nil)
+	r := script.NewWithGuest(gateGuest, nil)
 
 	out, err := r.Run(context.Background(), `{"tool":"nope","args":{}}`)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestRun_ToolError_SurfacesErrorToGuest(t *testing.T) {
 		ToolSpec: brain.ToolSpec{Name: "boom"},
 		Invoke:   func(context.Context, string) (string, error) { return "", errors.New("kaboom") },
 	}
-	r := script.New(gateGuest, brain.NewRegistry([]brain.Tool{boom}))
+	r := script.NewWithGuest(gateGuest, brain.NewRegistry([]brain.Tool{boom}))
 
 	out, err := r.Run(context.Background(), `{"tool":"boom","args":{}}`)
 	if err != nil {
@@ -89,7 +89,7 @@ func TestRun_ToolError_SurfacesErrorToGuest(t *testing.T) {
 // The interpreter never dispatches itself: a script calling nocturn.call("code.run", …)
 // is refused (no recursive interpreter), surfaced to the guest as a catchable error.
 func TestRun_CodeRunNotReentrant(t *testing.T) {
-	r := script.New(gateGuest, brain.NewRegistry(nil))
+	r := script.NewWithGuest(gateGuest, brain.NewRegistry(nil))
 
 	out, err := r.Run(context.Background(), `{"tool":"code.run","args":{"source":"1"}}`)
 	if err != nil {
@@ -104,7 +104,7 @@ func TestRun_CodeRunNotReentrant(t *testing.T) {
 // returning the script's stdout.
 func TestTool_CodeRun_RunsSource(t *testing.T) {
 	var gotArgs string
-	r := script.New(gateGuest, brain.NewRegistry([]brain.Tool{recordingTool("echo", "OK", &gotArgs)}))
+	r := script.NewWithGuest(gateGuest, brain.NewRegistry([]brain.Tool{recordingTool("echo", "OK", &gotArgs)}))
 
 	tool := r.Tool()
 	if tool.Name != "code.run" {
@@ -127,7 +127,7 @@ func TestTool_CodeRun_RunsSource(t *testing.T) {
 // code.run validates its own arguments (structure + schema guidance + our
 // validation), reporting bad input rather than running an empty script.
 func TestTool_CodeRun_RejectsMissingSource(t *testing.T) {
-	r := script.New(gateGuest, nil)
+	r := script.NewWithGuest(gateGuest, nil)
 	tool := r.Tool()
 
 	if _, err := tool.Invoke(context.Background(), `{}`); err == nil {

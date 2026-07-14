@@ -13,7 +13,7 @@ import (
 // Shell A: a real interpreter on the sandbox evaluates arbitrary JS source and
 // its stdout comes back. Pure compute, zero capabilities.
 func TestInterp_EvalPureCompute(t *testing.T) {
-	r := script.NewRunner(nil)
+	r := script.New(nil)
 
 	out, err := r.Run(context.Background(), `console.log(2 + 2)`)
 	if err != nil {
@@ -27,7 +27,7 @@ func TestInterp_EvalPureCompute(t *testing.T) {
 // A broader slice of the language works (not just arithmetic): JSON, arrays,
 // template strings — proving it is a genuine interpreter, not a toy.
 func TestInterp_LanguageSurface(t *testing.T) {
-	r := script.NewRunner(nil)
+	r := script.New(nil)
 
 	src := `
 		const xs = [1, 2, 3].map(n => n * n);
@@ -46,7 +46,7 @@ func TestInterp_LanguageSurface(t *testing.T) {
 // the gate dispatches to the tool's Invoke, and the result returns into JS.
 func TestInterp_GateReachesTool(t *testing.T) {
 	var gotArgs string
-	r := script.NewRunner(brain.NewRegistry([]brain.Tool{recordingTool("greet", "hello from host", &gotArgs)}))
+	r := script.New(brain.NewRegistry([]brain.Tool{recordingTool("greet", "hello from host", &gotArgs)}))
 
 	src := `
 		const r = nocturn.call("greet", {name: "nocturn"});
@@ -71,7 +71,7 @@ func TestInterp_DeniedEffectIsCatchable(t *testing.T) {
 		ToolSpec: brain.ToolSpec{Name: "http.write"},
 		Invoke:   func(context.Context, string) (string, error) { return "", errDenied },
 	}
-	r := script.NewRunner(brain.NewRegistry([]brain.Tool{deny}))
+	r := script.New(brain.NewRegistry([]brain.Tool{deny}))
 
 	src := `
 		try {
@@ -102,7 +102,7 @@ func TestInterp_TopLevelAwaitAndLoop(t *testing.T) {
 			return "1.2.3.4", nil
 		},
 	}
-	r := script.NewRunner(brain.NewRegistry([]brain.Tool{tool}))
+	r := script.New(brain.NewRegistry([]brain.Tool{tool}))
 
 	// The exact shape from the failing session: a top-level await loop.
 	src := `
@@ -128,7 +128,7 @@ func TestInterp_TopLevelAwaitAndLoop(t *testing.T) {
 
 // Promise machinery (.then) also runs — the job queue is pumped, not dropped.
 func TestInterp_PromiseThenRuns(t *testing.T) {
-	r := script.NewRunner(nil)
+	r := script.New(nil)
 
 	out, err := r.Run(context.Background(), `Promise.resolve(21).then(n => console.log(n * 2));`)
 	if err != nil {
@@ -146,7 +146,7 @@ func TestInterp_UnhandledRejectionIsError(t *testing.T) {
 		ToolSpec: brain.ToolSpec{Name: "dns.resolve"},
 		Invoke:   func(context.Context, string) (string, error) { return "", errDenied },
 	}
-	r := script.NewRunner(brain.NewRegistry([]brain.Tool{deny}))
+	r := script.New(brain.NewRegistry([]brain.Tool{deny}))
 
 	// No try/catch: the rejection propagates to the top-level promise.
 	_, err := r.Run(context.Background(), `await nocturn.call("dns.resolve", {host: "x"});`)
@@ -158,7 +158,7 @@ func TestInterp_UnhandledRejectionIsError(t *testing.T) {
 // A runaway script is trapped by the sandbox's wall-clock deadline (wazero has
 // no fuel — CPU is bounded by the deadline + memory cap).
 func TestInterp_RunawayTrapped(t *testing.T) {
-	r := script.NewRunner(nil)
+	r := script.New(nil)
 	r.Timeout = 300 * time.Millisecond
 
 	_, err := r.Run(context.Background(), `while (true) {}`)

@@ -26,7 +26,7 @@ func TestE2E_ScriptFetchesThroughGateway(t *testing.T) {
 	defer srv.Close()
 
 	netCap := autoAllowNet(srv.Client())
-	r := script.NewRunner(brain.NewRegistry(netCap.Tools()))
+	r := script.New(brain.NewRegistry(netCap.Tools()))
 
 	src := `
 		const body = nocturn.call("http.read", {url: ` + jsString(srv.URL) + `});
@@ -55,7 +55,7 @@ func TestE2E_DeniedRequestNeverLeaves(t *testing.T) {
 		Scanner: secret.NewScanner(secret.NewStore()),
 		HTTP:    srv.Client(),
 	}
-	r := script.NewRunner(brain.NewRegistry(netCap.Tools()))
+	r := script.New(brain.NewRegistry(netCap.Tools()))
 
 	src := `
 		try {

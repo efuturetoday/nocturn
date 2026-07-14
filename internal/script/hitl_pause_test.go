@@ -66,7 +66,7 @@ func TestHITL_ApprovalOutlastsBudget_ScriptStillCompletes(t *testing.T) {
 		HTTP:    srv.Client(),
 	}
 
-	r := script.New(gateGuest, brain.NewRegistry(netCap.Tools()))
+	r := script.NewWithGuest(gateGuest, brain.NewRegistry(netCap.Tools()))
 	r.Timeout = 200 * time.Millisecond // shorter than the 400ms approval
 
 	// gate guest: stdin IS the gate request.

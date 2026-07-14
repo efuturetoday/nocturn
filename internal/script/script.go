@@ -40,7 +40,7 @@ const (
 // Runner evaluates JS source on the interpreter guest, dispatching a script's
 // nocturn.call effects through a shared brain.Registry — the SAME registry the
 // model dispatches through, so script effects are gated and observed identically.
-// Build it with New (or NewRunner for the embedded interpreter); the zero value
+// Build it with New (embedded interpreter) or NewWithGuest; the zero value
 // is not usable.
 type Runner struct {
 	Guest    []byte          // the interpreter wasm
@@ -49,12 +49,13 @@ type Runner struct {
 	MaxPages uint32          // memory cap in 64 KiB pages (0 = sandbox default)
 }
 
-// New builds a Runner over an explicit interpreter guest and a shared dispatch
-// Registry. A nil Registry yields an empty one (every effect reports "unknown
-// tool"). code.run may live in the shared Registry for the model to call, but a
-// script can never re-enter it — dispatch refuses code.run (no recursive
-// interpreter).
-func New(guest []byte, reg *brain.Registry) *Runner {
+// NewWithGuest builds a Runner over an explicit interpreter guest (e.g. a test
+// guest) and a shared dispatch Registry; most callers want New, which supplies
+// the embedded interpreter. A nil Registry yields an empty one (every effect
+// reports "unknown tool"). code.run may live in the shared Registry for the
+// model to call, but a script can never re-enter it — dispatch refuses code.run
+// (no recursive interpreter).
+func NewWithGuest(guest []byte, reg *brain.Registry) *Runner {
 	if reg == nil {
 		reg = brain.NewRegistry(nil)
 	}

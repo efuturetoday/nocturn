@@ -15,9 +15,10 @@ import (
 //go:embed qjs/nocturn-qjs.wasm
 var interpreterGuest []byte
 
-// NewRunner builds a Runner over the embedded QuickJS interpreter and the given
-// shared dispatch Registry (the same one the model dispatches through, so script
-// effects are gated and observed identically).
-func NewRunner(reg *brain.Registry) *Runner {
-	return New(interpreterGuest, reg)
+// New builds a Runner over the embedded QuickJS interpreter and the given shared
+// dispatch Registry (the same one the model dispatches through, so script effects
+// are gated and observed identically). This is the ready-to-use constructor; use
+// NewWithGuest only to supply a different guest (e.g. in tests).
+func New(reg *brain.Registry) *Runner {
+	return NewWithGuest(interpreterGuest, reg)
 }
