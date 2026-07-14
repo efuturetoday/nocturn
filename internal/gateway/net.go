@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -61,13 +62,21 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 		return nil, err
 	}
 
-	call := capability.Call{Capability: "net.fetch", Attrs: map[string]string{"host": host}}
-	if err := n.Guard.Authorize(ctx, call, "fetch "+req.URL); err != nil {
+	method := req.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	method = strings.ToUpper(method)
+
+	// method rides on the Call so a later policy can gate mutating verbs (e.g.
+	// "POST → Ask"); today gating is host-based, so this is only a hook.
+	call := capability.Call{Capability: "net.fetch", Attrs: map[string]string{"host": host, "method": method}}
+	if err := n.Guard.Authorize(ctx, call, method+" "+req.URL); err != nil {
 		return nil, err
 	}
 
-	// Egress leak-scan seam (next shell): scan the guest-built request HERE,
-	// before the legitimate credential is stamped in below.
+	// Egress leak-scan seam (next shell): scan the guest-built request HERE
+	// (URL + body), before the legitimate credential is stamped in below.
 
 	// Host-owned, domain-bound credential injection: only a credential whose
 	// binding matches this destination host rides along (nil Injector = none).
@@ -75,11 +84,11 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 		return nil, err
 	}
 
-	method := req.Method
-	if method == "" {
-		method = http.MethodGet
+	var body io.Reader
+	if len(req.Body) > 0 {
+		body = bytes.NewReader(req.Body)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
 	if err != nil {
 		return nil, err
 	}

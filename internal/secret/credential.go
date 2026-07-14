@@ -42,6 +42,7 @@ type Request struct {
 	Method  string
 	URL     string
 	Headers map[string]string
+	Body    []byte
 }
 
 // Injector is the host-owned credential set — the "cookie jar". It maps a

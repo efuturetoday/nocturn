@@ -27,12 +27,20 @@ func (n *Net) fetchTool() brain.Tool {
 	return brain.Tool{
 		ToolSpec: brain.ToolSpec{
 			Name:        "net.fetch",
-			Description: "Fetch the contents of a URL over HTTP(S).",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","description":"The URL to fetch"}},"required":["url"]}`),
+			Description: "Make an HTTP(S) request to a URL and return the response body. Defaults to GET; set method + body to send data (POST/PUT/PATCH/DELETE).",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"url":{"type":"string","description":"The URL to request"},` +
+				`"method":{"type":"string","enum":["GET","HEAD","POST","PUT","PATCH","DELETE"],"description":"HTTP method (default GET)"},` +
+				`"body":{"type":"string","description":"Request body, for POST/PUT/PATCH"},` +
+				`"content_type":{"type":"string","description":"Content-Type of the body (default application/json)"}` +
+				`},"required":["url"]}`),
 		},
 		Invoke: func(ctx context.Context, args string) (string, error) {
 			var a struct {
-				URL string `json:"url"`
+				URL         string `json:"url"`
+				Method      string `json:"method"`
+				Body        string `json:"body"`
+				ContentType string `json:"content_type"`
 			}
 			if err := json.Unmarshal([]byte(args), &a); err != nil {
 				return "", fmt.Errorf("invalid arguments: %w", err)
@@ -40,13 +48,40 @@ func (n *Net) fetchTool() brain.Tool {
 			if a.URL == "" {
 				return "", errors.New("missing required field: url")
 			}
-			body, err := n.Fetch(ctx, secret.Request{URL: a.URL})
+			method := strings.ToUpper(strings.TrimSpace(a.Method))
+			if method == "" {
+				method = "GET"
+			}
+			if !validMethod(method) {
+				return "", fmt.Errorf("unsupported method %q", a.Method)
+			}
+
+			req := secret.Request{Method: method, URL: a.URL}
+			if a.Body != "" {
+				ct := a.ContentType
+				if ct == "" {
+					ct = "application/json"
+				}
+				req.Body = []byte(a.Body)
+				req.Headers = map[string]string{"Content-Type": ct}
+			}
+
+			body, err := n.Fetch(ctx, req)
 			if err != nil {
 				return "", err
 			}
 			return truncate(string(body), maxToolResponse), nil
 		},
 	}
+}
+
+// validMethod reports whether m is an HTTP method net.fetch will send.
+func validMethod(m string) bool {
+	switch m {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE":
+		return true
+	}
+	return false
 }
 
 func (n *Net) resolveTool() brain.Tool {

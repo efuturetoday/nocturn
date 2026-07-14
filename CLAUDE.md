@@ -129,7 +129,7 @@ getestet, bevor die nächste kam:
 | `capability` | Reine Entscheidung. `Policy.Evaluate(Call, Env)` (deny>ask>allow, fail-closed). `EpochRegistry`, `RateLimiter`, `Window`. Konstante `Wildcard`, `Permanent`. |
 | `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Injector`/`Binding`/`Request` (host-owned, **domain-bound** Credential-Injektion — Cookie-Modell: injiziert nur bei Ziel-Host-Match). |
 | `hitl` | `Engine` (Request/Resolve, queue-then-execute), HMAC-`token`; Sub-Paket `hitl/ntfy` (`Publisher` push + `Listener` subscribe). |
-| `gateway` | `Guard.Authorize` (die eine Autorisierungs-Pipeline) + `Net` (Capability-Gruppe: `Fetch`, `Resolve`). `ErrDenied`. |
+| `gateway` | `Guard.Authorize` (die eine Autorisierungs-Pipeline) + `Net` (Capability-Gruppe: `Fetch` — Methoden GET/POST/…, host-owned domain-bound Credential-Injektion, Manual-Cred-Reject; `Resolve`). `ErrDenied`, `ErrManualCredential`. |
 | `brain` | Agentischer Loop. `Model`-Interface (Port), `Tool`/`ToolSpec`, `Run`, `OnToken` (Streaming). `Conversation` = reine Message-History (`NewConversation`/`Send`). |
 | `llm` | OpenAI-kompatibler Adapter (go-openai), native `tool_calls`, SSE-Streaming. |
 | `agent` | **Session-Lifecycle-Owner.** `Session` bündelt `brain.Conversation` + geteilten `gateway.Guard` + geteilte `EpochRegistry` + die aktuelle Epoche. `Ask` stempelt die Epoche via `capability.WithEpoch` in den ctx (→ Guard bindet Session-Grants daran); `Reset` schließt die Epoche (widerruft Grants) + öffnet frische Epoche + frische Conversation; `Close` schließt die Epoche. |

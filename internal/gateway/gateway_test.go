@@ -3,12 +3,15 @@ package gateway_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
@@ -258,5 +261,70 @@ func TestFetch_ManualCredential_Rejected(t *testing.T) {
 	}
 	if hit {
 		t.Fatal("a request with a manual credential must not reach the network")
+	}
+}
+
+// A POST carries method, body, and Content-Type through to the server.
+func TestFetch_PostSendsBody(t *testing.T) {
+	var gotMethod, gotCT, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotCT = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}}
+	_, err := n.Fetch(context.Background(), secret.Request{
+		Method: "POST", URL: srv.URL, Body: []byte(`{"x":1}`),
+		Headers: map[string]string{"Content-Type": "application/json"},
+	})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if gotMethod != "POST" || gotCT != "application/json" || gotBody != `{"x":1}` {
+		t.Fatalf("server saw method=%q ct=%q body=%q", gotMethod, gotCT, gotBody)
+	}
+}
+
+// The net.fetch tool sends a POST (method lower-cased by the model is accepted)
+// with body + content type, and rejects an unsupported method before any request.
+func TestFetchTool_Post(t *testing.T) {
+	var gotMethod, gotCT, gotBody string
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		gotMethod = r.Method
+		gotCT = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowFetch(capability.Wildcard)}}
+	var fetch brain.Tool
+	for _, tl := range n.Tools() {
+		if tl.Name == "net.fetch" {
+			fetch = tl
+		}
+	}
+
+	args := fmt.Sprintf(`{"url":%q,"method":"post","body":"hi","content_type":"text/plain"}`, srv.URL)
+	if _, err := fetch.Invoke(context.Background(), args); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if gotMethod != "POST" || gotCT != "text/plain" || gotBody != "hi" {
+		t.Fatalf("server saw method=%q ct=%q body=%q", gotMethod, gotCT, gotBody)
+	}
+
+	hit = false
+	if _, err := fetch.Invoke(context.Background(), fmt.Sprintf(`{"url":%q,"method":"TRACE"}`, srv.URL)); err == nil {
+		t.Fatal("expected error for unsupported method")
+	}
+	if hit {
+		t.Fatal("an unsupported method must be rejected before any request")
 	}
 }
