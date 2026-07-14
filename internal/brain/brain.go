@@ -21,6 +21,8 @@ import (
 	"errors"
 	"sort"
 	"time"
+
+	"github.com/efuturetoday/nocturn/internal/deadline"
 )
 
 // ErrMaxSteps is returned when the loop hits its step budget without the Model
@@ -40,11 +42,14 @@ type ToolCall struct {
 	Args string // JSON
 }
 
-// Step is the Model's decision: a final Answer, or a ToolCall. A nil ToolCall
-// means Answer is final.
+// Step is the Model's decision: a final Answer, or one or more ToolCalls to run.
+// An empty ToolCalls means Answer is final. A model may request several calls in
+// one turn; they are run SEQUENTIALLY (each through the Registry, each its own
+// approval), never concurrently — so every effect stays a deliberate, single
+// human decision.
 type Step struct {
-	Answer   string
-	ToolCall *ToolCall
+	Answer    string
+	ToolCalls []ToolCall
 }
 
 // ToolSpec is the declaration a Model sees: the tool's name, a description, and
@@ -70,17 +75,17 @@ type Model interface {
 	Next(ctx context.Context, conv []Message, tools []ToolSpec, onToken func(string)) (Step, error)
 }
 
-// Brain runs the loop with a Model and a set of Tools. OnToken, if set, receives
-// answer text as it streams from the Model; OnToolCall, if set, is notified of
-// each tool call before it runs (a UI hook — tools stay unaware of the UI).
+// Brain runs the loop with a Model and a shared Registry of tools. OnToken, if
+// set, receives answer text as it streams from the Model. Tool-call observation
+// lives on the Registry — which both the Brain and the script interpreter
+// dispatch through — so every tool call, model- or script-issued, is seen in one
+// place; the Brain itself carries no per-tool UI hook.
 type Brain struct {
 	Model       Model
-	Tools       map[string]Tool
+	Registry    *Registry
 	MaxSteps    int
-	ToolTimeout  time.Duration // per-tool-call deadline; 0 = no limit
-	OnToken      func(string)
-	OnToolCall   func(ToolCall)                          // before a tool runs
-	OnToolResult func(tc ToolCall, out string, err error) // after a tool runs
+	ToolTimeout time.Duration // per-tool-call deadline; 0 = no limit
+	OnToken     func(string)  // answer-token stream; nil = no streaming
 }
 
 const defaultMaxSteps = 8
@@ -101,27 +106,23 @@ func (b *Brain) run(ctx context.Context, conv []Message) (string, []Message, err
 	}
 
 	for i := 0; i < steps; i++ {
-		step, err := b.Model.Next(ctx, conv, b.toolSpecs(), b.OnToken)
+		step, err := b.Model.Next(ctx, conv, b.Registry.Specs(), b.OnToken)
 		if err != nil {
 			return "", conv, err
 		}
-		if step.ToolCall == nil {
+		if len(step.ToolCalls) == 0 {
 			conv = append(conv, Message{Role: "assistant", Content: step.Answer})
 			return step.Answer, conv, nil
 		}
-		if b.OnToolCall != nil {
-			b.OnToolCall(*step.ToolCall)
+		// Run every requested call in order, feeding each result back before the
+		// next — sequential, so multiple gated effects mean one approval at a time.
+		for _, tc := range step.ToolCalls {
+			conv = append(conv, Message{
+				Role:    "assistant",
+				Content: "call " + tc.Tool + "(" + tc.Args + ")",
+			})
+			conv = append(conv, Message{Role: "tool", Content: b.invoke(ctx, tc)})
 		}
-
-		conv = append(conv, Message{
-			Role:    "assistant",
-			Content: "call " + step.ToolCall.Tool + "(" + step.ToolCall.Args + ")",
-		})
-		result, err := b.invoke(ctx, *step.ToolCall)
-		if b.OnToolResult != nil {
-			b.OnToolResult(*step.ToolCall, result, err)
-		}
-		conv = append(conv, Message{Role: "tool", Content: result})
 	}
 	return "", conv, ErrMaxSteps
 }
@@ -147,32 +148,109 @@ func (c *Conversation) Send(ctx context.Context, input string) (string, error) {
 	return ans, err
 }
 
-// invoke runs a tool call, returning the result or an error string to feed back
-// to the Model (an unknown tool or a validation/execution error is reported, not
-// fatal, so the Model can correct itself).
-func (b *Brain) invoke(ctx context.Context, tc ToolCall) (string, error) {
-	tool, ok := b.Tools[tc.Tool]
-	if !ok {
-		err := errors.New("unknown tool " + tc.Tool)
-		return "error: " + err.Error(), err
-	}
+// invoke runs a tool call through the shared Registry (which emits the observer
+// events) and returns the content to feed back to the Model — the tool's output,
+// or an "error: ..." string on failure (an unknown tool or a validation/execution
+// error is reported, not fatal, so the Model can correct itself).
+func (b *Brain) invoke(ctx context.Context, tc ToolCall) string {
 	if b.ToolTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, b.ToolTimeout)
+		// A pausable budget so an out-of-band approval inside the tool doesn't
+		// burn the per-tool deadline (hitl pauses it during the human wait).
+		ctx, cancel = deadline.WithBudget(ctx, b.ToolTimeout)
 		defer cancel()
 	}
-	out, err := tool.Invoke(ctx, tc.Args)
+	out, err := b.Registry.Invoke(ctx, tc.Tool, tc.Args)
 	if err != nil {
-		return "error: " + err.Error(), err
+		return "error: " + timeoutCause(ctx, err).Error()
 	}
-	return out, nil
+	return out
 }
 
-func (b *Brain) toolSpecs() []ToolSpec {
-	specs := make([]ToolSpec, 0, len(b.Tools))
-	for _, t := range b.Tools {
+// timeoutCause replaces a context-cancellation error with the context's cause
+// (e.g. deadline exceeded). A pausable budget cancels via context.WithCancelCause,
+// so ctx.Err reports only Canceled; the real reason is the cause — the model
+// should be told "deadline exceeded", not "canceled".
+func timeoutCause(ctx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) {
+		if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
+			return cause
+		}
+	}
+	return err
+}
+
+// Phase marks whether a ToolEvent is the start or the end of an invocation.
+type Phase int
+
+const (
+	ToolStart Phase = iota
+	ToolEnd
+)
+
+// ToolEvent is emitted by a Registry around every tool invocation — model- or
+// script-issued — so one observer sees all tool calls, nested by call order (a
+// script's calls arrive between the ToolStart and ToolEnd of its code.run).
+type ToolEvent struct {
+	Tool   string
+	Args   string // JSON, as the caller supplied it (model args or script args)
+	Phase  Phase
+	Result string // ToolEnd only
+	Err    error  // ToolEnd only (e.g. gateway.ErrDenied for a denied effect)
+}
+
+// Registry is the one place tool calls are dispatched: it maps names to Tools,
+// hands their specs to the Model, and runs a named tool's Invoke. It is shared
+// by the Brain (model-issued calls) and the script interpreter (script-issued
+// calls), so its OnCall observer sees every tool call from both, nested by call
+// order. The tools map is set up before any Invoke and not mutated during one,
+// so concurrent reads need no lock.
+type Registry struct {
+	tools  map[string]Tool
+	OnCall func(ToolEvent) // observability sink; nil = off
+}
+
+// NewRegistry builds a Registry over the given tools. A nil slice yields an empty
+// registry (every call reports "unknown tool"), which is convenient for tests.
+func NewRegistry(tools []Tool) *Registry {
+	reg := make(map[string]Tool, len(tools))
+	for _, t := range tools {
+		reg[t.Name] = t
+	}
+	return &Registry{tools: reg}
+}
+
+// Add registers a tool after construction — used for code.run, which needs the
+// Registry to exist first so the interpreter can dispatch back into it.
+func (r *Registry) Add(t Tool) { r.tools[t.Name] = t }
+
+// Specs returns the tool declarations for the Model, sorted by name.
+func (r *Registry) Specs() []ToolSpec {
+	specs := make([]ToolSpec, 0, len(r.tools))
+	for _, t := range r.tools {
 		specs = append(specs, t.ToolSpec)
 	}
 	sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
 	return specs
+}
+
+// Invoke looks up a tool by name and runs it, emitting a ToolStart before and a
+// ToolEnd after (carrying the result/error). An unknown tool is reported as an
+// error the caller can surface — not fatal. The observer is fail-open.
+func (r *Registry) Invoke(ctx context.Context, name, args string) (out string, err error) {
+	r.emit(ToolEvent{Tool: name, Args: args, Phase: ToolStart})
+	tool, ok := r.tools[name]
+	if !ok {
+		err = errors.New("unknown tool " + name)
+	} else {
+		out, err = tool.Invoke(ctx, args)
+	}
+	r.emit(ToolEvent{Tool: name, Args: args, Phase: ToolEnd, Result: out, Err: err})
+	return out, err
+}
+
+func (r *Registry) emit(ev ToolEvent) {
+	if r.OnCall != nil {
+		r.OnCall(ev)
+	}
 }

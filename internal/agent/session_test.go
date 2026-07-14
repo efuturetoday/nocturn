@@ -46,21 +46,19 @@ func convContains(conv []brain.Message, substr string) bool {
 // Reset rotates it to a fresh, different epoch.
 func TestSession_ThreadsEpoch_ResetRotatesIt(t *testing.T) {
 	var seen []capability.EpochID
-	tools := map[string]brain.Tool{
-		"probe": {
-			ToolSpec: brain.ToolSpec{Name: "probe"},
-			Invoke: func(ctx context.Context, _ string) (string, error) {
-				seen = append(seen, capability.EpochFrom(ctx))
-				return "ok", nil
-			},
+	tools := []brain.Tool{{
+		ToolSpec: brain.ToolSpec{Name: "probe"},
+		Invoke: func(ctx context.Context, _ string) (string, error) {
+			seen = append(seen, capability.EpochFrom(ctx))
+			return "ok", nil
 		},
-	}
+	}}
 	model := &scriptedModel{steps: []brain.Step{
-		{ToolCall: &brain.ToolCall{Tool: "probe"}}, {Answer: "one"},
-		{ToolCall: &brain.ToolCall{Tool: "probe"}}, {Answer: "two"},
+		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "one"},
+		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "two"},
 	}}
 
-	b := &brain.Brain{Model: model, Tools: tools}
+	b := &brain.Brain{Model: model, Registry: brain.NewRegistry(tools)}
 	epochs := capability.NewEpochRegistry()
 	s := agent.New(b, &gateway.Guard{Epochs: epochs}, epochs)
 
@@ -128,21 +126,19 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 	}
 	netCap := &gateway.Net{Guard: guard}
 
-	tools := map[string]brain.Tool{
-		"net.fetch": {
-			ToolSpec: brain.ToolSpec{Name: "net.fetch"},
-			Invoke: func(ctx context.Context, _ string) (string, error) {
-				body, err := netCap.Fetch(ctx, secret.Request{URL: srv.URL})
-				return string(body), err
-			},
+	tools := []brain.Tool{{
+		ToolSpec: brain.ToolSpec{Name: "net.fetch"},
+		Invoke: func(ctx context.Context, _ string) (string, error) {
+			body, err := netCap.Fetch(ctx, secret.Request{URL: srv.URL})
+			return string(body), err
 		},
-	}
+	}}
 	model := &scriptedModel{steps: []brain.Step{
-		{ToolCall: &brain.ToolCall{Tool: "net.fetch"}}, {Answer: "one"},
-		{ToolCall: &brain.ToolCall{Tool: "net.fetch"}}, {Answer: "two"},
+		{ToolCalls: []brain.ToolCall{{Tool: "net.fetch"}}}, {Answer: "one"},
+		{ToolCalls: []brain.ToolCall{{Tool: "net.fetch"}}}, {Answer: "two"},
 	}}
 
-	b := &brain.Brain{Model: model, Tools: tools}
+	b := &brain.Brain{Model: model, Registry: brain.NewRegistry(tools)}
 	s := agent.New(b, guard, epochs)
 
 	if _, err := s.Ask(context.Background(), "fetch it once"); err != nil {
