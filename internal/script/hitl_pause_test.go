@@ -12,6 +12,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
@@ -53,7 +54,7 @@ func TestHITL_ApprovalOutlastsBudget_ScriptStillCompletes(t *testing.T) {
 	engine := hitl.NewEngine([]byte("test-host-key"), approver)
 	approver.engine = engine
 
-	netCap := &gateway.Net{
+	netCap := &netcap.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
 				{Capability: "http.write", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},

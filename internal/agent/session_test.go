@@ -14,6 +14,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
@@ -124,7 +125,7 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 		Epochs:    epochs,
 		TTL:       time.Second,
 	}
-	netCap := &gateway.Net{Guard: guard}
+	netCap := &netcap.Net{Guard: guard}
 
 	tools := []brain.Tool{{
 		ToolSpec: brain.ToolSpec{Name: "net.fetch"},

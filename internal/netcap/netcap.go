@@ -1,4 +1,4 @@
-package gateway
+package netcap
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
+	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
@@ -22,7 +23,7 @@ const maxResponseBytes = 10 << 20 // 10 MiB
 // credential itself — userinfo in the URL or a sensitive header. Credentials
 // must flow only through host-side injection (the Injector), never smuggled by
 // the model, or it could bypass the host's domain-bound credential control.
-var ErrManualCredential = errors.New("gateway: request carries a manually-supplied credential")
+var ErrManualCredential = errors.New("netcap: request carries a manually-supplied credential")
 
 // sensitiveHeaders are request headers the guest may never set itself; the host
 // owns the credential channel.
@@ -33,12 +34,14 @@ var sensitiveHeaders = map[string]bool{
 	"x-api-key":           true,
 }
 
-// Net groups the networking capabilities. It holds a shared *Guard plus its own
-// dependencies: the host-owned credential Injector (the "cookie jar") and an
-// HTTP client. Further networking capabilities (dns, ping) are added as sibling
-// methods here — the struct stays small and the Guard stays shared.
+// Net groups the networking capabilities. It holds a shared *gateway.Guard plus
+// its own dependencies: the host-owned credential Injector (the "cookie jar") and
+// an HTTP client. Further networking capabilities (dns, ping) are added as sibling
+// methods here — the struct stays small and the Guard stays shared. Net is an
+// interface-adapter: it maps a tool invocation to a capability + host and runs it
+// through the guard, then performs the real I/O.
 type Net struct {
-	Guard       *Guard
+	Guard       *gateway.Guard
 	Credentials *secret.Injector // host-owned, domain-bound credential jar; nil = no injection
 	Scanner     *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
 	HTTP        *http.Client
@@ -79,7 +82,7 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	// credential injection, and the request itself are unreachable on a denied
 	// call. Keeping them inside the closure makes the guarded pipeline cohesive
 	// and a bypass impossible by construction.
-	return Do(ctx, n.Guard, call, method+" "+req.URL, func() ([]byte, error) {
+	return gateway.Do(ctx, n.Guard, call, method+" "+req.URL, func() ([]byte, error) {
 		// Egress leak scan on the guest-built request (URL + headers + body), BEFORE
 		// the legitimate credential is stamped in below — so the host's own injected
 		// bearer is never flagged.
@@ -172,11 +175,22 @@ func rejectManualCredentials(req secret.Request) error {
 // no god-object, just a small method with its own dependency (a resolver).
 func (n *Net) Resolve(ctx context.Context, host string) ([]string, error) {
 	call := capability.Call{Capability: "dns.resolve", Attrs: map[string]string{"host": host}}
-	return Do(ctx, n.Guard, call, "resolve "+host, func() ([]string, error) {
+	return gateway.Do(ctx, n.Guard, call, "resolve "+host, func() ([]string, error) {
 		resolver := n.Resolver
 		if resolver == nil {
 			resolver = net.DefaultResolver
 		}
 		return resolver.LookupHost(ctx, host)
 	})
+}
+
+func hostOf(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("netcap: bad url %q: %w", rawURL, err)
+	}
+	if u.Hostname() == "" {
+		return "", fmt.Errorf("netcap: url %q has no host", rawURL)
+	}
+	return u.Hostname(), nil
 }

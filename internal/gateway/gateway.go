@@ -1,19 +1,18 @@
-// Package gateway is the guarded path to real-world effects.
+// Package gateway is the authorization use-case: the one reusable pipeline that
+// decides whether a real-world effect may proceed.
 //
-// Its core is the Guard: the one reusable authorization pipeline — the broker
-// decision (allow / ask / deny, with epoch, time window, and rate limit) plus
-// out-of-band human approval on Ask. Capabilities do NOT accumulate on a single
-// growing struct: each capability group (e.g. Net) is a small type that holds a
-// *Guard and its own dependencies, and runs every call through Guard.Authorize
-// before performing any effect. Adding a capability (dns, ping, email) is a new
-// small type or method — never a new field on a god-object.
+// Its core is the Guard: the broker decision (allow / ask / deny, with epoch,
+// time window, and rate limit) plus out-of-band human approval on Ask, wrapped by
+// Do (authorize-then-execute). The concrete effects live OUTSIDE this package, in
+// interface-adapter packages (e.g. netcap for http/dns) that each hold a *Guard
+// and run every call through it before doing any I/O. Adding a capability is a new
+// small adapter type — never a new field on a god-object here. This package
+// therefore depends only inward (capability + hitl), not on any effect adapter.
 package gateway
 
 import (
 	"context"
 	"errors"
-	"fmt"
-	"net/url"
 	"sync"
 	"time"
 
@@ -143,15 +142,4 @@ func (g *Guard) grant(epoch capability.EpochID, call capability.Call) {
 		Effect:     capability.Allow,
 		Epoch:      epoch,
 	})
-}
-
-func hostOf(rawURL string) (string, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return "", fmt.Errorf("gateway: bad url %q: %w", rawURL, err)
-	}
-	if u.Hostname() == "" {
-		return "", fmt.Errorf("gateway: url %q has no host", rawURL)
-	}
-	return u.Hostname(), nil
 }

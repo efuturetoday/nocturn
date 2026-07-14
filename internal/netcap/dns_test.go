@@ -1,4 +1,4 @@
-package gateway_test
+package netcap_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
+	"github.com/efuturetoday/nocturn/internal/netcap"
 )
 
 func allowResolve(hostGlob string) capability.Policy {
@@ -17,7 +18,7 @@ func allowResolve(hostGlob string) capability.Policy {
 }
 
 func TestResolve_Allow_ReturnsAddrs(t *testing.T) {
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowResolve(capability.Wildcard)}}
+	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowResolve(capability.Wildcard)}}
 	addrs, err := n.Resolve(context.Background(), "localhost")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -28,14 +29,14 @@ func TestResolve_Allow_ReturnsAddrs(t *testing.T) {
 }
 
 func TestResolve_Deny(t *testing.T) {
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: capability.Policy{}}} // deny-by-default
+	n := &netcap.Net{Guard: &gateway.Guard{Policy: capability.Policy{}}} // deny-by-default
 	if _, err := n.Resolve(context.Background(), "localhost"); !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
 	}
 }
 
 func TestResolve_HostAllowlist_DeniesOtherHost(t *testing.T) {
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowResolve("*.example.com")}}
+	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowResolve("*.example.com")}}
 	if _, err := n.Resolve(context.Background(), "localhost"); !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("resolve of non-allowlisted host: err = %v, want ErrDenied", err)
 	}
@@ -45,7 +46,7 @@ func TestResolve_Ask_DenyBlocks(t *testing.T) {
 	policy := capability.Policy{Rules: []capability.Rule{
 		{Capability: "dns.resolve", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 	}}
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: policy, Approvals: askEngine(false), TTL: time.Second}}
+	n := &netcap.Net{Guard: &gateway.Guard{Policy: policy, Approvals: askEngine(false), TTL: time.Second}}
 	if _, err := n.Resolve(context.Background(), "localhost"); !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
 	}

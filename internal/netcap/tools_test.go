@@ -1,4 +1,4 @@
-package gateway_test
+package netcap_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
+	"github.com/efuturetoday/nocturn/internal/netcap"
 )
 
 func toolByName(tools []brain.Tool, name string) (brain.Tool, bool) {
@@ -26,7 +27,7 @@ func toolByName(tools []brain.Tool, name string) (brain.Tool, bool) {
 // The capability group exports its own tools with valid JSON-Schema args — the
 // tool contract lives with the capability, not in the caller.
 func TestTools_ExposesCapabilitiesWithSchemas(t *testing.T) {
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: capability.Policy{}}}
+	n := &netcap.Net{Guard: &gateway.Guard{Policy: capability.Policy{}}}
 	tools := n.Tools()
 
 	for _, name := range []string{"http.read", "http.write", "dns.resolve"} {
@@ -44,7 +45,7 @@ func TestTools_ExposesCapabilitiesWithSchemas(t *testing.T) {
 }
 
 func TestFetchTool_ValidatesArguments(t *testing.T) {
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
+	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
 	ft, _ := toolByName(n.Tools(), "http.read")
 
 	if _, err := ft.Invoke(context.Background(), `not json`); err == nil {
@@ -61,7 +62,7 @@ func TestFetchTool_Invoke_ReturnsBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
+	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
 	ft, _ := toolByName(n.Tools(), "http.read")
 
 	out, err := ft.Invoke(context.Background(), fmt.Sprintf(`{"url":%q}`, srv.URL))

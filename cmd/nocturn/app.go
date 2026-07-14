@@ -22,6 +22,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/llm"
+	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
@@ -64,7 +65,7 @@ func tuiCmd(_ []string) error {
 
 	epochs := capability.NewEpochRegistry()
 	store := secret.NewStore()
-	netCap := &gateway.Net{
+	netCap := &netcap.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
 				{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},

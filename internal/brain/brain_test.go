@@ -14,6 +14,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
+	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
@@ -308,7 +309,7 @@ func TestBrain_Integration_FetchThroughGateway(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	netCap := &gateway.Net{Guard: &gateway.Guard{
+	netCap := &netcap.Net{Guard: &gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
 			{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
 		}},

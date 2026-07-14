@@ -5,7 +5,7 @@
 // the host side of that import is a dispatcher over a brain.Tool registry: the
 // guest calls nocturn.call(tool, args), the dispatcher looks the tool up and
 // runs its Invoke. That registry is the SAME set of gated tools the model uses
-// (gateway.Net.Tools()), so a script reaches effects through the identical
+// (netcap.Net.Tools()), so a script reaches effects through the identical
 // authorization pipeline (Guard.Authorize + out-of-band HITL). One gate is the
 // reference monitor; adding a capability is a Go-side change and never rebuilds
 // the interpreter.

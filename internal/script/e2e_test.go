@@ -10,12 +10,13 @@ import (
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
+	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
 // End to end through the REAL gateway: a JS script calls nocturn.call("http.read",
-// …), the one gate dispatches to gateway.Net's http.read tool, which runs the
+// …), the one gate dispatches to netcap.Net's http.read tool, which runs the
 // full guarded path (Guard.Authorize → Fetch), and the HTTP body flows back into
 // the script. This is the whole "gateway-backed effect gate, wired" claim proven
 // with the actual interpreter, not a fake tool.
@@ -50,7 +51,7 @@ func TestE2E_DeniedRequestNeverLeaves(t *testing.T) {
 	defer srv.Close()
 
 	// A Net with an empty policy → deny-by-default.
-	netCap := &gateway.Net{
+	netCap := &netcap.Net{
 		Guard:   &gateway.Guard{Policy: capability.Policy{}},
 		Scanner: secret.NewScanner(secret.NewStore()),
 		HTTP:    srv.Client(),
@@ -79,8 +80,8 @@ func TestE2E_DeniedRequestNeverLeaves(t *testing.T) {
 
 // autoAllowNet builds a Net that auto-allows http.read for any host — enough to
 // prove the wiring without an approval loop.
-func autoAllowNet(client *http.Client) *gateway.Net {
-	return &gateway.Net{
+func autoAllowNet(client *http.Client) *netcap.Net {
+	return &netcap.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
 				{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
