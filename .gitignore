@@ -7,3 +7,6 @@
 /nocturn
 /nocturnd
 *.test
+
+# macOS
+.DS_Store

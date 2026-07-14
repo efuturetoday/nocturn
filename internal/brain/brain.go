@@ -126,22 +126,24 @@ func (b *Brain) run(ctx context.Context, conv []Message) (string, []Message, err
 	return "", conv, ErrMaxSteps
 }
 
-// Session is a multi-turn conversation with a Brain: it carries the history
-// across turns so the model has the full context each time.
-type Session struct {
+// Conversation is a multi-turn exchange with a Brain: it carries the history
+// across turns so the model has the full context each time. It owns only the
+// message history — the session lifecycle (epoch, guard) lives one layer out in
+// internal/agent, which drives this.
+type Conversation struct {
 	brain *Brain
 	conv  []Message
 }
 
-// NewSession starts an empty conversation on this Brain.
-func (b *Brain) NewSession() *Session { return &Session{brain: b} }
+// NewConversation starts an empty conversation on this Brain.
+func (b *Brain) NewConversation() *Conversation { return &Conversation{brain: b} }
 
 // Send adds the user's input, runs the loop to a final answer, and keeps the
-// whole exchange in the session's history.
-func (s *Session) Send(ctx context.Context, input string) (string, error) {
-	s.conv = append(s.conv, Message{Role: "user", Content: input})
-	ans, conv, err := s.brain.run(ctx, s.conv)
-	s.conv = conv
+// whole exchange in the conversation's history.
+func (c *Conversation) Send(ctx context.Context, input string) (string, error) {
+	c.conv = append(c.conv, Message{Role: "user", Content: input})
+	ans, conv, err := c.brain.run(ctx, c.conv)
+	c.conv = conv
 	return ans, err
 }
 

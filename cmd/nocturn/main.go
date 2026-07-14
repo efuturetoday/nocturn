@@ -23,6 +23,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
@@ -94,6 +95,7 @@ func chatCmd(args []string) error {
 	if *allowFetch {
 		effect = capability.Allow
 	}
+	epochs := capability.NewEpochRegistry()
 	netCap := &gateway.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
@@ -101,6 +103,7 @@ func chatCmd(args []string) error {
 				{Capability: "dns.resolve", HostGlob: capability.Wildcard, Effect: effect, Epoch: capability.Permanent},
 			}},
 			Approvals: engine,
+			Epochs:    epochs, // shared with the session, so "Allow this session" grants are epoch-scoped
 			TTL:       *ttl,
 		},
 		HTTP: &http.Client{Timeout: 15 * time.Second},
@@ -119,7 +122,9 @@ func chatCmd(args []string) error {
 		OnToken:     func(tok string) { fmt.Print(tok) },                                    // stream the answer live
 		OnToolCall:  func(tc brain.ToolCall) { fmt.Printf("  → %s(%s)\n", tc.Tool, tc.Args) }, // UI feedback
 	}
-	if _, err := b.Run(ctx, request); err != nil {
+	session := agent.New(b, netCap.Guard, epochs)
+	defer session.Close()
+	if _, err := session.Ask(ctx, request); err != nil {
 		return err
 	}
 	fmt.Println()

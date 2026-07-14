@@ -140,8 +140,9 @@ func TestFetch_Ask_DenyBlocksRequest(t *testing.T) {
 	}
 }
 
-// "Allow this session" remembers the grant: the same host is not asked again.
-func TestFetch_AllowThisSession_RemembersGrant(t *testing.T) {
+// "Allow this session" remembers the grant, bound to the session epoch: the
+// same host is not asked again — until the epoch is closed, which revokes it.
+func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -152,18 +153,30 @@ func TestFetch_AllowThisSession_RemembersGrant(t *testing.T) {
 	engine := hitl.NewEngine([]byte("test-key"), n)
 	n.resolve = engine.Resolve
 
-	g := &gateway.Net{Guard: &gateway.Guard{Policy: askFetch(), Approvals: engine, TTL: time.Second}}
+	epochs := capability.NewEpochRegistry()
+	epoch := epochs.Open()
+	g := &gateway.Net{Guard: &gateway.Guard{Policy: askFetch(), Approvals: engine, Epochs: epochs, TTL: time.Second}}
+	ctx := capability.WithEpoch(context.Background(), epoch)
 
-	// first call: asked, ApprovedSession granted for this host
-	if _, err := g.Fetch(context.Background(), secret.Request{URL: srv.URL}, nil); err != nil {
+	// first call: asked, ApprovedSession granted for this host, bound to epoch
+	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}, nil); err != nil {
 		t.Fatalf("first fetch: %v", err)
 	}
-	// second call to the same host: covered by the session grant, no ask
-	if _, err := g.Fetch(context.Background(), secret.Request{URL: srv.URL}, nil); err != nil {
+	// second call to the same host: covered by the live session grant, no ask
+	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}, nil); err != nil {
 		t.Fatalf("second fetch: %v", err)
 	}
 	if asked != 1 {
 		t.Fatalf("human asked %d times, want 1 (the session grant should skip the 2nd ask)", asked)
+	}
+
+	// close the epoch: the grant is revoked, so the same host is asked again.
+	epochs.Close(epoch)
+	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}, nil); err != nil {
+		t.Fatalf("third fetch: %v", err)
+	}
+	if asked != 2 {
+		t.Fatalf("human asked %d times, want 2 (closing the epoch must revoke the session grant)", asked)
 	}
 }
 

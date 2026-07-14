@@ -35,8 +35,8 @@ type Guard struct {
 	TTL       time.Duration
 	Now       func() time.Time
 
-	mu      sync.Mutex
-	session []capability.Rule // grants remembered via "Allow this session"
+	mu     sync.Mutex
+	grants []capability.Rule // "Allow this session" grants, each bound to a session epoch
 }
 
 func (g *Guard) now() time.Time {
@@ -55,8 +55,9 @@ var approvalChoices = []hitl.Choice{
 
 // Authorize runs a call through the broker and, on Ask, through out-of-band
 // human approval. It returns nil if the call may proceed, ErrDenied otherwise.
-// "Allow this session" additionally remembers the grant so the same capability
-// and host is not asked again.
+// "Allow this session" additionally remembers the grant, bound to the epoch
+// carried by ctx, so the same capability and host is not asked again — until
+// that epoch is closed, which revokes the grant.
 func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent string) error {
 	env := capability.Env{Now: g.now(), Epochs: g.Epochs}
 	if g.Rate != nil {
@@ -68,7 +69,8 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 		return nil
 	case capability.Ask:
 		// A session grant short-circuits the ask — but only an Ask, never an
-		// explicit Deny (deny-wins stays a hard rail).
+		// explicit Deny (deny-wins stays a hard rail). The grant is epoch-aware:
+		// a grant whose epoch has been closed no longer matches.
 		if g.sessionAllows(call, env) {
 			return nil
 		}
@@ -78,7 +80,7 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 		}
 		switch out {
 		case hitl.ApprovedSession:
-			g.allowSession(call)
+			g.grant(capability.EpochFrom(ctx), call)
 			return nil
 		case hitl.Approved:
 			return nil
@@ -90,27 +92,40 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 	}
 }
 
-// sessionAllows reports whether a call is covered by a remembered session grant.
+// sessionAllows reports whether a call is covered by a live session grant. It
+// evaluates the grants with the same Env, so a grant bound to a closed epoch
+// (IsAlive == false) fails to match — revocation for free.
 func (g *Guard) sessionAllows(call capability.Call, env capability.Env) bool {
 	g.mu.Lock()
-	sess := g.session
+	grants := g.grants
 	g.mu.Unlock()
-	if len(sess) == 0 {
+	if len(grants) == 0 {
 		return false
 	}
-	return capability.Policy{Rules: sess}.Evaluate(call, env) == capability.Allow
+	return capability.Policy{Rules: grants}.Evaluate(call, env) == capability.Allow
 }
 
-// allowSession remembers a grant for the rest of the session, so the same
-// capability + host is auto-allowed without asking again.
-func (g *Guard) allowSession(call capability.Call) {
+// grant remembers a call's capability + host as allowed for the given epoch, so
+// the same call is auto-allowed without asking again while that epoch is alive.
+// Closing the epoch (EpochRegistry.Close) revokes it. Dead-epoch grants are
+// pruned on the way in, so the slice cannot grow across revoked sessions.
+func (g *Guard) grant(epoch capability.EpochID, call capability.Call) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.session = append(g.session, capability.Rule{
+	if g.Epochs != nil {
+		kept := g.grants[:0]
+		for _, r := range g.grants {
+			if g.Epochs.IsAlive(r.Epoch) {
+				kept = append(kept, r)
+			}
+		}
+		g.grants = kept
+	}
+	g.grants = append(g.grants, capability.Rule{
 		Capability: call.Capability,
 		HostGlob:   call.Attrs["host"], // exact host; "" matches hostless calls
 		Effect:     capability.Allow,
-		Epoch:      capability.Permanent,
+		Epoch:      epoch,
 	})
 }
 

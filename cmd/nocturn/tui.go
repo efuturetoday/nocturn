@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joho/godotenv"
 
+	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
@@ -64,6 +65,7 @@ type approval struct {
 
 type chatModel struct {
 	startTurn func(string) context.CancelFunc
+	reset     func() // starts a new session: revokes session grants, clears history
 
 	vp   viewport.Model
 	ta   textarea.Model
@@ -82,7 +84,7 @@ type chatModel struct {
 	ready      bool
 }
 
-func newChatModel(startTurn func(string) context.CancelFunc) chatModel {
+func newChatModel(startTurn func(string) context.CancelFunc, reset func()) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Message…"
 	ta.Prompt = "❯ "
@@ -90,7 +92,7 @@ func newChatModel(startTurn func(string) context.CancelFunc) chatModel {
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
 	ta.SetHeight(1)
 	ta.Focus()
-	return chatModel{startTurn: startTurn, ta: ta, spin: spinner.New(spinner.WithSpinner(spinner.Dot))}
+	return chatModel{startTurn: startTurn, reset: reset, ta: ta, spin: spinner.New(spinner.WithSpinner(spinner.Dot))}
 }
 
 func (m chatModel) Init() tea.Cmd { return tea.Batch(m.spin.Tick, pulseTick()) }
@@ -183,6 +185,16 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
+		case "ctrl+n":
+			if m.running {
+				return m, nil
+			}
+			m.reset()
+			m.history = ""
+			m.stream = ""
+			m.activeTool = ""
+			m.syncViewport()
+			return m, nil
 		case "esc":
 			if m.running && m.cancel != nil {
 				m.cancel()
@@ -309,7 +321,7 @@ func (m chatModel) View() string {
 	if m.running {
 		status = m.spin.View() + hintStyle.Render(" thinking…   Esc cancel · ctrl+c quit")
 	} else {
-		status = hintStyle.Render("Enter send · Ctrl+J newline · ctrl+c quit")
+		status = hintStyle.Render("Enter send · Ctrl+J newline · Ctrl+N new session · ctrl+c quit")
 	}
 	return m.vp.View() + "\n" + status + "\n" + m.ta.View()
 }
@@ -368,6 +380,7 @@ func tuiCmd(_ []string) error {
 	engine := hitl.NewEngine(key, notifier)
 	notifier.resolve = engine.Resolve
 
+	epochs := capability.NewEpochRegistry()
 	netCap := &gateway.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
@@ -375,6 +388,7 @@ func tuiCmd(_ []string) error {
 				{Capability: "dns.resolve", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 			}},
 			Approvals: engine,
+			Epochs:    epochs, // shared with the session, so "Allow this session" grants are revocable
 			TTL:       2 * time.Minute,
 		},
 		HTTP: &http.Client{Timeout: 15 * time.Second},
@@ -393,17 +407,18 @@ func tuiCmd(_ []string) error {
 		OnToolCall:   func(tc brain.ToolCall) { p.Send(toolMsg{name: tc.Tool, args: tc.Args}) },
 		OnToolResult: func(_ brain.ToolCall, _ string, err error) { p.Send(toolResultMsg{err: err}) },
 	}
-	session := b.NewSession()
+	session := agent.New(b, netCap.Guard, epochs)
+	defer session.Close()
 	startTurn := func(input string) context.CancelFunc {
 		turnCtx, cancel := context.WithCancel(ctx)
 		go func() {
-			_, err := session.Send(turnCtx, input)
+			_, err := session.Ask(turnCtx, input)
 			p.Send(doneMsg{err: err})
 		}()
 		return cancel
 	}
 
-	p = tea.NewProgram(newChatModel(startTurn), tea.WithAltScreen())
+	p = tea.NewProgram(newChatModel(startTurn, session.Reset), tea.WithAltScreen())
 	notifier.p = p
 	_, err := p.Run()
 	return err
