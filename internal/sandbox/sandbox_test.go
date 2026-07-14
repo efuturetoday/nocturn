@@ -4,6 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,6 +17,9 @@ var echoGuest []byte
 
 //go:embed testdata/loop.wasm
 var loopGuest []byte
+
+//go:embed testdata/fsprobe.wasm
+var fsGuest []byte
 
 // echoHost returns the request unchanged — enough to prove the round-trip ABI.
 func echoHost() sandbox.HostFunc {
@@ -40,7 +45,7 @@ func TestRun_HostCallABI_ViaStdio(t *testing.T) {
 	}
 }
 
-// A runaway guest is trapped by the wall-clock deadline (the #422 guarantee).
+// A runaway guest is trapped by the wall-clock deadline.
 func TestRun_DeadlineTrapsRunawayGuest(t *testing.T) {
 	_, err := sandbox.Run(context.Background(), loopGuest, sandbox.Config{
 		Timeout: 200 * time.Millisecond,
@@ -56,5 +61,23 @@ func TestRun_DeadlineTrapsRunawayGuest(t *testing.T) {
 func TestRun_UngrantedImport_CannotInstantiate(t *testing.T) {
 	if _, err := sandbox.Run(context.Background(), echoGuest, sandbox.Config{}); err == nil {
 		t.Fatal("guest reached an ungranted host function — isolation is broken")
+	}
+}
+
+// The workspace is the ONLY filesystem: the guest can create a file inside /work
+// but cannot escape it to reach the host FS. Confinement is allowlist-by-mount.
+func TestRun_Workspace_ConfinedReadWrite(t *testing.T) {
+	ws := t.TempDir()
+	res, err := sandbox.Run(context.Background(), fsGuest, sandbox.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("run: %v (stderr=%s)", err, res.Stderr)
+	}
+	// result byte: bit0 = create-in-/work ok, bit1 = escape open ok (must be 0)
+	if len(res.Stdout) != 1 || res.Stdout[0] != 0x01 {
+		t.Fatalf("result = %v, want [1] (write ok, escape blocked)", res.Stdout)
+	}
+	// the create really landed inside the host workspace dir
+	if _, err := os.Stat(filepath.Join(ws, "probe.txt")); err != nil {
+		t.Fatalf("workspace file not created on host: %v", err)
 	}
 }
