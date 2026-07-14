@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -311,6 +312,49 @@ func TestFetch_Write_DeniedWithoutWriteRule(t *testing.T) {
 	}
 	if hit {
 		t.Fatal("a write with no http.write rule must not reach the network")
+	}
+}
+
+// A stored vault value in the outbound request is blocked by the leak scanner
+// before it reaches the network.
+func TestFetch_EgressLeak_Blocked(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
+	defer srv.Close()
+
+	store := secret.NewStore()
+	store.Set("tok", []byte("supersecretvalue123"))
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Scanner: secret.NewScanner(store)}
+
+	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL + "/?x=supersecretvalue123"})
+	if !errors.Is(err, secret.ErrLeaked) {
+		t.Fatalf("err = %v, want ErrLeaked", err)
+	}
+	if hit {
+		t.Fatal("a leaking request must not reach the network")
+	}
+}
+
+// A vault value echoed back in a response is redacted before it is returned.
+func TestFetch_IngressLeak_Redacted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("echo supersecretvalue123 back"))
+	}))
+	defer srv.Close()
+
+	store := secret.NewStore()
+	store.Set("tok", []byte("supersecretvalue123"))
+	n := &gateway.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Scanner: secret.NewScanner(store)}
+
+	body, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if strings.Contains(string(body), "supersecretvalue123") {
+		t.Fatal("ingress secret was not redacted")
+	}
+	if !strings.Contains(string(body), "[REDACTED]") {
+		t.Fatal("no redaction marker in response body")
 	}
 }
 

@@ -49,6 +49,19 @@ func (s *Store) value(name string) ([]byte, bool) {
 	return v, ok
 }
 
+// knownValues returns a snapshot of every stored secret value. Host-internal
+// like value — never exposed to a guest; used only by the leak scanner to catch
+// a stored secret being exfiltrated.
+func (s *Store) knownValues() [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([][]byte, 0, len(s.secrets))
+	for _, v := range s.secrets {
+		out = append(out, v)
+	}
+	return out
+}
+
 // GuestView is the only store surface a guest may hold. It exposes presence and
 // nothing else — there is deliberately no method that returns a secret value,
 // so even a fully compromised guest cannot exfiltrate a credential through it.

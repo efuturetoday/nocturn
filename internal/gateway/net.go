@@ -40,6 +40,7 @@ var sensitiveHeaders = map[string]bool{
 type Net struct {
 	Guard       *Guard
 	Credentials *secret.Injector // host-owned, domain-bound credential jar; nil = no injection
+	Scanner     *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
 	HTTP        *http.Client
 	Resolver    *net.Resolver
 }
@@ -77,8 +78,12 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 		return nil, err
 	}
 
-	// Egress leak-scan seam (next shell): scan the guest-built request HERE
-	// (URL + body), before the legitimate credential is stamped in below.
+	// Egress leak scan on the guest-built request (URL + headers + body), BEFORE
+	// the legitimate credential is stamped in below — so the host's own injected
+	// bearer is never flagged.
+	if err := n.Scanner.ScanEgress(egressParts(req)...); err != nil {
+		return nil, err
+	}
 
 	// Host-owned, capability- and host-scoped credential injection: only a
 	// credential whose binding matches this capability AND destination host
@@ -108,9 +113,25 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// Ingress redaction seam (next shell): redact injected secrets that echo
-	// back before the body reaches the model.
-	return io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return nil, err
+	}
+	// Ingress redaction: strip any secret echoed back before it reaches the model.
+	return n.Scanner.RedactIngress(respBody), nil
+}
+
+// egressParts collects the guest-built request's leak-scannable surfaces.
+func egressParts(req secret.Request) []string {
+	parts := make([]string, 0, len(req.Headers)+2)
+	parts = append(parts, req.URL)
+	for _, v := range req.Headers {
+		parts = append(parts, v)
+	}
+	if len(req.Body) > 0 {
+		parts = append(parts, string(req.Body))
+	}
+	return parts
 }
 
 // capabilityForMethod maps an HTTP method to the capability that gates it: safe

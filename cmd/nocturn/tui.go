@@ -24,6 +24,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/llm"
+	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
 var (
@@ -381,6 +382,7 @@ func tuiCmd(_ []string) error {
 	notifier.resolve = engine.Resolve
 
 	epochs := capability.NewEpochRegistry()
+	store := secret.NewStore()
 	netCap := &gateway.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
@@ -392,7 +394,8 @@ func tuiCmd(_ []string) error {
 			Epochs:    epochs, // shared with the session, so "Allow this session" grants are revocable
 			TTL:       2 * time.Minute,
 		},
-		HTTP: &http.Client{Timeout: 15 * time.Second},
+		Scanner: secret.NewScanner(store),
+		HTTP:    &http.Client{Timeout: 15 * time.Second},
 	}
 	tools := map[string]brain.Tool{}
 	for _, t := range netCap.Tools() {

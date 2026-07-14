@@ -31,6 +31,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl/ntfy"
 	"github.com/efuturetoday/nocturn/internal/host"
 	"github.com/efuturetoday/nocturn/internal/llm"
+	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
 func main() {
@@ -96,6 +97,7 @@ func chatCmd(args []string) error {
 		effect = capability.Allow
 	}
 	epochs := capability.NewEpochRegistry()
+	store := secret.NewStore()
 	netCap := &gateway.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
@@ -108,7 +110,8 @@ func chatCmd(args []string) error {
 			Epochs:    epochs, // shared with the session, so "Allow this session" grants are epoch-scoped
 			TTL:       *ttl,
 		},
-		HTTP: &http.Client{Timeout: 15 * time.Second},
+		Scanner: secret.NewScanner(store),
+		HTTP:    &http.Client{Timeout: 15 * time.Second},
 	}
 
 	// The capabilities export their own tools (name, schema, argument validation).

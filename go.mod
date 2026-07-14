@@ -3,7 +3,12 @@ module github.com/efuturetoday/nocturn
 go 1.26.1
 
 require (
+	github.com/charmbracelet/bubbles v1.0.0
+	github.com/charmbracelet/bubbletea v1.3.10
+	github.com/charmbracelet/glamour v1.0.0
+	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/joho/godotenv v1.5.1
+	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/tetratelabs/wazero v1.12.0
 )
@@ -13,11 +18,7 @@ require (
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
-	github.com/charmbracelet/bubbles v1.0.0 // indirect
-	github.com/charmbracelet/bubbletea v1.3.10 // indirect
 	github.com/charmbracelet/colorprofile v0.4.1 // indirect
-	github.com/charmbracelet/glamour v1.0.0 // indirect
-	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834 // indirect
 	github.com/charmbracelet/x/ansi v0.11.6 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
 	github.com/charmbracelet/x/exp/slice v0.0.0-20250327172914-2fdc97757edf // indirect
