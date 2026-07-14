@@ -130,8 +130,9 @@ getestet, bevor die nächste kam:
 | `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Inject`/`Binding`/`Request` (Credential-Konzern). |
 | `hitl` | `Engine` (Request/Resolve, queue-then-execute), HMAC-`token`; Sub-Paket `hitl/ntfy` (`Publisher` push + `Listener` subscribe). |
 | `gateway` | `Guard.Authorize` (die eine Autorisierungs-Pipeline) + `Net` (Capability-Gruppe: `Fetch`, `Resolve`). `ErrDenied`. |
-| `brain` | Agentischer Loop. `Model`-Interface (Port), `Tool`/`ToolSpec`, `Run`, `OnToken` (Streaming). |
+| `brain` | Agentischer Loop. `Model`-Interface (Port), `Tool`/`ToolSpec`, `Run`, `OnToken` (Streaming). `Conversation` = reine Message-History (`NewConversation`/`Send`). |
 | `llm` | OpenAI-kompatibler Adapter (go-openai), native `tool_calls`, SSE-Streaming. |
+| `agent` | **Session-Lifecycle-Owner.** `Session` bündelt `brain.Conversation` + geteilten `gateway.Guard` + geteilte `EpochRegistry` + die aktuelle Epoche. `Ask` stempelt die Epoche via `capability.WithEpoch` in den ctx (→ Guard bindet Session-Grants daran); `Reset` schließt die Epoche (widerruft Grants) + öffnet frische Epoche + frische Conversation; `Close` schließt die Epoche. |
 
 `cmd/nocturn/main.go` — CLI: `run <skill.wasm>` und `chat "<request>"`.
 `spike/extism`, `spike/javy` — **Wegwerf**-Spikes (Skill-Schicht-Entscheidung, geparkt), eigene go.mod.
@@ -292,8 +293,237 @@ gestreamt**.
 2. **Secure-by-default `chat`** — `net.fetch = Ask` + Handy-Freigabe als Default.
 3. **Weitere Capabilities** (`ping`, Mail, Kalender) — Muster: kleiner Typ + `*Guard`.
 4. **Skill-Schicht** (Extism vs. eigener Host + Javy) — geparkte Weiche, beide gespiket.
-5. **Verteilung** (IronHub-Stil + Code-Signing), **Epoch ins Brain** (task-scoped
-   Grants via „für-diese-Session-merken"), **tool_call_id**-Verfeinerung.
+5. **Verteilung** (IronHub-Stil + Code-Signing), **tool_call_id**-Verfeinerung.
+
+**Erledigt (Refactor):** **Epoch verdrahtet** — `agent.Session` als expliziter
+Lifecycle-Owner; „Allow this session"-Grants sind epoch-gebunden und werden bei
+`Reset`/`Close` widerrufen (Epoche schließen → `IsAlive`=false → Grant matcht nicht
+mehr). Epoche fließt via `capability.WithEpoch(ctx)` durch `Ask → Conversation.Send
+→ brain.run → tool.Invoke → Guard.Authorize`. TUI: **Ctrl+N = new session** (Grants
+widerrufen + Chat leeren). Race-clean getestet (`internal/agent`, Gateway-Revocation).
 
 **Arbeitsweise:** Zwiebelschalig, ein Aspekt klären → bauen → als stabil beweisen.
 Explizit statt implizit. Kein Wildwuchs. Kein Cruft.
+
+---
+
+# Anhang — Recherche & Roadmap (dauerhaftes Wissen)
+
+> Aus dem Ur-Plan hierher konsolidiert. Referenz, nicht täglich gebraucht —
+> aber zu wertvoll, um in einer Plan-Datei zu verrotten. `★`-Zahlen/Timestamps
+> sind grobe Richtwerte (Fetch-Summarizer konfabuliert Zahlen — vor externer
+> Nutzung via GitHub-API prüfen). Alles Übrige ist repo-/primärquellen-verifiziert.
+
+## A — Wettbewerb (Deep-Dive)
+
+### IronClaw (`nearai/ironclaw`) — der direkte Rivale, Benchmark
+Rust-Reimplementierung von OpenClaw, 54-Crate-Workspace, Apache-2.0/MIT, ~12,5k★,
+v0.29.1 (Juni 2026, **pre-1.0**). Illia Polosukhin (NEAR) assoziiert. Hosted = NEAR
+AI Cloud (TEE).
+- **Isolation:** Wasmtime 46, Component-Model + WASI Preview 2. WASM-Tools sehen nur
+  **4 Host-Funktionen** (`log`, `now_unix_secs`, `workspace_read/write`); Netz über
+  host-seitigen HTTP-Proxy. Per-Tool `capabilities.json`. Memory-Limit via
+  `ResourceLimiter`, **CPU via Fuel** (100 M Instr.). Pipeline:
+  `WASM→Allowlist→Leak-Scan→Credential→Execute→Leak-Scan→WASM`.
+- **Stärken (nicht frontal angreifen):** (a) **Credential-Vault** `ironclaw_secrets`:
+  AES-256-GCM, per-Secret HKDF-SHA256, domain-separated AAD, Low-Entropy-Guard, Secret
+  nie im WASM-Memory — **Table-Stakes-Vorbild für uns**. (b) **Bidirektionales
+  Leak-Scanning** (15+ Patterns, ein-/ausgehend). (c) Rust-Memory-Safety + reife
+  Component-Isolation + Fuel. (d) Feature-Breite (MCP-Client, viele Provider/Channels,
+  NL→WASM-Tool-Autogen, Hybrid-Vektorsuche).
+- **Schwächen (verifiziert, schlagbar):** (a) **Kein Out-of-band/Phone-HITL**
+  (`phone|twilio|push|sms` = 0 Treffer). „Approval" = persistenter Grant-Store
+  `ironclaw_approvals` (Allow/Ask/Deny), **prompted den User nicht**, **Auto-Approve
+  default AN**, „Ask" ist *in-band* (angreifbar). Background-Trigger → kein Mensch,
+  System *denied* nur High-Severity. (b) `PolicyAction::Review` = **Stub**. (c)
+  **Skill-Attenuation nicht geportet** (#5581), Capability-Katalog leakt (#5712),
+  **kein Code-Signing**. (d) **Kein SECURITY.md**, private Vuln-Reporting aus (#6000).
+  (e) Multi-Tenant-Leck (#5460), Audit-Sink-Lücken (#5640/#5428). (f)
+  **Schwergewichtig:** Postgres 15 + pgvector + 54 Crates + Node/pnpm-WebUI; „einfach" =
+  NEAR-Cloud/TEE-Lock-in. „reborn"-Rewrite läuft → Design ungesetzt.
+
+### OpenClaw selbst — der HITL-Incumbent (überraschend)
+- iOS-App + **Apple-Watch** reviewen/genehmigen pending **`exec`-Requests** vom Handy
+  (`operator.approvals`, „first committed answer wins"). Echte Out-of-band-Freigabe —
+  **bereits ausgeliefert**.
+- **Schwächen (unser Konter):** nur `tools.exec` (nicht alle Boundaries) · **abschaltbar**
+  („never stop on exec approvals") · TS-Monolith, **kein WASM-Sandbox**. → Wir:
+  *verpflichtend, nicht abschaltbar, an ALLEN Boundaries, WASM-isoliert*.
+
+### WASM-Sandbox-Tech (Isolations-Konkurrenz)
+- **MS Wassette** — MCP-Server, läuft WASI-Components als Tools (Wasmtime). WIT→JSON-
+  Schema-Automapping, OCI-Distribution **signiert (Notation/Cosign)**, deny-by-default,
+  YAML-Policy. Sauberste standardkonforme Capability-Injektion, aber **„not production
+  ready"**, Rust+Wasmtime+CGo, **kein HITL**.
+- **wasmCloud/Cosmonic** — Capability-Injektion als typisierte WIT-Contracts (Link-Zeit,
+  kein Ambient-Effekt). Schwergewichtig (Lattice), aber Linking-Modell = Blaupause.
+- **Extism** — Plugin-Framework, **Go-SDK nutzt wazero (CGo-frei)** — direkter
+  Präzedenzfall. Capability = Manifest. **Footgun:** `allowed_hosts: null` = ALLE Hosts;
+  kein Signing/Registry.
+
+### OpenClaw-Forks (Isolation, aber kein Out-of-band-HITL)
+| Fork | Stack | Isolation | Schwäche |
+|---|---|---|---|
+| **NanoClaw** (`nanocoai/nanoclaw`) | TS, Docker | Container-pro-Chat-Gruppe, Vault | „Tamper-evident Log" nur Blog-Claim; Name mehrdeutig |
+| **NemoClaw** (`NVIDIA/NemoClaw`) | TS-CLI + Python | **Real:** OpenShell (Landlock+seccomp+netns) + YAML-Policy | Sandbox ≠ VM; Approval lokal/policy |
+| **ZeroClaw** (`elev8tion/zeroclaw`) | Rust | Gateway-Pairing (OTP+Bearer), deny-by-default Channel-Allowlist | „<5 MB" = 1 macOS-Run, keine Methodik; fragmentiert |
+| **PicoClaw** (`sipeed/picoclaw`) | **Go**, Single-Binary, MCP | Multi-Arch | **Kein** Capability-/Security-Modell; ~95% agent-generiert |
+| **nanobot** (`HKUDS/nanobot`) | Python + MCP | „safer workspace access" | **Kein** Sandbox/Gate/Approval; Name kollidiert |
+
+### HITL-Player (in-app/desktop, nicht out-of-band)
+- **Cline** (~58k★) — per-Tool-Approval, Auto-Approve-Toggles, `requires_approval`,
+  Shadow-Git-Checkpoints. VS-Code-in-Editor, kein Sandbox/Out-of-band.
+- **QwenPaw** (AgentScope) — „Tool Guard" YAML + `ShellEvasionGuardian`, Level
+  STRICT/SMART/AUTO/OFF, Kernel-Sandbox, Skill-Scanner. Lokal, **kein** Push.
+- **Goose** (Block, Rust) — Modi Autonomous/Manual/Smart/Chat-Only, per-Tool
+  Always/Ask/Never. In-app.
+- **OpenHands** (Python) — Confirmation-Mode (`WAITING_FOR_CONFIRMATION`), sauber
+  getrennt `SecurityAnalyzer` (LLM taggt Risk) vs. `ConfirmationPolicy`. Coding, in-app.
+- **MS Agent Framework** — per-Function `approval_mode`; Run gibt `user_input_requests`
+  zurück, **App liefert den Kanal** — exakt der Hook für eine Phone-Schicht. Kein Transport.
+- **Shannot** (`corv89/shannot`) — HITL via Syscall-Interception + virtuelles FS, Review
+  in **TUI**. Lokal, nicht mobil.
+
+### Out-of-band-/Phone-Approval — die Nische ist in 3 Fragmente zersplittert
+- **Bolt-on-MCP** (`telegram-assistant-mcp`) — winzig/generisch, kein Sandbox.
+- **Claude-Code-Hooks** (`claude-push`, `claude-ntfy-hook`) — `PermissionRequest`-Hook +
+  ntfy-SSE mit Allow/Deny. Beweisen die Nachfrage, aber Coding-scoped, **Topic-Name =
+  einzige Auth (schwach)**, un-sandboxed.
+- **Enterprise-OAuth CIBA** (Auth0/Okta) — rigoroseste Out-of-band-Freigabe,
+  standardisiert, aber **transaktions-scoped**, kein genereller Trust-Boundary. *Option:*
+  CIBA als Transport für Standards-Glaubwürdigkeit.
+- **MCP Elicitation** — das *richtige* Primitive (Tool pausieren bis User-Input), aber
+  transport-agnostisch → jemand muss es ans Handy verdrahten.
+
+### Positionierungs-Matrix
+| Projekt | Stack | Isolation | HITL | Out-of-band | Verbindlich | Ops | Reife |
+|---|---|---|---|---|---|---|---|
+| **Nocturn** | Go+wazero | Capability, Zero Ambient | Broker-Gate | **Ja, erzwungen** | **Ja, nicht abschaltbar** | Single-Binary | Neu |
+| IronClaw | Rust | WASM-Component+Vault+Fuel | Grant-Store | Nein | Auto-Approve AN | Postgres+54 Crates/TEE | Reif (pre-1.0) |
+| OpenClaw | TS | keiner | iOS/Watch (exec-only) | Ja, optional | **Abschaltbar** | Node-Gateway | Sehr reif |
+| Wassette | Wasmtime-Comp. | Zero-Authority | — | Nein | — | MCP-Server | Früh |
+| NemoClaw | TS+Rust | Landlock+seccomp+netns | Policy | Nein | Policy | Kernel-Sandbox | Neu |
+| Cline | TS/VS-Code | keiner | Per-Action | Nein | Optional | Extension | ~58k★ |
+| OpenHands | Python | Docker | Confirmation | Nein | Optional | Docker | Hoch |
+
+### Wo Nocturn gewinnt (und wo nicht)
+1. **Nicht neu:** WASM-Sandbox (IronClaw/Wassette) **und** Phone-Approval (OpenClaw)
+   existieren einzeln — nicht als Neuheit verkaufen.
+2. **Verteidigbar = Kombination + Verbindlichkeit:** *verpflichtende, nicht abschaltbare
+   Out-of-band-Freigabe auf separatem Gerät, an JEDER Trust-Boundary, WASM-isoliert,
+   Single-Binary ohne DB/Cloud*. Andere: *sandboxen-und-automatisieren* (IronClaw) **oder**
+   *fragen-nur-in-app* (Cline/OpenHands) **oder** *out-of-band-aber-optional-exec-only*
+   (OpenClaw). Niemand macht Out-of-band zum **erzwungenen Default**.
+3. **Table-Stakes zum Mitziehen:** Credential-Vault + **bidirektionales Leak-Scanning**
+   (sonst wirkt IronClaw stärker).
+4. **Glaubwürdigkeits-Siege gg. IronClaws Lücken:** erzwungene Attenuation (#5581),
+   Code-Signing, SECURITY.md + getesteter Audit-Sink (#6000/#5640), starke Krypto am
+   Approval-Kanal (ntfy-Bolt-ons haben nur ratbaren Topic).
+5. **Framing:** *„IronClaw-Grade Tool-Isolation, aber mit erzwungener menschlicher
+   Zustimmung an Trust-Boundaries — auf einem zweiten Gerät, nicht abschaltbar, in einer
+   einzigen Go-Binary ohne Cloud."*
+
+## B — OpenClaw Gap-Analyse (Bedrohung → unsere Antwort)
+
+OpenClaw-Arch: **channel** (Messaging-Adapter) → **brain** (Loop, Memory) → **body**
+(Tools: Browser/Shell/Cron). Skills = Plain Files via „ClawHub", model-agnostisch.
+
+| # | Schwäche (dokumentiert) | Ursache | Nocturns Antwort |
+|---|---|---|---|
+| 1 | Prompt-Injection (~57% Robustheit); Web-/Nachrichten-Inhalt kapert Agent | LLM-Output steuert privilegierte Tools direkt | Broker + **HITL für irreversibel/extern**; LLM-Output = *untrusted* |
+| 2 | **Exfil über Link-Previews** (PromptArmor): Agent baut Angreifer-URL, Preview holt sie | Ungebremster Egress | Kein Ambient-Netz; Egress gebrokert + **Leak-Scanning** + HITL für neue Ziele |
+| 3 | Bösartige Skills / ClawHub-Supply-Chain (Cisco) | Skills ungesandboxt mit Host-Rechten | **WASM Zero-Authority**; Skills signiert + **Attenuation erzwungen** |
+| 4 | Schwache Default-Configs (CNCERT) → Takeover | Ambient-Rechte, Opt-out | **Deny-by-default**: keine Capability ohne expliziten epoch-Grant |
+| 5 | Exponierte Control-UI/Dashboards | Netz-erreichbare Web-UI | **Lokal-only**, Unix-Socket, keine Netz-Bindung; Keychain |
+| 6 | Irreversible Fehlaktionen (MoltMatch) | Kein Freigabe-Gate für destruktive Ops | HITL zwingend für send/delete/pay/commit; Zeitfenster + Rate |
+| 7 | Governance/„vibe slop" | Usability über Security | Kleiner auditierter Kern; append-only Audit; SECURITY.md |
+
+**Kern:** Zwei unabhängige Bedrohungsklassen → zwei Verteidigungen. Bösartiger
+*Code* (#3,#4) → **WASM-Sandbox**. Injection missbraucht *legitime* Tools (#1,#2,#6)
+→ **Broker + Out-of-band-HITL** (Sandbox allein stoppt Injection nicht; in-band-
+Freigabe liegt im selben Trust-Domain → **separates Gerät**).
+
+## C — wazero-Realität & PORTICO (ehrliche Runtime-Einordnung)
+
+- **wazero ist WASIp1-only, kein Component-Model** (#2289 „not planned"), **kein Fuel**.
+  Kosten ggü. Wasmtime: (a) keine typisierten WIT-Interfaces / kein WIT→Tool-Mapping →
+  **eigene Manifest-/Schema-Schicht** (Extism-Stil) nötig; (b) WASIp1 gröber; (c)
+  CPU-Grenze nur über **Context-Deadline + Memory-Page-Cap**; (d) Component-Tools von
+  Wassette/wasmCloud laufen ohne Shim nicht.
+- **Warum trotzdem richtig:** CGo-freie **Single-Binary** (Cross-Compile trivial), und
+  **jede Capability = deine Go-Funktion** → Boundary maximal auditierbar, wrappbar,
+  revozierbar.
+- **PORTICO** (arXiv 2606.22504): Capabilities als **epoch-gebundene opake Handles**
+  statt stehender Rechte — Grant an Task/Subgoal-Epoche binden, **Revoke = Epoche
+  invalidieren**; jede Host-Function = Reference-Monitor (Stale-Replay vor dem Effekt
+  abgewiesen). Attenuierbare **Biscuit/Macaroon**-Tokens (nur Verengung). → Die
+  `EpochRegistry` + `agent.Session` sind der erste Schritt dieses Musters.
+- **Escape-Hatch:** Capability-Interfaces abstrakt genug für ein späteres
+  **wasmtime-go/Component-Backend**, falls Component-Portabilität hart wird.
+
+## D — Trust-Grenze: Variante A (entschieden)
+
+**„Skills/Tools im WASM, Brain im Host"** (aktuell umgesetzt). Alternative B (Brain +
+Skills im WASM) offen gehalten.
+
+| | A: Brain im Host (**gewählt**) | B: Brain + Skills im WASM |
+|---|---|---|
+| LLM-Keys | nie im Sandbox | müssen gebrokert werden |
+| Isolation | Skill-Code isoliert; Broker+HITL gegen Injection-Wirkung | auch Loop isoliert |
+| Komplexität | gering, idiomatisch Go | hoch (Loop+LLM-I/O über ABI) |
+| Injection-Schutz | **identisch** (kommt aus Broker/HITL) | identisch |
+
+**Begründung:** Injection-Abwehr kommt aus **Broker + Out-of-band-HITL**, nicht aus
+der Loop-Position. A ist simpler, gleiche Netto-Sicherheit, Keys aus dem Sandbox.
+Host-Function-Grenze so bauen, dass die Loop später bruchfrei nach B wandern kann.
+
+## E — Roadmap M0–M7 + Ziel-Layout
+
+**Status:** M0–M5 stehen (Kern 0–5, Gateway, Brain, LLM, Binary, TUI, Out-of-band-HITL
+live gg. iPhone verifiziert). M4-Rest (Leak-Scan) ist die **aktive** Aufgabe.
+
+- **M0 Scaffold** ✅ — wazero führt Zero-Authority-Guest.
+- **M1 Broker + erste Host-Fn** ✅ — deny>ask>allow, epoch-check. (`http_get` → real:
+  `net.fetch`/`dns.resolve`.)
+- **M2 Signierte + attenuierte Skills** ⬜ — Ed25519, erzwungene Attenuation, Beispiel-
+  Skill (TinyGo→wasm). *Skill-Schicht geparkt (Extism vs. eigener Host+Javy).*
+- **M3 Out-of-band-HITL** ✅ — Queue, signiertes Single-Use-Token, ntfy, nicht abschaltbar.
+- **M4 Vault + Leak-Scan** 🔷 — Vault-Injektion ✅; **Leak-Scan = aktiv**; Keychain ⬜.
+- **M5 Brain** ✅ — Loop (Variante A), LLM-Adapter, Tool-Calls durch Broker.
+- **M6 Tauri-Shell** ⬜ — Desktop-UI über Unix-Socket, Approval-Liste, kein Netz-Listener.
+- **M7 Policy + Härtung** 🔷 — Zeitfenster/Rate ✅ (Primitive), Metriken/SECURITY.md/Audit-
+  Sink ⬜, Security-Pass.
+
+**Ziel-Repo-Layout (noch nicht erreichte Teile):** `cmd/nocturnd` (Daemon), `internal/
+skill/` (loader + Ed25519 + Attenuation, registry), `internal/audit/log.go` (append-only,
+getestet), `api/socket.go` (Unix-Socket-IPC), `skills/example-http/`, `desktop/` (Tauri),
+`internal/secret/keychain.go`, `SECURITY.md`.
+
+## F — Sicherheits-Beweis-Checkliste (was wir stets beweisen können müssen)
+
+- **Zero-Authority:** Guest ohne `net`/`fs`-Grant kann keine Verbindung/kein FS öffnen
+  (Link-/Trap-Fehler). ✅
+- **Broker-Präzedenz + Epoch:** deny schlägt engere allow; first-match; unbekannte
+  Capability → deny; abgelaufene Epoche → Stale-Replay abgewiesen. ✅
+- **Attenuation (M2):** installierter Skill kann nachweislich nicht schreiben/HTTP/Shell
+  (Konter zu IronClaw #5581). ⬜
+- **Out-of-band-HITL-E2E:** Approve ⇒ Aktion+Audit; Deny/Timeout ⇒ getrappt;
+  abgelaufenes/wiederverwendetes Token abgewiesen; Boundary-Policy nicht abschaltbar
+  (Negativtest). ✅ (live gg. iPhone)
+- **Vault/Leak-Scan (M4):** Secret nie im Guest-Memory; Egress mit Secret → geblockt;
+  Ingress-Secret → geflaggt/redigiert. 🔷 (aktiv)
+- **Exfil-Regression (OpenClaw #2):** Egress auf Nicht-Allowlist → geblockt; neue Domain →
+  „ask" statt stiller Ausführung. ✅ (Gating) / 🔷 (Secret-in-URL: mit Leak-Scan)
+- **Härtung (M7):** OOM-/Deadline-Guest sauber getrappt; Daemon bindet nur Unix-Socket,
+  kein TCP (`lsof`). ⬜
+
+## G — Referenzen & offene Punkte
+
+**Referenzen auf der Platte:** `scrippy/internal/engine/extism/` (WASM-Host-Muster,
+wazero), `my-tauri-app` / `f7svelte` (Tauri-Shells), `neura/aep-export-saas/.claude/
+skills/golang-*` (Go-Style/Testing/Security).
+
+**Offen:** Skill-Sprache Guests (TinyGo vs. Rust) · ntfy self-hosted vs. .sh + CIBA-
+Adoption · Escape-Hatch wasmtime-go/Component-Backend · Task- vs. Session-Epoche
+(PORTICO-Feinung, aktuell 1 Epoche/Session) · Keychain-Backend · Skill-PDK-Weiche
+(Extism 34-Modul-TCB vs. eigener Host+Javy — Säule-2 DevEx vs. Säule-4 kleine TCB).
