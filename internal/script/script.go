@@ -32,9 +32,6 @@ const (
 	gateName = "call"
 	// codeRunName is the brain tool that runs a script.
 	codeRunName = "code.run"
-	// maxScriptOutput caps how much of a script's stdout is handed back to the
-	// model, mirroring the gateway's response cap.
-	maxScriptOutput = 4000
 )
 
 // Runner evaluates JS source on the interpreter guest, dispatching a script's
@@ -63,8 +60,9 @@ func NewWithGuest(guest []byte, reg *brain.Registry) *Runner {
 }
 
 // Run evaluates source on the interpreter and returns what the script printed to
-// stdout (bounded). A trap, non-zero exit, memory exhaustion, or timeout returns
-// an error alongside any stderr the guest produced.
+// stdout. A trap, non-zero exit, memory exhaustion, or timeout returns an error
+// alongside any stderr the guest produced. Output is not truncated here — the
+// brain bounds what the model sees; a script's own effect results stay whole.
 func (r *Runner) Run(ctx context.Context, source string) (string, error) {
 	gate := sandbox.HostFunc{Name: gateName, Fn: r.dispatch}
 	res, err := sandbox.Run(ctx, r.Guest, sandbox.Config{
@@ -75,11 +73,11 @@ func (r *Runner) Run(ctx context.Context, source string) (string, error) {
 	})
 	if err != nil {
 		if len(res.Stderr) > 0 {
-			return "", fmt.Errorf("%w: %s", err, truncate(string(res.Stderr), maxScriptOutput))
+			return "", fmt.Errorf("%w: %s", err, res.Stderr)
 		}
 		return "", err
 	}
-	return truncate(string(res.Stdout), maxScriptOutput), nil
+	return string(res.Stdout), nil
 }
 
 // dispatch is the one gate. The guest calls nocturn.call(reqPtr,reqLen) with a
@@ -145,11 +143,4 @@ func (r *Runner) Tool() brain.Tool {
 			return r.Run(ctx, a.Source)
 		},
 	}
-}
-
-func truncate(s string, n int) string {
-	if len(s) > n {
-		return s[:n] + "…(truncated)"
-	}
-	return s
 }

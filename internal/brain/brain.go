@@ -97,6 +97,13 @@ type Brain struct {
 
 const defaultMaxSteps = 8
 
+// maxToolOutput bounds how much of a tool's result is fed back to the Model, to
+// keep the context bounded. It is applied HERE — the single point where a tool
+// result reaches the model — not per tool, and deliberately NOT in the Registry:
+// the Registry also serves the script interpreter, and a script's nocturn.call
+// results are processed programmatically and must not be truncated.
+const maxToolOutput = 4000
+
 // Run drives a single request to a final answer (fresh conversation).
 func (b *Brain) Run(ctx context.Context, request string) (string, error) {
 	ans, _, err := b.run(ctx, []Message{{Role: "user", Content: request}})
@@ -177,9 +184,16 @@ func (b *Brain) invoke(ctx context.Context, tc ToolCall) string {
 	}
 	out, err := b.Registry.Invoke(ctx, tc.Tool, tc.Args)
 	if err != nil {
-		return "error: " + timeoutCause(ctx, err).Error()
+		return truncate("error: "+timeoutCause(ctx, err).Error(), maxToolOutput)
 	}
-	return out
+	return truncate(out, maxToolOutput)
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…(truncated)"
+	}
+	return s
 }
 
 // timeoutCause replaces a context-cancellation error with the context's cause

@@ -94,6 +94,33 @@ func TestBrain_StreamsAnswerTokens(t *testing.T) {
 	}
 }
 
+// A tool's output is bounded HERE (at the brain) before it reaches the model, so
+// one big result can't blow the context — regardless of which tool produced it.
+func TestBrain_LongToolOutputBoundedForModel(t *testing.T) {
+	big := strings.Repeat("x", 10000)
+	reg := brain.NewRegistry([]brain.Tool{
+		tool("big", func(context.Context, string) (string, error) { return big, nil }),
+	})
+	model := &scriptedModel{steps: []brain.Step{
+		{ToolCalls: []brain.ToolCall{{ID: "1", Tool: "big"}}},
+		{Answer: "done"},
+	}}
+
+	b := &brain.Brain{Model: model, Registry: reg}
+	if _, err := b.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var toolMsg string
+	for _, m := range model.convs[1] {
+		if m.Role == "tool" {
+			toolMsg = m.Content
+		}
+	}
+	if len(toolMsg) >= len(big) || !strings.Contains(toolMsg, "truncated") {
+		t.Fatalf("tool output not bounded for the model (len=%d)", len(toolMsg))
+	}
+}
+
 // Multiple tool calls in one turn run CONCURRENTLY: each blocks at a barrier
 // until all have started, so a sequential executor would deadlock here. Results
 // are still stitched into history in CALL ORDER, not completion order.

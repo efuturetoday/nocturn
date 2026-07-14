@@ -11,10 +11,6 @@ import (
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
-// maxToolResponse caps how much of a fetched body is handed to the model, to
-// keep the context bounded.
-const maxToolResponse = 4000
-
 // Tools exposes this capability group as brain tools — name, JSON Schema, and an
 // Invoke that validates the model's arguments and calls the guarded method. The
 // tool contract (schema + argument parsing) lives WITH the capability, not in
@@ -107,7 +103,10 @@ func (n *Net) doRequest(ctx context.Context, method, url, body, contentType stri
 	if err != nil {
 		return "", err
 	}
-	return truncate(string(resp), maxToolResponse), nil
+	// Not truncated here: the brain bounds what the model sees, and a script's
+	// nocturn.call gets the whole response to process. The raw read is already
+	// capped at maxResponseBytes (net.go).
+	return string(resp), nil
 }
 
 func methodOrDefault(m, def string) string {
@@ -144,11 +143,4 @@ func (n *Net) resolveTool() brain.Tool {
 			return strings.Join(addrs, ", "), nil
 		},
 	}
-}
-
-func truncate(s string, n int) string {
-	if len(s) > n {
-		return s[:n] + "…(truncated)"
-	}
-	return s
 }
