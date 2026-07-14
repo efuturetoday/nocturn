@@ -92,7 +92,7 @@ func (n *Net) writeTool() brain.Tool {
 	}
 }
 
-// doRequest builds and runs the HTTP request shared by net.read and net.write.
+// doRequest builds and runs the HTTP request shared by http.read and http.write.
 func (n *Net) doRequest(ctx context.Context, method, url, body, contentType string) (string, error) {
 	req := secret.Request{Method: method, URL: url}
 	if body != "" {

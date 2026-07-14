@@ -69,7 +69,7 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	}
 	method = strings.ToUpper(method)
 
-	// The capability — net.read for safe methods, net.write for mutating ones —
+	// The capability — http.read for safe methods, http.write for mutating ones —
 	// is what the policy and credential bindings key on. The raw HTTP method
 	// never reaches the security layer.
 	capName := capabilityForMethod(method)

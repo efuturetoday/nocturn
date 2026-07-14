@@ -1,8 +1,8 @@
 // Package sandbox runs an untrusted WebAssembly guest (an interpreter such as
 // QuickJS or MicroPython, or a compiled skill) under strict isolation on wazero.
 //
-// It builds on the zero-authority core in internal/host and adds exactly what a
-// real guest needs and nothing more: WASI stdio for input/output, an optional
+// A guest starts from zero authority; the sandbox adds exactly what a real guest
+// needs and nothing more: WASI stdio for input/output, an optional
 // workspace directory confined by construction, brokered host-function imports,
 // and hardening (a memory cap and a wall-clock deadline that traps runaway
 // guests). The sandbox performs NO effect itself — every effect is a HostFunc
