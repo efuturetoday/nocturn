@@ -44,7 +44,7 @@ func TestNext_StreamsAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("next: %v", err)
 	}
-	if step.ToolCall != nil || step.Answer != "The answer is 42." {
+	if len(step.ToolCalls) != 0 || step.Answer != "The answer is 42." {
 		t.Fatalf("step = %+v, want final answer", step)
 	}
 	if streamed != "The answer is 42." {
@@ -64,11 +64,37 @@ func TestNext_AccumulatesStreamedToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("next: %v", err)
 	}
-	if step.ToolCall == nil || step.ToolCall.Tool != "net.fetch" {
-		t.Fatalf("step = %+v, want tool call net.fetch", step)
+	if len(step.ToolCalls) != 1 || step.ToolCalls[0].Tool != "net.fetch" {
+		t.Fatalf("step = %+v, want one tool call net.fetch", step)
 	}
-	if step.ToolCall.Args != `{"url":"https://x"}` {
-		t.Fatalf("args = %q, want accumulated JSON", step.ToolCall.Args)
+	if step.ToolCalls[0].Args != `{"url":"https://x"}` {
+		t.Fatalf("args = %q, want accumulated JSON", step.ToolCalls[0].Args)
+	}
+}
+
+// Several tool calls in one turn (different stream indices) must be kept SEPARATE,
+// each with its own accumulated name and args — not concatenated into one call.
+func TestNext_MultipleToolCallsKeptSeparate(t *testing.T) {
+	srv := mockStream(
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"http.read","arguments":"{\"url\":\"a\"}"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"name":"dns.resolve","arguments":"{\"host\":"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"b\"}"}}]}}]}`,
+	)
+	defer srv.Close()
+
+	c := llm.New(srv.URL, "k", "auto")
+	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "do both"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("next: %v", err)
+	}
+	if len(step.ToolCalls) != 2 {
+		t.Fatalf("got %d tool calls, want 2 (indices must not be merged): %+v", len(step.ToolCalls), step.ToolCalls)
+	}
+	if step.ToolCalls[0].Tool != "http.read" || step.ToolCalls[0].Args != `{"url":"a"}` {
+		t.Fatalf("call[0] = %+v, want http.read {url:a}", step.ToolCalls[0])
+	}
+	if step.ToolCalls[1].Tool != "dns.resolve" || step.ToolCalls[1].Args != `{"host":"b"}` {
+		t.Fatalf("call[1] = %+v, want dns.resolve {host:b}", step.ToolCalls[1])
 	}
 }
 

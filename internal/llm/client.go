@@ -69,7 +69,8 @@ func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []brain.T
 	}
 	defer stream.Close()
 
-	var content, toolName, toolArgs strings.Builder
+	var content strings.Builder
+	acc := newToolAcc()
 	for {
 		chunk, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -88,21 +89,55 @@ func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []brain.T
 				onToken(delta.Content)
 			}
 		}
+		// Tool calls stream in fragments keyed by index: the name arrives once, the
+		// arguments in pieces, and several calls interleave. Accumulate PER INDEX,
+		// or two parallel calls would be concatenated into one garbage call.
 		for _, tc := range delta.ToolCalls {
-			if tc.Function.Name != "" {
-				toolName.WriteString(tc.Function.Name)
-			}
-			toolArgs.WriteString(tc.Function.Arguments)
+			acc.add(tc)
 		}
 	}
 
-	if toolName.Len() > 0 {
-		return brain.Step{ToolCall: &brain.ToolCall{
-			Tool: toolName.String(),
-			Args: toolArgs.String(), // JSON, validated by the tool
-		}}, nil
+	if calls := acc.calls(); len(calls) > 0 {
+		return brain.Step{ToolCalls: calls}, nil
 	}
 	return brain.Step{Answer: strings.TrimSpace(content.String())}, nil
+}
+
+// toolAcc accumulates streamed tool_call fragments per index and yields them in
+// first-seen order.
+type toolAcc struct {
+	order []int
+	name  map[int]*strings.Builder
+	args  map[int]*strings.Builder
+}
+
+func newToolAcc() *toolAcc {
+	return &toolAcc{name: map[int]*strings.Builder{}, args: map[int]*strings.Builder{}}
+}
+
+func (a *toolAcc) add(tc openai.ToolCall) {
+	idx := 0
+	if tc.Index != nil {
+		idx = *tc.Index
+	}
+	if _, seen := a.name[idx]; !seen {
+		a.order = append(a.order, idx)
+		a.name[idx] = &strings.Builder{}
+		a.args[idx] = &strings.Builder{}
+	}
+	a.name[idx].WriteString(tc.Function.Name)
+	a.args[idx].WriteString(tc.Function.Arguments)
+}
+
+func (a *toolAcc) calls() []brain.ToolCall {
+	calls := make([]brain.ToolCall, 0, len(a.order))
+	for _, idx := range a.order {
+		calls = append(calls, brain.ToolCall{
+			Tool: a.name[idx].String(),
+			Args: a.args[idx].String(), // JSON, validated by the tool
+		})
+	}
+	return calls
 }
 
 func buildMessages(conv []brain.Message) []openai.ChatCompletionMessage {
