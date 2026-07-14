@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/llm"
+	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
@@ -41,12 +43,11 @@ var pulsePalette = []string{"23", "30", "37", "44", "51", "44", "37", "30"}
 
 // Messages sent to the program from the turn goroutine / notifier.
 type (
-	tokenMsg      string
-	toolMsg       struct{ name, args string }
-	toolResultMsg struct{ err error }
-	doneMsg       struct{ err error }
-	pulseMsg      struct{}
-	approvalMsg   struct {
+	tokenMsg     string
+	toolEventMsg brain.ToolEvent // one tool call's start/end, from the shared Registry
+	doneMsg      struct{ err error }
+	pulseMsg     struct{}
+	approvalMsg  struct {
 		intent  string
 		options []hitl.Option
 		reply   chan string
@@ -64,6 +65,15 @@ type approval struct {
 	reply   chan string
 }
 
+// toolFrame is one in-flight tool call on the call stack. A script's effects
+// nest inside code.run, so calls form a stack: children accumulate into their
+// parent's rendered lines and are committed together when the parent ends.
+type toolFrame struct {
+	name     string
+	args     string
+	children []string // rendered, already-committed child lines (nested effects)
+}
+
 type chatModel struct {
 	startTurn func(string) context.CancelFunc
 	reset     func() // starts a new session: revokes session grants, clears history
@@ -73,12 +83,12 @@ type chatModel struct {
 	spin spinner.Model
 	md   *glamour.TermRenderer
 
-	history    string
-	stream     string // raw accumulated assistant text for the current turn
-	streamMD   string // markdown-rendered, already-committed blocks of stream
-	streamOff  int    // byte offset into stream up to which streamMD has been rendered
-	activeTool string // in-flight tool call (pulsing); "" when none
-	pulse      int
+	history   string
+	stream    string      // raw accumulated assistant text for the current turn
+	streamMD  string      // markdown-rendered, already-committed blocks of stream
+	streamOff int         // byte offset into stream up to which streamMD has been rendered
+	callStack []toolFrame // in-flight tool calls (pulsing); empty when none
+	pulse     int
 	running    bool
 	cancel     context.CancelFunc // cancels the current turn
 	approval   *approval
@@ -120,21 +130,93 @@ func (m *chatModel) resetStream() {
 	m.streamOff = 0
 }
 
-// commitActiveTool moves the in-flight tool line into the static transcript.
-func (m *chatModel) commitActiveTool() {
-	if m.activeTool != "" {
-		m.history += toolStyle.Render("  ● "+m.activeTool) + "\n"
-		m.activeTool = ""
+// toolDisplay splits a tool call into a one-line headline and an optional
+// multi-line body. code.run's JS source becomes a rendered ```javascript block;
+// every other tool shows its raw args inline.
+func (m chatModel) toolDisplay(name, args string) (headline, body string) {
+	if name == "code.run" {
+		if src, ok := codeRunSource(args); ok {
+			code := m.renderMarkdown("```javascript\n" + strings.TrimSpace(src) + "\n```")
+			return name, strings.TrimRight(code, "\n") + "\n"
+		}
+	}
+	return name + "(" + args + ")", ""
+}
+
+// renderToolFrame renders a completed tool call for the static transcript: a
+// bullet at depth 0, a nested "↳" child at depth ≥1, the headline (wrapped),
+// code.run's JS body, and any child lines it accumulated. On error the line is
+// red with the reason underneath.
+func (m chatModel) renderToolFrame(f toolFrame, err error, depth int) string {
+	style := toolStyle
+	if err != nil {
+		style = errStyle
+	}
+	bullet := "  ● "
+	if depth > 0 {
+		bullet = "    ↳ "
+	}
+	headline, body := m.toolDisplay(f.name, f.args)
+	out := styleWidth(style, m.width).Render(bullet+headline) + "\n" + body
+	for _, c := range f.children {
+		out += c
+	}
+	if err != nil {
+		out += styleWidth(errStyle, m.width).Render("      ↳ "+shortErr(err)) + "\n"
+	}
+	return out
+}
+
+// handleToolEvent tracks the tool call stack: a ToolStart pushes a frame, a
+// ToolEnd pops it and renders it — nested effects fold into their parent's child
+// lines, a top-level call commits straight to the transcript.
+func (m *chatModel) handleToolEvent(ev brain.ToolEvent) {
+	switch ev.Phase {
+	case brain.ToolStart:
+		m.callStack = append(m.callStack, toolFrame{name: ev.Tool, args: ev.Args})
+	case brain.ToolEnd:
+		if len(m.callStack) == 0 {
+			return
+		}
+		frame := m.callStack[len(m.callStack)-1]
+		m.callStack = m.callStack[:len(m.callStack)-1]
+		depth := len(m.callStack) // the popped frame's own depth
+		block := m.renderToolFrame(frame, ev.Err, depth)
+		if depth > 0 {
+			parent := &m.callStack[len(m.callStack)-1]
+			parent.children = append(parent.children, block)
+		} else {
+			m.history += block
+		}
 	}
 }
 
-func (m *chatModel) syncViewport() {
-	content := m.history
-	if m.activeTool != "" {
-		dot := lipgloss.NewStyle().Bold(true).
-			Foreground(lipgloss.Color(pulsePalette[m.pulse%len(pulsePalette)])).Render("●")
-		content += "  " + dot + " " + toolStyle.Render(m.activeTool) + "\n"
+// renderActiveStack renders the in-flight call stack live: the top-level call
+// pulses with its already-completed children beneath it, and any nested effect
+// currently running is shown as its own pulsing line.
+func (m chatModel) renderActiveStack() string {
+	if len(m.callStack) == 0 {
+		return ""
 	}
+	dot := lipgloss.NewStyle().Bold(true).
+		Foreground(lipgloss.Color(pulsePalette[m.pulse%len(pulsePalette)])).Render("●")
+	top := m.callStack[0]
+	headline, body := m.toolDisplay(top.name, top.args)
+	// Dot + space sit outside the wrapped style (4 visible columns), so wrap the
+	// headline to width-4 to keep padding from overflowing the line.
+	out := "  " + dot + " " + styleWidth(toolStyle, m.width-4).Render(headline) + "\n" + body
+	for _, c := range top.children {
+		out += c
+	}
+	for _, f := range m.callStack[1:] { // a nested effect in progress
+		hl, _ := m.toolDisplay(f.name, f.args)
+		out += "    " + dot + " " + styleWidth(toolStyle, m.width-6).Render(hl) + "\n"
+	}
+	return out
+}
+
+func (m *chatModel) syncViewport() {
+	content := m.history + m.renderActiveStack()
 	content += m.streamMD
 	if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
 		content += tail // still-incomplete last block, shown raw until it closes
@@ -231,7 +313,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reset()
 			m.history = ""
 			m.resetStream()
-			m.activeTool = ""
+			m.callStack = nil
 			m.syncViewport()
 			return m, nil
 		case "esc":
@@ -249,7 +331,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.ta.Reset()
 			m.ta.Blur()
-			m.history += userStyle.Render("❯ "+input) + "\n\n"
+			m.history += styleWidth(userStyle, m.width).Render("❯ "+input) + "\n\n"
 			m.resetStream()
 			m.running = true
 			m.cancel = m.startTurn(input)
@@ -264,34 +346,19 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pulseMsg:
 		m.pulse++
-		if m.activeTool != "" {
+		if len(m.callStack) > 0 {
 			m.syncViewport()
 		}
 		return m, pulseTick()
 
 	case tokenMsg:
-		m.commitActiveTool()
 		m.stream += string(msg)
 		m.advanceStream()
 		m.syncViewport()
 		return m, nil
 
-	case toolMsg:
-		m.commitActiveTool()
-		m.activeTool = msg.name + "(" + msg.args + ")"
-		m.syncViewport()
-		return m, nil
-
-	case toolResultMsg:
-		if m.activeTool != "" {
-			if msg.err != nil {
-				m.history += errStyle.Render("  ● "+m.activeTool) + "\n"
-				m.history += errStyle.Render("    ↳ "+shortErr(msg.err)) + "\n"
-			} else {
-				m.history += toolStyle.Render("  ● "+m.activeTool) + "\n"
-			}
-			m.activeTool = ""
-		}
+	case toolEventMsg:
+		m.handleToolEvent(brain.ToolEvent(msg))
 		m.syncViewport()
 		return m, nil
 
@@ -302,7 +369,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case doneMsg:
-		m.commitActiveTool()
+		m.callStack = nil // every ToolStart is paired with a ToolEnd; clear defensively
 		m.cancel = nil
 		full := m.streamMD
 		if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
@@ -315,7 +382,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.Is(msg.err, context.Canceled) {
 				m.history += hintStyle.Render("— cancelled") + "\n\n"
 			} else {
-				m.history += errStyle.Render("error: "+msg.err.Error()) + "\n\n"
+				m.history += styleWidth(errStyle, m.width).Render("error: "+msg.err.Error()) + "\n\n"
 			}
 		}
 		m.resetStream()
@@ -368,6 +435,28 @@ func (m chatModel) View() string {
 		status = hintStyle.Render("Enter send · Ctrl+J newline · Ctrl+N new session · ctrl+c quit")
 	}
 	return m.vp.View() + "\n" + status + "\n" + m.ta.View()
+}
+
+// styleWidth constrains a lipgloss style to w columns, which enables word-wrap;
+// with a non-positive width (before the first WindowSizeMsg) it is a no-op.
+func styleWidth(s lipgloss.Style, w int) lipgloss.Style {
+	if w > 0 {
+		return s.Width(w)
+	}
+	return s
+}
+
+// codeRunSource pulls the JS source out of a code.run call's JSON args so the
+// TUI can show it as readable, syntax-highlighted code (unmarshalling turns the
+// escaped \n back into real newlines) instead of a crammed one-line string.
+func codeRunSource(args string) (string, bool) {
+	var a struct {
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(args), &a); err == nil && strings.TrimSpace(a.Source) != "" {
+		return a.Source, true
+	}
+	return "", false
 }
 
 func shortErr(err error) string {
@@ -440,19 +529,30 @@ func tuiCmd(_ []string) error {
 		Scanner: secret.NewScanner(store),
 		HTTP:    &http.Client{Timeout: 15 * time.Second},
 	}
-	tools := map[string]brain.Tool{}
-	for _, t := range netCap.Tools() {
-		tools[t.Name] = t
-	}
+	// One shared Registry dispatches every tool call — the model's AND the
+	// script's — so its OnCall observer sees them all in one place, nested by
+	// call order.
+	reg := brain.NewRegistry(netCap.Tools())
+
+	// A script interpreter (QuickJS on the sandbox) exposed as code.run: the
+	// model can run multi-step JS that reaches effects via one generic host gate
+	// (nocturn.call), dispatched back through the SAME Registry — every effect
+	// still passes Guard.Authorize + out-of-band HITL. Pure compute needs no
+	// approval. The Timeout is a backstop; the brain's ToolTimeout (via ctx)
+	// governs normally. code.run is added after the runner exists so the
+	// interpreter can dispatch back into the Registry; a script may not re-enter
+	// it (the runner's dispatch refuses code.run).
+	runner := script.NewRunner(reg)
+	runner.Timeout = 60 * time.Second
+	reg.Add(runner.Tool())
 
 	var p *tea.Program
+	reg.OnCall = func(ev brain.ToolEvent) { p.Send(toolEventMsg(ev)) }
 	b := &brain.Brain{
 		Model:       llm.New(baseURL, apiKey, modelName),
-		Tools:       tools,
-		ToolTimeout:  20 * time.Second,
-		OnToken:      func(tok string) { p.Send(tokenMsg(tok)) },
-		OnToolCall:   func(tc brain.ToolCall) { p.Send(toolMsg{name: tc.Tool, args: tc.Args}) },
-		OnToolResult: func(_ brain.ToolCall, _ string, err error) { p.Send(toolResultMsg{err: err}) },
+		Registry:    reg,
+		ToolTimeout: 20 * time.Second,
+		OnToken:     func(tok string) { p.Send(tokenMsg(tok)) },
 	}
 	session := agent.New(b, netCap.Guard, epochs)
 	defer session.Close()
