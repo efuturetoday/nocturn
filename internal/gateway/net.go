@@ -74,51 +74,54 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	// never reaches the security layer.
 	capName := capabilityForMethod(method)
 	call := capability.Call{Capability: capName, Attrs: map[string]string{"host": host}}
-	if err := n.Guard.Authorize(ctx, call, method+" "+req.URL); err != nil {
-		return nil, err
-	}
 
-	// Egress leak scan on the guest-built request (URL + headers + body), BEFORE
-	// the legitimate credential is stamped in below — so the host's own injected
-	// bearer is never flagged.
-	if err := n.Scanner.ScanEgress(egressParts(req)...); err != nil {
-		return nil, err
-	}
+	// Everything past the gate runs only if Do authorizes: the leak-scan,
+	// credential injection, and the request itself are unreachable on a denied
+	// call. Keeping them inside the closure makes the guarded pipeline cohesive
+	// and a bypass impossible by construction.
+	return Do(n.Guard, ctx, call, method+" "+req.URL, func() ([]byte, error) {
+		// Egress leak scan on the guest-built request (URL + headers + body), BEFORE
+		// the legitimate credential is stamped in below — so the host's own injected
+		// bearer is never flagged.
+		if err := n.Scanner.ScanEgress(egressParts(req)...); err != nil {
+			return nil, err
+		}
 
-	// Host-owned, capability- and host-scoped credential injection: only a
-	// credential whose binding matches this capability AND destination host
-	// rides along (nil Injector = none).
-	if _, err := n.Credentials.InjectMatching(&req, capName, host); err != nil {
-		return nil, err
-	}
+		// Host-owned, capability- and host-scoped credential injection: only a
+		// credential whose binding matches this capability AND destination host
+		// rides along (nil Injector = none).
+		if _, err := n.Credentials.InjectMatching(&req, capName, host); err != nil {
+			return nil, err
+		}
 
-	var body io.Reader
-	if len(req.Body) > 0 {
-		body = bytes.NewReader(req.Body)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
-	if err != nil {
-		return nil, err
-	}
-	for k, v := range req.Headers {
-		httpReq.Header.Set(k, v)
-	}
+		var body io.Reader
+		if len(req.Body) > 0 {
+			body = bytes.NewReader(req.Body)
+		}
+		httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range req.Headers {
+			httpReq.Header.Set(k, v)
+		}
 
-	client := n.HTTP
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-	if err != nil {
-		return nil, err
-	}
-	// Ingress redaction: strip any secret echoed back before it reaches the model.
-	return n.Scanner.RedactIngress(respBody), nil
+		client := n.HTTP
+		if client == nil {
+			client = http.DefaultClient
+		}
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+		if err != nil {
+			return nil, err
+		}
+		// Ingress redaction: strip any secret echoed back before it reaches the model.
+		return n.Scanner.RedactIngress(respBody), nil
+	})
 }
 
 // egressParts collects the guest-built request's leak-scannable surfaces.
@@ -169,13 +172,11 @@ func rejectManualCredentials(req secret.Request) error {
 // no god-object, just a small method with its own dependency (a resolver).
 func (n *Net) Resolve(ctx context.Context, host string) ([]string, error) {
 	call := capability.Call{Capability: "dns.resolve", Attrs: map[string]string{"host": host}}
-	if err := n.Guard.Authorize(ctx, call, "resolve "+host); err != nil {
-		return nil, err
-	}
-
-	resolver := n.Resolver
-	if resolver == nil {
-		resolver = net.DefaultResolver
-	}
-	return resolver.LookupHost(ctx, host)
+	return Do(n.Guard, ctx, call, "resolve "+host, func() ([]string, error) {
+		resolver := n.Resolver
+		if resolver == nil {
+			resolver = net.DefaultResolver
+		}
+		return resolver.LookupHost(ctx, host)
+	})
 }

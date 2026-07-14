@@ -92,6 +92,22 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 	}
 }
 
+// Do authorizes call (out-of-band HITL on Ask) and runs effect ONLY if the call
+// is allowed. Because the effect is a closure, it is unreachable unless Authorize
+// returned nil: a capability method physically cannot run its effect without
+// gating first, nor return a result on a denied call — bypass is impossible by
+// construction. This keeps a capability's guarded pipeline (authorize → its own
+// leak-scan / credential-inject / execute) cohesive while making a forgotten or
+// out-of-order gate unrepresentable. A free function, not a method, so it can be
+// generic over the effect's result type.
+func Do[T any](g *Guard, ctx context.Context, call capability.Call, intent string, effect func() (T, error)) (T, error) {
+	if err := g.Authorize(ctx, call, intent); err != nil {
+		var zero T
+		return zero, err
+	}
+	return effect()
+}
+
 // sessionAllows reports whether a call is covered by a live session grant. It
 // evaluates the grants with the same Env, so a grant bound to a closed epoch
 // (IsAlive == false) fails to match — revocation for free.
