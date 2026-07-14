@@ -49,3 +49,12 @@ func TestRun_DeadlineTrapsRunawayGuest(t *testing.T) {
 		t.Fatalf("err = %v, want deadline exceeded", err)
 	}
 }
+
+// Unforgeable by absence — the zero-authority floor: a guest that imports a host
+// function it was not granted cannot even instantiate. echoGuest imports
+// nocturn.echo; run with no Hosts, that import does not exist in its world.
+func TestRun_UngrantedImport_CannotInstantiate(t *testing.T) {
+	if _, err := sandbox.Run(context.Background(), echoGuest, sandbox.Config{}); err == nil {
+		t.Fatal("guest reached an ungranted host function — isolation is broken")
+	}
+}

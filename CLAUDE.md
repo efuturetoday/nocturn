@@ -69,7 +69,7 @@ getestet, bevor die nächste kam:
 │ │ │ │ │ │ ┌──────────────────────────────────────────────────────────┐ │ │ │ │ │ │
 │ │ │ │ │ │ │ 1  capability — Broker deny>ask>allow, Epoch/Rate/Window │ │ │ │ │ │ │
 │ │ │ │ │ │ │ ┌──────────────────────────────────────────────────────┐ │ │ │ │ │ │ │
-│ │ │ │ │ │ │ │ 0  host — Zero Authority + ABI-Fenster               │ │ │ │ │ │ │ │
+│ │ │ │ │ │ │ │ 0  sandbox — Zero Authority + WASI + ABI + Härtung   │ │ │ │ │ │ │ │
 │ │ │ │ │ │ │ └──────────────────────────────────────────────────────┘ │ │ │ │ │ │ │
 │ │ │ │ │ │ └──────────────────────────────────────────────────────────┘ │ │ │ │ │ │
 │ │ │ │ │ └──────────────────────────────────────────────────────────────┘ │ │ │ │ │
@@ -109,9 +109,10 @@ getestet, bevor die nächste kam:
 ```
 
 ### Schalen (jede stabil bevor die nächste kam)
-0. **Zero Authority** (`host`) — wazero-Gast ohne Freigabe kann *nicht mal starten*.
-1. **ABI-Fenster** (`host`) — genau *ein* opt-in Host-Fenster; Daten via `(ptr,len)`
-   über linearen Speicher; wazero bounds-checked.
+0. **Zero Authority** (`sandbox`) — wazero-Gast ohne Freigabe kann *nicht mal starten*
+   (ungranted import = strukturell abwesend).
+1. **ABI-Fenster** (`sandbox`) — gebrokerte HostFunc-Imports; Daten via `(ptr,len)`
+   über linearen Speicher (wazero bounds-checked); Standard-ABI (packed-ptr + Gast-`malloc`).
 2. **Broker** (`capability`) — `deny > ask > allow`, deny-by-default, deny-wins.
 3. **Epoch/Revocation** (`capability`) — task-gebundene, widerrufbare Grants (PORTICO).
 4. **Secret-Store** (`secret`) — Gast sieht nur Präsenz, nie den Wert; Host injiziert.
@@ -125,8 +126,7 @@ getestet, bevor die nächste kam:
 
 | Paket | Rolle |
 |---|---|
-| `host` | wazero-Host, Zero-Authority-Kern + Kernel-Demos. `Run` (nichts), `RunWithLog` (ABI-Fenster), `RunWithBrokeredLog`, `RunWithHITLLog`. Test-Gäste `logprobe` (WAT). |
-| `sandbox` | **Die generelle Guest-Engine** (Interpreter/Skills). `Run(ctx, guest, Config)`: gehärtet (Memory-Cap + Wall-Clock-Deadline trappt Runaways), WASI-stdio, Workspace `WithDirMount(/work)` (Allowlist-by-construction), gebrokerte `HostFunc`-Imports über **Standard-ABI** (`nocturn.<name>(reqPtr,reqLen)→packed(addr<<32\|size)`, Host alloziert Antwort im Gast via dessen `malloc`). WAT-Test-Gäste (`echo`/`loop`). |
+| `sandbox` | **Die wazero-Schicht: Zero-Authority-Boden + generelle Guest-Engine** (Interpreter/Skills). `Run(ctx, guest, Config)`: gehärtet (Memory-Cap + Wall-Clock-Deadline trappt Runaways, #422), WASI-stdio, Workspace `WithDirMount(/work)` (Allowlist-by-construction), gebrokerte `HostFunc`-Imports über **Standard-ABI** (`nocturn.<name>(reqPtr,reqLen)→packed(addr<<32\|size)`, Host alloziert Antwort im Gast via dessen `malloc`). Der Sandbox **gated nichts** — Effekte sind caller-gelieferte HostFuncs, die ans Gateway delegieren. WAT-Test-Gäste (`echo`/`loop`/`logprobe`). |
 | `capability` | Reine Entscheidung. `Policy.Evaluate(Call, Env)` (deny>ask>allow, fail-closed). `EpochRegistry`, `RateLimiter`, `Window`. Konstante `Wildcard`, `Permanent`. |
 | `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Injector`/`Binding`/`Request` (host-owned Credential-Injektion, **capability + host scoped**; `capMatches`/`hostMatches`) + `Scanner` (bidirektionaler Leak-Scan: `ScanEgress`→`ErrLeaked`, `RedactIngress`→`[REDACTED]`; Tier1 exakter Vault-Wert encoding-robust + Tier2 gitleaks-Muster via Aho-Corasick + Entropy). |
 | `hitl` | `Engine` (Request/Resolve, queue-then-execute), HMAC-`token`; Sub-Paket `hitl/ntfy` (`Publisher` push + `Listener` subscribe). |
@@ -260,22 +260,14 @@ go test ./internal/...    # alle Tests (race-clean)
 go test -race ./internal/...
 golangci-lint run         # (geplant)
 
-# WAT-Gast neu bauen (nach Änderung an testdata/logprobe/log_probe.wat):
-wat2wasm internal/host/testdata/logprobe/log_probe.wat -o internal/host/testdata/logprobe.wasm
+# Sandbox-WAT-Test-Gäste neu bauen (nach Änderung):
+wat2wasm internal/sandbox/testdata/echo.wat -o internal/sandbox/testdata/echo.wasm
 
-# Assistent live (Streaming, gateway-bewacht):
+# Der Assistent (die TUI ist das ganze Interface, parameterlos):
 cp .env.example .env   # FREELLM_API_KEY eintragen
-go run ./cmd/nocturn chat --allow-fetch "Fetch https://example.com and summarize."
-#   ohne --allow-fetch: net.fetch = Ask → Freigabe (Terminal), oder --ntfy fürs Handy
-
-# Chat-Session-TUI (charm): multi-turn, Verlauf, thinking-Spinner, Tool-Indicator,
-# Streaming, Markdown (Glamour), inline-Approval:
-go run ./cmd/nocturn tui
-#   Enter senden · Ctrl+J neue Zeile · net.fetch/dns = Ask → y/n inline · ctrl+c quit
-
-# WASM-Skill durch den HITL-Log-Pfad:
-go run ./cmd/nocturn run internal/host/testdata/logprobe.wasm
-#   --ntfy --req-topic <a> --resp-topic <b>  → Freigabe aufs iPhone
+go run ./cmd/nocturn
+#   multi-turn Chat, Streaming, Markdown, Tool-Indicator; http.write = Ask → inline y/n;
+#   Enter senden · Ctrl+J neue Zeile · Ctrl+N neue Session · ctrl+c quit
 ```
 
 ---
