@@ -1,0 +1,106 @@
+package brain
+
+import (
+	"context"
+	"errors"
+	"sort"
+	"sync/atomic"
+)
+
+// Phase marks whether a ToolEvent is the start or the end of an invocation.
+type Phase int
+
+const (
+	ToolStart Phase = iota
+	ToolEnd
+)
+
+// ToolEvent is emitted by a Registry around every tool invocation — model- or
+// script-issued. ID is unique per invocation and pairs a ToolStart with its
+// ToolEnd; Parent is the enclosing invocation's ID (0 = root), so an observer can
+// reconstruct both concurrency (independent roots run at once) and nesting (a
+// script's nocturn.call carries its code.run's ID as Parent). Because calls may
+// run concurrently, events from different invocations interleave — match them by
+// ID, never by arrival order.
+type ToolEvent struct {
+	ID     uint64 // unique per invocation
+	Parent uint64 // enclosing invocation's ID; 0 = root
+	Tool   string
+	Args   string // JSON, as the caller supplied it (model args or script args)
+	Phase  Phase
+	Result string // ToolEnd only
+	Err    error  // ToolEnd only (e.g. gateway.ErrDenied for a denied effect)
+}
+
+// Registry is the one place tool calls are dispatched: it maps names to Tools,
+// hands their specs to the Model, and runs a named tool's Invoke. It is shared
+// by the Brain (model-issued calls) and the script interpreter (script-issued
+// calls), so its OnCall observer sees every tool call from both. Invoke is safe
+// for concurrent use: the tools map is set up before any Invoke and not mutated
+// during one, and call ids come from an atomic counter.
+type Registry struct {
+	tools  map[string]Tool
+	nextID atomic.Uint64
+	OnCall func(ToolEvent) // observability sink; nil = off
+}
+
+// callIDKey carries the enclosing invocation's id so a nested Invoke (a script's
+// nocturn.call inside code.run) can record its parent.
+type callIDKey struct{}
+
+func withCallID(ctx context.Context, id uint64) context.Context {
+	return context.WithValue(ctx, callIDKey{}, id)
+}
+
+func callIDFrom(ctx context.Context) uint64 {
+	id, _ := ctx.Value(callIDKey{}).(uint64)
+	return id
+}
+
+// NewRegistry builds a Registry over the given tools. A nil slice yields an empty
+// registry (every call reports "unknown tool"), which is convenient for tests.
+func NewRegistry(tools []Tool) *Registry {
+	reg := make(map[string]Tool, len(tools))
+	for _, t := range tools {
+		reg[t.Name] = t
+	}
+	return &Registry{tools: reg}
+}
+
+// Add registers a tool after construction — used for code.run, which needs the
+// Registry to exist first so the interpreter can dispatch back into it.
+func (r *Registry) Add(t Tool) { r.tools[t.Name] = t }
+
+// Specs returns the tool declarations for the Model, sorted by name.
+func (r *Registry) Specs() []ToolSpec {
+	specs := make([]ToolSpec, 0, len(r.tools))
+	for _, t := range r.tools {
+		specs = append(specs, t.ToolSpec)
+	}
+	sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
+	return specs
+}
+
+// Invoke looks up a tool by name and runs it, emitting a ToolStart before and a
+// ToolEnd after (carrying the result/error). An unknown tool is reported as an
+// error the caller can surface — not fatal. The observer is fail-open.
+func (r *Registry) Invoke(ctx context.Context, name, args string) (out string, err error) {
+	id := r.nextID.Add(1)
+	parent := callIDFrom(ctx)
+	ctx = withCallID(ctx, id) // so a nested Invoke records this call as its parent
+	r.emit(ToolEvent{ID: id, Parent: parent, Tool: name, Args: args, Phase: ToolStart})
+	tool, ok := r.tools[name]
+	if !ok {
+		err = errors.New("unknown tool " + name)
+	} else {
+		out, err = tool.Invoke(ctx, args)
+	}
+	r.emit(ToolEvent{ID: id, Parent: parent, Tool: name, Args: args, Phase: ToolEnd, Result: out, Err: err})
+	return out, err
+}
+
+func (r *Registry) emit(ev ToolEvent) {
+	if r.OnCall != nil {
+		r.OnCall(ev)
+	}
+}
