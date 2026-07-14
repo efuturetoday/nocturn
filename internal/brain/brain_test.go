@@ -94,33 +94,87 @@ func TestBrain_StreamsAnswerTokens(t *testing.T) {
 	}
 }
 
-// Several tool calls in one model turn run sequentially — in order, each result
-// fed back before the next model turn — never concurrently.
-func TestBrain_MultipleToolCallsRunSequentially(t *testing.T) {
-	var order []string
-	reg := brain.NewRegistry([]brain.Tool{
-		tool("a", func(context.Context, string) (string, error) { order = append(order, "a"); return "ra", nil }),
-		tool("b", func(context.Context, string) (string, error) { order = append(order, "b"); return "rb", nil }),
-	})
+// Multiple tool calls in one turn run CONCURRENTLY: each blocks at a barrier
+// until all have started, so a sequential executor would deadlock here. Results
+// are still stitched into history in CALL ORDER, not completion order.
+func TestBrain_ParallelToolCallsRunConcurrently(t *testing.T) {
+	const n = 3
+	started := make(chan struct{}, n)
+	proceed := make(chan struct{})
+	mk := func(name, out string) brain.Tool {
+		return tool(name, func(context.Context, string) (string, error) {
+			started <- struct{}{} // announce start
+			<-proceed             // wait for the barrier to open
+			return out, nil
+		})
+	}
+	reg := brain.NewRegistry([]brain.Tool{mk("a", "ra"), mk("b", "rb"), mk("c", "rc")})
 	model := &scriptedModel{steps: []brain.Step{
-		{ToolCalls: []brain.ToolCall{{Tool: "a"}, {Tool: "b"}}},
+		{ToolCalls: []brain.ToolCall{{ID: "1", Tool: "a"}, {ID: "2", Tool: "b"}, {ID: "3", Tool: "c"}}},
 		{Answer: "done"},
 	}}
-
 	b := &brain.Brain{Model: model, Registry: reg}
-	ans, err := b.Run(context.Background(), "do a then b")
-	if err != nil {
-		t.Fatalf("run: %v", err)
+
+	ansCh := make(chan string, 1)
+	go func() { ans, _ := b.Run(context.Background(), "go"); ansCh <- ans }()
+
+	// All three must start before any is allowed to finish — impossible if serial.
+	for i := 0; i < n; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("tool calls did not run concurrently (a sequential executor deadlocks here)")
+		}
 	}
-	if ans != "done" {
-		t.Fatalf("answer = %q", ans)
+	close(proceed)
+
+	if ans := <-ansCh; ans != "done" {
+		t.Fatalf("answer = %q, want done", ans)
 	}
-	if len(order) != 2 || order[0] != "a" || order[1] != "b" {
-		t.Fatalf("run order = %v, want [a b] in sequence", order)
+	// The model's second turn saw the results in call order a,b,c.
+	var got []string
+	for _, m := range model.convs[1] {
+		if m.Role == "tool" {
+			got = append(got, m.Content)
+		}
 	}
-	// The model's next turn saw BOTH tool results.
-	if !convContains(model.convs[1], "ra") || !convContains(model.convs[1], "rb") {
-		t.Fatal("both tool results must be fed back before the next model turn")
+	if len(got) != 3 || got[0] != "ra" || got[1] != "rb" || got[2] != "rc" {
+		t.Fatalf("tool results in history = %v, want [ra rb rc] in call order", got)
+	}
+}
+
+// Every invocation gets a unique id, and a nested call (a tool whose Invoke
+// re-enters the Registry, like code.run → nocturn.call) records the enclosing
+// call as its Parent — the basis for the observer to render concurrency + nesting.
+func TestRegistry_NestedCallsCarryIDAndParent(t *testing.T) {
+	var reg *brain.Registry
+	var events []brain.ToolEvent
+	inner := tool("inner", func(context.Context, string) (string, error) { return "in", nil })
+	outer := tool("outer", func(ctx context.Context, _ string) (string, error) {
+		return reg.Invoke(ctx, "inner", "{}") // nested: same ctx carries the parent id
+	})
+	reg = brain.NewRegistry([]brain.Tool{outer, inner})
+	reg.OnCall = func(ev brain.ToolEvent) { events = append(events, ev) }
+
+	if _, err := reg.Invoke(context.Background(), "outer", "{}"); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	// Sequential nesting → outer start, inner start, inner end, outer end.
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want 4: %+v", len(events), events)
+	}
+	oStart, iStart, iEnd, oEnd := events[0], events[1], events[2], events[3]
+	if oStart.Tool != "outer" || oStart.Parent != 0 {
+		t.Fatalf("outer start = %+v, want root (Parent 0)", oStart)
+	}
+	if iStart.Tool != "inner" || iStart.Parent != oStart.ID {
+		t.Fatalf("inner.Parent = %d, want outer.ID = %d", iStart.Parent, oStart.ID)
+	}
+	if oStart.ID == iStart.ID || oStart.ID == 0 || iStart.ID == 0 {
+		t.Fatalf("ids must be unique and non-zero: outer=%d inner=%d", oStart.ID, iStart.ID)
+	}
+	if iEnd.ID != iStart.ID || oEnd.ID != oStart.ID {
+		t.Fatalf("ToolEnd ids must match their ToolStart: %+v %+v", iEnd, oEnd)
 	}
 }
 

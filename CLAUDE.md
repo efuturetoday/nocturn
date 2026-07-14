@@ -221,9 +221,12 @@ unsere Sicherheit umgeht).
 - **freellm-Endpoint:** OpenAI-kompatibel, Model `auto` (umgeht Cooldowns einzelner
   Modelle); `FREELLM_BASE_URL`/`_API_KEY`/`_MODEL` in `.env`. War hinter Authelia
   (303→SSO), jetzt offen.
-- **Tool-Call-History vereinfacht:** wir mappen Tool-Ergebnisse als `[tool result] …`
-  User-Beobachtungen (kein `tool_call_id`-Plumbing). Für strikte Multi-Tool-Convos
-  später verfeinern.
+- **Tool-Call-History nativ (`tool_call_id`-Plumbing):** ein Assistant-Turn trägt seine
+  `tool_calls` (mit id) nativ, ein Ergebnis ist eine `role=tool`-Message mit `tool_call_id` —
+  Ergebnisse sind ihren Calls **per id** zugeordnet, nicht positionell/textuell. `brain.ToolCall.ID`
+  + `brain.Message.ToolCalls`/`.ToolCallID`; der llm-Adapter fängt die id (Fallback `call_<idx>`,
+  falls der Endpoint keine liefert) und baut natives `tool_calls`/`role=tool` in `buildMessages`.
+  (Früher: `[tool result] …`-Text; abgelöst.) Voraussetzung für parallele Tool-Ausführung.
 
 ---
 
@@ -292,7 +295,7 @@ gestreamt**.
 2. **Secure-by-default `chat`** — `net.fetch = Ask` + Handy-Freigabe als Default.
 3. **Weitere Capabilities** (`ping`, Mail, Kalender) — Muster: kleiner Typ + `*Guard`.
    Kommen jetzt Modell **und** Skripten gleichzeitig zugute (ein Tool = beide Aufrufer).
-4. **Verteilung** (IronHub-Stil + Code-Signing), **tool_call_id**-Verfeinerung.
+4. **Verteilung** (IronHub-Stil + Code-Signing). **Weg B (async Skript-Gate) — nur TODO**, s. FRAGEN.md.
 5. **Skill-Signing/Attenuation** (M2-Rest, Ed25519) auf `script` aufsetzen; ggf. Preamble-
    Wrapper (`nocturn.<toolName>`), `/work`-Input-Kanal, Timeout-vs-HITL-Feinung.
 
@@ -304,6 +307,17 @@ eigenen Hosts (QuickJS, ein Gate) entschieden** — minimale TCB (Säule 4), Erw
 Go-seitig (Interpreter-`.wasm` unverändert). Race-clean getestet (Pure-Compute-Eval, Gate-
 Dispatch durch echten Interpreter, denied-Effekt = fangbare JS-Exception, Runaway getrappt,
 E2E gg. echtes `gateway.Net` + `httptest`).
+
+**Erledigt (Nebenläufigkeit):** (1) **native `tool_call_id`-History** (`brain.Message.ToolCalls`/
+`.ToolCallID`, Adapter baut natives `tool_calls`/`role=tool`, Fallback-id `nocturn_call_<idx>`);
+(2) **parallele Tool-Calls** — `brain.run` fächert die Calls einer Runde per `sync.WaitGroup.Go`
+nebenläufig aus (kein Abbruch bei Fehler/Deny; Ergebnisse in Call-Reihenfolge → deterministische
+History); (3) **serialisierte Freigaben** via `hitl.Serialize` (Mutex ums blockierende `Notify` —
+auto-`Allow` läuft parallel, nur `Ask` serialisiert am Menschen, transport-agnostisch); (4)
+**Observer mit id+parent** (`ToolEvent{ID,Parent}`, atomarer Registry-Zähler, ctx-getragene Call-id)
+→ TUI-Observer von LIFO-`callStack` auf **Forest nach id** (nebenläufige Wurzeln + Verschachtelung).
+Race-clean getestet (Barriere-Test beweist Parallelität; Forest-Bookkeeping headless). Der Mensch
+bleibt bei gegateten Effekten der Flaschenhals — genau so gewollt.
 
 **Erledigt (HITL-Wait pausiert Deadlines):** neues `internal/deadline` (pausierbares Budget im
 ctx). `brain.ToolTimeout` und das Sandbox-Guest-Deadline nutzen jetzt `deadline.WithBudget`;

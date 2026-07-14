@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"time"
 
@@ -65,13 +66,17 @@ type approval struct {
 	reply   chan string
 }
 
-// toolFrame is one in-flight tool call on the call stack. A script's effects
-// nest inside code.run, so calls form a stack: children accumulate into their
-// parent's rendered lines and are committed together when the parent ends.
+// toolFrame is one in-flight tool call in the forest of active calls, keyed by
+// its Registry id. Calls may run concurrently (independent roots) and nest (a
+// script's effects inside code.run); a finished child folds into its parent's
+// rendered lines, a finished root commits to the transcript.
 type toolFrame struct {
+	id       uint64
+	parent   uint64 // enclosing call's id; 0 = root
+	depth    int    // nesting depth (0 = root), for indentation
 	name     string
 	args     string
-	children []string // rendered, already-committed child lines (nested effects)
+	children []string // rendered blocks of finished nested effects, in finish order
 }
 
 type chatModel struct {
@@ -84,17 +89,18 @@ type chatModel struct {
 	md   *glamour.TermRenderer
 
 	history   string
-	stream    string      // raw accumulated assistant text for the current turn
-	streamMD  string      // markdown-rendered, already-committed blocks of stream
-	streamOff int         // byte offset into stream up to which streamMD has been rendered
-	callStack []toolFrame // in-flight tool calls (pulsing); empty when none
+	stream    string                // raw accumulated assistant text for the current turn
+	streamMD  string                // markdown-rendered, already-committed blocks of stream
+	streamOff int                   // byte offset into stream up to which streamMD has been rendered
+	active    map[uint64]*toolFrame // in-flight tool calls by id (concurrent + nested)
+	roots     []uint64              // root call ids (parent 0), in start order, for stable render
 	pulse     int
-	running    bool
-	cancel     context.CancelFunc // cancels the current turn
-	approval   *approval
-	width      int
-	height     int
-	ready      bool
+	running   bool
+	cancel    context.CancelFunc // cancels the current turn
+	approval  *approval
+	width     int
+	height    int
+	ready     bool
 }
 
 func newChatModel(startTurn func(string) context.CancelFunc, reset func()) chatModel {
@@ -167,56 +173,96 @@ func (m chatModel) renderToolFrame(f toolFrame, err error, depth int) string {
 	return out
 }
 
-// handleToolEvent tracks the tool call stack: a ToolStart pushes a frame, a
-// ToolEnd pops it and renders it — nested effects fold into their parent's child
-// lines, a top-level call commits straight to the transcript.
+// handleToolEvent maintains the forest of in-flight tool calls keyed by id. Calls
+// may run concurrently (independent roots) and nest (a script's nocturn.call under
+// its code.run); a ToolEnd closes exactly its own call by id — never by stack
+// position — folding a finished nested effect into its still-running parent and
+// committing a finished root straight to the transcript.
 func (m *chatModel) handleToolEvent(ev brain.ToolEvent) {
 	switch ev.Phase {
 	case brain.ToolStart:
-		m.callStack = append(m.callStack, toolFrame{name: ev.Tool, args: ev.Args})
+		if m.active == nil {
+			m.active = map[uint64]*toolFrame{}
+		}
+		depth := 0
+		if p := m.active[ev.Parent]; p != nil {
+			depth = p.depth + 1
+		}
+		m.active[ev.ID] = &toolFrame{id: ev.ID, parent: ev.Parent, depth: depth, name: ev.Tool, args: ev.Args}
+		if ev.Parent == 0 {
+			m.roots = append(m.roots, ev.ID)
+		}
 	case brain.ToolEnd:
-		if len(m.callStack) == 0 {
+		f := m.active[ev.ID]
+		if f == nil {
 			return
 		}
-		frame := m.callStack[len(m.callStack)-1]
-		m.callStack = m.callStack[:len(m.callStack)-1]
-		depth := len(m.callStack) // the popped frame's own depth
-		block := m.renderToolFrame(frame, ev.Err, depth)
-		if depth > 0 {
-			parent := &m.callStack[len(m.callStack)-1]
-			parent.children = append(parent.children, block)
+		delete(m.active, ev.ID)
+		block := m.renderToolFrame(*f, ev.Err, f.depth)
+		if parent := m.active[f.parent]; f.parent != 0 && parent != nil {
+			parent.children = append(parent.children, block) // fold into the still-running parent
 		} else {
-			m.history += block
+			m.history += block // a finished root (or orphan) commits to the transcript
+			m.roots = removeID(m.roots, ev.ID)
 		}
 	}
 }
 
-// renderActiveStack renders the in-flight call stack live: the top-level call
-// pulses with its already-completed children beneath it, and any nested effect
-// currently running is shown as its own pulsing line.
-func (m chatModel) renderActiveStack() string {
-	if len(m.callStack) == 0 {
+func removeID(ids []uint64, id uint64) []uint64 {
+	for i, x := range ids {
+		if x == id {
+			return append(ids[:i], ids[i+1:]...)
+		}
+	}
+	return ids
+}
+
+// renderActive renders the in-flight forest live: every root pulses, its finished
+// nested effects fold beneath it, and any still-running nested effect shows as its
+// own pulsing, indented line. Multiple roots (concurrent tool calls) render in
+// start order.
+func (m chatModel) renderActive() string {
+	if len(m.active) == 0 {
 		return ""
 	}
 	dot := lipgloss.NewStyle().Bold(true).
 		Foreground(lipgloss.Color(pulsePalette[m.pulse%len(pulsePalette)])).Render("●")
-	top := m.callStack[0]
-	headline, body := m.toolDisplay(top.name, top.args)
-	// Dot + space sit outside the wrapped style (4 visible columns), so wrap the
-	// headline to width-4 to keep padding from overflowing the line.
-	out := "  " + dot + " " + styleWidth(toolStyle, m.width-4).Render(headline) + "\n" + body
-	for _, c := range top.children {
-		out += c
+
+	kids := map[uint64][]*toolFrame{}
+	for _, f := range m.active {
+		kids[f.parent] = append(kids[f.parent], f)
 	}
-	for _, f := range m.callStack[1:] { // a nested effect in progress
-		hl, _ := m.toolDisplay(f.name, f.args)
-		out += "    " + dot + " " + styleWidth(toolStyle, m.width-6).Render(hl) + "\n"
+	var renderFrame func(f *toolFrame) string
+	renderFrame = func(f *toolFrame) string {
+		headline, body := m.toolDisplay(f.name, f.args)
+		indent := strings.Repeat("  ", f.depth)
+		// Dot + space sit outside the wrapped style (4 visible columns); wrap the
+		// headline to width-4-indent to keep padding from overflowing the line.
+		out := indent + "  " + dot + " " + styleWidth(toolStyle, m.width-4-2*f.depth).Render(headline) + "\n"
+		if f.depth == 0 {
+			out += body // code.run's JS body under the root
+		}
+		for _, c := range f.children { // already-finished nested effects
+			out += c
+		}
+		cs := kids[f.id]
+		sort.Slice(cs, func(i, j int) bool { return cs[i].id < cs[j].id })
+		for _, c := range cs { // still-running nested effects
+			out += renderFrame(c)
+		}
+		return out
+	}
+	out := ""
+	for _, rid := range m.roots {
+		if f := m.active[rid]; f != nil {
+			out += renderFrame(f)
+		}
 	}
 	return out
 }
 
 func (m *chatModel) syncViewport() {
-	content := m.history + m.renderActiveStack()
+	content := m.history + m.renderActive()
 	content += m.streamMD
 	if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
 		content += tail // still-incomplete last block, shown raw until it closes
@@ -313,7 +359,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reset()
 			m.history = ""
 			m.resetStream()
-			m.callStack = nil
+			m.active, m.roots = nil, nil
 			m.syncViewport()
 			return m, nil
 		case "esc":
@@ -346,7 +392,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pulseMsg:
 		m.pulse++
-		if len(m.callStack) > 0 {
+		if len(m.active) > 0 {
 			m.syncViewport()
 		}
 		return m, pulseTick()
@@ -369,7 +415,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case doneMsg:
-		m.callStack = nil // every ToolStart is paired with a ToolEnd; clear defensively
+		m.active, m.roots = nil, nil // every ToolStart is paired with a ToolEnd; clear defensively
 		m.cancel = nil
 		full := m.streamMD
 		if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
@@ -510,7 +556,9 @@ func tuiCmd(_ []string) error {
 		return err
 	}
 	notifier := &tuiNotifier{}
-	engine := hitl.NewEngine(key, notifier)
+	// Serialize approvals: tool calls may run concurrently, but the human sees one
+	// prompt at a time (auto-allowed effects never reach the notifier and stay parallel).
+	engine := hitl.NewEngine(key, hitl.Serialize(notifier))
 	notifier.resolve = engine.Resolve
 
 	epochs := capability.NewEpochRegistry()

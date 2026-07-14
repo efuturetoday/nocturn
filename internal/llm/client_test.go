@@ -70,6 +70,95 @@ func TestNext_AccumulatesStreamedToolCall(t *testing.T) {
 	if step.ToolCalls[0].Args != `{"url":"https://x"}` {
 		t.Fatalf("args = %q, want accumulated JSON", step.ToolCalls[0].Args)
 	}
+	if step.ToolCalls[0].ID != "c1" {
+		t.Fatalf("id = %q, want the streamed tool_call id c1", step.ToolCalls[0].ID)
+	}
+}
+
+// When the endpoint omits tool_call ids, the adapter synthesizes stable ones so
+// the assistant call and its result can still be matched by id on the next turn.
+func TestNext_SynthesizesMissingToolCallID(t *testing.T) {
+	srv := mockStream(
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"dns.resolve","arguments":"{}"}}]}}]}`,
+	)
+	defer srv.Close()
+
+	c := llm.New(srv.URL, "k", "auto")
+	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "go"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("next: %v", err)
+	}
+	if len(step.ToolCalls) != 1 || step.ToolCalls[0].ID != "nocturn_call_0" {
+		t.Fatalf("id = %q, want synthesized nocturn_call_0", step.ToolCalls[0].ID)
+	}
+}
+
+// Prior tool turns are replayed to the model as NATIVE tool_calls / role=tool
+// messages matched by tool_call_id — not flattened to text.
+func TestNext_BuildsNativeToolHistory(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	conv := []brain.Message{
+		{Role: "user", Content: "resolve example.com"},
+		{Role: "assistant", ToolCalls: []brain.ToolCall{{ID: "call_9", Tool: "dns.resolve", Args: `{"host":"example.com"}`}}},
+		{Role: "tool", ToolCallID: "call_9", Content: "93.184.216.34"},
+	}
+	c := llm.New(srv.URL, "test-key", "auto")
+	if _, err := c.Next(context.Background(), conv, nil, nil); err != nil {
+		t.Fatalf("next: %v", err)
+	}
+
+	var req struct {
+		Messages []struct {
+			Role       string `json:"role"`
+			Content    string `json:"content"`
+			ToolCallID string `json:"tool_call_id"`
+			ToolCalls  []struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(gotBody, &req); err != nil {
+		t.Fatalf("request body not JSON: %v", err)
+	}
+
+	var asst, toolMsg bool
+	for _, m := range req.Messages {
+		if strings.Contains(m.Content, "[tool result]") {
+			t.Fatalf("history still uses the [tool result] text prefix: %q", m.Content)
+		}
+		if m.Role == "assistant" && len(m.ToolCalls) == 1 {
+			tc := m.ToolCalls[0]
+			if tc.ID != "call_9" || tc.Type != "function" || tc.Function.Name != "dns.resolve" || tc.Function.Arguments != `{"host":"example.com"}` {
+				t.Fatalf("assistant tool_call = %+v, want native call_9 dns.resolve", tc)
+			}
+			asst = true
+		}
+		if m.Role == "tool" {
+			if m.ToolCallID != "call_9" || m.Content != "93.184.216.34" {
+				t.Fatalf("tool message = %+v, want role=tool tied to call_9", m)
+			}
+			toolMsg = true
+		}
+	}
+	if !asst {
+		t.Fatal("no native assistant tool_calls message in the request")
+	}
+	if !toolMsg {
+		t.Fatal("no native role=tool result message in the request")
+	}
 }
 
 // Several tool calls in one turn (different stream indices) must be kept SEPARATE,

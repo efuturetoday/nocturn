@@ -39,8 +39,7 @@ func New(baseURL, apiKey, modelName string) *Client {
 var _ brain.Model = (*Client)(nil)
 
 const systemPrompt = "You are Nocturn, a careful assistant. " +
-	"Use a tool when it helps; otherwise answer directly. " +
-	"Lines beginning with \"[tool result]\" are outputs from tools you called."
+	"Use a tool when it helps; otherwise answer directly."
 
 // Next sends the conversation and tool schemas to the endpoint and returns the
 // model's structured decision: a tool call or a final answer. The completion is
@@ -104,15 +103,16 @@ func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []brain.T
 }
 
 // toolAcc accumulates streamed tool_call fragments per index and yields them in
-// first-seen order.
+// first-seen order, each with its tool_call_id.
 type toolAcc struct {
 	order []int
+	id    map[int]string
 	name  map[int]*strings.Builder
 	args  map[int]*strings.Builder
 }
 
 func newToolAcc() *toolAcc {
-	return &toolAcc{name: map[int]*strings.Builder{}, args: map[int]*strings.Builder{}}
+	return &toolAcc{id: map[int]string{}, name: map[int]*strings.Builder{}, args: map[int]*strings.Builder{}}
 }
 
 func (a *toolAcc) add(tc openai.ToolCall) {
@@ -125,6 +125,9 @@ func (a *toolAcc) add(tc openai.ToolCall) {
 		a.name[idx] = &strings.Builder{}
 		a.args[idx] = &strings.Builder{}
 	}
+	if tc.ID != "" {
+		a.id[idx] = tc.ID // the id arrives in the first fragment of each call
+	}
 	a.name[idx].WriteString(tc.Function.Name)
 	a.args[idx].WriteString(tc.Function.Arguments)
 }
@@ -132,7 +135,12 @@ func (a *toolAcc) add(tc openai.ToolCall) {
 func (a *toolAcc) calls() []brain.ToolCall {
 	calls := make([]brain.ToolCall, 0, len(a.order))
 	for _, idx := range a.order {
+		id := a.id[idx]
+		if id == "" {
+			id = fmt.Sprintf("nocturn_call_%d", idx) // some endpoints omit ids; synthesize a stable, collision-proof one
+		}
 		calls = append(calls, brain.ToolCall{
+			ID:   id,
 			Tool: a.name[idx].String(),
 			Args: a.args[idx].String(), // JSON, validated by the tool
 		})
@@ -145,14 +153,29 @@ func buildMessages(conv []brain.Message) []openai.ChatCompletionMessage {
 		{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 	}
 	for _, m := range conv {
-		role, content := openai.ChatMessageRoleUser, m.Content
 		switch m.Role {
 		case "assistant":
-			role = openai.ChatMessageRoleAssistant
+			// An assistant turn carries its tool calls natively (tool_calls), so
+			// the model sees exactly what it requested — matched to results by id.
+			am := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: m.Content}
+			for _, tc := range m.ToolCalls {
+				am.ToolCalls = append(am.ToolCalls, openai.ToolCall{
+					ID:       tc.ID,
+					Type:     openai.ToolTypeFunction,
+					Function: openai.FunctionCall{Name: tc.Tool, Arguments: tc.Args},
+				})
+			}
+			msgs = append(msgs, am)
 		case "tool":
-			content = "[tool result] " + content // presented as an observation
+			// A tool result is a native role=tool message tied to its call by id.
+			msgs = append(msgs, openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				ToolCallID: m.ToolCallID,
+				Content:    m.Content,
+			})
+		default:
+			msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: m.Content})
 		}
-		msgs = append(msgs, openai.ChatCompletionMessage{Role: role, Content: content})
 	}
 	return msgs
 }

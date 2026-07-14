@@ -7,6 +7,15 @@ Erledigte wandern nach **Geklärt** (mit kurzer Antwort) oder raus.
 
 ## Offen
 
+- **TODO (nicht jetzt bauen) — Weg B: async Skript-Gate für echte Parallelität in Skripten.**
+  `nocturn.call` non-blocking machen (`submit(tool,args)→handle` + `await(handle)` / echtes
+  JS-Promise), N Effekte Go-seitig nebenläufig ausführen, sodass `Promise.all([...])` im Skript
+  echt parallelisiert. Umgeht das wazero-Limit (Go kann einen suspendierten Gast nicht async
+  aufwecken; ein Host-Call blockiert die ganze Instanz) via **kooperativem submit/await** — die
+  Nebenläufigkeit passiert im Go-Host, der single-threaded Gast awaited nur; nutzt den bestehenden
+  Job-Pump (`JS_ExecutePendingJob`). Erst wenn ein Workload viele I/O-Effekte im Skript fächert.
+  Brain-Level-Parallelität (Schale 2, s. CLAUDE.md §11) ist der kleinere, frühere Schritt.
+
 ### 1. Tool-Timeout pro Tool konfigurierbar?
 - **Aktuell:** *globaler* `brain.Brain.ToolTimeout` (20 s) — uniform für ALLE Tools;
   zusätzlich HTTP-Client-Timeout 15 s im Gateway.

@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/deadline"
@@ -30,14 +32,21 @@ import (
 var ErrMaxSteps = errors.New("brain: max steps exceeded without a final answer")
 
 // Message is one turn in the conversation. Role is "user", "assistant", or
-// "tool".
+// "tool". An assistant turn that calls tools carries them in ToolCalls (native
+// tool_calls, not text); a tool result carries the id of the call it answers in
+// ToolCallID, so results match their calls by id — not by position.
 type Message struct {
-	Role    string
-	Content string
+	Role       string
+	Content    string
+	ToolCalls  []ToolCall // assistant turn: the tool calls it requested
+	ToolCallID string     // tool turn: the id of the call this result answers
 }
 
-// ToolCall is the Model's request to invoke a tool with JSON arguments.
+// ToolCall is the Model's request to invoke a tool with JSON arguments. ID is the
+// tool_call_id that ties the call to its result across the conversation (the
+// model supplies it; the adapter synthesizes one if the endpoint omits it).
 type ToolCall struct {
+	ID   string
 	Tool string
 	Args string // JSON
 }
@@ -114,14 +123,22 @@ func (b *Brain) run(ctx context.Context, conv []Message) (string, []Message, err
 			conv = append(conv, Message{Role: "assistant", Content: step.Answer})
 			return step.Answer, conv, nil
 		}
-		// Run every requested call in order, feeding each result back before the
-		// next — sequential, so multiple gated effects mean one approval at a time.
-		for _, tc := range step.ToolCalls {
-			conv = append(conv, Message{
-				Role:    "assistant",
-				Content: "call " + tc.Tool + "(" + tc.Args + ")",
-			})
-			conv = append(conv, Message{Role: "tool", Content: b.invoke(ctx, tc)})
+		// One native assistant turn carrying all requested calls, then a role=tool
+		// result per call keyed by its id. The calls run CONCURRENTLY (each gets its
+		// own deadline budget and goes through the shared, thread-safe Registry); a
+		// failing/denied call never aborts the others — every result is fed back. The
+		// results are stitched back in CALL ORDER, so the history is deterministic no
+		// matter which call finishes first. Gated effects still serialize at the
+		// human (the notifier is serialized), so only auto-allowed ones truly overlap.
+		conv = append(conv, Message{Role: "assistant", ToolCalls: step.ToolCalls})
+		results := make([]string, len(step.ToolCalls))
+		var wg sync.WaitGroup
+		for idx, tc := range step.ToolCalls {
+			wg.Go(func() { results[idx] = b.invoke(ctx, tc) })
+		}
+		wg.Wait()
+		for idx, tc := range step.ToolCalls {
+			conv = append(conv, Message{Role: "tool", ToolCallID: tc.ID, Content: results[idx]})
 		}
 	}
 	return "", conv, ErrMaxSteps
@@ -189,9 +206,15 @@ const (
 )
 
 // ToolEvent is emitted by a Registry around every tool invocation — model- or
-// script-issued — so one observer sees all tool calls, nested by call order (a
-// script's calls arrive between the ToolStart and ToolEnd of its code.run).
+// script-issued. ID is unique per invocation and pairs a ToolStart with its
+// ToolEnd; Parent is the enclosing invocation's ID (0 = root), so an observer can
+// reconstruct both concurrency (independent roots run at once) and nesting (a
+// script's nocturn.call carries its code.run's ID as Parent). Because calls may
+// run concurrently, events from different invocations interleave — match them by
+// ID, never by arrival order.
 type ToolEvent struct {
+	ID     uint64 // unique per invocation
+	Parent uint64 // enclosing invocation's ID; 0 = root
 	Tool   string
 	Args   string // JSON, as the caller supplied it (model args or script args)
 	Phase  Phase
@@ -202,12 +225,26 @@ type ToolEvent struct {
 // Registry is the one place tool calls are dispatched: it maps names to Tools,
 // hands their specs to the Model, and runs a named tool's Invoke. It is shared
 // by the Brain (model-issued calls) and the script interpreter (script-issued
-// calls), so its OnCall observer sees every tool call from both, nested by call
-// order. The tools map is set up before any Invoke and not mutated during one,
-// so concurrent reads need no lock.
+// calls), so its OnCall observer sees every tool call from both. Invoke is safe
+// for concurrent use: the tools map is set up before any Invoke and not mutated
+// during one, and call ids come from an atomic counter.
 type Registry struct {
 	tools  map[string]Tool
+	nextID atomic.Uint64
 	OnCall func(ToolEvent) // observability sink; nil = off
+}
+
+// callIDKey carries the enclosing invocation's id so a nested Invoke (a script's
+// nocturn.call inside code.run) can record its parent.
+type callIDKey struct{}
+
+func withCallID(ctx context.Context, id uint64) context.Context {
+	return context.WithValue(ctx, callIDKey{}, id)
+}
+
+func callIDFrom(ctx context.Context) uint64 {
+	id, _ := ctx.Value(callIDKey{}).(uint64)
+	return id
 }
 
 // NewRegistry builds a Registry over the given tools. A nil slice yields an empty
@@ -238,14 +275,17 @@ func (r *Registry) Specs() []ToolSpec {
 // ToolEnd after (carrying the result/error). An unknown tool is reported as an
 // error the caller can surface — not fatal. The observer is fail-open.
 func (r *Registry) Invoke(ctx context.Context, name, args string) (out string, err error) {
-	r.emit(ToolEvent{Tool: name, Args: args, Phase: ToolStart})
+	id := r.nextID.Add(1)
+	parent := callIDFrom(ctx)
+	ctx = withCallID(ctx, id) // so a nested Invoke records this call as its parent
+	r.emit(ToolEvent{ID: id, Parent: parent, Tool: name, Args: args, Phase: ToolStart})
 	tool, ok := r.tools[name]
 	if !ok {
 		err = errors.New("unknown tool " + name)
 	} else {
 		out, err = tool.Invoke(ctx, args)
 	}
-	r.emit(ToolEvent{Tool: name, Args: args, Phase: ToolEnd, Result: out, Err: err})
+	r.emit(ToolEvent{ID: id, Parent: parent, Tool: name, Args: args, Phase: ToolEnd, Result: out, Err: err})
 	return out, err
 }
 
