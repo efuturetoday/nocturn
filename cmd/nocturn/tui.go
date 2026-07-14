@@ -4,32 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/stopwatch"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/ansi"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 )
-
-var (
-	userStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
-	toolStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-	askStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
-	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
-	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	hintStyle     = lipgloss.NewStyle().Faint(true)
-)
-
-// pulsePalette runs dim -> bright cyan -> dim, for the glowing tool-call dot.
-var pulsePalette = []string{"23", "30", "37", "44", "51", "44", "37", "30"}
 
 // Messages sent to the program from the turn goroutine / notifier.
 type (
@@ -48,6 +42,32 @@ func pulseTick() tea.Cmd {
 	return tea.Tick(140*time.Millisecond, func(time.Time) tea.Msg { return pulseMsg{} })
 }
 
+const maxInputRows = 6 // the input grows with content up to this many rows
+
+// keyMap drives the bubbles/help footer from real key bindings.
+type keyMap struct {
+	send, newline, newSession, cancel, scroll, quit key.Binding
+}
+
+func newKeyMap() keyMap {
+	return keyMap{
+		send:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "send")),
+		newline:    key.NewBinding(key.WithKeys("ctrl+j"), key.WithHelp("⇧↵", "newline")),
+		newSession: key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("⌃N", "new")),
+		cancel:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+		scroll:     key.NewBinding(key.WithKeys("pgup", "pgdown"), key.WithHelp("⇞⇟", "scroll")),
+		quit:       key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("⌃C", "quit")),
+	}
+}
+
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.send, k.newline, k.newSession, k.scroll, k.quit}
+}
+
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{{k.send, k.newline}, {k.newSession, k.cancel}, {k.scroll, k.quit}}
+}
+
 type approval struct {
 	intent  string
 	options []hitl.Option
@@ -55,62 +75,156 @@ type approval struct {
 	reply   chan string
 }
 
-// toolFrame is one in-flight tool call in the forest of active calls, keyed by
-// its Registry id. Calls may run concurrently (independent roots) and nest (a
-// script's effects inside code.run); a finished child folds into its parent's
-// rendered lines, a finished root commits to the transcript.
+// toolFrame is one tool call in the forest of calls. Calls run concurrently
+// (independent roots) and nest (a script's effects inside code.run). children are
+// the finished nested effects (a real tree, re-rendered on resize); still-running
+// nested effects live in chatModel.active. A frame renders identically live and
+// committed — live shows a pulsing dot, committed shows ✓/✗ and its duration.
 type toolFrame struct {
 	id       uint64
-	parent   uint64 // enclosing call's id; 0 = root
-	depth    int    // nesting depth (0 = root), for indentation
+	parent   uint64
+	depth    int
 	name     string
 	args     string
-	children []string // rendered blocks of finished nested effects, in finish order
+	started  time.Time
+	elapsed  time.Duration
+	err      error
+	done     bool
+	children []*toolFrame
+}
+
+// entry is one committed item in the transcript. render is width-aware (and may
+// cache) so the whole transcript re-wraps when the terminal is resized.
+type entry interface {
+	render(m *chatModel, width int) string
+}
+
+type userEntry struct{ text string }
+
+func (e *userEntry) render(m *chatModel, width int) string {
+	return styleWidth(userStyle, width).Render("› " + e.text)
+}
+
+type assistantEntry struct {
+	md     string // raw markdown, so it re-renders at any width
+	cache  string
+	cacheW int
+	cached bool
+}
+
+func (e *assistantEntry) render(m *chatModel, width int) string {
+	if !e.cached || e.cacheW != width {
+		e.cache = assistantMark.Render("◆") + " " + m.renderMarkdown(e.md)
+		e.cacheW, e.cached = width, true
+	}
+	return e.cache
+}
+
+type toolEntry struct {
+	root   *toolFrame
+	cache  string
+	cacheW int
+	cached bool
+}
+
+func (e *toolEntry) render(m *chatModel, width int) string {
+	if !e.cached || e.cacheW != width {
+		e.cache = strings.TrimRight(m.renderFrame(e.root, width), "\n")
+		e.cacheW, e.cached = width, true
+	}
+	return e.cache
+}
+
+type noticeEntry struct {
+	text string
+	err  bool
+}
+
+func (e *noticeEntry) render(m *chatModel, width int) string {
+	if e.err {
+		return styleWidth(errStyle, width).Render(e.text)
+	}
+	return hintStyle.Render(e.text)
 }
 
 type chatModel struct {
 	startTurn func(string) context.CancelFunc
 	reset     func() // starts a new session: revokes session grants, clears history
+	model     string // model name, shown in the header
 
 	vp   viewport.Model
 	ta   textarea.Model
 	spin spinner.Model
+	sw   stopwatch.Model
+	help help.Model
+	keys keyMap
 	md   *glamour.TermRenderer
+	dark bool // terminal background, detected once (never re-queried → no escape leak)
 
-	history   string
-	stream    string                // raw accumulated assistant text for the current turn
-	streamMD  string                // markdown-rendered, already-committed blocks of stream
-	streamOff int                   // byte offset into stream up to which streamMD has been rendered
-	active    map[uint64]*toolFrame // in-flight tool calls by id (concurrent + nested)
-	roots     []uint64              // root call ids (parent 0), in start order, for stable render
+	entries   []entry
+	stream    string // raw assistant text for the current turn
+	streamMD  string // markdown-rendered, already-committed blocks of the live stream
+	streamOff int    // byte offset into stream up to which streamMD has been rendered
+	active    map[uint64]*toolFrame
+	roots     []uint64
+	inputH    int
 	pulse     int
 	running   bool
-	cancel    context.CancelFunc // cancels the current turn
+	cancel    context.CancelFunc
 	approval  *approval
+	notice    string // transient one-line status (e.g. "new session"); cleared on next input
 	width     int
 	height    int
 	ready     bool
 }
 
-func newChatModel(startTurn func(string) context.CancelFunc, reset func()) chatModel {
+func newChatModel(startTurn func(string) context.CancelFunc, reset func(), model string, dark bool) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Message…"
-	ta.Prompt = "❯ "
+	ta.Prompt = "› "
 	ta.ShowLineNumbers = false
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
 	ta.SetHeight(1)
 	ta.Focus()
-	return chatModel{startTurn: startTurn, reset: reset, ta: ta, spin: spinner.New(spinner.WithSpinner(spinner.Dot))}
+	return chatModel{
+		startTurn: startTurn, reset: reset, model: model, dark: dark, inputH: 1,
+		ta:   ta,
+		spin: spinner.New(spinner.WithSpinner(spinner.Dot)),
+		sw:   stopwatch.NewWithInterval(100 * time.Millisecond),
+		help: help.New(),
+		keys: newKeyMap(),
+	}
 }
 
 func (m chatModel) Init() tea.Cmd { return tea.Batch(m.spin.Tick, pulseTick()) }
 
-func (m *chatModel) layout() {
-	bottom := 2
-	if m.approval != nil {
-		bottom = 1 + len(m.approval.options)
+// glamourStyle is a FIXED style (dark or light, decided once) with zero document
+// margin. Using a fixed style means the renderer is rebuilt on resize WITHOUT
+// re-querying the terminal background (glamour's WithAutoStyle does query, and its
+// OSC response leaks into the input on every resize). Margin 0 lets the transcript
+// own its own gutter so markers align.
+func glamourStyle(dark bool) ansi.StyleConfig {
+	sc := styles.LightStyleConfig
+	if dark {
+		sc = styles.DarkStyleConfig
 	}
-	h := m.height - bottom - 1
+	zero := uint(0)
+	sc.Document.Margin = &zero
+	return sc
+}
+
+// --- layout -----------------------------------------------------------------
+
+// layout sizes the viewport to whatever the header, status/input (or approval)
+// leave. Heights are derived from View's structure, not magic numbers, so the
+// approval prompt always reserves exactly the rows it renders.
+func (m *chatModel) layout() {
+	var h int
+	if m.approval != nil {
+		h = m.height - m.approvalHeight() - 2 // header(2) + "\n" joins
+	} else {
+		h = m.height - m.inputH - 3 // header(2) + status(1)
+	}
 	if h < 3 {
 		h = 3
 	}
@@ -118,55 +232,58 @@ func (m *chatModel) layout() {
 	m.ta.SetWidth(m.width)
 }
 
-// resetStream clears the per-turn streaming state (raw text + rendered blocks).
-func (m *chatModel) resetStream() {
-	m.stream = ""
-	m.streamMD = ""
-	m.streamOff = 0
+func (m chatModel) approvalHeight() int {
+	return 3 + len(m.approval.options) // rule + heading + options + hint
 }
 
-// toolDisplay splits a tool call into a one-line headline and an optional
-// multi-line body. code.run's JS source becomes a rendered ```javascript block;
-// every other tool shows its raw args inline.
-func (m chatModel) toolDisplay(name, args string) (headline, body string) {
-	if name == "code.run" {
-		if src, ok := codeRunSource(args); ok {
-			code := m.renderMarkdown("```javascript\n" + strings.TrimSpace(src) + "\n```")
-			return name, strings.TrimRight(code, "\n") + "\n"
+// growInput sizes the input area to its content (up to maxInputRows).
+func (m *chatModel) growInput() {
+	rows := strings.Count(m.ta.Value(), "\n") + 1
+	if rows < 1 {
+		rows = 1
+	}
+	if rows > maxInputRows {
+		rows = maxInputRows
+	}
+	if rows != m.inputH {
+		m.inputH = rows
+		m.ta.SetHeight(rows)
+		m.layout()
+	}
+}
+
+// --- streaming (progressive markdown, kept for live rendering) ---------------
+
+func (m *chatModel) resetStream() {
+	m.stream, m.streamMD, m.streamOff = "", "", 0
+}
+
+func (m *chatModel) advanceStream() {
+	rest := m.stream[m.streamOff:]
+	split := stableSplit(rest)
+	if split == 0 {
+		return
+	}
+	m.streamMD += m.renderMarkdown(rest[:split]) + "\n"
+	m.streamOff += split
+}
+
+// stableSplit returns the length of the largest prefix of s ending on a blank
+// line with all ``` fences closed — the safely-renderable complete blocks.
+func stableSplit(s string) int {
+	best := 0
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] == '\n' && s[i+1] == '\n' {
+			if strings.Count(s[:i], "```")%2 == 0 {
+				best = i + 2
+			}
 		}
 	}
-	return name + "(" + args + ")", ""
+	return best
 }
 
-// renderToolFrame renders a completed tool call for the static transcript: a
-// bullet at depth 0, a nested "↳" child at depth ≥1, the headline (wrapped),
-// code.run's JS body, and any child lines it accumulated. On error the line is
-// red with the reason underneath.
-func (m chatModel) renderToolFrame(f toolFrame, err error, depth int) string {
-	style := toolStyle
-	if err != nil {
-		style = errStyle
-	}
-	bullet := "  ● "
-	if depth > 0 {
-		bullet = "    ↳ "
-	}
-	headline, body := m.toolDisplay(f.name, f.args)
-	out := styleWidth(style, m.width).Render(bullet+headline) + "\n" + body
-	for _, c := range f.children {
-		out += c
-	}
-	if err != nil {
-		out += styleWidth(errStyle, m.width).Render("      ↳ "+shortErr(err)) + "\n"
-	}
-	return out
-}
+// --- tool-call forest --------------------------------------------------------
 
-// handleToolEvent maintains the forest of in-flight tool calls keyed by id. Calls
-// may run concurrently (independent roots) and nest (a script's nocturn.call under
-// its code.run); a ToolEnd closes exactly its own call by id — never by stack
-// position — folding a finished nested effect into its still-running parent and
-// committing a finished root straight to the transcript.
 func (m *chatModel) handleToolEvent(ev brain.ToolEvent) {
 	switch ev.Phase {
 	case brain.ToolStart:
@@ -177,7 +294,7 @@ func (m *chatModel) handleToolEvent(ev brain.ToolEvent) {
 		if p := m.active[ev.Parent]; p != nil {
 			depth = p.depth + 1
 		}
-		m.active[ev.ID] = &toolFrame{id: ev.ID, parent: ev.Parent, depth: depth, name: ev.Tool, args: ev.Args}
+		m.active[ev.ID] = &toolFrame{id: ev.ID, parent: ev.Parent, depth: depth, name: ev.Tool, args: ev.Args, started: time.Now()}
 		if ev.Parent == 0 {
 			m.roots = append(m.roots, ev.ID)
 		}
@@ -187,13 +304,15 @@ func (m *chatModel) handleToolEvent(ev brain.ToolEvent) {
 			return
 		}
 		delete(m.active, ev.ID)
-		block := m.renderToolFrame(*f, ev.Err, f.depth)
-		if parent := m.active[f.parent]; f.parent != 0 && parent != nil {
-			parent.children = append(parent.children, block) // fold into the still-running parent
-		} else {
-			m.history += block // a finished root (or orphan) commits to the transcript
-			m.roots = removeID(m.roots, ev.ID)
+		f.done, f.err, f.elapsed = true, ev.Err, time.Since(f.started)
+		if f.parent != 0 {
+			if p := m.active[f.parent]; p != nil {
+				p.children = append(p.children, f) // fold into the still-running parent
+				return
+			}
 		}
+		m.roots = removeID(m.roots, ev.ID)
+		m.entries = append(m.entries, &toolEntry{root: f}) // a finished root commits
 	}
 }
 
@@ -206,86 +325,218 @@ func removeID(ids []uint64, id uint64) []uint64 {
 	return ids
 }
 
-// renderActive renders the in-flight forest live: every root pulses, its finished
-// nested effects fold beneath it, and any still-running nested effect shows as its
-// own pulsing, indented line. Multiple roots (concurrent tool calls) render in
-// start order.
-func (m chatModel) renderActive() string {
-	if len(m.active) == 0 {
-		return ""
+// renderFrame renders a call and its subtree at width. It is used for BOTH live
+// (from active) and committed (from a toolEntry) frames: a running frame gets a
+// pulsing accent dot; a finished one gets ✓/✗ and its duration. Children are the
+// finished sub-frames plus any still-running ones (from active), in id order.
+func (m *chatModel) renderFrame(f *toolFrame, width int) string {
+	var lead, tail string
+	switch {
+	case !f.done:
+		lead = m.pulseDot()
+	case f.err != nil:
+		lead = errStyle.Render("✗")
+		tail = "  " + hintStyle.Render(shortErr(f.err))
+	default:
+		lead = okStyle.Render("✓")
+		tail = "  " + hintStyle.Render(fmtDuration(f.elapsed))
 	}
-	dot := lipgloss.NewStyle().Bold(true).
-		Foreground(lipgloss.Color(pulsePalette[m.pulse%len(pulsePalette)])).Render("●")
+	indent := strings.Repeat("  ", f.depth)
+	head := toolHeadline(f.name, f.args)
+	line := indent + "  " + lead + " " + styleWidth(toolStyle, width-4-2*f.depth).Render(head) + tail
+	out := line + "\n"
+	if body := m.toolBody(f.name, f.args); body != "" {
+		out += body
+	}
 
-	kids := map[uint64][]*toolFrame{}
-	for _, f := range m.active {
-		kids[f.parent] = append(kids[f.parent], f)
+	kids := append([]*toolFrame(nil), f.children...)
+	for _, a := range m.active {
+		if a.parent == f.id {
+			kids = append(kids, a)
+		}
 	}
-	var renderFrame func(f *toolFrame) string
-	renderFrame = func(f *toolFrame) string {
-		headline, body := m.toolDisplay(f.name, f.args)
-		indent := strings.Repeat("  ", f.depth)
-		// Dot + space sit outside the wrapped style (4 visible columns); wrap the
-		// headline to width-4-indent to keep padding from overflowing the line.
-		out := indent + "  " + dot + " " + styleWidth(toolStyle, m.width-4-2*f.depth).Render(headline) + "\n"
-		if f.depth == 0 {
-			out += body // code.run's JS body under the root
-		}
-		for _, c := range f.children { // already-finished nested effects
-			out += c
-		}
-		cs := kids[f.id]
-		sort.Slice(cs, func(i, j int) bool { return cs[i].id < cs[j].id })
-		for _, c := range cs { // still-running nested effects
-			out += renderFrame(c)
-		}
-		return out
-	}
-	out := ""
-	for _, rid := range m.roots {
-		if f := m.active[rid]; f != nil {
-			out += renderFrame(f)
-		}
+	sort.Slice(kids, func(i, j int) bool { return kids[i].id < kids[j].id })
+	for _, c := range kids {
+		out += m.renderFrame(c, width)
 	}
 	return out
 }
 
-func (m *chatModel) syncViewport() {
-	content := m.history + m.renderActive()
-	content += m.streamMD
-	if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
-		content += tail // still-incomplete last block, shown raw until it closes
+// renderActive renders the still-running forest live (roots in start order).
+func (m *chatModel) renderActive(width int) string {
+	if len(m.active) == 0 {
+		return ""
 	}
-	m.vp.SetContent(content)
-	m.vp.GotoBottom()
-}
-
-// advanceStream renders any newly-completed markdown blocks from the raw stream
-// into streamMD, leaving the trailing incomplete block raw. A block ends at a
-// blank line; we never split inside an open ``` code fence.
-func (m *chatModel) advanceStream() {
-	rest := m.stream[m.streamOff:]
-	split := stableSplit(rest)
-	if split == 0 {
-		return
-	}
-	m.streamMD += m.renderMarkdown(rest[:split]) + "\n"
-	m.streamOff += split
-}
-
-// stableSplit returns the byte length of the largest prefix of s that ends on a
-// blank-line boundary with all ``` code fences closed — i.e. only complete,
-// safely-renderable top-level blocks. Returns 0 if nothing is complete yet.
-func stableSplit(s string) int {
-	best := 0
-	for i := 0; i+1 < len(s); i++ {
-		if s[i] == '\n' && s[i+1] == '\n' {
-			if strings.Count(s[:i], "```")%2 == 0 {
-				best = i + 2 // consume both newlines
-			}
+	var b strings.Builder
+	for _, rid := range m.roots {
+		if f := m.active[rid]; f != nil {
+			b.WriteString(m.renderFrame(f, width))
 		}
 	}
-	return best
+	return b.String()
+}
+
+func (m *chatModel) pulseDot() string {
+	return pulseDotStyle(m.pulse).Render("●")
+}
+
+// toolHeadline is the one-line label for a tool call — compact and quiet, not
+// raw JSON: http.read/write show method + host/path, dns.resolve the host,
+// code.run just its name (the JS renders as a body), others a trimmed arg blob.
+func toolHeadline(name, args string) string {
+	switch name {
+	case "http.read", "http.write":
+		if u, ok := jsonField(args, "url"); ok {
+			return name + " " + clip(compactURL(u), 64)
+		}
+	case "dns.resolve":
+		if h, ok := jsonField(args, "host"); ok {
+			return name + " " + clip(h, 64)
+		}
+	case "code.run":
+		return name
+	}
+	if a := strings.TrimSpace(args); a != "" && a != "{}" {
+		return name + " " + clip(a, 64)
+	}
+	return name
+}
+
+func (m *chatModel) toolBody(name, args string) string {
+	if name == "code.run" {
+		if src, ok := codeRunSource(args); ok {
+			code := m.renderMarkdown("```javascript\n" + strings.TrimSpace(src) + "\n```")
+			return strings.TrimRight(code, "\n") + "\n"
+		}
+	}
+	return ""
+}
+
+// --- viewport composition ----------------------------------------------------
+
+func (m *chatModel) syncViewport() {
+	wasBottom := m.vp.AtBottom()
+
+	var b strings.Builder
+	if len(m.entries) == 0 && !m.running {
+		b.WriteString(m.welcome())
+	}
+	for _, e := range m.entries {
+		b.WriteString(e.render(m, m.width))
+		b.WriteString("\n\n")
+	}
+	b.WriteString(m.renderActive(m.width))
+	if live := m.streamMD; live != "" {
+		b.WriteString(assistantMark.Render("◆") + " " + live)
+	}
+	if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
+		if m.streamMD == "" {
+			b.WriteString(assistantMark.Render("◆") + " ")
+		}
+		b.WriteString(tail)
+	}
+
+	m.vp.SetContent(strings.TrimRight(b.String(), "\n"))
+	if wasBottom {
+		m.vp.GotoBottom()
+	}
+}
+
+func (m *chatModel) welcome() string {
+	var b strings.Builder
+	b.WriteString(welcomeTitle.Render("nocturn ✦") + "\n")
+	b.WriteString(welcomeDim.Render("a careful assistant — every effect is gated, approvals arrive out-of-band") + "\n\n")
+	b.WriteString(welcomeDim.Render("try") + "\n")
+	for _, ex := range []string{
+		"resolve the DNS of google.com, wikipedia.org and github.com",
+		"fetch example.com and summarize what it says",
+		"use a script to compute the 20th Fibonacci number",
+	} {
+		b.WriteString("  " + hintStyle.Render("› "+ex) + "\n")
+	}
+	return b.String()
+}
+
+// --- chrome ------------------------------------------------------------------
+
+func (m chatModel) header() string {
+	left := headerNameStyle.Render("nocturn ✦ ") + headerModelStyle.Render(m.model)
+	var pill string
+	switch {
+	case m.approval != nil:
+		pill = warnStyle.Render("● ") + hintStyle.Render("waiting")
+	case m.running:
+		pill = m.pulseDot() + hintStyle.Render(" thinking")
+	default:
+		pill = okStyle.Render("● ") + hintStyle.Render("ready")
+	}
+	gap := m.width - visibleWidth(left) - visibleWidth(pill)
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + pill + "\n" + m.rule()
+}
+
+func (m chatModel) rule() string {
+	w := m.width
+	if w < 1 {
+		w = 1
+	}
+	return ruleStyle.Render(strings.Repeat("─", w))
+}
+
+func (m chatModel) statusLine() string {
+	switch {
+	case m.notice != "":
+		return hintStyle.Render(m.notice)
+	case m.running:
+		return m.spin.View() + hintStyle.Render(" thinking "+fmtDuration(m.sw.Elapsed())+" · esc cancel")
+	default:
+		return m.help.View(m.keys) // idiomatic bubbles/help footer from the key bindings
+	}
+}
+
+func (m chatModel) approvalView() string {
+	var b strings.Builder
+	b.WriteString(m.rule() + "\n")
+	b.WriteString(askStyle.Render("Approve ") + m.approval.intent + "\n")
+	for i, o := range m.approval.options {
+		if i == m.approval.cursor {
+			b.WriteString(selectedStyle.Render("▸ " + o.Label))
+		} else {
+			b.WriteString(hintStyle.Render("  " + o.Label))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(hintStyle.Render("↑↓ select · ↵ confirm · esc deny"))
+	return b.String()
+}
+
+func (m chatModel) View() string {
+	if !m.ready {
+		return ""
+	}
+	if m.approval != nil {
+		return m.header() + "\n" + m.vp.View() + "\n" + m.approvalView()
+	}
+	return m.header() + "\n" + m.vp.View() + "\n" + m.statusLine() + "\n" + m.ta.View()
+}
+
+func (m chatModel) renderMarkdown(s string) string {
+	if m.md != nil {
+		if out, err := m.md.Render(s); err == nil {
+			return strings.Trim(out, "\n") // glamour pads with blank lines; drop them so markers/code tuck in
+		}
+	}
+	return s
+}
+
+// --- update ------------------------------------------------------------------
+
+// scrollKeys let the user read back during a turn without the view snapping to
+// the bottom (syncViewport only auto-scrolls when already at the bottom).
+var scrollKeys = map[string]bool{
+	"pgup": true, "pgdown": true, "ctrl+u": true, "ctrl+d": true, "home": true, "end": true,
 }
 
 func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -296,39 +547,20 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp = viewport.New(msg.Width, 3)
 			m.ready = true
 		}
-		m.md, _ = glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(msg.Width))
+		m.md, _ = glamour.NewTermRenderer(glamour.WithStyles(glamourStyle(m.dark)), glamour.WithWordWrap(msg.Width))
+		m.help.Width = msg.Width
 		m.layout()
 		m.syncViewport()
 		return m, nil
 
 	case tea.KeyMsg:
 		if m.approval != nil {
-			switch msg.String() {
-			case "up", "k":
-				if m.approval.cursor > 0 {
-					m.approval.cursor--
-				}
-			case "down", "j":
-				if m.approval.cursor < len(m.approval.options)-1 {
-					m.approval.cursor++
-				}
-			case "enter":
-				m.approval.reply <- m.approval.options[m.approval.cursor].Token
-				m.approval = nil
-				m.layout()
-				m.syncViewport()
-			case "esc":
-				m.approval.reply <- denyToken(m.approval.options)
-				m.approval = nil
-				if m.cancel != nil {
-					m.cancel()
-				}
-				m.layout()
-				m.syncViewport()
-			case "ctrl+c":
-				return m, tea.Quit
-			}
-			return m, nil
+			return m.updateApproval(msg)
+		}
+		if scrollKeys[msg.String()] {
+			var cmd tea.Cmd
+			m.vp, cmd = m.vp.Update(msg)
+			return m, cmd
 		}
 		if msg.Paste {
 			if m.running {
@@ -336,6 +568,8 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.ta, cmd = m.ta.Update(msg)
+			m.growInput()
+			m.syncViewport()
 			return m, cmd
 		}
 		switch msg.String() {
@@ -346,9 +580,10 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.reset()
-			m.history = ""
+			m.entries = nil
 			m.resetStream()
 			m.active, m.roots = nil, nil
+			m.notice = "new session — grants revoked"
 			m.syncViewport()
 			return m, nil
 		case "esc":
@@ -366,12 +601,16 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.ta.Reset()
 			m.ta.Blur()
-			m.history += styleWidth(userStyle, m.width).Render("❯ "+input) + "\n\n"
+			m.inputH = 1
+			m.ta.SetHeight(1)
+			m.notice = ""
+			m.entries = append(m.entries, &userEntry{text: input})
 			m.resetStream()
 			m.running = true
 			m.cancel = m.startTurn(input)
+			m.layout()
 			m.syncViewport()
-			return m, nil
+			return m, tea.Batch(m.sw.Reset(), m.sw.Start())
 		}
 
 	case spinner.TickMsg:
@@ -379,9 +618,14 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
 
+	case stopwatch.TickMsg, stopwatch.StartStopMsg, stopwatch.ResetMsg:
+		var cmd tea.Cmd
+		m.sw, cmd = m.sw.Update(msg)
+		return m, cmd
+
 	case pulseMsg:
 		m.pulse++
-		if len(m.active) > 0 {
+		if m.running || len(m.active) > 0 {
 			m.syncViewport()
 		}
 		return m, pulseTick()
@@ -404,32 +648,31 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case doneMsg:
-		m.active, m.roots = nil, nil // every ToolStart is paired with a ToolEnd; clear defensively
+		m.active, m.roots = nil, nil
 		m.cancel = nil
-		full := m.streamMD
-		if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
-			full += m.renderMarkdown(tail)
-		}
-		if strings.TrimSpace(full) != "" {
-			m.history += strings.TrimRight(full, "\n") + "\n\n"
+		if strings.TrimSpace(m.stream) != "" {
+			m.entries = append(m.entries, &assistantEntry{md: m.stream})
 		}
 		if msg.err != nil {
 			if errors.Is(msg.err, context.Canceled) {
-				m.history += hintStyle.Render("— cancelled") + "\n\n"
+				m.entries = append(m.entries, &noticeEntry{text: "— cancelled"})
 			} else {
-				m.history += styleWidth(errStyle, m.width).Render("error: "+msg.err.Error()) + "\n\n"
+				m.entries = append(m.entries, &noticeEntry{text: "error: " + msg.err.Error(), err: true})
 			}
 		}
 		m.resetStream()
 		m.running = false
 		m.syncViewport()
-		return m, m.ta.Focus()
+		return m, tea.Batch(m.ta.Focus(), m.sw.Stop())
 	}
 
+	// Non-key messages (and idle keys while not running) fall through here.
 	var cmd tea.Cmd
 	if _, isKey := msg.(tea.KeyMsg); isKey {
-		if !m.running && m.approval == nil {
+		if !m.running {
 			m.ta, cmd = m.ta.Update(msg)
+			m.growInput()
+			m.syncViewport()
 		}
 	} else {
 		m.vp, cmd = m.vp.Update(msg)
@@ -437,43 +680,37 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m chatModel) renderMarkdown(s string) string {
-	if m.md != nil {
-		if out, err := m.md.Render(s); err == nil {
-			return strings.TrimRight(out, "\n")
+func (m chatModel) updateApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if m.approval.cursor > 0 {
+			m.approval.cursor--
 		}
+	case "down", "j":
+		if m.approval.cursor < len(m.approval.options)-1 {
+			m.approval.cursor++
+		}
+	case "enter":
+		m.approval.reply <- m.approval.options[m.approval.cursor].Token
+		m.approval = nil
+		m.layout()
+		m.syncViewport()
+	case "esc":
+		m.approval.reply <- denyToken(m.approval.options)
+		m.approval = nil
+		if m.cancel != nil {
+			m.cancel()
+		}
+		m.layout()
+		m.syncViewport()
+	case "ctrl+c":
+		return m, tea.Quit
 	}
-	return s
+	return m, nil
 }
 
-func (m chatModel) View() string {
-	if !m.ready {
-		return "starting…"
-	}
-	if m.approval != nil {
-		b := m.vp.View() + "\n" + askStyle.Render("Approve: ") + m.approval.intent + "\n"
-		for i, o := range m.approval.options {
-			cursor, line := "  ", o.Label
-			if i == m.approval.cursor {
-				cursor, line = "▸ ", selectedStyle.Render(o.Label)
-			}
-			b += cursor + line + "\n"
-		}
-		b += hintStyle.Render("↑↓ select · Enter · Esc = deny")
-		return b
-	}
+// --- small helpers -----------------------------------------------------------
 
-	var status string
-	if m.running {
-		status = m.spin.View() + hintStyle.Render(" thinking…   Esc cancel · ctrl+c quit")
-	} else {
-		status = hintStyle.Render("Enter send · Ctrl+J newline · Ctrl+N new session · ctrl+c quit")
-	}
-	return m.vp.View() + "\n" + status + "\n" + m.ta.View()
-}
-
-// styleWidth constrains a lipgloss style to w columns, which enables word-wrap;
-// with a non-positive width (before the first WindowSizeMsg) it is a no-op.
 func styleWidth(s lipgloss.Style, w int) lipgloss.Style {
 	if w > 0 {
 		return s.Width(w)
@@ -481,17 +718,48 @@ func styleWidth(s lipgloss.Style, w int) lipgloss.Style {
 	return s
 }
 
+func pulseDotStyle(pulse int) lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(pulsePalette[pulse%len(pulsePalette)]))
+}
+
+func visibleWidth(s string) int { return lipgloss.Width(s) }
+
 // codeRunSource pulls the JS source out of a code.run call's JSON args so the
-// TUI can show it as readable, syntax-highlighted code (unmarshalling turns the
-// escaped \n back into real newlines) instead of a crammed one-line string.
+// TUI can show it as readable, highlighted code instead of a crammed one-liner.
 func codeRunSource(args string) (string, bool) {
-	var a struct {
-		Source string `json:"source"`
-	}
-	if err := json.Unmarshal([]byte(args), &a); err == nil && strings.TrimSpace(a.Source) != "" {
-		return a.Source, true
+	if src, ok := jsonField(args, "source"); ok {
+		return src, true
 	}
 	return "", false
+}
+
+func jsonField(args, key string) (string, bool) {
+	var m map[string]any
+	if json.Unmarshal([]byte(args), &m) == nil {
+		if v, ok := m[key].(string); ok && strings.TrimSpace(v) != "" {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+func compactURL(u string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+}
+
+func clip(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+func fmtDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 func shortErr(err error) string {

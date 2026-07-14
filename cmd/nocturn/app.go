@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/joho/godotenv"
 
 	"github.com/efuturetoday/nocturn/internal/agent"
@@ -113,7 +114,13 @@ func tuiCmd(_ []string) error {
 		return cancel
 	}
 
-	p = tea.NewProgram(newChatModel(startTurn, session.Reset), tea.WithAltScreen())
+	// Detect the terminal background ONCE, here, before bubbletea takes over stdin
+	// — so glamour never re-queries it mid-run (that OSC response would leak into
+	// the input on every resize). Mouse is deliberately NOT captured: in some
+	// terminals its SGR reports leak into the input, and capture breaks native
+	// text selection/copy — scroll with PgUp/PgDn/Ctrl+U/D instead.
+	dark := lipgloss.HasDarkBackground()
+	p = tea.NewProgram(newChatModel(startTurn, session.Reset, modelName, dark), tea.WithAltScreen())
 	notifier.p = p
 	_, err := p.Run()
 	return err
