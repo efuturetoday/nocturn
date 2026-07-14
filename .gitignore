@@ -8,5 +8,8 @@
 /nocturnd
 *.test
 
+# interpreter build cache (wasi-sdk + quickjs-ng checkout; see internal/script/qjs/build.sh)
+internal/script/qjs/.buildcache/
+
 # macOS
 .DS_Store
