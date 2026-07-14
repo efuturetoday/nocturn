@@ -125,7 +125,8 @@ getestet, bevor die nächste kam:
 
 | Paket | Rolle |
 |---|---|
-| `host` | wazero-Host. `Run` (Zero-Authority), `RunWithLog` (ABI-Fenster), `RunWithBrokeredLog`, `RunWithHITLLog`. Test-Gäste in `testdata/` (`probe` Go-wasip1, `logprobe` handgeschriebenes WAT). |
+| `host` | wazero-Host, Zero-Authority-Kern + Kernel-Demos. `Run` (nichts), `RunWithLog` (ABI-Fenster), `RunWithBrokeredLog`, `RunWithHITLLog`. Test-Gäste `logprobe` (WAT). |
+| `sandbox` | **Die generelle Guest-Engine** (Interpreter/Skills). `Run(ctx, guest, Config)`: gehärtet (Memory-Cap + Wall-Clock-Deadline trappt Runaways), WASI-stdio, Workspace `WithDirMount(/work)` (Allowlist-by-construction), gebrokerte `HostFunc`-Imports über **Standard-ABI** (`nocturn.<name>(reqPtr,reqLen)→packed(addr<<32\|size)`, Host alloziert Antwort im Gast via dessen `malloc`). WAT-Test-Gäste (`echo`/`loop`). |
 | `capability` | Reine Entscheidung. `Policy.Evaluate(Call, Env)` (deny>ask>allow, fail-closed). `EpochRegistry`, `RateLimiter`, `Window`. Konstante `Wildcard`, `Permanent`. |
 | `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Injector`/`Binding`/`Request` (host-owned Credential-Injektion, **capability + host scoped**; `capMatches`/`hostMatches`) + `Scanner` (bidirektionaler Leak-Scan: `ScanEgress`→`ErrLeaked`, `RedactIngress`→`[REDACTED]`; Tier1 exakter Vault-Wert encoding-robust + Tier2 gitleaks-Muster via Aho-Corasick + Entropy). |
 | `hitl` | `Engine` (Request/Resolve, queue-then-execute), HMAC-`token`; Sub-Paket `hitl/ntfy` (`Publisher` push + `Listener` subscribe). |

@@ -74,7 +74,9 @@ type chatModel struct {
 	md   *glamour.TermRenderer
 
 	history    string
-	stream     string
+	stream     string // raw accumulated assistant text for the current turn
+	streamMD   string // markdown-rendered, already-committed blocks of stream
+	streamOff  int    // byte offset into stream up to which streamMD has been rendered
 	activeTool string // in-flight tool call (pulsing); "" when none
 	pulse      int
 	running    bool
@@ -111,6 +113,13 @@ func (m *chatModel) layout() {
 	m.ta.SetWidth(m.width)
 }
 
+// resetStream clears the per-turn streaming state (raw text + rendered blocks).
+func (m *chatModel) resetStream() {
+	m.stream = ""
+	m.streamMD = ""
+	m.streamOff = 0
+}
+
 // commitActiveTool moves the in-flight tool line into the static transcript.
 func (m *chatModel) commitActiveTool() {
 	if m.activeTool != "" {
@@ -126,11 +135,40 @@ func (m *chatModel) syncViewport() {
 			Foreground(lipgloss.Color(pulsePalette[m.pulse%len(pulsePalette)])).Render("●")
 		content += "  " + dot + " " + toolStyle.Render(m.activeTool) + "\n"
 	}
-	if m.stream != "" {
-		content += m.stream
+	content += m.streamMD
+	if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
+		content += tail // still-incomplete last block, shown raw until it closes
 	}
 	m.vp.SetContent(content)
 	m.vp.GotoBottom()
+}
+
+// advanceStream renders any newly-completed markdown blocks from the raw stream
+// into streamMD, leaving the trailing incomplete block raw. A block ends at a
+// blank line; we never split inside an open ``` code fence.
+func (m *chatModel) advanceStream() {
+	rest := m.stream[m.streamOff:]
+	split := stableSplit(rest)
+	if split == 0 {
+		return
+	}
+	m.streamMD += m.renderMarkdown(rest[:split]) + "\n"
+	m.streamOff += split
+}
+
+// stableSplit returns the byte length of the largest prefix of s that ends on a
+// blank-line boundary with all ``` code fences closed — i.e. only complete,
+// safely-renderable top-level blocks. Returns 0 if nothing is complete yet.
+func stableSplit(s string) int {
+	best := 0
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] == '\n' && s[i+1] == '\n' {
+			if strings.Count(s[:i], "```")%2 == 0 {
+				best = i + 2 // consume both newlines
+			}
+		}
+	}
+	return best
 }
 
 func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -192,7 +230,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.reset()
 			m.history = ""
-			m.stream = ""
+			m.resetStream()
 			m.activeTool = ""
 			m.syncViewport()
 			return m, nil
@@ -212,7 +250,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ta.Reset()
 			m.ta.Blur()
 			m.history += userStyle.Render("❯ "+input) + "\n\n"
-			m.stream = ""
+			m.resetStream()
 			m.running = true
 			m.cancel = m.startTurn(input)
 			m.syncViewport()
@@ -234,6 +272,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tokenMsg:
 		m.commitActiveTool()
 		m.stream += string(msg)
+		m.advanceStream()
 		m.syncViewport()
 		return m, nil
 
@@ -265,8 +304,12 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case doneMsg:
 		m.commitActiveTool()
 		m.cancel = nil
-		if strings.TrimSpace(m.stream) != "" {
-			m.history += m.renderMarkdown(m.stream) + "\n\n"
+		full := m.streamMD
+		if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
+			full += m.renderMarkdown(tail)
+		}
+		if strings.TrimSpace(full) != "" {
+			m.history += strings.TrimRight(full, "\n") + "\n\n"
 		}
 		if msg.err != nil {
 			if errors.Is(msg.err, context.Canceled) {
@@ -275,7 +318,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.history += errStyle.Render("error: "+msg.err.Error()) + "\n\n"
 			}
 		}
-		m.stream = ""
+		m.resetStream()
 		m.running = false
 		m.syncViewport()
 		return m, m.ta.Focus()
