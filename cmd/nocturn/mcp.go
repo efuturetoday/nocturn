@@ -43,7 +43,7 @@ func loadMCP(ctx context.Context, reg *tool.Registry, guard *gateway.Guard, inj 
 		if err != nil {
 			return err
 		}
-		if err := wireMCPCredential(ctx, inj, vault, srv); err != nil {
+		if err := wireMCPCredential(ctx, inj, vault, srv, conn.Host()); err != nil {
 			return err
 		}
 		// The operator's "y" IS the human approval for the two setup calls
@@ -61,7 +61,7 @@ func loadMCP(ctx context.Context, reg *tool.Registry, guard *gateway.Guard, inj 
 			// full vault purge to fix ONE credential is a footgun. Offer to re-enter
 			// just this token and retry once. A network failure (no StatusError)
 			// leaves the token untouched.
-			retried, rerr := reenterOnRejection(ctx, inj, vault, srv, err)
+			retried, rerr := reenterOnRejection(ctx, inj, vault, srv, conn.Host(), err)
 			if rerr != nil {
 				return rerr
 			}
@@ -120,13 +120,14 @@ func reviewMCP(srv mcpcap.Server) bool {
 // this connection's requests. Neither the model nor the server config chooses
 // the header; mcpcap.New bound it at construction. Validate made auth/oauth
 // mutually exclusive.
-func wireMCPCredential(ctx context.Context, inj *secret.Injector, vault *secret.Vault, srv mcpcap.Server) error {
+func wireMCPCredential(ctx context.Context, inj *secret.Injector, vault *secret.Vault, srv mcpcap.Server, host string) error {
 	if inj == nil {
 		return nil
 	}
-	// Same namespaced key the binding from mcpcap.New resolves, so only THIS
-	// connection's binding can reach this source — never another owner's.
-	name := mcpcap.SecretName(mcpcap.Owner(srv.Name), mcpcap.CredentialName)
+	// Same host-bound key the binding from mcpcap.New resolves, so only THIS
+	// connection's binding can reach this source — never another owner's, and
+	// never the token issued for a DIFFERENT host under the same server name.
+	name := mcpcap.SecretName(srv.Name, host)
 	if srv.Auth == "token" {
 		// A CLEAN token already in the vault (an earlier run) → no prompt. The
 		// stored value is injected verbatim as "Bearer <v>", so anything but a
@@ -185,11 +186,11 @@ func validBearer(s string) bool {
 // static token it re-prompts (no echo) and overwrites the vault entry; for OAuth
 // it re-runs the authorization flow and swaps in the fresh refreshing source.
 // Returns whether a retry is worthwhile (a new credential was stored).
-func reenterOnRejection(ctx context.Context, inj *secret.Injector, vault *secret.Vault, srv mcpcap.Server, cause error) (bool, error) {
+func reenterOnRejection(ctx context.Context, inj *secret.Injector, vault *secret.Vault, srv mcpcap.Server, host string, cause error) (bool, error) {
 	if !mcpcap.IsServerRejection(cause) {
 		return false, nil // no response from the server — not a credential problem
 	}
-	name := mcpcap.SecretName(mcpcap.Owner(srv.Name), mcpcap.CredentialName)
+	name := mcpcap.SecretName(srv.Name, host)
 	switch {
 	case srv.Auth == "token":
 		fmt.Printf("\nMCP server %q rejected the stored token (%v).\n", srv.Name, cause)

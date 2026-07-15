@@ -176,3 +176,25 @@ Festgehalten, was fehlt und warum:
   3. **HITL** hat den Port schon (`hitl.Notifier` → ntfy) — Muster für die obigen übernehmen.
 - **Merke:** Nichts Terminal-Only in `internal/` wachsen lassen; neue interaktive Schritte immer als Port +
   TUI-Adapter, damit der REST-Adapter bruchfrei danebentreten kann.
+
+### 8. MCP-Credential host-gebunden (Same-Name/Other-URL-Exfil) — erledigt + Follow-ups
+
+- **Erledigt:** Der Vault-Key des MCP-Bearers ist an `(name, host)` gebunden —
+  **`mcp:<name>@<host>/oauth`** (`mcpcap.SecretName(name, host)`, host lowercased). Ändert man in
+  `mcp.json` bei gleichem Servernamen die **URL/den Host**, ändert sich der Key → kein gespeicherter
+  Wert → `wireMCPCredential` **fragt neu**, und der alte Token wird **nie** an den neuen Host injiziert
+  (InjectMatching fail-closed). Gleiche URL = gleicher Key = Token überlebt Neustart. Exfil-Regressionstest
+  `TestConn_HostRebind_NoCrossHostExfil`. Owner-Scoping (`mcp:<name>`) bleibt namensbasiert.
+- **Offen (Follow-ups):**
+  1. **Purge-on-removal:** Wird ein Server aus `mcp.json` entfernt, bleibt `mcp:<name>@<host>/oauth` als
+     **Waise** im Vault (harmlos — keine Binding referenziert sie). Aufräumen braucht eine
+     **Vault-Key-Enumeration** (heute `store.snapshot()` unexported) + Config-Diff → an den „Manage-Flow"
+     koppeln (wie Plugin-Uninstall, #6). Optional OAuth-Revoke beim Entfernen.
+  2. **Plugin-Pendant — erledigt:** `plugin.SecretName(owner, cred, host)` → **`plugin:<name>/<cred>@<host>`**
+     (install.go), OAuth-Token host-gekeyt (plugins.go `wirePluginOAuth`). Manifest-Host-Wechsel bei gleichem
+     Plugin-/Credential-Namen → anderer Key → Re-Auth, kein stiller Cross-Host-Reuse. Zusätzlich erzwingt
+     `Manifest.Validate()` jetzt, dass jeder `credential.host` vom `requires`-Ceiling gedeckt ist (Kohärenz).
+     Regressionstest `TestHost_CredentialHostBound_NoCrossHostReuse`. (Plugins waren ohnehin besser umzäunt:
+     Ceiling + Install-Review-bei-jedem-Start; jetzt zusätzlich strukturell host-gebunden.)
+  3. **Granularität:** Bindung an Hostname (kein Port), konsistent mit dem `hostMatches`-Scope; Host:Port
+     später optional, falls je nötig.

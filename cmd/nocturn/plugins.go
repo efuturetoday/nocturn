@@ -61,11 +61,19 @@ func wirePluginOAuth(ctx context.Context, inj *secret.Injector, vault *secret.Va
 	if inj == nil {
 		return nil
 	}
+	// The token is keyed by the credential's host (plugin.SecretName), so look up
+	// the host of the CredentialDecl each OAuth block feeds (Validate guarantees a
+	// match). A manifest that repoints the credential to another host thus yields a
+	// different key → re-authorization, never a silent cross-host token reuse.
+	credHost := map[string]string{}
+	for _, c := range m.Credentials {
+		credHost[c.Name] = c.Host
+	}
 	for _, o := range m.OAuth {
 		cfg := oauth.Provider(o.AuthURL, o.TokenURL, o.ClientID, o.ClientSecret, o.Scopes...)
-		// Same namespaced key the install binding resolves (plugin.SecretName), so
-		// only THIS plugin's binding can reach this source — never another's.
-		name := plugin.SecretName(plugin.Owner(m.Name), o.Name)
+		// Same host-bound key the install binding resolves (plugin.SecretName), so
+		// only THIS plugin's binding for THIS host can reach this source.
+		name := plugin.SecretName(plugin.Owner(m.Name), o.Name, credHost[o.Name])
 		tok, ok := vaultToken(vault, name)
 		if !ok {
 			fmt.Printf("\nPlugin %q needs to authorize %q (scopes: %s)\n", m.Name, o.Name, strings.Join(o.Scopes, " "))

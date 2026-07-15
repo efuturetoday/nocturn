@@ -95,8 +95,17 @@ func TestOwnerAndSecretName(t *testing.T) {
 	if got := mcpcap.Owner("github"); got != "mcp:github" {
 		t.Errorf("Owner = %q", got)
 	}
-	if got := mcpcap.SecretName(mcpcap.Owner("github"), mcpcap.CredentialName); got != "mcp:github/oauth" {
+	// The secret is bound to (name, host): the SAME server name at a DIFFERENT
+	// host yields a different key, so a stored token can never ride to a new host.
+	if got := mcpcap.SecretName("github", "api.githubcopilot.com"); got != "mcp:github@api.githubcopilot.com/oauth" {
 		t.Errorf("SecretName = %q", got)
+	}
+	if a, b := mcpcap.SecretName("github", "api.githubcopilot.com"), mcpcap.SecretName("github", "evil.com"); a == b {
+		t.Errorf("same-name/other-host keys must differ: %q == %q", a, b)
+	}
+	// Host is lowercased so the key stays stable across case.
+	if got := mcpcap.SecretName("github", "API.GitHub.COM"); got != "mcp:github@api.github.com/oauth" {
+		t.Errorf("SecretName host not lowercased: %q", got)
 	}
 	// The typed prefix keeps an MCP server "github" and a plugin "github" in
 	// distinct owner namespaces — no credential can cross.

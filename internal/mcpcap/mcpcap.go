@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
@@ -30,9 +31,7 @@ import (
 const maxResponseBytes = 10 << 20 // 10 MiB
 
 // CredentialName is the one credential a server config can declare: the
-// server's own OAuth bearer, injected host-side as "Authorization: Bearer …".
-// It is namespaced under the connection's Owner (SecretName), so it can never
-// collide with a plugin's or another server's credential.
+// server's own bearer, injected host-side as "Authorization: Bearer …".
 const CredentialName = "oauth"
 
 // Owner is the credential-injection owner id for an MCP connection:
@@ -41,10 +40,17 @@ const CredentialName = "oauth"
 // an MCP server "github" get distinct owners.
 func Owner(name string) string { return "mcp:" + name }
 
-// SecretName namespaces a credential under its owner ("<owner>/<credential>"),
-// exactly like plugin.SecretName — a connection can only ever reference a
-// secret under its OWN owner.
-func SecretName(owner, credential string) string { return owner + "/" + credential }
+// SecretName is the vault key (and binding secret name) for a server's bearer,
+// bound to BOTH the server name AND the host it was issued for:
+// "mcp:<name>@<host>/oauth". Host-binding is a security boundary: if mcp.json is
+// edited to point the SAME-named server at a DIFFERENT host, the key changes, so
+// the stored token is not found — the operator is re-prompted and the old token
+// is never injected to the new host (no silent cross-host exfil). Same host =
+// same key = the token survives restarts as before. The host is lowercased
+// (hostnames are case-insensitive) so the key stays stable.
+func SecretName(name, host string) string {
+	return Owner(name) + "@" + strings.ToLower(host) + "/" + CredentialName
+}
 
 // StatusError is a non-2xx HTTP response from an MCP server: the server WAS
 // reached and rejected the request (unlike a network error, where no response
@@ -106,9 +112,8 @@ func New(srv Server, guard *gateway.Guard, creds *secret.Injector, scanner *secr
 	}
 	c.client = mcp.New(c.transport)
 	if (srv.OAuth != nil || srv.Auth == "token") && creds != nil {
-		owner := Owner(srv.Name)
-		creds.AddBinding(owner, secret.Binding{
-			Secret: SecretName(owner, CredentialName), Capability: "http.write", Host: c.host,
+		creds.AddBinding(Owner(srv.Name), secret.Binding{
+			Secret: SecretName(srv.Name, c.host), Capability: "http.write", Host: c.host,
 			Header: "Authorization", Prefix: "Bearer ",
 		})
 	}

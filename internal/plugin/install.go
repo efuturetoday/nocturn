@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -38,13 +39,18 @@ func NewHost(reg *tool.Registry, inj *secret.Injector) *Host {
 // colliding — a plugin "github" and an MCP server "github" get distinct owners.
 func Owner(name string) string { return "plugin:" + name }
 
-// SecretName namespaces a credential under its owner: "<owner>/<credential>", so
-// the secret-store key a plugin resolves is always under its OWN owner — it can
-// never reference (and exfiltrate) another owner's credential by re-using a bare
-// name, since it can only build a name under its own Owner(). The OAuth wiring
-// registers the source under the same key. (Owner-scoped injection is the second
-// layer; this closes the shared-name vector.)
-func SecretName(owner, credential string) string { return owner + "/" + credential }
+// SecretName is the secret-store/vault key for a plugin credential, bound to the
+// owner, the credential name, AND the host it is issued for:
+// "<owner>/<credential>@<host>" (host lowercased). Owner-scoping already stops a
+// plugin from referencing another owner's credential by a bare name; host-binding
+// adds a second boundary: if a plugin's manifest is edited to point the SAME
+// credential at a DIFFERENT host, the key changes, so the stored token is not
+// found and the operator must re-authorize — a token issued for host A can never
+// be injected to host B under a reused name (no silent cross-host exfil). The
+// OAuth wiring registers the source under the same key.
+func SecretName(owner, credential, host string) string {
+	return owner + "/" + credential + "@" + strings.ToLower(host)
+}
 
 // Install reviews and installs a loaded plugin. approve is called with the
 // manifest (the ceiling + credentials the operator sees) and returns true to
@@ -85,7 +91,7 @@ func (h *Host) Install(l Loaded, approve func(Manifest) (bool, error)) error {
 		owner := Owner(name)
 		for _, c := range l.Manifest.Credentials {
 			h.Injector.AddBinding(owner, secret.Binding{
-				Secret: SecretName(owner, c.Name), Capability: c.Capability, Host: c.Host, Header: c.Header, Prefix: c.Prefix,
+				Secret: SecretName(owner, c.Name, c.Host), Capability: c.Capability, Host: c.Host, Header: c.Header, Prefix: c.Prefix,
 			})
 		}
 	}

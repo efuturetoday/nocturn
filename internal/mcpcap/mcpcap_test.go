@@ -241,13 +241,13 @@ func TestConn_CredentialInjection_OwnerScoped(t *testing.T) {
 	defer srv.Close()
 
 	store := secret.NewStore()
-	owner := mcpcap.Owner("test")
-	own := mcpcap.SecretName(owner, mcpcap.CredentialName)
-	store.Set(own, []byte("own-token-123"))
 	store.Set("plugin:x/oauth", []byte("foreign-token-456"))
 
 	inj := secret.NewInjector(store)
 	conn := connect(t, srv.URL, &gateway.Guard{Policy: allowWrite()}, inj, nil)
+	owner := mcpcap.Owner("test")
+	own := mcpcap.SecretName("test", conn.Host())
+	store.Set(own, []byte("own-token-123"))
 	inj.AddBinding(owner, secret.Binding{Secret: own, Capability: "http.write", Host: conn.Host(), Header: "Authorization", Prefix: "Bearer "})
 	inj.AddBinding("plugin:x", secret.Binding{Secret: "plugin:x/oauth", Capability: "http.write", Host: conn.Host(), Header: "X-Api-Key", Prefix: ""})
 
@@ -280,9 +280,9 @@ func TestConn_StaticToken_Injected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	// The cmd wiring stores the config token under the connection's namespaced
+	// The cmd wiring stores the config token under the connection's host-bound
 	// secret (vault-backed in production); the binding's store resolver finds it.
-	store.Set(mcpcap.SecretName(mcpcap.Owner("test"), mcpcap.CredentialName), []byte("ghp_pat123"))
+	store.Set(mcpcap.SecretName("test", conn.Host()), []byte("ghp_pat123"))
 
 	if err := conn.Connect(context.Background()); err != nil {
 		t.Fatalf("connect: %v", err)
@@ -297,6 +297,38 @@ func TestConn_StaticToken_Injected(t *testing.T) {
 		if a != "Bearer ghp_pat123" {
 			t.Errorf("request %d Authorization = %q, want the static bearer", i, a)
 		}
+	}
+}
+
+// Exfil regression: a token stored for host A must NEVER be injected when the
+// SAME-named server is repointed at a different host. The credential is bound to
+// (name, host), so the host-B binding resolves a different key, finds nothing,
+// and fails closed — the host-A token never leaves the process, and no request
+// reaches host B carrying it. (fakeMCP here stands in for the attacker host B.)
+func TestConn_HostRebind_NoCrossHostExfil(t *testing.T) {
+	f := &fakeMCP{}
+	srv := f.start() // host B: where the same-named server now points
+	defer srv.Close()
+
+	store := secret.NewStore()
+	// The real token, issued for a DIFFERENT host (host A).
+	store.Set(mcpcap.SecretName("github", "api.githubcopilot.com"), []byte("gho_realtoken"))
+	inj := secret.NewInjector(store)
+
+	conn, err := mcpcap.New(mcpcap.Server{Name: "github", URL: srv.URL, Auth: "token"},
+		&gateway.Guard{Policy: allowWrite()}, inj, nil, nil)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	// No token is stored for host B's key → the binding's resolver returns
+	// ErrNotFound → InjectMatching fails closed BEFORE any byte is sent.
+	if err := conn.Connect(context.Background()); err == nil {
+		t.Fatal("connect succeeded — the host-A token was injected to host B (exfil!)")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.auth) != 0 {
+		t.Fatalf("a request reached host B despite no valid credential: %v", f.auth)
 	}
 }
 

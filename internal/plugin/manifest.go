@@ -116,10 +116,18 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("plugin: requires entry needs a capability and target (got %q, %q)", r.Capability, r.Target)
 		}
 	}
+	ceil := m.Ceiling()
 	creds := map[string]bool{}
 	for _, c := range m.Credentials {
 		if c.Name == "" || c.Capability == "" || c.Host == "" || c.Header == "" {
 			return fmt.Errorf("plugin: credential %q needs name, capability, host and header", c.Name)
+		}
+		// A credential is only ever injected on an effect the ceiling permits; one
+		// whose (capability, host) lies OUTSIDE requires could never be used, and a
+		// mismatch is a red flag (e.g. a credential quietly pointed at another host
+		// than the ceiling allows). Reject it so the manifest stays coherent.
+		if !ceil.Allows(capability.Call{Capability: c.Capability, Target: c.Host}) {
+			return fmt.Errorf("plugin: credential %q (%s %s) is outside the requires ceiling", c.Name, c.Capability, c.Host)
 		}
 		creds[c.Name] = true
 	}
