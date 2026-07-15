@@ -50,6 +50,11 @@ func reviewPlugin(m plugin.Manifest) (bool, error) {
 	for _, r := range m.Requires {
 		fmt.Printf("    %-12s %s\n", r.Capability, r.Target)
 	}
+	for _, td := range m.Tools {
+		if td.Intent != "" {
+			fmt.Printf("    tool %-8s asks: %q\n", td.Name, td.Intent)
+		}
+	}
 	for _, c := range m.Credentials {
 		fmt.Printf("    credential   %s → %s\n", c.Name, c.Host)
 	}

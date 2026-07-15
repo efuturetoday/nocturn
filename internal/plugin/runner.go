@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
+	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/sandbox"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/tool"
@@ -59,6 +61,13 @@ func (p *Plugin) Tools() []tool.Tool {
 				Parameters:  td.Parameters,
 			},
 			Invoke: func(ctx context.Context, args string) (string, error) {
+				// Stamp the tool's semantic intent (from the install-reviewed
+				// manifest template) so a gated effect underneath prompts at the
+				// human level ("Send email to x@a"), not the transport level. Only
+				// the wording changes; the ceiling still bounds the real target.
+				if intent := renderIntent(td.Intent, args); intent != "" {
+					ctx = gateway.WithIntent(ctx, intent)
+				}
 				return p.invoke(ctx, td.Name, args)
 			},
 		})
@@ -100,6 +109,26 @@ func jsBootstrap(toolName, args string) string {
 		"  const __out = await globalThis.plugin.tools[" + string(name) + "](__args);\n" +
 		"  print(typeof __out === \"string\" ? __out : JSON.stringify(__out));\n" +
 		"})();\n"
+}
+
+var placeholderRe = regexp.MustCompile(`\{[a-zA-Z0-9_]+\}`)
+
+// renderIntent fills {field} placeholders in tmpl from the call's JSON args
+// (e.g. "Send an email to {to}" + {"to":"x@a"} → "Send an email to x@a"). An
+// unknown or unparsable field leaves its placeholder as-is; an empty template
+// yields "" (the effect tool's own wording is then used).
+func renderIntent(tmpl, args string) string {
+	if tmpl == "" {
+		return ""
+	}
+	var m map[string]any
+	_ = json.Unmarshal([]byte(args), &m)
+	return placeholderRe.ReplaceAllStringFunc(tmpl, func(ph string) string {
+		if v, ok := m[ph[1:len(ph)-1]]; ok {
+			return fmt.Sprintf("%v", v)
+		}
+		return ph
+	})
 }
 
 // rawArgs re-marshals args to a clean JSON literal (defends the JS bootstrap and

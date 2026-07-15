@@ -4,12 +4,60 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
+	"github.com/efuturetoday/nocturn/internal/hitl"
 )
 
 var probeCall = capability.Call{Capability: "probe", Target: "example.com"}
+
+// captureNotifier records the intent it was prompted with and approves once.
+type captureNotifier struct {
+	intent  string
+	resolve func(string) error
+}
+
+func (n *captureNotifier) Notify(intent string, options []hitl.Option) error {
+	n.intent = intent
+	for _, o := range options {
+		if o.Outcome == hitl.Approved {
+			return n.resolve(o.Token)
+		}
+	}
+	return errors.New("no approve option")
+}
+
+// A trusted layer's ctx intent (WithIntent) is shown to the human instead of the
+// effect tool's own transport-level intent; without it, the tool's default is used.
+func TestAuthorize_WithIntentOverridesPrompt(t *testing.T) {
+	notifier := &captureNotifier{}
+	engine := hitl.NewEngine([]byte("k"), notifier)
+	notifier.resolve = engine.Resolve
+	g := &gateway.Guard{
+		Policy: capability.Policy{Rules: []capability.Rule{
+			{Capability: "probe", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+		}},
+		Approvals: engine,
+		TTL:       time.Second,
+	}
+
+	if err := g.Authorize(context.Background(), probeCall, "http.write example.com"); err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	if notifier.intent != "http.write example.com" {
+		t.Fatalf("default intent = %q, want the tool's own", notifier.intent)
+	}
+
+	ctx := gateway.WithIntent(context.Background(), "Send email to x@a")
+	if err := g.Authorize(ctx, probeCall, "http.write example.com"); err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	if notifier.intent != "Send email to x@a" {
+		t.Fatalf("intent = %q, want the ctx-supplied semantic intent", notifier.intent)
+	}
+}
 
 // Do runs the effect only when the call is allowed, and returns its result.
 func TestDo_AllowedRunsEffect(t *testing.T) {

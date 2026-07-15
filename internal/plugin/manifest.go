@@ -29,11 +29,16 @@ type Manifest struct {
 	Credentials []CredentialDecl `json:"credentials"` // host-injected credentials it uses
 }
 
-// ToolDecl declares a tool the plugin exposes to the model.
+// ToolDecl declares a tool the plugin exposes to the model. Intent is an optional
+// human-readable template for the HITL prompt, with {field} placeholders filled
+// from the call's arguments (e.g. "Send an email to {to}"). It is reviewed at
+// install time and shown at the semantic level instead of the transport effect
+// the tool performs underneath; empty means the effect tool's own wording is used.
 type ToolDecl struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"` // JSON-schema object
+	Intent      string          `json:"intent"`     // optional HITL template, {field} placeholders
 }
 
 // Require is one (capability, target-glob) the plugin may attempt — a ceiling

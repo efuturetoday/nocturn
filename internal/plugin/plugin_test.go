@@ -67,10 +67,12 @@ type countNotifier struct {
 	want    hitl.Outcome
 	resolve func(token string) error
 	calls   int
+	intent  string // the prompt text of the most recent Notify
 }
 
-func (n *countNotifier) Notify(_ string, options []hitl.Option) error {
+func (n *countNotifier) Notify(intent string, options []hitl.Option) error {
 	n.calls++
+	n.intent = intent
 	for _, o := range options {
 		if o.Outcome == n.want {
 			return n.resolve(o.Token)
@@ -144,5 +146,43 @@ func TestPlugin_CeilingBoundsEffects_E2E(t *testing.T) {
 	}
 	if reg.Has("example.fetch") {
 		t.Fatal("uninstall did not remove example.fetch")
+	}
+}
+
+// Semantic HITL wording: a plugin tool with a manifest intent template makes the
+// human see "Send hi to the example API" — rendered from the tool's args — rather
+// than the transport-level "http.write api.example.com" the effect performs.
+func TestPlugin_ManifestIntentReachesHITL(t *testing.T) {
+	stub := &http.Client{Transport: rtFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok")), Header: make(http.Header)}, nil
+	})}
+	notifier := &countNotifier{want: hitl.Approved}
+	engine := hitl.NewEngine([]byte("k"), notifier)
+	notifier.resolve = engine.Resolve
+	guard := &gateway.Guard{
+		Policy: capability.Policy{Rules: []capability.Rule{
+			{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+		}},
+		Approvals: engine,
+		TTL:       time.Second,
+	}
+	netCap := &netcap.Net{Guard: guard, HTTP: stub, Scanner: secret.NewScanner(secret.NewStore())}
+	reg := tool.NewRegistry(netCap.Tools())
+
+	host := plugin.NewHost(reg, nil)
+	l, err := plugin.Load("testdata/example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Install(l, func(plugin.Manifest) (bool, error) { return true, nil }); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	ctx := capability.WithGrants(context.Background(), capability.NewGrants("test", capability.Permanent, nil))
+
+	if _, err := reg.Invoke(ctx, "example.send", `{"msg":"hi"}`); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if notifier.intent != "Send hi to the example API" {
+		t.Fatalf("HITL intent = %q, want the rendered manifest template", notifier.intent)
 	}
 }

@@ -76,6 +76,14 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 		if grants != nil && grants.Allows(call, env) {
 			return nil // standing grant (session or always)
 		}
+		// A higher, trusted layer (a plugin Host rendering an install-reviewed
+		// manifest template) may have stamped a semantic intent onto ctx — prefer
+		// it over the effect tool's transport-level default, so the human reads
+		// "Send email to x@a" instead of "http.write gmail.googleapis.com". The
+		// gated (capability, target) is unchanged; only the prompt wording is.
+		if r := intentFrom(ctx); r != "" {
+			intent = r
+		}
 		out, err := g.Approvals.Request(ctx, intent, approvalChoices, g.TTL)
 		if err != nil {
 			return err
@@ -115,4 +123,22 @@ func Do[T any](ctx context.Context, g *Guard, call capability.Call, intent strin
 		return zero, err
 	}
 	return effect()
+}
+
+// intentKey carries a higher layer's semantic intent for the current operation.
+type intentKey struct{}
+
+// WithIntent attaches a human-readable intent that Authorize prefers over the
+// effect tool's own (transport-level) intent when prompting. It is set by a
+// TRUSTED layer only — the plugin Host, rendering a template that was reviewed at
+// install time — never by guest code, so a plugin cannot forge a misleading
+// prompt for an effect it isn't allowed to attempt (the ceiling still bounds the
+// real target, and that is what is gated).
+func WithIntent(ctx context.Context, intent string) context.Context {
+	return context.WithValue(ctx, intentKey{}, intent)
+}
+
+func intentFrom(ctx context.Context) string {
+	s, _ := ctx.Value(intentKey{}).(string)
+	return s
 }
