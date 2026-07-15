@@ -138,6 +138,7 @@ getestet, bevor die nächste kam:
 | `plugin` | **Sandboxed Ersatz für MCP-Server.** Artefakt (`plugin.js` auf dem geteilten QuickJS **oder** `plugin.wasm`) + Sidecar `plugin.json` (`Manifest`: `tools[]`, `requires[]`=Ceiling, `credentials[]`; `Validate()` fail-closed; `Load(dir)` **ohne** Ausführung). `Plugin.Tools()` → namespaced `<name>.<tool>` in die geteilte `tool.Registry`; **stateless** (frische Sandbox-Instanz pro Call, Cross-Call-State via `/work`). `runGuest` stempelt das **Plugin-Ceiling** in ctx (**einzige** Stelle, `SECURITY:`-Kommentar) → Effekte hart auf `requires` begrenzt; leeres Manifest = deny-all. `Host.Install`/`Uninstall` (eine HITL-Freigabe der Decke, **keine** Effekt-Grants; Uninstall lässt Context-Grants leben). **Semantisches HITL-Wording:** `ToolDecl.intent` = install-reviewtes Template (`{feld}`-Platzhalter aus den Args); der Host rendert es (`renderIntent`) + stempelt `gateway.WithIntent` → der Guard zeigt *„Send email to x@a"* statt Transport. Nur Wording — die gegatete `(capability, target)` bleibt; das Template ist trusted (Manifest, kein Gast-Code). |
 | `filecap` | **Zweite Capability-Familie (nach netcap) — der Beweis, dass das Broker-Modell nicht HTTP-förmig ist.** `Files{Guard, Root}` → Tools **`file.read`**/**`file.write`** über *einen* Workspace-`Root`. `Target` = **workspace-relativer Pfad** (glob-gematcht wie ein Host) → ein Grant/Ceiling scoped per Pfad (`file.write @ notes/*`) exakt wie http per Host. Jeder Pfad **confined** zu `Root` (Escape via `..`/absolut = harter Fehler *vor* dem Broker); dann `Guard.Do` (Broker + HITL + Grants). |
 | `llm` | OpenAI-kompatibler Adapter (go-openai), native `tool_calls`, SSE-Streaming. `Next(...[]tool.Spec...)` erfüllt `brain.Model`. |
+| `skill` | **Die Skills-Schicht (agentskills.io-Standard) — Kontext, KEINE Tools.** Host-seitig, importiert **nur `tool` + stdlib + yaml.v3**. `Discover(scopes)` liest `SKILL.md` (yaml.v3-Frontmatter, 16-KB-Cap + typed decode; lenient, Shadowing, Diagnostics) aus `<ws>/.skills/`. **Model-driven progressive disclosure** über EIN Meta-Tool **`skill.load`** (Katalog in der Description, `name`-enum der sichtbaren Skills, Body on-demand → `<skill>`-wrapped, `Spec.MaxResult` hebt die Truncation; `metadata.nocturn.model-invocation:never` versteckt aus dem Katalog). **`skill.read`** = Tier-3-Resources (references/templates/scripts) eines *geladenen* Skills, confined (symlink-aufgelöst), read-only, **nicht gegated** (null Autorität), observable. `Active` = per-Session-Dedup-Set (ctx-Seam, von `agent.Session` gestempelt). Skills verleihen **keine** Autorität (`allowed-tools` geparst, **ignoriert**) → jeder Effekt bleibt Broker+HITL. `/name`+`/skills` im TUI. |
 | `oauth` | Host-managed OAuth (ADR-5). **`Provider(authURL, tokenURL, clientID, …)`** = provider-agnostisch (Plugin bringt eigene Endpoints/Scopes mit; `Google()` = dünner Wrapper); Loopback-PKCE-`Authorize`; refreshing `Source` (wrappt `golang.org/x/oauth2`-TokenSource) → an `secret.Injector` als Bearer-Quelle; Gast sieht das Token nie. |
 | `agent` | **Session-Lifecycle-Owner.** `Session` bündelt `brain.Conversation` + geteilten `gateway.Guard` + geteilte `EpochRegistry` + die eigene **`capability.Grants`** + `GrantStore`. `Ask` stempelt die Grants via `capability.WithGrants` (+ optional Workspace-`Ceiling`) in ctx; `Reset` schließt die Epoche (widerruft Session-Grants), öffnet frische Grants+Conversation (`always`-Grants überleben); `Close` schließt die Epoche. Enthält **`GrantsStore`** (file-backed `capability.GrantStore`, `<config>/nocturn/grants.json`, 0600; ehem. in `gateway`). |
 
@@ -148,7 +149,9 @@ Review pre-TUI), `auth.go` (`wireGoogleCredential`), `tui.go` (View). Kein `run`
 
 **Dependencies (bewusst minimal):** Kern (`internal/`): `wazero` (pure Go, kein
 CGo), `go-openai` (**0 transitive Deps**), `golang.org/x/sys`, `golang.org/x/oauth2`
-(nur im `oauth`-Paket). `cmd/`: `godotenv`, **charm** (bubbletea/lipgloss/bubbles) — nur
+(nur im `oauth`-Paket), `gopkg.in/yaml.v3` (nur im `skill`-Paket, SKILL.md-Frontmatter;
+in Go kein RCE-Deserialisierungs-Risiko, Input size-capped + typed decode; `check.v1`
+= test-only). `cmd/`: `godotenv`, **charm** (bubbletea/lipgloss/bubbles) — nur
 Präsentation, berührt die **Trusted-TCB nicht**. **Verworfen:** langchaingo (290 Deps,
 bringt eigenen Agent-Loop der unsere Sicherheit umgeht).
 **Dev-Tools:** `wat2wasm` (brew wabt) für den WAT-Gast; **`wasi-sdk` + quickjs-ng-Checkout** zum Neubauen des Interpreter-`.wasm` (`internal/script/qjs/build.sh`, nur bei Shim-Änderung — das gebaute `.wasm` ist committet); `javy` (Spike). Kein Runtime-Dep: das Binary bleibt pure Go/wazero, kein CGo.
@@ -407,6 +410,21 @@ liest *„Send hi to the example API"* statt *„http.write api.example.com"*. *
 fälschen, den es gar nicht versuchen darf (Ceiling bounded weiterhin das echte Ziel). Getestet: Guard-Override-
 Unit + Plugin-E2E durch echtes QuickJS (`msg:"hi"` → gerenderter Prompt am HITL). **Offen (Phase D, optional):**
 Consent am Tool-Boundary + semantischer Grant-Key (statt host-level) — nur falls per-Effekt-Asks nerven.
+
+**Erledigt (Skills-Schicht — agentskills.io, model-driven):** `internal/skill`. Skills sind
+**Kontext, keine Tools** (nie im `tools`-Array) — sie steuern, *wie* das Modell seine gegateten Tools
+nutzt, und verleihen **null Autorität** (`allowed-tools` geparst, **ignoriert** — Broker/HITL bleibt
+einzige Instanz; ADR-6/9). **Progressive disclosure** über EIN Meta-Tool **`skill.load`** (Katalog in
+der Description, `name`-enum; Body on-demand → `<skill>`-wrapped; `tool.Spec.MaxResult` verhindert
+Truncation des Bodies; `metadata.nocturn.model-invocation:never` versteckt aus dem Katalog).
+**`skill.read`** = Tier-3-Resources (references/templates/scripts) *geladener* Skills, confined
+(symlink-aufgelöst) + read-only + nur aktiviert + ungegated (Ingestion, keine Autorität). Frontmatter
+via **yaml.v3** (16-KB-Cap + typed decode). `agent.Session` besitzt das `Active`-Dedup-Set (stempelt es
+in `Ask`, erneuert bei `Reset`). TUI: **`/name`** (explizite Aktivierung, Harness injiziert den Body) +
+**`/skills`** (Listing) + Startup-Notice. Workspace (ADR-10): `<ws>/.skills/` (host-gelesen, außerhalb
+`mnt` → Modell kann keine Skills schreiben). Race-clean getestet inkl. E2E `skill.read`→`code.run` durch
+echtes QuickJS. *Klärung:* das größte Assistant-Ökosystem sind Markdown-Skills (5.400+), nicht MCP —
+un-sandboxed-safe adoptierbar, weil ein Skill nur über gegatete Tools wirkt.
 
 **Erledigt (OAuth, ADR-5):** `internal/oauth` — Loopback-PKCE-`Authorize` (einmalige Consent-
 Zeremonie, druckt URL) + refreshing `Source` über `golang.org/x/oauth2`; via `secret.Injector`
