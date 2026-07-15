@@ -17,12 +17,12 @@ package brain
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"sync"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/deadline"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // ErrMaxSteps is returned when the loop hits its step budget without the Model
@@ -59,27 +59,11 @@ type Step struct {
 	ToolCalls []ToolCall
 }
 
-// ToolSpec is the declaration a Model sees: the tool's name, a description, and
-// a JSON Schema for its arguments.
-type ToolSpec struct {
-	Name        string
-	Description string
-	Parameters  json.RawMessage
-}
-
-// Tool is an invocable capability. Invoke receives the raw JSON arguments; it is
-// responsible for unmarshalling and validating them (returning an error the
-// brain feeds back to the Model on bad input).
-type Tool struct {
-	ToolSpec
-	Invoke func(ctx context.Context, args string) (string, error)
-}
-
 // Model produces the next Step given the conversation and the available tools.
 // If onToken is non-nil, the Model streams answer text through it as it arrives
 // (tool-call decisions do not stream). onToken may be nil for no streaming.
 type Model interface {
-	Next(ctx context.Context, conv []Message, tools []ToolSpec, onToken func(string)) (Step, error)
+	Next(ctx context.Context, conv []Message, tools []tool.Spec, onToken func(string)) (Step, error)
 }
 
 // Brain runs the loop with a Model and a shared Registry of tools. OnToken, if
@@ -89,7 +73,7 @@ type Model interface {
 // place; the Brain itself carries no per-tool UI hook.
 type Brain struct {
 	Model       Model
-	Registry    *Registry
+	Registry    *tool.Registry
 	MaxSteps    int
 	ToolTimeout time.Duration // per-tool-call deadline; 0 = no limit
 	OnToken     func(string)  // answer-token stream; nil = no streaming

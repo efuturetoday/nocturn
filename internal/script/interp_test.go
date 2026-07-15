@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/script"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // Shell A: a real interpreter on the sandbox evaluates arbitrary JS source and
@@ -46,7 +46,7 @@ func TestInterp_LanguageSurface(t *testing.T) {
 // the gate dispatches to the tool's Invoke, and the result returns into JS.
 func TestInterp_GateReachesTool(t *testing.T) {
 	var gotArgs string
-	r := script.New(brain.NewRegistry([]brain.Tool{recordingTool("greet", "hello from host", &gotArgs)}))
+	r := script.New(tool.NewRegistry([]tool.Tool{recordingTool("greet", "hello from host", &gotArgs)}))
 
 	src := `
 		const r = nocturn.call("greet", {name: "nocturn"});
@@ -67,11 +67,11 @@ func TestInterp_GateReachesTool(t *testing.T) {
 // A denied/failed effect surfaces as a catchable JS exception — the host does
 // not crash and the script keeps control.
 func TestInterp_DeniedEffectIsCatchable(t *testing.T) {
-	deny := brain.Tool{
-		ToolSpec: brain.ToolSpec{Name: "http.write"},
-		Invoke:   func(context.Context, string) (string, error) { return "", errDenied },
+	deny := tool.Tool{
+		Spec:   tool.Spec{Name: "http.write"},
+		Invoke: func(context.Context, string) (string, error) { return "", errDenied },
 	}
-	r := script.New(brain.NewRegistry([]brain.Tool{deny}))
+	r := script.New(tool.NewRegistry([]tool.Tool{deny}))
 
 	src := `
 		try {
@@ -95,14 +95,14 @@ func TestInterp_DeniedEffectIsCatchable(t *testing.T) {
 // drives the job queue to completion, so awaited continuations actually run.
 func TestInterp_TopLevelAwaitAndLoop(t *testing.T) {
 	var calls int
-	tool := brain.Tool{
-		ToolSpec: brain.ToolSpec{Name: "dns.resolve"},
+	dnsTool := tool.Tool{
+		Spec: tool.Spec{Name: "dns.resolve"},
 		Invoke: func(_ context.Context, _ string) (string, error) {
 			calls++
 			return "1.2.3.4", nil
 		},
 	}
-	r := script.New(brain.NewRegistry([]brain.Tool{tool}))
+	r := script.New(tool.NewRegistry([]tool.Tool{dnsTool}))
 
 	// The exact shape from the failing session: a top-level await loop.
 	src := `
@@ -142,11 +142,11 @@ func TestInterp_PromiseThenRuns(t *testing.T) {
 // A rejected top-level promise (an await that throws and isn't caught) surfaces
 // as a run error, not a silent no-op.
 func TestInterp_UnhandledRejectionIsError(t *testing.T) {
-	deny := brain.Tool{
-		ToolSpec: brain.ToolSpec{Name: "dns.resolve"},
-		Invoke:   func(context.Context, string) (string, error) { return "", errDenied },
+	deny := tool.Tool{
+		Spec:   tool.Spec{Name: "dns.resolve"},
+		Invoke: func(context.Context, string) (string, error) { return "", errDenied },
 	}
-	r := script.New(brain.NewRegistry([]brain.Tool{deny}))
+	r := script.New(tool.NewRegistry([]tool.Tool{deny}))
 
 	// No try/catch: the rejection propagates to the top-level promise.
 	_, err := r.Run(context.Background(), `await nocturn.call("dns.resolve", {host: "x"});`)

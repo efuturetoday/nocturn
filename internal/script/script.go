@@ -2,7 +2,7 @@
 // compiled to wasm) and bridges effects through a single generic gate.
 //
 // The interpreter guest declares exactly ONE host import — nocturn.call — and
-// the host side of that import is a dispatcher over a brain.Tool registry: the
+// the host side of that import is a dispatcher over a tool.Tool registry: the
 // guest calls nocturn.call(tool, args), the dispatcher looks the tool up and
 // runs its Invoke. That registry is the SAME set of gated tools the model uses
 // (netcap.Net.Tools()), so a script reaches effects through the identical
@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/sandbox"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 const (
@@ -35,15 +35,15 @@ const (
 )
 
 // Runner evaluates JS source on the interpreter guest, dispatching a script's
-// nocturn.call effects through a shared brain.Registry — the SAME registry the
+// nocturn.call effects through a shared tool.Registry — the SAME registry the
 // model dispatches through, so script effects are gated and observed identically.
 // Build it with New (embedded interpreter) or NewWithGuest; the zero value
 // is not usable.
 type Runner struct {
-	Guest    []byte          // the interpreter wasm
-	Registry *brain.Registry // shared dispatch registry (also the model's)
-	Timeout  time.Duration   // per-run wall-clock bound (0 = sandbox default)
-	MaxPages uint32          // memory cap in 64 KiB pages (0 = sandbox default)
+	Guest    []byte         // the interpreter wasm
+	Registry *tool.Registry // shared dispatch registry (also the model's)
+	Timeout  time.Duration  // per-run wall-clock bound (0 = sandbox default)
+	MaxPages uint32         // memory cap in 64 KiB pages (0 = sandbox default)
 }
 
 // NewWithGuest builds a Runner over an explicit interpreter guest (e.g. a test
@@ -52,9 +52,9 @@ type Runner struct {
 // reports "unknown tool"). code.run may live in the shared Registry for the
 // model to call, but a script can never re-enter it — dispatch refuses code.run
 // (no recursive interpreter).
-func NewWithGuest(guest []byte, reg *brain.Registry) *Runner {
+func NewWithGuest(guest []byte, reg *tool.Registry) *Runner {
 	if reg == nil {
-		reg = brain.NewRegistry(nil)
+		reg = tool.NewRegistry(nil)
 	}
 	return &Runner{Guest: guest, Registry: reg}
 }
@@ -115,9 +115,9 @@ func (r *Runner) dispatch(ctx context.Context, req []byte) ([]byte, error) {
 // Tool exposes the runner to the brain as code.run. Pure compute needs no
 // approval; effects the script performs are gated by the tools it calls through
 // the gate. This is the model-facing counterpart to running a script.
-func (r *Runner) Tool() brain.Tool {
-	return brain.Tool{
-		ToolSpec: brain.ToolSpec{
+func (r *Runner) Tool() tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{
 			Name: codeRunName,
 			Description: "Run a JavaScript program and return what it prints to stdout (console.log/print). " +
 				"Use it for multi-step computation and data shaping. " +

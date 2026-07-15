@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // loadPlugins installs every plugin under ./plugins/<name>/ into the shared
@@ -20,7 +20,7 @@ import (
 // A plugin declaring a scary ceiling is shown verbatim and installed only on an
 // explicit "y". (Follow-up: a manifest-hash "already approved" record so an
 // unchanged plugin needs no re-prompt on every boot.)
-func loadPlugins(reg *brain.Registry, inj *secret.Injector) error {
+func loadPlugins(reg *tool.Registry, inj *secret.Injector) error {
 	entries, err := os.ReadDir("plugins")
 	if err != nil {
 		return nil // no plugins dir → nothing to install

@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // delayedApprover plays a slow human: it approves (Allow once) after a fixed
@@ -67,7 +67,7 @@ func TestHITL_ApprovalOutlastsBudget_ScriptStillCompletes(t *testing.T) {
 		HTTP:    srv.Client(),
 	}
 
-	r := script.NewWithGuest(gateGuest, brain.NewRegistry(netCap.Tools()))
+	r := script.NewWithGuest(gateGuest, tool.NewRegistry(netCap.Tools()))
 	r.Timeout = 200 * time.Millisecond // shorter than the 400ms approval
 
 	// gate guest: stdin IS the gate request.

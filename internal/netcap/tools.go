@@ -7,16 +7,16 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // Tools exposes this capability group as brain tools — name, JSON Schema, and an
 // Invoke that validates the model's arguments and calls the guarded method. The
 // tool contract (schema + argument parsing) lives WITH the capability, not in
 // the caller; the caller just collects Tools().
-func (n *Net) Tools() []brain.Tool {
-	return []brain.Tool{n.readTool(), n.writeTool(), n.resolveTool()}
+func (n *Net) Tools() []tool.Tool {
+	return []tool.Tool{n.readTool(), n.writeTool(), n.resolveTool()}
 }
 
 // http.read and http.write are split so the tool the model picks IS the
@@ -24,9 +24,9 @@ func (n *Net) Tools() []brain.Tool {
 // methods) through http.write. The capability name — not the HTTP verb — is what
 // the policy gates and what credential bindings scope to.
 
-func (n *Net) readTool() brain.Tool {
-	return brain.Tool{
-		ToolSpec: brain.ToolSpec{
+func (n *Net) readTool() tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{
 			Name:        "http.read",
 			Description: "Read a URL over HTTP(S) with a safe method (GET/HEAD) and return the response body.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
@@ -54,9 +54,9 @@ func (n *Net) readTool() brain.Tool {
 	}
 }
 
-func (n *Net) writeTool() brain.Tool {
-	return brain.Tool{
-		ToolSpec: brain.ToolSpec{
+func (n *Net) writeTool() tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{
 			Name:        "http.write",
 			Description: "Send data to a URL with a mutating method (POST/PUT/PATCH/DELETE). This is a write and may require approval.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
@@ -119,9 +119,9 @@ func methodOrDefault(m, def string) string {
 func isRead(m string) bool  { return m == "GET" || m == "HEAD" }
 func isWrite(m string) bool { return m == "POST" || m == "PUT" || m == "PATCH" || m == "DELETE" }
 
-func (n *Net) resolveTool() brain.Tool {
-	return brain.Tool{
-		ToolSpec: brain.ToolSpec{
+func (n *Net) resolveTool() tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{
 			Name:        "dns.resolve",
 			Description: "Resolve a hostname to its IP addresses.",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"host":{"type":"string","description":"The hostname to resolve"}},"required":["host"]}`),

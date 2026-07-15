@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 func allowRead(hostGlob string) capability.Policy {
@@ -171,7 +171,7 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 	epoch := epochs.Open()
 	g := &netcap.Net{Guard: &gateway.Guard{Policy: askRead(), Approvals: engine, Epochs: epochs, TTL: time.Second}}
 	// The permission context owns the session grant, bound to the epoch.
-	ctx := capability.WithContext(context.Background(), capability.NewContext("test", epoch, nil))
+	ctx := capability.WithGrants(context.Background(), capability.NewGrants("test", epoch, nil))
 
 	// first call: asked, ApprovedSession granted for this host, bound to epoch
 	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}); err != nil {
@@ -376,7 +376,7 @@ func TestFetchTool_Post(t *testing.T) {
 	defer srv.Close()
 
 	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowReadWrite()}}
-	var write brain.Tool
+	var write tool.Tool
 	for _, tl := range n.Tools() {
 		if tl.Name == "http.write" {
 			write = tl

@@ -21,14 +21,14 @@ import (
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // Messages sent to the program from the turn goroutine / notifier.
 type (
 	tokenMsg     string
-	toolEventMsg brain.ToolEvent // one tool call's start/end, from the shared Registry
+	toolEventMsg tool.Event // one tool call's start/end, from the shared Registry
 	doneMsg      struct{ err error }
 	pulseMsg     struct{}
 	approvalMsg  struct {
@@ -311,9 +311,9 @@ func stableSplit(s string) int {
 
 // --- tool-call forest --------------------------------------------------------
 
-func (m *chatModel) handleToolEvent(ev brain.ToolEvent) {
+func (m *chatModel) handleToolEvent(ev tool.Event) {
 	switch ev.Phase {
-	case brain.ToolStart:
+	case tool.Start:
 		if m.active == nil {
 			m.active = map[uint64]*toolFrame{}
 		}
@@ -325,7 +325,7 @@ func (m *chatModel) handleToolEvent(ev brain.ToolEvent) {
 		if ev.Parent == 0 {
 			m.roots = append(m.roots, ev.ID)
 		}
-	case brain.ToolEnd:
+	case tool.End:
 		f := m.active[ev.ID]
 		if f == nil {
 			return
@@ -682,7 +682,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case toolEventMsg:
-		m.handleToolEvent(brain.ToolEvent(msg))
+		m.handleToolEvent(tool.Event(msg))
 		m.syncViewport()
 		return m, nil
 

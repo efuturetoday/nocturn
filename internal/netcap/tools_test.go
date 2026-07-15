@@ -9,19 +9,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/netcap"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
-func toolByName(tools []brain.Tool, name string) (brain.Tool, bool) {
+func toolByName(tools []tool.Tool, name string) (tool.Tool, bool) {
 	for _, t := range tools {
 		if t.Name == name {
 			return t, true
 		}
 	}
-	return brain.Tool{}, false
+	return tool.Tool{}, false
 }
 
 // The capability group exports its own tools with valid JSON-Schema args — the

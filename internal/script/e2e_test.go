@@ -7,12 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // End to end through the REAL gateway: a JS script calls nocturn.call("http.read",
@@ -27,7 +27,7 @@ func TestE2E_ScriptFetchesThroughGateway(t *testing.T) {
 	defer srv.Close()
 
 	netCap := autoAllowNet(srv.Client())
-	r := script.New(brain.NewRegistry(netCap.Tools()))
+	r := script.New(tool.NewRegistry(netCap.Tools()))
 
 	src := `
 		const body = nocturn.call("http.read", {url: ` + jsString(srv.URL) + `});
@@ -56,7 +56,7 @@ func TestE2E_DeniedRequestNeverLeaves(t *testing.T) {
 		Scanner: secret.NewScanner(secret.NewStore()),
 		HTTP:    srv.Client(),
 	}
-	r := script.New(brain.NewRegistry(netCap.Tools()))
+	r := script.New(tool.NewRegistry(netCap.Tools()))
 
 	src := `
 		try {

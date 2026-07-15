@@ -1,4 +1,4 @@
-package brain
+package tool
 
 import (
 	"context"
@@ -8,29 +8,29 @@ import (
 	"sync/atomic"
 )
 
-// Phase marks whether a ToolEvent is the start or the end of an invocation.
+// Phase marks whether an Event is the start or the end of an invocation.
 type Phase int
 
 const (
-	ToolStart Phase = iota
-	ToolEnd
+	Start Phase = iota
+	End
 )
 
-// ToolEvent is emitted by a Registry around every tool invocation — model- or
-// script-issued. ID is unique per invocation and pairs a ToolStart with its
-// ToolEnd; Parent is the enclosing invocation's ID (0 = root), so an observer can
+// Event is emitted by a Registry around every tool invocation — model- or
+// script-issued. ID is unique per invocation and pairs a Start with its
+// End; Parent is the enclosing invocation's ID (0 = root), so an observer can
 // reconstruct both concurrency (independent roots run at once) and nesting (a
 // script's nocturn.call carries its code.run's ID as Parent). Because calls may
 // run concurrently, events from different invocations interleave — match them by
 // ID, never by arrival order.
-type ToolEvent struct {
+type Event struct {
 	ID     uint64 // unique per invocation
 	Parent uint64 // enclosing invocation's ID; 0 = root
 	Tool   string
 	Args   string // JSON, as the caller supplied it (model args or script args)
 	Phase  Phase
-	Result string // ToolEnd only
-	Err    error  // ToolEnd only (e.g. gateway.ErrDenied for a denied effect)
+	Result string // End only
+	Err    error  // End only (e.g. gateway.ErrDenied for a denied effect)
 }
 
 // Registry is the one place tool calls are dispatched: it maps names to Tools,
@@ -43,7 +43,7 @@ type Registry struct {
 	mu     sync.RWMutex
 	tools  map[string]Tool
 	nextID atomic.Uint64
-	OnCall func(ToolEvent) // observability sink; nil = off
+	OnCall func(Event) // observability sink; nil = off
 }
 
 // callIDKey carries the enclosing invocation's id so a nested Invoke (a script's
@@ -92,38 +92,38 @@ func (r *Registry) Has(name string) bool {
 }
 
 // Specs returns the tool declarations for the Model, sorted by name.
-func (r *Registry) Specs() []ToolSpec {
+func (r *Registry) Specs() []Spec {
 	r.mu.RLock()
-	specs := make([]ToolSpec, 0, len(r.tools))
+	specs := make([]Spec, 0, len(r.tools))
 	for _, t := range r.tools {
-		specs = append(specs, t.ToolSpec)
+		specs = append(specs, t.Spec)
 	}
 	r.mu.RUnlock()
 	sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
 	return specs
 }
 
-// Invoke looks up a tool by name and runs it, emitting a ToolStart before and a
-// ToolEnd after (carrying the result/error). An unknown tool is reported as an
+// Invoke looks up a tool by name and runs it, emitting a Start before and a
+// End after (carrying the result/error). An unknown tool is reported as an
 // error the caller can surface — not fatal. The observer is fail-open.
 func (r *Registry) Invoke(ctx context.Context, name, args string) (out string, err error) {
 	id := r.nextID.Add(1)
 	parent := callIDFrom(ctx)
 	ctx = withCallID(ctx, id) // so a nested Invoke records this call as its parent
-	r.emit(ToolEvent{ID: id, Parent: parent, Tool: name, Args: args, Phase: ToolStart})
+	r.emit(Event{ID: id, Parent: parent, Tool: name, Args: args, Phase: Start})
 	r.mu.RLock()
-	tool, ok := r.tools[name]
+	t, ok := r.tools[name]
 	r.mu.RUnlock() // release before Invoke: it may run long and re-enter the registry
 	if !ok {
 		err = errors.New("unknown tool " + name)
 	} else {
-		out, err = tool.Invoke(ctx, args)
+		out, err = t.Invoke(ctx, args)
 	}
-	r.emit(ToolEvent{ID: id, Parent: parent, Tool: name, Args: args, Phase: ToolEnd, Result: out, Err: err})
+	r.emit(Event{ID: id, Parent: parent, Tool: name, Args: args, Phase: End, Result: out, Err: err})
 	return out, err
 }
 
-func (r *Registry) emit(ev ToolEvent) {
+func (r *Registry) emit(ev Event) {
 	if r.OnCall != nil {
 		r.OnCall(ev)
 	}

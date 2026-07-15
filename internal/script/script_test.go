@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/script"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // gateGuest stands in for the QuickJS interpreter: a minimal WASI guest that
@@ -21,11 +21,11 @@ import (
 //go:embed testdata/gate.wasm
 var gateGuest []byte
 
-// recordingTool is a fake brain.Tool that captures the args it was invoked with
+// recordingTool is a fake tool.Tool that captures the args it was invoked with
 // and returns a fixed output — enough to prove the gate dispatches correctly.
-func recordingTool(name, out string, gotArgs *string) brain.Tool {
-	return brain.Tool{
-		ToolSpec: brain.ToolSpec{Name: name},
+func recordingTool(name, out string, gotArgs *string) tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{Name: name},
 		Invoke: func(_ context.Context, args string) (string, error) {
 			if gotArgs != nil {
 				*gotArgs = args
@@ -39,7 +39,7 @@ func recordingTool(name, out string, gotArgs *string) brain.Tool {
 // tool's Invoke with its args, and the result flows back out.
 func TestRun_GateDispatchesToTool(t *testing.T) {
 	var gotArgs string
-	r := script.NewWithGuest(gateGuest, brain.NewRegistry([]brain.Tool{recordingTool("echo", "PONG", &gotArgs)}))
+	r := script.NewWithGuest(gateGuest, tool.NewRegistry([]tool.Tool{recordingTool("echo", "PONG", &gotArgs)}))
 
 	out, err := r.Run(context.Background(), `{"tool":"echo","args":{"v":42}}`)
 	if err != nil {
@@ -71,11 +71,11 @@ func TestRun_UnknownTool_SurfacesErrorToGuest(t *testing.T) {
 // A tool's own Invoke error reaches the guest the same way (e.g. a denied
 // effect: Guard.Authorize → ErrDenied → "error: ...").
 func TestRun_ToolError_SurfacesErrorToGuest(t *testing.T) {
-	boom := brain.Tool{
-		ToolSpec: brain.ToolSpec{Name: "boom"},
-		Invoke:   func(context.Context, string) (string, error) { return "", errors.New("kaboom") },
+	boom := tool.Tool{
+		Spec:   tool.Spec{Name: "boom"},
+		Invoke: func(context.Context, string) (string, error) { return "", errors.New("kaboom") },
 	}
-	r := script.NewWithGuest(gateGuest, brain.NewRegistry([]brain.Tool{boom}))
+	r := script.NewWithGuest(gateGuest, tool.NewRegistry([]tool.Tool{boom}))
 
 	out, err := r.Run(context.Background(), `{"tool":"boom","args":{}}`)
 	if err != nil {
@@ -89,7 +89,7 @@ func TestRun_ToolError_SurfacesErrorToGuest(t *testing.T) {
 // The interpreter never dispatches itself: a script calling nocturn.call("code.run", …)
 // is refused (no recursive interpreter), surfaced to the guest as a catchable error.
 func TestRun_CodeRunNotReentrant(t *testing.T) {
-	r := script.NewWithGuest(gateGuest, brain.NewRegistry(nil))
+	r := script.NewWithGuest(gateGuest, tool.NewRegistry(nil))
 
 	out, err := r.Run(context.Background(), `{"tool":"code.run","args":{"source":"1"}}`)
 	if err != nil {
@@ -104,7 +104,7 @@ func TestRun_CodeRunNotReentrant(t *testing.T) {
 // returning the script's stdout.
 func TestTool_CodeRun_RunsSource(t *testing.T) {
 	var gotArgs string
-	r := script.NewWithGuest(gateGuest, brain.NewRegistry([]brain.Tool{recordingTool("echo", "OK", &gotArgs)}))
+	r := script.NewWithGuest(gateGuest, tool.NewRegistry([]tool.Tool{recordingTool("echo", "OK", &gotArgs)}))
 
 	tool := r.Tool()
 	if tool.Name != "code.run" {

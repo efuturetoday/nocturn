@@ -16,6 +16,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // scriptedModel returns a fixed sequence of steps and records every conversation
@@ -26,7 +27,7 @@ type scriptedModel struct {
 	convs [][]brain.Message
 }
 
-func (m *scriptedModel) Next(_ context.Context, conv []brain.Message, _ []brain.ToolSpec, onToken func(string)) (brain.Step, error) {
+func (m *scriptedModel) Next(_ context.Context, conv []brain.Message, _ []tool.Spec, onToken func(string)) (brain.Step, error) {
 	m.convs = append(m.convs, append([]brain.Message(nil), conv...))
 	s := m.steps[m.calls]
 	m.calls++
@@ -45,14 +46,14 @@ func convContains(conv []brain.Message, substr string) bool {
 	return false
 }
 
-func tool(name string, invoke func(context.Context, string) (string, error)) brain.Tool {
-	return brain.Tool{ToolSpec: brain.ToolSpec{Name: name}, Invoke: invoke}
+func mkTool(name string, invoke func(context.Context, string) (string, error)) tool.Tool {
+	return tool.Tool{Spec: tool.Spec{Name: name}, Invoke: invoke}
 }
 
 func TestBrain_ToolCallResultFedBackThenFinal(t *testing.T) {
 	var gotArgs string
-	reg := brain.NewRegistry([]brain.Tool{
-		tool("net.fetch", func(_ context.Context, args string) (string, error) {
+	reg := tool.NewRegistry([]tool.Tool{
+		mkTool("net.fetch", func(_ context.Context, args string) (string, error) {
 			gotArgs = args
 			return "PONG", nil
 		}),
@@ -83,7 +84,7 @@ func TestBrain_StreamsAnswerTokens(t *testing.T) {
 	var streamed string
 	b := &brain.Brain{
 		Model:    model,
-		Registry: brain.NewRegistry(nil),
+		Registry: tool.NewRegistry(nil),
 		OnToken:  func(tok string) { streamed += tok },
 	}
 	ans, err := b.Run(context.Background(), "hi")
@@ -99,8 +100,8 @@ func TestBrain_StreamsAnswerTokens(t *testing.T) {
 // one big result can't blow the context — regardless of which tool produced it.
 func TestBrain_LongToolOutputBoundedForModel(t *testing.T) {
 	big := strings.Repeat("x", 10000)
-	reg := brain.NewRegistry([]brain.Tool{
-		tool("big", func(context.Context, string) (string, error) { return big, nil }),
+	reg := tool.NewRegistry([]tool.Tool{
+		mkTool("big", func(context.Context, string) (string, error) { return big, nil }),
 	})
 	model := &scriptedModel{steps: []brain.Step{
 		{ToolCalls: []brain.ToolCall{{ID: "1", Tool: "big"}}},
@@ -129,14 +130,14 @@ func TestBrain_ParallelToolCallsRunConcurrently(t *testing.T) {
 	const n = 3
 	started := make(chan struct{}, n)
 	proceed := make(chan struct{})
-	mk := func(name, out string) brain.Tool {
-		return tool(name, func(context.Context, string) (string, error) {
+	mk := func(name, out string) tool.Tool {
+		return mkTool(name, func(context.Context, string) (string, error) {
 			started <- struct{}{} // announce start
 			<-proceed             // wait for the barrier to open
 			return out, nil
 		})
 	}
-	reg := brain.NewRegistry([]brain.Tool{mk("a", "ra"), mk("b", "rb"), mk("c", "rc")})
+	reg := tool.NewRegistry([]tool.Tool{mk("a", "ra"), mk("b", "rb"), mk("c", "rc")})
 	model := &scriptedModel{steps: []brain.Step{
 		{ToolCalls: []brain.ToolCall{{ID: "1", Tool: "a"}, {ID: "2", Tool: "b"}, {ID: "3", Tool: "c"}}},
 		{Answer: "done"},
@@ -175,14 +176,14 @@ func TestBrain_ParallelToolCallsRunConcurrently(t *testing.T) {
 // re-enters the Registry, like code.run → nocturn.call) records the enclosing
 // call as its Parent — the basis for the observer to render concurrency + nesting.
 func TestRegistry_NestedCallsCarryIDAndParent(t *testing.T) {
-	var reg *brain.Registry
-	var events []brain.ToolEvent
-	inner := tool("inner", func(context.Context, string) (string, error) { return "in", nil })
-	outer := tool("outer", func(ctx context.Context, _ string) (string, error) {
+	var reg *tool.Registry
+	var events []tool.Event
+	inner := mkTool("inner", func(context.Context, string) (string, error) { return "in", nil })
+	outer := mkTool("outer", func(ctx context.Context, _ string) (string, error) {
 		return reg.Invoke(ctx, "inner", "{}") // nested: same ctx carries the parent id
 	})
-	reg = brain.NewRegistry([]brain.Tool{outer, inner})
-	reg.OnCall = func(ev brain.ToolEvent) { events = append(events, ev) }
+	reg = tool.NewRegistry([]tool.Tool{outer, inner})
+	reg.OnCall = func(ev tool.Event) { events = append(events, ev) }
 
 	if _, err := reg.Invoke(context.Background(), "outer", "{}"); err != nil {
 		t.Fatalf("invoke: %v", err)
@@ -209,8 +210,8 @@ func TestRegistry_NestedCallsCarryIDAndParent(t *testing.T) {
 // A slow tool is cut off by ToolTimeout, and the timeout error is fed back so
 // the model can move on instead of hanging.
 func TestBrain_ToolTimeout(t *testing.T) {
-	reg := brain.NewRegistry([]brain.Tool{
-		tool("slow", func(ctx context.Context, _ string) (string, error) {
+	reg := tool.NewRegistry([]tool.Tool{
+		mkTool("slow", func(ctx context.Context, _ string) (string, error) {
 			<-ctx.Done() // blocks until the per-tool deadline fires
 			return "", ctx.Err()
 		}),
@@ -234,8 +235,8 @@ func TestBrain_ToolTimeout(t *testing.T) {
 }
 
 func TestBrain_MaxStepsExceeded(t *testing.T) {
-	reg := brain.NewRegistry([]brain.Tool{
-		tool("noop", func(context.Context, string) (string, error) { return "", nil }),
+	reg := tool.NewRegistry([]tool.Tool{
+		mkTool("noop", func(context.Context, string) (string, error) { return "", nil }),
 	})
 	model := &scriptedModel{steps: []brain.Step{
 		{ToolCalls: []brain.ToolCall{{Tool: "noop"}}},
@@ -258,7 +259,7 @@ func TestBrain_UnknownToolIsReportedNotFatal(t *testing.T) {
 		{Answer: "recovered"},
 	}}
 
-	b := &brain.Brain{Model: model, Registry: brain.NewRegistry(nil)}
+	b := &brain.Brain{Model: model, Registry: tool.NewRegistry(nil)}
 	ans, err := b.Run(context.Background(), "call a missing tool")
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -273,8 +274,8 @@ func TestBrain_UnknownToolIsReportedNotFatal(t *testing.T) {
 
 // A bad-arguments error from a tool is fed back so the model can correct itself.
 func TestBrain_ToolValidationErrorFedBack(t *testing.T) {
-	reg := brain.NewRegistry([]brain.Tool{
-		tool("net.fetch", func(_ context.Context, args string) (string, error) {
+	reg := tool.NewRegistry([]tool.Tool{
+		mkTool("net.fetch", func(_ context.Context, args string) (string, error) {
 			var a struct {
 				URL string `json:"url"`
 			}
@@ -315,8 +316,8 @@ func TestBrain_Integration_FetchThroughGateway(t *testing.T) {
 		}},
 	}}
 
-	reg := brain.NewRegistry([]brain.Tool{
-		tool("net.fetch", func(ctx context.Context, args string) (string, error) {
+	reg := tool.NewRegistry([]tool.Tool{
+		mkTool("net.fetch", func(ctx context.Context, args string) (string, error) {
 			var a struct {
 				URL string `json:"url"`
 			}

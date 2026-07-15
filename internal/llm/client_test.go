@@ -12,6 +12,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/llm"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // mockStream serves the given chunks as an OpenAI SSE stream.
@@ -201,7 +202,7 @@ func TestNext_SendsToolSchemasAndAuth(t *testing.T) {
 	defer srv.Close()
 
 	c := llm.New(srv.URL, "test-key", "test-model")
-	tools := []brain.ToolSpec{{
+	tools := []tool.Spec{{
 		Name:        "net.fetch",
 		Description: "Fetch a URL",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),

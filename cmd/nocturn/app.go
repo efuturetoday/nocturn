@@ -26,6 +26,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // tuiNotifier bridges HITL approval into the TUI.
@@ -92,7 +93,7 @@ func tuiCmd(_ []string) error {
 	// One shared Registry dispatches every tool call — the model's AND the
 	// script's — so its OnCall observer sees them all in one place, nested by
 	// call order.
-	reg := brain.NewRegistry(netCap.Tools())
+	reg := tool.NewRegistry(netCap.Tools())
 
 	// A script interpreter (QuickJS on the sandbox) exposed as code.run: the
 	// model can run multi-step JS that reaches effects via one generic host gate
@@ -121,7 +122,7 @@ func tuiCmd(_ []string) error {
 	}
 
 	var p *tea.Program
-	reg.OnCall = func(ev brain.ToolEvent) { p.Send(toolEventMsg(ev)) }
+	reg.OnCall = func(ev tool.Event) { p.Send(toolEventMsg(ev)) }
 	b := &brain.Brain{
 		Model:       llm.New(baseURL, apiKey, modelName),
 		Registry:    reg,
@@ -130,9 +131,9 @@ func tuiCmd(_ []string) error {
 	}
 	// Durable "always" grants: the user's persistent per-workspace permission
 	// decisions (missing file = none).
-	var grants capability.PersistentGrants
+	var grants capability.GrantStore
 	if dir, err := os.UserConfigDir(); err == nil {
-		grants = gateway.LoadGrantsStore(filepath.Join(dir, "nocturn", "grants.json"))
+		grants = agent.LoadGrantsStore(filepath.Join(dir, "nocturn", "grants.json"))
 	}
 	session := agent.New(b, netCap.Guard, epochs, grants)
 	defer session.Close()

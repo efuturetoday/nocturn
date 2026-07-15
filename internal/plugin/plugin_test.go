@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 func validManifest() plugin.Manifest {
@@ -98,7 +98,7 @@ func TestPlugin_CeilingBoundsEffects_E2E(t *testing.T) {
 		TTL:       time.Second,
 	}
 	netCap := &netcap.Net{Guard: guard, HTTP: stub, Scanner: secret.NewScanner(secret.NewStore())}
-	reg := brain.NewRegistry(netCap.Tools())
+	reg := tool.NewRegistry(netCap.Tools())
 
 	host := plugin.NewHost(reg, nil)
 	l, err := plugin.Load("testdata/example")
@@ -113,7 +113,7 @@ func TestPlugin_CeilingBoundsEffects_E2E(t *testing.T) {
 	}
 
 	// Session context owns the standing grants.
-	ctx := capability.WithContext(context.Background(), capability.NewContext("test", capability.Permanent, nil))
+	ctx := capability.WithGrants(context.Background(), capability.NewGrants("test", capability.Permanent, nil))
 
 	// 1. in-ceiling fetch → asks once → session grant → 2nd is silent.
 	if out, err := reg.Invoke(ctx, "example.fetch", "{}"); err != nil || strings.TrimSpace(out) != "ok" {

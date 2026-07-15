@@ -88,7 +88,7 @@ func TestAuthorize_ApprovedAlways_PersistsAcrossContexts(t *testing.T) {
 	g, n := askGuard(t, hitl.ApprovedAlways)
 	store := &memGrants{recs: map[string]bool{}}
 
-	ctx1 := capability.WithContext(context.Background(), capability.NewContext("ws", capability.Permanent, store))
+	ctx1 := capability.WithGrants(context.Background(), capability.NewGrants("ws", capability.Permanent, store))
 	if err := g.Authorize(ctx1, read("api.example.com"), "GET"); err != nil {
 		t.Fatalf("first authorize: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAuthorize_ApprovedAlways_PersistsAcrossContexts(t *testing.T) {
 	}
 
 	// A fresh context (new epoch) with the same store: no ask, the always-grant holds.
-	ctx2 := capability.WithContext(context.Background(), capability.NewContext("ws", capability.Permanent, store))
+	ctx2 := capability.WithGrants(context.Background(), capability.NewGrants("ws", capability.Permanent, store))
 	if err := g.Authorize(ctx2, read("api.example.com"), "GET"); err != nil {
 		t.Fatalf("second authorize: %v", err)
 	}

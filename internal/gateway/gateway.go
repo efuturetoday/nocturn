@@ -25,7 +25,7 @@ var ErrDenied = errors.New("gateway: capability denied")
 
 // Guard authorizes capability calls. It is host-trusted and shared by every
 // capability group. It is a pure COMPOSER: the standing-grant state lives on the
-// active capability.Context (not on the Guard), and upper bounds live in the
+// active capability.Grants (not on the Guard), and upper bounds live in the
 // ceiling chain carried by ctx — so the Guard holds no per-session mutable state.
 type Guard struct {
 	Policy    capability.Policy
@@ -56,9 +56,9 @@ var approvalChoices = []hitl.Choice{
 //     → hard deny, never even asking — so a prompt-injected caller can't get you
 //     to approve something it was never allowed to attempt.
 //  2. Base policy: Allow → proceed; Deny → deny (deny-wins hard rail).
-//  3. On Ask: a standing grant in the active context (session or always) short-
+//  3. On Ask: a standing grant in the active grant set (session or always) short-
 //     circuits; otherwise out-of-band human approval, and the chosen scope
-//     (once/session/always) is recorded as a grant on the context.
+//     (once/session/always) is recorded as a grant on the grant set.
 func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent string) error {
 	if !capability.WithinCeilings(ctx, call) {
 		return ErrDenied
@@ -72,8 +72,8 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 	case capability.Allow:
 		return nil
 	case capability.Ask:
-		cx := capability.ContextFrom(ctx)
-		if cx != nil && cx.Allows(call, env) {
+		grants := capability.GrantsFrom(ctx)
+		if grants != nil && grants.Allows(call, env) {
 			return nil // standing grant (session or always)
 		}
 		out, err := g.Approvals.Request(ctx, intent, approvalChoices, g.TTL)
@@ -82,13 +82,13 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 		}
 		switch out {
 		case hitl.ApprovedAlways:
-			if cx != nil {
-				_ = cx.Record(call, capability.Always) // persist error must not block the allow
+			if grants != nil {
+				_ = grants.Record(call, capability.ScopeAlways) // persist error must not block the allow
 			}
 			return nil
 		case hitl.ApprovedSession:
-			if cx != nil {
-				_ = cx.Record(call, capability.Session)
+			if grants != nil {
+				_ = grants.Record(call, capability.ScopeSession)
 			}
 			return nil
 		case hitl.Approved:

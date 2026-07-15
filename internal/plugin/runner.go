@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/sandbox"
 	"github.com/efuturetoday/nocturn/internal/script"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // defaultTimeout bounds one plugin tool-call (a single sandbox.Run).
@@ -26,7 +26,7 @@ type Plugin struct {
 	Manifest Manifest
 	artifact []byte
 	kind     Kind
-	reg      *brain.Registry
+	reg      *tool.Registry
 	ceiling  capability.Ceiling
 
 	Timeout  time.Duration
@@ -35,7 +35,7 @@ type Plugin struct {
 }
 
 // New builds a Plugin from a Loaded package over the shared dispatch registry.
-func New(l Loaded, reg *brain.Registry) *Plugin {
+func New(l Loaded, reg *tool.Registry) *Plugin {
 	return &Plugin{
 		Manifest: l.Manifest,
 		artifact: l.Artifact,
@@ -48,12 +48,12 @@ func New(l Loaded, reg *brain.Registry) *Plugin {
 
 // Tools returns the plugin's model-facing tools, namespaced <plugin>.<tool>. Each
 // tool's Invoke runs the plugin artifact for that tool.
-func (p *Plugin) Tools() []brain.Tool {
-	tools := make([]brain.Tool, 0, len(p.Manifest.Tools))
+func (p *Plugin) Tools() []tool.Tool {
+	tools := make([]tool.Tool, 0, len(p.Manifest.Tools))
 	for _, td := range p.Manifest.Tools {
 		td := td
-		tools = append(tools, brain.Tool{
-			ToolSpec: brain.ToolSpec{
+		tools = append(tools, tool.Tool{
+			Spec: tool.Spec{
 				Name:        p.Manifest.Name + "." + td.Name,
 				Description: td.Description,
 				Parameters:  td.Parameters,
@@ -116,6 +116,15 @@ func rawArgs(args string) json.RawMessage {
 // runGuest is the shared sandbox launch: it stamps the plugin ceiling onto ctx
 // (so the broker hard-denies out-of-ceiling effects), registers the one gate, and
 // runs the guest to completion, returning its stdout.
+//
+// SECURITY: this WithCeiling call is the SOLE place a plugin's ceiling enters the
+// request context, and it gates EVERY plugin effect. capability.WithinCeilings is
+// deliberately fail-OPEN on an empty chain (no ceiling → vacuously allowed), so a
+// plugin effect that reached the broker WITHOUT this stamp would be bounded only by
+// the base policy — i.e. unbounded by the manifest. Both runJS and runWASM route
+// through here precisely so that can never happen; do not add a plugin execution
+// path that calls sandbox.Run without first stamping p.ceiling. The regression
+// test TestPlugin_CeilingBoundsEffects_E2E locks the out-of-ceiling hard-deny.
 func (p *Plugin) runGuest(ctx context.Context, guest, stdin []byte) (string, error) {
 	ctx = capability.WithCeiling(ctx, p.ceiling)
 	gate := sandbox.HostFunc{Name: "call", Fn: p.dispatch}

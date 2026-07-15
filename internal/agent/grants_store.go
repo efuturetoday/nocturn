@@ -1,4 +1,4 @@
-package gateway
+package agent
 
 import (
 	"encoding/json"
@@ -9,9 +9,9 @@ import (
 	"github.com/efuturetoday/nocturn/internal/capability"
 )
 
-// GrantsStore is the durable "always" permission set (implements
-// capability.PersistentGrants): the grants a user chose to remember across
-// restarts, keyed by context/workspace id. File-backed (0600), concurrency-safe.
+// GrantsStore is the durable "always" backing for a capability.Grants set
+// (implements capability.GrantStore): the grants a user chose to remember across
+// restarts, keyed by grant-set/workspace id. File-backed (0600), concurrency-safe.
 // A missing or unparsable file yields an empty store — fail-closed, so corrupt
 // persisted grants simply don't apply rather than crashing or widening authority.
 type GrantsStore struct {
@@ -21,12 +21,12 @@ type GrantsStore struct {
 }
 
 type grantRecord struct {
-	Context    string `json:"context"`
+	GrantSet   string `json:"grant_set"`
 	Capability string `json:"capability"`
 	Host       string `json:"host"`
 }
 
-var _ capability.PersistentGrants = (*GrantsStore)(nil)
+var _ capability.GrantStore = (*GrantsStore)(nil)
 
 // LoadGrantsStore reads path (missing/invalid → empty store, fail-closed).
 func LoadGrantsStore(path string) *GrantsStore {
@@ -37,10 +37,10 @@ func LoadGrantsStore(path string) *GrantsStore {
 	return s
 }
 
-// Allows reports whether an "always" grant exactly matches (context, capability,
+// Allows reports whether an "always" grant exactly matches (grant-set, capability,
 // host) — grants are recorded from a live call, so the host is exact.
-func (s *GrantsStore) Allows(contextID string, call capability.Call) bool {
-	rec := recordFor(contextID, call)
+func (s *GrantsStore) Allows(grantSetID string, call capability.Call) bool {
+	rec := recordFor(grantSetID, call)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.recs {
@@ -52,8 +52,8 @@ func (s *GrantsStore) Allows(contextID string, call capability.Call) bool {
 }
 
 // Record persists an "always" grant (idempotent), writing the file atomically.
-func (s *GrantsStore) Record(contextID string, call capability.Call) error {
-	rec := recordFor(contextID, call)
+func (s *GrantsStore) Record(grantSetID string, call capability.Call) error {
+	rec := recordFor(grantSetID, call)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.recs {
@@ -65,8 +65,8 @@ func (s *GrantsStore) Record(contextID string, call capability.Call) error {
 	return s.persist()
 }
 
-func recordFor(contextID string, call capability.Call) grantRecord {
-	return grantRecord{Context: contextID, Capability: call.Capability, Host: call.Attrs["host"]}
+func recordFor(grantSetID string, call capability.Call) grantRecord {
+	return grantRecord{GrantSet: grantSetID, Capability: call.Capability, Host: call.Attrs["host"]}
 }
 
 func (s *GrantsStore) persist() error {

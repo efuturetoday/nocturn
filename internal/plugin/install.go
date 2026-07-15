@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // Host installs and uninstalls plugins into the shared stack. It reuses the SAME
@@ -16,7 +16,7 @@ import (
 // by the broker + HITL + the user's context grants — installing ≠ silently
 // allowing.
 type Host struct {
-	Registry *brain.Registry
+	Registry *tool.Registry
 	Injector *secret.Injector // may be nil (no credential binding)
 
 	mu     sync.Mutex
@@ -28,7 +28,7 @@ type installed struct {
 }
 
 // NewHost builds a plugin host over the shared registry and injector.
-func NewHost(reg *brain.Registry, inj *secret.Injector) *Host {
+func NewHost(reg *tool.Registry, inj *secret.Injector) *Host {
 	return &Host{Registry: reg, Injector: inj, active: map[string]*installed{}}
 }
 

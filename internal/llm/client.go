@@ -17,6 +17,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/efuturetoday/nocturn/internal/brain"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // Client calls an OpenAI-compatible chat endpoint.
@@ -45,7 +46,7 @@ const systemPrompt = "You are Nocturn, a careful assistant. " +
 // model's structured decision: a tool call or a final answer. The completion is
 // streamed: answer text is forwarded to onToken (if non-nil) as it arrives, and
 // tool-call deltas are accumulated into a single structured call.
-func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []brain.ToolSpec, onToken func(string)) (brain.Step, error) {
+func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []tool.Spec, onToken func(string)) (brain.Step, error) {
 	req := openai.ChatCompletionRequest{
 		Model:    c.Model,
 		Messages: buildMessages(conv),

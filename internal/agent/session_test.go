@@ -16,6 +16,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // scriptedModel returns a fixed sequence of steps and records every conversation
@@ -27,7 +28,7 @@ type scriptedModel struct {
 	convs [][]brain.Message
 }
 
-func (m *scriptedModel) Next(_ context.Context, conv []brain.Message, _ []brain.ToolSpec, _ func(string)) (brain.Step, error) {
+func (m *scriptedModel) Next(_ context.Context, conv []brain.Message, _ []tool.Spec, _ func(string)) (brain.Step, error) {
 	m.convs = append(m.convs, append([]brain.Message(nil), conv...))
 	s := m.steps[m.calls]
 	m.calls++
@@ -47,10 +48,10 @@ func convContains(conv []brain.Message, substr string) bool {
 // down to the tool, and Reset rotates it to a fresh, different epoch.
 func TestSession_ThreadsContext_ResetRotatesEpoch(t *testing.T) {
 	var seen []capability.EpochID
-	tools := []brain.Tool{{
-		ToolSpec: brain.ToolSpec{Name: "probe"},
+	tools := []tool.Tool{{
+		Spec: tool.Spec{Name: "probe"},
 		Invoke: func(ctx context.Context, _ string) (string, error) {
-			if c := capability.ContextFrom(ctx); c != nil {
+			if c := capability.GrantsFrom(ctx); c != nil {
 				seen = append(seen, c.Epoch)
 			} else {
 				seen = append(seen, 0)
@@ -63,7 +64,7 @@ func TestSession_ThreadsContext_ResetRotatesEpoch(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "two"},
 	}}
 
-	b := &brain.Brain{Model: model, Registry: brain.NewRegistry(tools)}
+	b := &brain.Brain{Model: model, Registry: tool.NewRegistry(tools)}
 	epochs := capability.NewEpochRegistry()
 	s := agent.New(b, &gateway.Guard{Epochs: epochs}, epochs, nil)
 
@@ -131,8 +132,8 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 	}
 	netCap := &netcap.Net{Guard: guard}
 
-	tools := []brain.Tool{{
-		ToolSpec: brain.ToolSpec{Name: "net.fetch"},
+	tools := []tool.Tool{{
+		Spec: tool.Spec{Name: "net.fetch"},
 		Invoke: func(ctx context.Context, _ string) (string, error) {
 			body, err := netCap.Fetch(ctx, secret.Request{URL: srv.URL})
 			return string(body), err
@@ -143,7 +144,7 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "net.fetch"}}}, {Answer: "two"},
 	}}
 
-	b := &brain.Brain{Model: model, Registry: brain.NewRegistry(tools)}
+	b := &brain.Brain{Model: model, Registry: tool.NewRegistry(tools)}
 	s := agent.New(b, guard, epochs, nil)
 
 	if _, err := s.Ask(context.Background(), "fetch it once"); err != nil {

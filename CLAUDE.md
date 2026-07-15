@@ -55,7 +55,7 @@ getestet, bevor die nächste kam:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────┐
-│ 7  cmd/nocturn — CLI: run | chat        (TUI folgt)                              │
+│ 7  cmd/nocturn — TUI (parameterlos) · agent (Session) · plugin · oauth          │
 │ ┌──────────────────────────────────────────────────────────────────────────────┐ │
 │ │ 6  llm — go-openai-Adapter, native tool_calls                                │ │
 │ │ ┌──────────────────────────────────────────────────────────────────────────┐ │ │
@@ -127,24 +127,29 @@ getestet, bevor die nächste kam:
 | Paket | Rolle |
 |---|---|
 | `sandbox` | **Die wazero-Schicht: Zero-Authority-Boden + generelle Guest-Engine** (Interpreter/Skills). `Run(ctx, guest, Config)`: gehärtet (Memory-Cap + Wall-Clock-Deadline trappt Runaways, #422), WASI-stdio, Workspace `WithDirMount(/work)` (Allowlist-by-construction), gebrokerte `HostFunc`-Imports über **Standard-ABI** (`nocturn.<name>(reqPtr,reqLen)→packed(addr<<32\|size)`, Host alloziert Antwort im Gast via dessen `malloc`). Der Sandbox **gated nichts** — Effekte sind caller-gelieferte HostFuncs, die ans Gateway delegieren. WAT-Test-Gäste (`echo`/`loop`/`logprobe`). |
-| `capability` | Reine Entscheidung. `Policy.Evaluate(Call, Env)` (deny>ask>allow, fail-closed). `EpochRegistry`, `RateLimiter`, `Window`. Konstante `Wildcard`, `Permanent`. |
+| `capability` | Reine Entscheidung (kein I/O, stdlib-only). `Policy.Evaluate(Call, Env)` (deny>ask>allow, fail-closed). `EpochRegistry`, `RateLimiter`, `Window`. Konstante `Wildcard`, `Permanent`. **`Ceiling`** = komponierbare Obergrenze (Schnittmenge, ctx-**Kette** `WithCeiling`/`CeilingsFrom`/`WithinCeilings`; leere Kette = vacuously true = fail-**open**, bewusst — s.u.). **`Grants`** (ehem. `Context`) = Eigentümer des stehenden Permission-Sets einer Session/Workspace: session-scoped (epoch-gebunden) + `always` via `GrantStore`-Interface (I/O-frei gehalten); `Allows`/`Record(call, scope)`; Scope-Konstanten **`ScopeOnce`/`ScopeSession`/`ScopeAlways`**; ctx-Seam `WithGrants`/`GrantsFrom`. |
 | `deadline` | **Pausierbares Execution-Budget im Context** (`WithBudget`/`PauserFrom`/`Pauser`), stdlib-only. Wie `context.WithTimeout`, aber die Deadline lässt sich **pausieren** und ist per ctx-Value auffindbar (Muster wie `WithEpoch`); verkettet sich mit einem Eltern-Budget (Pause/Resume propagiert hoch). `hitl` pausiert es während einer Out-of-band-Freigabe → der Menschen-Wait zehrt **nicht** das Sandbox-/Brain-Timeout auf (nur die HITL-TTL begrenzt ihn), danach läuft es mit Restbudget weiter. Cancel via `WithCancelCause` → Grund über `context.Cause` (DeadlineExceeded vs Canceled); Esc/Ctrl-C/TTL trappen weiterhin sofort. |
 | `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Injector`/`Binding`/`Request` (host-owned Credential-Injektion, **capability + host scoped**; `capMatches`/`hostMatches`) + `Scanner` (bidirektionaler Leak-Scan: `ScanEgress`→`ErrLeaked`, `RedactIngress`→`[REDACTED]`; Tier1 exakter Vault-Wert encoding-robust + Tier2 gitleaks-Muster via Aho-Corasick + Entropy). |
-| `hitl` | `Engine` (Request/Resolve, queue-then-execute), HMAC-`token`; Sub-Paket `hitl/ntfy` (`Publisher` push + `Listener` subscribe). |
-| `gateway` | `Guard.Authorize` (die eine Autorisierungs-Pipeline) + `Net` (Capability-Gruppe). Tools: **`http.read`** (GET/HEAD) / **`http.write`** (POST/PUT/PATCH/DELETE) — Tool = Capability = Autoritätseinheit (`capabilityForMethod`); `dns.resolve`. Capability+host-scoped Credential-Injektion, Manual-Cred-Reject. `ErrDenied`, `ErrManualCredential`. |
-| `brain` | Agentischer Loop. `Model`-Interface (Port), `Tool`/`ToolSpec`, `Run`, `OnToken` (Streaming). `Conversation` = reine Message-History (`NewConversation`/`Send`). |
-| `script` | **Echter Interpreter auf der Sandbox: QuickJS (quickjs-ng) → wasm32-wasi**, embedded via `go:embed` (`qjs/nocturn-qjs.{c,wasm}`, Build `qjs/build.sh` mit wasi-sdk). `Runner.Run(ctx, source)` evaluiert JS-Source (stdin→eval→stdout); als Brain-Tool **`code.run`**. Der Gast deklariert **genau einen** Host-Import `nocturn.call(tool,args)` (+ `malloc`/`free`-Export für den packed-ptr-ABI); der Go-`dispatch` routet auf **dieselbe `brain.Tool`-Registry wie das Modell** (`Net.Tools()`) → jeder Effekt durch `Guard.Authorize` + HITL. Ein Gate = Reference-Monitor; neue Capability = Go-seitig, Interpreter unverändert. Reine Compute braucht null Caps; denied Effekt → JS-Exception (kein Host-Crash). |
-| `llm` | OpenAI-kompatibler Adapter (go-openai), native `tool_calls`, SSE-Streaming. |
-| `agent` | **Session-Lifecycle-Owner.** `Session` bündelt `brain.Conversation` + geteilten `gateway.Guard` + geteilte `EpochRegistry` + die aktuelle Epoche. `Ask` stempelt die Epoche via `capability.WithEpoch` in den ctx (→ Guard bindet Session-Grants daran); `Reset` schließt die Epoche (widerruft Grants) + öffnet frische Epoche + frische Conversation; `Close` schließt die Epoche. |
+| `hitl` | `Engine` (Request/Resolve, queue-then-execute), HMAC-`token`; Outcomes `Approved`/`ApprovedSession`/`ApprovedAlways`/`Denied`; Sub-Paket `hitl/ntfy` (`Publisher` push + `Listener` subscribe). |
+| `tool` | **Der Tool-Bus (neutraler Vertrag, stdlib-only Leaf — importiert nichts Projekt-Internes).** `Tool`/`Spec` (Modell-sichtbare Aktion), die geteilte **`Registry`** (dispatch + `Add`/`Remove`/`Has`/`Specs`/`Invoke`, RWMutex, atomarer Call-id), und der Observer **`Event`** (`Start`/`End`-`Phase`, `ID`/`Parent` → Forest). Trennt Effekt-**Provider** (`netcap`/`script`/`plugin`) von **Consumern** (brain-Loop, TUI-Observer) → **kein Provider→Loop-Import mehr**. (Ehem. in `brain`; Typen entstuttert: `tool.Spec`, nicht `tool.ToolSpec`.) |
+| `gateway` | **`Guard.Authorize` = reiner Komponierer** (hält keinen per-session-State): Ceiling-Kette (`WithinCeilings`, außerhalb = **hart deny, nie fragen**) → aktive `capability.Grants` (stehender Grant short-circuit) → `Policy.Evaluate` → HITL (`Once/Session/Always` → `Grants.Record`). `Do[T]` = authorize-then-execute. + `Net` (Capability-Gruppe): **`http.read`**/**`http.write`** (`capabilityForMethod`), `dns.resolve`; capability+host-scoped Credential-Injektion. `ErrDenied`, `ErrManualCredential`. (Depends **nicht** auf `brain`.) |
+| `brain` | Agentischer Loop (schlank). `Model`-Interface (Port, `Next(...[]tool.Spec...)`), `Conversation`/`Message`/`Step`/`ToolCall`, `Run`, `OnToken` (Streaming). Tool-Calls einer Runde laufen **nebenläufig** (`sync.WaitGroup.Go`), Ergebnisse in Call-Reihenfolge. (Tool-Abstraktion + Registry → `internal/tool` ausgelagert.) |
+| `script` | **Echter Interpreter auf der Sandbox: QuickJS (quickjs-ng) → wasm32-wasi**, embedded via `go:embed` (`qjs/nocturn-qjs.{c,wasm}`, Build `qjs/build.sh` mit wasi-sdk). `Runner.Run(ctx, source)` evaluiert JS-Source (stdin→eval→stdout); als Brain-Tool **`code.run`**. Der Gast deklariert **genau einen** Host-Import `nocturn.call(tool,args)` (+ `malloc`/`free`-Export für den packed-ptr-ABI); der Go-`dispatch` routet auf **dieselbe `tool.Registry` wie das Modell** (`Net.Tools()`) → jeder Effekt durch `Guard.Authorize` + HITL. Ein Gate = Reference-Monitor; neue Capability = Go-seitig, Interpreter unverändert. Reine Compute braucht null Caps; denied Effekt → JS-Exception (kein Host-Crash). `InterpreterGuest()` teilt das eingebettete QuickJS-`.wasm` an `plugin`. |
+| `plugin` | **Sandboxed Ersatz für MCP-Server.** Artefakt (`plugin.js` auf dem geteilten QuickJS **oder** `plugin.wasm`) + Sidecar `plugin.json` (`Manifest`: `tools[]`, `requires[]`=Ceiling, `credentials[]`; `Validate()` fail-closed; `Load(dir)` **ohne** Ausführung). `Plugin.Tools()` → namespaced `<name>.<tool>` in die geteilte `tool.Registry`; **stateless** (frische Sandbox-Instanz pro Call, Cross-Call-State via `/work`). `runGuest` stempelt das **Plugin-Ceiling** in ctx (**einzige** Stelle, `SECURITY:`-Kommentar) → Effekte hart auf `requires` begrenzt; leeres Manifest = deny-all. `Host.Install`/`Uninstall` (eine HITL-Freigabe der Decke, **keine** Effekt-Grants; Uninstall lässt Context-Grants leben). |
+| `llm` | OpenAI-kompatibler Adapter (go-openai), native `tool_calls`, SSE-Streaming. `Next(...[]tool.Spec...)` erfüllt `brain.Model`. |
+| `oauth` | Host-managed OAuth (ADR-5). Google-Config + Loopback-PKCE-`Authorize`; refreshing `Source` (wrappt `golang.org/x/oauth2`-TokenSource) → an `secret.Injector` als Bearer-Quelle; Gast sieht das Token nie. |
+| `agent` | **Session-Lifecycle-Owner.** `Session` bündelt `brain.Conversation` + geteilten `gateway.Guard` + geteilte `EpochRegistry` + die eigene **`capability.Grants`** + `GrantStore`. `Ask` stempelt die Grants via `capability.WithGrants` (+ optional Workspace-`Ceiling`) in ctx; `Reset` schließt die Epoche (widerruft Session-Grants), öffnet frische Grants+Conversation (`always`-Grants überleben); `Close` schließt die Epoche. Enthält **`GrantsStore`** (file-backed `capability.GrantStore`, `<config>/nocturn/grants.json`, 0600; ehem. in `gateway`). |
 
-`cmd/nocturn/main.go` — CLI: `run <skill.wasm>` und `chat "<request>"`.
+`cmd/nocturn` — **die TUI ist das ganze Interface** (parameterlos, `go run ./cmd/nocturn`);
+`app.go` = Composition-Root (Stack zusammenbauen), `plugins.go` (walkt `./plugins/`, Install-
+Review pre-TUI), `auth.go` (`wireGoogleCredential`), `tui.go` (View). Kein `run`/`chat`-Subcommand mehr.
 `spike/extism`, `spike/javy` — **Wegwerf**-Spikes (Skill-Schicht-Entscheidung, geparkt), eigene go.mod.
 
 **Dependencies (bewusst minimal):** Kern (`internal/`): `wazero` (pure Go, kein
-CGo), `go-openai` (**0 transitive Deps**), `golang.org/x/sys`. `cmd/`: `godotenv`,
-**charm** (bubbletea/lipgloss/bubbles) — nur Präsentation, berührt die **Trusted-
-TCB nicht**. **Verworfen:** langchaingo (290 Deps, bringt eigenen Agent-Loop der
-unsere Sicherheit umgeht).
+CGo), `go-openai` (**0 transitive Deps**), `golang.org/x/sys`, `golang.org/x/oauth2`
+(nur im `oauth`-Paket). `cmd/`: `godotenv`, **charm** (bubbletea/lipgloss/bubbles) — nur
+Präsentation, berührt die **Trusted-TCB nicht**. **Verworfen:** langchaingo (290 Deps,
+bringt eigenen Agent-Loop der unsere Sicherheit umgeht).
 **Dev-Tools:** `wat2wasm` (brew wabt) für den WAT-Gast; **`wasi-sdk` + quickjs-ng-Checkout** zum Neubauen des Interpreter-`.wasm` (`internal/script/qjs/build.sh`, nur bei Shim-Änderung — das gebaute `.wasm` ist committet); `javy` (Spike). Kein Runtime-Dep: das Binary bleibt pure Go/wazero, kein CGo.
 
 ---
@@ -284,20 +289,20 @@ go run ./cmd/nocturn
 ## 11. Status & nächste Schritte
 
 **Gebaut & getestet (race-clean), live verifiziert:** Sicherheitskern (Schalen
-0–5) · Gateway (`net.fetch`, `dns.resolve`) · Brain (agentischer Loop, native
-tool_calls) · LLM-Adapter (freellm, Streaming) · Binary (`run`/`chat`) ·
-**Out-of-band-HITL gegen ntfy.sh + iPhone** · **End-to-End `chat` mit echtem LLM,
-gestreamt**.
+0–5) · Gateway (`http.read`/`http.write`, `dns.resolve`) · Brain (agentischer Loop, native
+tool_calls, parallele Calls) · LLM-Adapter (freellm, Streaming) · **TUI** (parameterlos,
+Streaming/Markdown/Tool-Indicator) · **Out-of-band-HITL gegen ntfy.sh + iPhone** · **End-to-End
+mit echtem LLM, gestreamt** · **Plugin-System** (JS/WASM, Ceiling-begrenzt) · **OAuth** (Google).
 
 **Offen / als Nächstes:**
-1. **TUI** (charm.land / bubbletea, lipgloss, glamour) — im `cmd/`, berührt die
-   TCB nicht; Streaming ins UI.
-2. **Secure-by-default `chat`** — `net.fetch = Ask` + Handy-Freigabe als Default.
-3. **Weitere Capabilities** (`ping`, Mail, Kalender) — Muster: kleiner Typ + `*Guard`.
-   Kommen jetzt Modell **und** Skripten gleichzeitig zugute (ein Tool = beide Aufrufer).
-4. **Verteilung** (IronHub-Stil + Code-Signing). **Weg B (async Skript-Gate) — nur TODO**, s. FRAGEN.md.
-5. **Skill-Signing/Attenuation** (M2-Rest, Ed25519) auf `script` aufsetzen; ggf. Preamble-
-   Wrapper (`nocturn.<toolName>`), `/work`-Input-Kanal, Timeout-vs-HITL-Feinung.
+1. **Weitere Capabilities** (`ping`, Mail, Kalender) — Muster: kleiner Typ + `*Guard`.
+   Kommen Modell, Skripten **und** Plugins gleichzeitig zugute (ein Tool = alle Aufrufer).
+2. **Workspace-Layer** — persistenter Workspace als `capability.Grants`-Eigentümer (eigene id +
+   Persistenz + Workspace-`Ceiling`); die Grants/Ceiling-Mechanik ist schon Drop-in dafür gebaut.
+3. **Verteilung** (IronHub-Stil + Code-Signing) + **Skill/Plugin-Signing/Attenuation** (M2-Rest,
+   Ed25519). **Weg B (async Skript-Gate) — nur TODO**, s. FRAGEN.md.
+4. **Keychain-Backend** für `secret` (statt Prozess-Speicher); Manifest-Hash-„approved"-Record
+   (unverändertes Plugin = kein Boot-Prompt).
 
 **Erledigt (Scripting-Frontier):** **Echter Interpreter auf der Sandbox** — `internal/script`:
 QuickJS (quickjs-ng) → wasm32-wasi (wasi-sdk, embedded), Brain-Tool **`code.run`**. Effekte
@@ -307,6 +312,33 @@ eigenen Hosts (QuickJS, ein Gate) entschieden** — minimale TCB (Säule 4), Erw
 Go-seitig (Interpreter-`.wasm` unverändert). Race-clean getestet (Pure-Compute-Eval, Gate-
 Dispatch durch echten Interpreter, denied-Effekt = fangbare JS-Exception, Runaway getrappt,
 E2E gg. echtes `gateway.Net` + `httptest`).
+
+**Erledigt (Plugin-System — sandboxed MCP-Ersatz):** `internal/plugin`. Artefakt (`plugin.js` auf
+dem geteilten QuickJS **oder** `plugin.wasm`) + Sidecar `plugin.json`-Manifest; ein Runtime-Vertrag
+(stdin `{tool,args}` → self-dispatch → Effekte via `nocturn.call` → stdout). Manifest `requires[]` =
+**Ceiling** (Obergrenze, **kein** Auto-Grant): Install zeigt die Decke, **eine** HITL-Freigabe,
+danach fragt der Agent **weiterhin pro Effekt** (du wählst einmal/Session/immer). Effekte hart auf
+`requires` begrenzt (`runGuest` stempelt das Plugin-Ceiling — außerhalb = **deny ohne zu fragen**,
+Anti-Injection). **Stateless** (frische Instanz pro Call, Cross-Call-State via `/work`). Tools
+namespaced `<name>.<tool>` in die geteilte `tool.Registry` → identisch gegated/beobachtet wie
+Modell-/Script-Calls. Race-clean + echt-QuickJS-E2E (in-Ceiling fragt→Session→still; out-of-Ceiling
+hart-deny ohne HITL; Uninstall entfernt Tools, `always`-Grant überlebt).
+
+**Erledigt (OAuth, ADR-5):** `internal/oauth` — Google Loopback-PKCE-`Authorize` (einmalige Consent-
+Zeremonie, druckt URL) + refreshing `Source` über `golang.org/x/oauth2`; via `secret.Injector`
+host-seitig als Bearer an der Grenze injiziert (Gast sieht das Token nie). `cmd` verdrahtet Gmail
+vor dem TUI-Start.
+
+**Erledigt (Autorisierung neu komponiert + `tool`-Extraktion):** (1) **`Guard` = reiner Komponierer**
+— Ceiling-Kette (`capability.Ceiling`, Schnittmenge, ctx-getragen) ∩ stehende **`capability.Grants`**
+(ehem. `Context`; session- + `always`-Tier über `GrantStore`) ∩ Base-Policy → HITL{once/session/always};
+Guard hält keinen per-session-State mehr. `hitl.ApprovedAlways` + „Allow always"-Choice. (2) **Neutraler
+Tool-Bus `internal/tool`** — `Tool`/`Spec`/`Registry`/`Event`/`Phase` aus `brain` ausgelagert (stdlib-only
+Leaf); Provider (`netcap`/`script`/`plugin`) importieren **nicht mehr** `brain` (Inversion behoben). Typen
+**entstuttert** (`tool.Spec`, `tool.Event`), Scope-Konstanten geprefixt (`ScopeOnce/Session/Always`),
+`capability.Context`-vs-`context.Context`-Namensclash eliminiert. `GrantsStore` (file-backed) von `gateway`
+→ `agent` verschoben (Lifecycle-Owner). `go build`/`vet`/`test -race ./...` grün; `gateway`/`capability`
+haben 0 `brain`-Deps.
 
 **Erledigt (Nebenläufigkeit):** (1) **native `tool_call_id`-History** (`brain.Message.ToolCalls`/
 `.ToolCallID`, Adapter baut natives `tool_calls`/`role=tool`, Fallback-id `nocturn_call_<idx>`);

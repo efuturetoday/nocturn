@@ -1,4 +1,4 @@
-package brain_test
+package tool_test
 
 import (
 	"context"
@@ -6,17 +6,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
+
+// mkTool builds a bare tool.Tool with the given name and Invoke.
+func mkTool(name string, invoke func(context.Context, string) (string, error)) tool.Tool {
+	return tool.Tool{Spec: tool.Spec{Name: name}, Invoke: invoke}
+}
 
 // The Registry emits exactly one ToolStart before and one ToolEnd after the
 // tool runs, carrying the caller's args and the tool's result.
 func TestRegistry_InvokeEmitsStartThenEnd(t *testing.T) {
-	var events []brain.ToolEvent
-	reg := brain.NewRegistry([]brain.Tool{
-		tool("echo", func(_ context.Context, args string) (string, error) { return "OUT:" + args, nil }),
+	var events []tool.Event
+	reg := tool.NewRegistry([]tool.Tool{
+		mkTool("echo", func(_ context.Context, args string) (string, error) { return "OUT:" + args, nil }),
 	})
-	reg.OnCall = func(ev brain.ToolEvent) { events = append(events, ev) }
+	reg.OnCall = func(ev tool.Event) { events = append(events, ev) }
 
 	out, err := reg.Invoke(context.Background(), "echo", `{"a":1}`)
 	if err != nil || out != `OUT:{"a":1}` {
@@ -25,10 +30,10 @@ func TestRegistry_InvokeEmitsStartThenEnd(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("got %d events, want 2 (start+end)", len(events))
 	}
-	if events[0].Phase != brain.ToolStart || events[0].Tool != "echo" || events[0].Args != `{"a":1}` {
+	if events[0].Phase != tool.Start || events[0].Tool != "echo" || events[0].Args != `{"a":1}` {
 		t.Fatalf("start event = %+v", events[0])
 	}
-	if events[1].Phase != brain.ToolEnd || events[1].Result != `OUT:{"a":1}` || events[1].Err != nil {
+	if events[1].Phase != tool.End || events[1].Result != `OUT:{"a":1}` || events[1].Err != nil {
 		t.Fatalf("end event = %+v", events[1])
 	}
 }
@@ -36,23 +41,23 @@ func TestRegistry_InvokeEmitsStartThenEnd(t *testing.T) {
 // An unknown tool is reported as the ToolEnd's Err (and as the returned error),
 // not fatal — the caller can surface it.
 func TestRegistry_UnknownToolReportedInEndEvent(t *testing.T) {
-	var events []brain.ToolEvent
-	reg := brain.NewRegistry(nil)
-	reg.OnCall = func(ev brain.ToolEvent) { events = append(events, ev) }
+	var events []tool.Event
+	reg := tool.NewRegistry(nil)
+	reg.OnCall = func(ev tool.Event) { events = append(events, ev) }
 
 	if _, err := reg.Invoke(context.Background(), "ghost", "{}"); err == nil ||
 		!strings.Contains(err.Error(), "unknown tool ghost") {
 		t.Fatalf("err = %v, want unknown tool ghost", err)
 	}
-	if len(events) != 2 || events[1].Phase != brain.ToolEnd || events[1].Err == nil {
+	if len(events) != 2 || events[1].Phase != tool.End || events[1].Err == nil {
 		t.Fatalf("events = %+v", events)
 	}
 }
 
 // A nil observer is a no-op: dispatch still works.
 func TestRegistry_NilObserverIsNoOp(t *testing.T) {
-	reg := brain.NewRegistry([]brain.Tool{
-		tool("echo", func(context.Context, string) (string, error) { return "ok", nil }),
+	reg := tool.NewRegistry([]tool.Tool{
+		mkTool("echo", func(context.Context, string) (string, error) { return "ok", nil }),
 	})
 	if out, err := reg.Invoke(context.Background(), "echo", "{}"); err != nil || out != "ok" {
 		t.Fatalf("out=%q err=%v", out, err)
@@ -65,16 +70,16 @@ func TestRegistry_NilObserverIsNoOp(t *testing.T) {
 // their code.run.
 func TestRegistry_NestedCallsNestByOrder(t *testing.T) {
 	var events []string
-	reg := brain.NewRegistry(nil)
-	reg.OnCall = func(ev brain.ToolEvent) {
+	reg := tool.NewRegistry(nil)
+	reg.OnCall = func(ev tool.Event) {
 		phase := "start"
-		if ev.Phase == brain.ToolEnd {
+		if ev.Phase == tool.End {
 			phase = "end"
 		}
 		events = append(events, ev.Tool+":"+phase)
 	}
-	reg.Add(tool("leaf", func(context.Context, string) (string, error) { return "L", nil }))
-	reg.Add(tool("parent", func(ctx context.Context, _ string) (string, error) {
+	reg.Add(mkTool("leaf", func(context.Context, string) (string, error) { return "L", nil }))
+	reg.Add(mkTool("parent", func(ctx context.Context, _ string) (string, error) {
 		_, _ = reg.Invoke(ctx, "leaf", "{}")
 		_, _ = reg.Invoke(ctx, "leaf", "{}")
 		return "P", nil

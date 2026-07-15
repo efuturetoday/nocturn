@@ -44,6 +44,13 @@ func TestCeiling_EmptyAllowsNothing(t *testing.T) {
 
 // No ceiling in ctx = unrestricted caller (model/script): WithinCeilings is
 // vacuously true.
+// An empty chain is vacuously within — WithinCeilings is deliberately fail-OPEN
+// when no ceiling was stamped. That is safe ONLY because a ceiling is not the
+// primary gate: the base policy still governs (deny-by-default for anything it
+// doesn't Allow), and every caller that MUST be bounded (plugins) stamps its
+// ceiling before any effect can reach the broker (see plugin.runGuest, the sole
+// stamping site). This test pins that intent so a future "fail-closed by default"
+// change is a conscious decision, not an accident.
 func TestWithinCeilings_NoneIsVacuouslyTrue(t *testing.T) {
 	if !capability.WithinCeilings(context.Background(), call("http.write", "anywhere")) {
 		t.Fatal("with no ceiling, every call must be within")

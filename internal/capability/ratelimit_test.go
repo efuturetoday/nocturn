@@ -43,9 +43,9 @@ func TestRateLimiter_DeniedCallDoesNotExtendWindow(t *testing.T) {
 	now := time.Unix(1000, 0)
 	rl := capability.NewRateLimiter(1, time.Minute, capability.WithClock(func() time.Time { return now }))
 
-	rl.Allow("k")             // t=1000, recorded
+	rl.Allow("k") // t=1000, recorded
 	now = now.Add(30 * time.Second)
-	if rl.Allow("k") {        // t=1030, over limit -> denied, NOT recorded
+	if rl.Allow("k") { // t=1030, over limit -> denied, NOT recorded
 		t.Fatal("second call within window must be denied")
 	}
 	now = now.Add(31 * time.Second) // t=1061: 61s after the only recorded call

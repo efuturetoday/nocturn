@@ -3,7 +3,7 @@ package script
 import (
 	_ "embed"
 
-	"github.com/efuturetoday/nocturn/internal/brain"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // interpreterGuest is the QuickJS interpreter compiled to a WASI command
@@ -19,7 +19,7 @@ var interpreterGuest []byte
 // dispatch Registry (the same one the model dispatches through, so script effects
 // are gated and observed identically). This is the ready-to-use constructor; use
 // NewWithGuest only to supply a different guest (e.g. in tests).
-func New(reg *brain.Registry) *Runner {
+func New(reg *tool.Registry) *Runner {
 	return NewWithGuest(interpreterGuest, reg)
 }
 
