@@ -38,11 +38,16 @@ type Manifest struct {
 // The guest never sees the token. client_id is a public/PKCE client id (shipped by
 // the plugin author, registered with the provider); no client_secret is needed.
 type OAuthDecl struct {
-	Name     string   `json:"name"`      // links to a CredentialDecl.Name (the injected secret)
-	AuthURL  string   `json:"auth_url"`  // https authorization endpoint
-	TokenURL string   `json:"token_url"` // https token endpoint
-	ClientID string   `json:"client_id"`
-	Scopes   []string `json:"scopes"`
+	Name     string `json:"name"`      // links to a CredentialDecl.Name (the injected secret)
+	AuthURL  string `json:"auth_url"`  // https authorization endpoint
+	TokenURL string `json:"token_url"` // https token endpoint
+	ClientID string `json:"client_id"`
+	// ClientSecretEnv names an env var holding the client secret, for providers
+	// whose token endpoint requires one (e.g. Google "Desktop app"/"Web"
+	// clients — even with PKCE). Empty = public/PKCE client, no secret. The
+	// secret is read from the environment, never stored in the manifest.
+	ClientSecretEnv string   `json:"client_secret_env"`
+	Scopes          []string `json:"scopes"`
 }
 
 // ToolDecl declares a tool the plugin exposes to the model. Intent is an optional

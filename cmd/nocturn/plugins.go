@@ -67,7 +67,11 @@ func wirePluginOAuth(ctx context.Context, inj *secret.Injector, m plugin.Manifes
 		return err
 	}
 	for _, o := range m.OAuth {
-		cfg := oauth.Provider(o.AuthURL, o.TokenURL, o.ClientID, "", o.Scopes...)
+		clientSecret := ""
+		if o.ClientSecretEnv != "" {
+			clientSecret = os.Getenv(o.ClientSecretEnv)
+		}
+		cfg := oauth.Provider(o.AuthURL, o.TokenURL, o.ClientID, clientSecret, o.Scopes...)
 		path := filepath.Join(dir, "nocturn", "oauth", m.Name+"-"+o.Name+".json")
 		tok, ok := loadTokenAt(path)
 		if !ok {
