@@ -40,7 +40,7 @@ func TestDiscover_LoadsSkipsAndShadows(t *testing.T) {
 
 	// secret-skill is discovered too — model-invocation:never only hides it from
 	// the skill.load catalog, it does not stop discovery.
-	want := []string{"greeter", "quoted-colon", "multiline", "renamed", "helper", "secret-skill"}
+	want := []string{"greeter", "quoted-colon", "multiline", "renamed", "helper", "secret-skill", "scripted"}
 	for _, n := range want {
 		if _, ok := got[n]; !ok {
 			t.Errorf("expected skill %q to load", n)

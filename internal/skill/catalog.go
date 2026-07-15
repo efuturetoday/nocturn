@@ -95,7 +95,7 @@ func (ix *Index) LoadTool() (tool.Tool, bool) {
 			if err != nil {
 				return "", err
 			}
-			return WrapBody(a.Name, body), nil
+			return WrapBody(a.Name, body) + resourceListing(s.Dir), nil
 		},
 	}, true
 }

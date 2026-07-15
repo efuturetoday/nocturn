@@ -146,6 +146,11 @@ func tuiCmd(_ []string) error {
 	if lt, ok := skills.LoadTool(); ok {
 		reg.Add(lt)
 	}
+	if skills.Len() > 0 {
+		// skill.read serves any loaded skill's bundled files (incl. a /name-only,
+		// model-invocation:never skill), so it registers whenever any skill exists.
+		reg.Add(skills.ReadTool())
+	}
 
 	var p *tea.Program
 	reg.OnCall = func(ev tool.Event) { p.Send(toolEventMsg(ev)) }
