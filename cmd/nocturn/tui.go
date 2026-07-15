@@ -114,10 +114,18 @@ type assistantEntry struct {
 
 func (e *assistantEntry) render(m *chatModel, width int) string {
 	if !e.cached || e.cacheW != width {
-		e.cache = assistantMark.Render("◆") + " " + m.renderMarkdown(e.md)
+		e.cache = assistantGutter(m.renderMarkdown(e.md))
 		e.cacheW, e.cached = width, true
 	}
 	return e.cache
+}
+
+// assistantGutter puts the ◆ marker in a fixed 2-col left gutter so it sits
+// beside the first line of the reply — whether that line is prose, a code block,
+// a list, or a heading — and continuation lines align under it. JoinHorizontal
+// keeps ANSI-styled content intact.
+func assistantGutter(block string) string {
+	return lipgloss.JoinHorizontal(lipgloss.Top, assistantMark.Render("◆ "), block)
 }
 
 type toolEntry struct {
@@ -169,6 +177,7 @@ type chatModel struct {
 	roots     []uint64
 	inputH    int
 	pulse     int
+	pausedAt  time.Time // when the current approval wait began; zero = not waiting
 	running   bool
 	cancel    context.CancelFunc
 	approval  *approval
@@ -196,6 +205,21 @@ func newChatModel(startTurn func(string) context.CancelFunc, reset func(), model
 	}
 }
 
+// resumeAfterApproval shifts every in-flight tool's start forward by the wait it
+// just spent at the prompt, so time.Since(started) at ToolEnd excludes it and the
+// tool's ✓/✗ duration reflects only real execution. (The "thinking" stopwatch is
+// paused/resumed separately via Stop/Start.)
+func (m *chatModel) resumeAfterApproval() {
+	if m.pausedAt.IsZero() {
+		return
+	}
+	d := time.Since(m.pausedAt)
+	for _, f := range m.active {
+		f.started = f.started.Add(d)
+	}
+	m.pausedAt = time.Time{}
+}
+
 func (m chatModel) Init() tea.Cmd { return tea.Batch(m.spin.Tick, pulseTick()) }
 
 // glamourStyle is a FIXED style (dark or light, decided once) with zero document
@@ -210,6 +234,9 @@ func glamourStyle(dark bool) ansi.StyleConfig {
 	}
 	zero := uint(0)
 	sc.Document.Margin = &zero
+	// Drop the literal "## " / "### " prefixes glamour keeps on headings, so they
+	// read as clean styled headings instead of raw hashes.
+	sc.H2.Prefix, sc.H3.Prefix, sc.H4.Prefix, sc.H5.Prefix, sc.H6.Prefix = "", "", "", "", ""
 	return sc
 }
 
@@ -332,6 +359,8 @@ func removeID(ids []uint64, id uint64) []uint64 {
 func (m *chatModel) renderFrame(f *toolFrame, width int) string {
 	var lead, tail string
 	switch {
+	case !f.done && m.approval != nil:
+		lead = warnStyle.Render("◌") // parked on a human, not running — say so honestly
 	case !f.done:
 		lead = m.pulseDot()
 	case f.err != nil:
@@ -343,8 +372,9 @@ func (m *chatModel) renderFrame(f *toolFrame, width int) string {
 	}
 	indent := strings.Repeat("  ", f.depth)
 	head := toolHeadline(f.name, f.args)
-	line := indent + "  " + lead + " " + styleWidth(toolStyle, width-4-2*f.depth).Render(head) + tail
-	out := line + "\n"
+	// No Width() padding here: it would push the trailing reason/duration to the
+	// far right edge, away from the tool name. Headlines are already clipped short.
+	out := indent + "  " + lead + " " + toolStyle.Render(head) + tail + "\n"
 	if body := m.toolBody(f.name, f.args); body != "" {
 		out += body
 	}
@@ -426,14 +456,15 @@ func (m *chatModel) syncViewport() {
 		b.WriteString("\n\n")
 	}
 	b.WriteString(m.renderActive(m.width))
-	if live := m.streamMD; live != "" {
-		b.WriteString(assistantMark.Render("◆") + " " + live)
-	}
+	live := strings.TrimRight(m.streamMD, "\n")
 	if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
-		if m.streamMD == "" {
-			b.WriteString(assistantMark.Render("◆") + " ")
+		if live != "" {
+			live += "\n"
 		}
-		b.WriteString(tail)
+		live += tail
+	}
+	if live != "" {
+		b.WriteString(assistantGutter(live))
 	}
 
 	m.vp.SetContent(strings.TrimRight(b.String(), "\n"))
@@ -547,13 +578,27 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp = viewport.New(msg.Width, 3)
 			m.ready = true
 		}
-		m.md, _ = glamour.NewTermRenderer(glamour.WithStyles(glamourStyle(m.dark)), glamour.WithWordWrap(msg.Width))
+		wrap := msg.Width - 2 // leave room for the 2-col assistant/tool gutter
+		if wrap < 20 {
+			wrap = 20
+		}
+		m.md, _ = glamour.NewTermRenderer(glamour.WithStyles(glamourStyle(m.dark)), glamour.WithWordWrap(wrap))
 		m.help.Width = msg.Width
 		m.layout()
 		m.syncViewport()
 		return m, nil
 
+	case tea.MouseMsg:
+		// Wheel scrolls the transcript; every mouse event is consumed here so none
+		// can fall through to the input.
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg)
+		return m, cmd
+
 	case tea.KeyMsg:
+		if isMouseLeak(msg) {
+			return m, nil // a stray SGR mouse report (edge scrolling); drop it
+		}
 		if m.approval != nil {
 			return m.updateApproval(msg)
 		}
@@ -610,7 +655,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancel = m.startTurn(input)
 			m.layout()
 			m.syncViewport()
-			return m, tea.Batch(m.sw.Reset(), m.sw.Start())
+			return m, tea.Batch(m.sw.Reset(), m.sw.Start()) // start the "thinking" timer
 		}
 
 	case spinner.TickMsg:
@@ -643,9 +688,10 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case approvalMsg:
 		m.approval = &approval{intent: msg.intent, options: msg.options, reply: msg.reply}
+		m.pausedAt = time.Now() // mark the human wait so tool durations can discount it
 		m.layout()
 		m.syncViewport()
-		return m, nil
+		return m, m.sw.Stop() // freeze the "thinking" timer while parked on the human
 
 	case doneMsg:
 		m.active, m.roots = nil, nil
@@ -662,6 +708,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resetStream()
 		m.running = false
+		m.pausedAt = time.Time{}
 		m.syncViewport()
 		return m, tea.Batch(m.ta.Focus(), m.sw.Stop())
 	}
@@ -693,11 +740,14 @@ func (m chatModel) updateApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.approval.reply <- m.approval.options[m.approval.cursor].Token
 		m.approval = nil
+		m.resumeAfterApproval() // discount the wait from the tool durations
 		m.layout()
 		m.syncViewport()
+		return m, m.sw.Start() // resume the "thinking" timer: execution continues
 	case "esc":
 		m.approval.reply <- denyToken(m.approval.options)
 		m.approval = nil
+		m.resumeAfterApproval()
 		if m.cancel != nil {
 			m.cancel()
 		}
@@ -710,6 +760,14 @@ func (m chatModel) updateApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // --- small helpers -----------------------------------------------------------
+
+// isMouseLeak reports whether a key event is actually a stray SGR mouse report
+// that slipped past the parser — some terminals emit "[<Cb;Cx;Cy M/m" when the
+// wheel is turned at the scroll edge. Dropping it keeps mouse noise out of the input.
+func isMouseLeak(k tea.KeyMsg) bool {
+	s := k.String()
+	return strings.Contains(s, "[<") && (strings.HasSuffix(s, "M") || strings.HasSuffix(s, "m"))
+}
 
 func styleWidth(s lipgloss.Style, w int) lipgloss.Style {
 	if w > 0 {
@@ -769,7 +827,11 @@ func shortErr(err error) string {
 	case errors.Is(err, context.Canceled):
 		return "cancelled"
 	default:
-		return err.Error()
+		s := err.Error()
+		if i := strings.IndexByte(s, '\n'); i >= 0 {
+			s = s[:i] // collapse a multi-line guest/JS stack to its first line
+		}
+		return clip(s, 80)
 	}
 }
 

@@ -133,11 +133,11 @@ func tuiCmd(_ []string) error {
 
 	// Detect the terminal background ONCE, here, before bubbletea takes over stdin
 	// — so glamour never re-queries it mid-run (that OSC response would leak into
-	// the input on every resize). Mouse is deliberately NOT captured: in some
-	// terminals its SGR reports leak into the input, and capture breaks native
-	// text selection/copy — scroll with PgUp/PgDn/Ctrl+U/D instead.
+	// the input on every resize). Mouse motion enables wheel scrolling in the
+	// viewport; the model also filters stray SGR mouse reports (which some
+	// terminals emit at the scroll edge) so they never land in the input.
 	dark := lipgloss.HasDarkBackground()
-	p = tea.NewProgram(newChatModel(startTurn, session.Reset, modelName, dark), tea.WithAltScreen())
+	p = tea.NewProgram(newChatModel(startTurn, session.Reset, modelName, dark), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	notifier.p = p
 	_, err := p.Run()
 	return err
