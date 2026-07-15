@@ -69,6 +69,23 @@ func NewRegistry(tools []Tool) *Registry {
 	return &Registry{tools: reg}
 }
 
+// Select returns a new Registry holding only the tools whose name satisfies
+// keep, sharing this registry's observability sink. It snapshots the current
+// tools — used to give an agent a registry limited to the tools it may use, so a
+// tool outside its list is not merely hidden from the model but UNREACHABLE
+// (Invoke reports "unknown tool"), a hard bound rather than a presentation filter.
+func (r *Registry) Select(keep func(name string) bool) *Registry {
+	r.mu.RLock()
+	sub := make(map[string]Tool)
+	for name, t := range r.tools {
+		if keep(name) {
+			sub[name] = t
+		}
+	}
+	r.mu.RUnlock()
+	return &Registry{tools: sub, OnCall: r.OnCall}
+}
+
 // Add registers a tool after construction — code.run, or a plugin's tools.
 func (r *Registry) Add(t Tool) {
 	r.mu.Lock()
