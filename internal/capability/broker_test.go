@@ -11,7 +11,7 @@ func TestPolicy_Evaluate(t *testing.T) {
 	cap := func(name string, host string) capability.Call {
 		c := capability.Call{Capability: name}
 		if host != "" {
-			c.Attrs = map[string]string{"host": host}
+			c.Target = host
 		}
 		return c
 	}
@@ -46,8 +46,8 @@ func TestPolicy_Evaluate(t *testing.T) {
 		{
 			name: "ask beats allow but loses to deny",
 			policy: capability.Policy{Rules: []capability.Rule{
-				{Capability: "net.fetch", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
-				{Capability: "net.fetch", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Capability: "net.fetch", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+				{Capability: "net.fetch", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 			}},
 			call: cap("net.fetch", "api.example.com"),
 			want: capability.Ask,
@@ -72,13 +72,13 @@ func TestPolicy_Evaluate(t *testing.T) {
 		},
 		{
 			name:   "explicit star host allows any host",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent}}},
 			call:   cap("net.fetch", "anything.com"),
 			want:   capability.Allow,
 		},
 		{
 			name:   "host rule does not match a hostless call",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent}}},
 			call:   cap("net.fetch", ""),
 			want:   capability.Deny,
 		},
@@ -90,13 +90,13 @@ func TestPolicy_Evaluate(t *testing.T) {
 		},
 		{
 			name:   "host glob allows matching host",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", HostGlob: "*.example.com", Effect: capability.Allow, Epoch: capability.Permanent}}},
+			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", TargetGlob: "*.example.com", Effect: capability.Allow, Epoch: capability.Permanent}}},
 			call:   cap("net.fetch", "api.example.com"),
 			want:   capability.Allow,
 		},
 		{
 			name:   "host glob denies non-matching host by default",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", HostGlob: "*.example.com", Effect: capability.Allow, Epoch: capability.Permanent}}},
+			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", TargetGlob: "*.example.com", Effect: capability.Allow, Epoch: capability.Permanent}}},
 			call:   cap("net.fetch", "evil.com"),
 			want:   capability.Deny,
 		},
@@ -188,5 +188,35 @@ func TestEvaluate_WindowAndRateCompose(t *testing.T) {
 	}
 	if rateCalls != 0 {
 		t.Fatal("rate budget must not be consumed when the rule does not match")
+	}
+}
+
+// Target semantics: an exact glob is path.Match (so "*" does not cross "/"), but
+// the explicit Wildcard token matches ANY target — including a multi-segment path
+// like "notes/todo.md". Without the Wildcard special-case, a "*" rule would fail
+// to match paths, silently denying every file.* call. A targetless call never
+// matches a target-scoped rule (even Wildcard).
+func TestEvaluate_TargetGlobAndWildcard(t *testing.T) {
+	rule := func(glob string) capability.Policy {
+		return capability.Policy{Rules: []capability.Rule{
+			{Capability: "file.write", TargetGlob: glob, Effect: capability.Allow, Epoch: capability.Permanent},
+		}}
+	}
+	cases := []struct {
+		glob, target string
+		want         capability.Decision
+	}{
+		{"*", "notes/todo.md", capability.Allow}, // Wildcard crosses "/"
+		{"*", "flat", capability.Allow},          // and matches a flat target
+		{"*", "", capability.Deny},               // but a target must be present
+		{"notes/*", "notes/todo.md", capability.Allow},
+		{"notes/*", "notes/deep/x.md", capability.Deny}, // path.Match "*" stops at "/"
+		{"notes/*", "secrets/k", capability.Deny},
+	}
+	for _, tc := range cases {
+		got := rule(tc.glob).Evaluate(capability.Call{Capability: "file.write", Target: tc.target}, capability.Env{})
+		if got != tc.want {
+			t.Errorf("glob %q target %q: got %v, want %v", tc.glob, tc.target, got, tc.want)
+		}
 	}
 }

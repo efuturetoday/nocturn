@@ -20,6 +20,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
+	"github.com/efuturetoday/nocturn/internal/filecap"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/llm"
@@ -78,9 +79,11 @@ func tuiCmd(_ []string) error {
 	netCap := &netcap.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
-				{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
-				{Capability: "http.write", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
-				{Capability: "dns.resolve", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Capability: "dns.resolve", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Capability: "file.read", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Capability: "file.write", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 			}},
 			Approvals: engine,
 			Epochs:    epochs, // shared with the session, so "Allow this session" grants are revocable
@@ -90,10 +93,17 @@ func tuiCmd(_ []string) error {
 		Scanner:     secret.NewScanner(store),
 		HTTP:        &http.Client{Timeout: 15 * time.Second},
 	}
+	// The filesystem capability group (file.read/file.write), confined to a
+	// ./workspace dir under the working directory — the second capability family,
+	// gated by the same Guard as netcap. The target the broker sees is the
+	// workspace-relative path, so a grant/ceiling scopes by path exactly as http
+	// scopes by host.
+	fileCap := filecap.New(netCap.Guard, "workspace")
+
 	// One shared Registry dispatches every tool call — the model's AND the
 	// script's — so its OnCall observer sees them all in one place, nested by
 	// call order.
-	reg := tool.NewRegistry(netCap.Tools())
+	reg := tool.NewRegistry(append(netCap.Tools(), fileCap.Tools()...))
 
 	// A script interpreter (QuickJS on the sandbox) exposed as code.run: the
 	// model can run multi-step JS that reaches effects via one generic host gate

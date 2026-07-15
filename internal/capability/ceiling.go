@@ -3,7 +3,7 @@ package capability
 import "context"
 
 // A Ceiling is an upper bound on what a caller may ATTEMPT: a set of allowed
-// (capability, host-glob) pairs. It is not a grant — it never turns Ask into
+// (capability, target-glob) pairs. It is not a grant — it never turns Ask into
 // Allow; it only permits an effect to be attempted (and thus asked about).
 // Outside the ceiling an effect is hard-denied and never even reaches HITL,
 // which is what stops a prompt-injected caller from getting you to approve
@@ -18,12 +18,12 @@ type Ceiling struct {
 	policy Policy
 }
 
-// Pair is one allowed (capability, host-glob) entry of a Ceiling. The same
-// fail-closed semantics as Rule apply: an empty Capability/HostGlob matches
-// nothing, and a host-bearing call needs an explicit glob ("*" for any).
+// Pair is one allowed (capability, target-glob) entry of a Ceiling. The same
+// fail-closed semantics as Rule apply: an empty Capability/TargetGlob matches
+// nothing, and a target-bearing call needs an explicit glob ("*" for any).
 type Pair struct {
 	Capability string
-	HostGlob   string
+	TargetGlob string
 }
 
 // NewCeiling builds a ceiling allowing exactly the given pairs (each a Permanent
@@ -33,7 +33,7 @@ func NewCeiling(pairs ...Pair) Ceiling {
 	for _, p := range pairs {
 		rules = append(rules, Rule{
 			Capability: p.Capability,
-			HostGlob:   p.HostGlob,
+			TargetGlob: p.TargetGlob,
 			Effect:     Allow,
 			Epoch:      Permanent,
 		})

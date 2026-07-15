@@ -22,21 +22,21 @@ import (
 
 func allowRead(hostGlob string) capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "http.read", HostGlob: hostGlob, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Capability: "http.read", TargetGlob: hostGlob, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
 }
 
 func askRead() capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+		{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 	}}
 }
 
 // allowReadWrite permits both http.read and http.write (for write/POST tests).
 func allowReadWrite() capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
-		{Capability: "http.write", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
 }
 

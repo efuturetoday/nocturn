@@ -23,7 +23,7 @@ type GrantsStore struct {
 type grantRecord struct {
 	GrantSet   string `json:"grant_set"`
 	Capability string `json:"capability"`
-	Host       string `json:"host"`
+	Target     string `json:"target"`
 }
 
 var _ capability.GrantStore = (*GrantsStore)(nil)
@@ -66,7 +66,7 @@ func (s *GrantsStore) Record(grantSetID string, call capability.Call) error {
 }
 
 func recordFor(grantSetID string, call capability.Call) grantRecord {
-	return grantRecord{GrantSet: grantSetID, Capability: call.Capability, Host: call.Attrs["host"]}
+	return grantRecord{GrantSet: grantSetID, Capability: call.Capability, Target: call.Target}
 }
 
 func (s *GrantsStore) persist() error {

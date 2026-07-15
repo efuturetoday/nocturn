@@ -13,7 +13,7 @@ import (
 )
 
 // Wildcard is the explicit "match any" token for Rule.Capability and
-// Rule.HostGlob. An empty field never means "any" — use Wildcard so intent is
+// Rule.TargetGlob. An empty field never means "any" — use Wildcard so intent is
 // always visible and a forgotten field fails closed.
 const Wildcard = "*"
 
@@ -43,10 +43,13 @@ func (d Decision) String() string {
 	}
 }
 
-// Call describes a capability invocation for the broker to evaluate.
+// Call describes a capability invocation for the broker to evaluate. Target is
+// the capability-defined resource string the call acts on — the host for http,
+// a path for file.*, a command for exec — matched against Rule.TargetGlob. A
+// pure-compute or targetless capability (e.g. "log") leaves it "".
 type Call struct {
-	Capability string            // e.g. "log", "net.fetch"
-	Attrs      map[string]string // e.g. {"host": "api.example.com"}
+	Capability string // e.g. "log", "http.read", "file.write"
+	Target     string // e.g. "api.example.com", "/work/notes.md"; "" = targetless
 }
 
 // Rule matches calls and assigns an effect. Wildcards are always explicit "*"
@@ -55,12 +58,13 @@ type Call struct {
 //
 //	Capability: "*" matches any capability; a name matches exactly; ""
 //	            (empty) matches nothing.
-//	HostGlob:   "*" matches any host; a shell glob (path.Match), e.g.
-//	            "*.example.com", matches that host; "" (empty) is NOT
-//	            host-scoped and matches only calls that carry no host (e.g.
-//	            "log") — it never matches a host-bearing call. This makes it
-//	            impossible to allow all hosts by forgetting to set a host:
-//	            "any host" must be written explicitly as "*".
+//	TargetGlob: "*" matches any target; a shell glob (path.Match), e.g.
+//	            "*.example.com" or "/work/notes/*", matches that target; ""
+//	            (empty) is NOT target-scoped and matches only targetless calls
+//	            (e.g. "log") — it never matches a target-bearing call. This makes
+//	            it impossible to allow every target by forgetting to set one:
+//	            "any target" must be written explicitly as "*". path.Match's "*"
+//	            does not cross "/", so a path glob is depth-bounded for free.
 //	Epoch:      the zero value is unset and matches NOTHING (fail closed) —
 //	            permanence is never implicit. Use Permanent for a grant that
 //	            never expires, or an id from EpochRegistry.Open to bind the
@@ -71,7 +75,7 @@ type Call struct {
 //	            daily time range (checked against Env.Now).
 type Rule struct {
 	Capability string
-	HostGlob   string
+	TargetGlob string
 	Effect     Decision
 	Epoch      EpochID
 	Window     *Window
@@ -89,18 +93,22 @@ func (r Rule) matches(call Call, env Env) bool {
 		}
 	}
 
-	host, hasHost := call.Attrs["host"]
+	hasTarget := call.Target != ""
 	switch {
-	case r.HostGlob == "":
-		// Not host-scoped: only matches calls without a host (e.g. "log").
-		if hasHost {
+	case r.TargetGlob == "":
+		// Not target-scoped: only matches targetless calls (e.g. "log").
+		if hasTarget {
 			return false
 		}
-	case !hasHost:
-		// Host-scoped rule cannot match a call that carries no host.
+	case !hasTarget:
+		// Target-scoped rule cannot match a call that carries no target.
 		return false
+	case r.TargetGlob == Wildcard:
+		// Explicit match-any: covers ANY target, including multi-segment paths
+		// (path.Match's "*" would not cross "/", but Wildcard is our any-token, not
+		// a glob). A target must still be present (handled above).
 	default:
-		if ok, err := path.Match(r.HostGlob, host); err != nil || !ok {
+		if ok, err := path.Match(r.TargetGlob, call.Target); err != nil || !ok {
 			return false
 		}
 	}
@@ -146,7 +154,7 @@ type Env struct {
 }
 
 // Evaluate returns the decision for a call in env: deny > ask > allow precedence
-// over rules whose match conditions (capability, host, live epoch, time window)
+// over rules whose match conditions (capability, target, live epoch, time window)
 // all hold, then a rate-limit post-check that turns a would-be Allow into Deny
 // when the call is over budget. Pass a zero Env{} for a context-free evaluation
 // — epoch-scoped and windowed grants then fail closed.

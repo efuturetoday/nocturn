@@ -100,7 +100,7 @@ func TestRevocation_IsolatedPerEpoch(t *testing.T) {
 
 	policy := capability.Policy{Rules: []capability.Rule{
 		{Capability: "pay", Effect: capability.Allow, Epoch: booking},
-		{Capability: "net.fetch", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: research},
+		{Capability: "net.fetch", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: research},
 	}}
 
 	reg.Close(booking)
@@ -108,7 +108,7 @@ func TestRevocation_IsolatedPerEpoch(t *testing.T) {
 	if got := policy.Evaluate(capability.Call{Capability: "pay"}, capability.Env{Epochs: reg}); got != capability.Deny {
 		t.Fatalf("revoked epoch grant: got %v, want Deny", got)
 	}
-	fetch := capability.Call{Capability: "net.fetch", Attrs: map[string]string{"host": "example.com"}}
+	fetch := capability.Call{Capability: "net.fetch", Target: "example.com"}
 	if got := policy.Evaluate(fetch, capability.Env{Epochs: reg}); got != capability.Allow {
 		t.Fatalf("still-live epoch grant: got %v, want Allow", got)
 	}

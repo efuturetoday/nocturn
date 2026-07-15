@@ -36,7 +36,7 @@ func askGuard(t *testing.T, want hitl.Outcome) (*gateway.Guard, *countNotifier) 
 	n.resolve = eng.Resolve
 	g := &gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
-			{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+			{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 		}},
 		Approvals: eng,
 		TTL:       time.Second,
@@ -45,14 +45,14 @@ func askGuard(t *testing.T, want hitl.Outcome) (*gateway.Guard, *countNotifier) 
 }
 
 func read(host string) capability.Call {
-	return capability.Call{Capability: "http.read", Attrs: map[string]string{"host": host}}
+	return capability.Call{Capability: "http.read", Target: host}
 }
 
 // An effect outside the ceiling chain is hard-denied — the human is NEVER asked
 // (the anti-prompt-injection rail).
 func TestAuthorize_OutsideCeiling_HardDeniesWithoutAsking(t *testing.T) {
 	g, n := askGuard(t, hitl.Approved)
-	ceiling := capability.NewCeiling(capability.Pair{Capability: "http.read", HostGlob: "good.com"})
+	ceiling := capability.NewCeiling(capability.Pair{Capability: "http.read", TargetGlob: "good.com"})
 	ctx := capability.WithCeiling(context.Background(), ceiling)
 
 	if err := g.Authorize(ctx, read("evil.com"), "GET evil"); !errors.Is(err, gateway.ErrDenied) {
@@ -74,7 +74,7 @@ func TestAuthorize_OutsideCeiling_HardDeniesWithoutAsking(t *testing.T) {
 type memGrants struct{ recs map[string]bool }
 
 func (m *memGrants) key(ctx string, c capability.Call) string {
-	return ctx + "|" + c.Capability + "|" + c.Attrs["host"]
+	return ctx + "|" + c.Capability + "|" + c.Target
 }
 func (m *memGrants) Allows(ctx string, c capability.Call) bool { return m.recs[m.key(ctx, c)] }
 func (m *memGrants) Record(ctx string, c capability.Call) error {

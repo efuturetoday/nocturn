@@ -76,7 +76,7 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	// is what the policy and credential bindings key on. The raw HTTP method
 	// never reaches the security layer.
 	capName := capabilityForMethod(method)
-	call := capability.Call{Capability: capName, Attrs: map[string]string{"host": host}}
+	call := capability.Call{Capability: capName, Target: host}
 
 	// Everything past the gate runs only if Do authorizes: the leak-scan,
 	// credential injection, and the request itself are unreachable on a denied
@@ -174,7 +174,7 @@ func rejectManualCredentials(req secret.Request) error {
 // approval. This is a sibling capability sharing the same Guard: adding it grew
 // no god-object, just a small method with its own dependency (a resolver).
 func (n *Net) Resolve(ctx context.Context, host string) ([]string, error) {
-	call := capability.Call{Capability: "dns.resolve", Attrs: map[string]string{"host": host}}
+	call := capability.Call{Capability: "dns.resolve", Target: host}
 	return gateway.Do(ctx, n.Guard, call, "resolve "+host, func() ([]string, error) {
 		resolver := n.Resolver
 		if resolver == nil {

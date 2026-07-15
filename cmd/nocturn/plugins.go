@@ -48,7 +48,7 @@ func loadPlugins(reg *tool.Registry, inj *secret.Injector) error {
 func reviewPlugin(m plugin.Manifest) (bool, error) {
 	fmt.Printf("\nInstall plugin %q v%s — it may attempt:\n", m.Name, m.Version)
 	for _, r := range m.Requires {
-		fmt.Printf("    %-12s %s\n", r.Capability, r.Host)
+		fmt.Printf("    %-12s %s\n", r.Capability, r.Target)
 	}
 	for _, c := range m.Credentials {
 		fmt.Printf("    credential   %s → %s\n", c.Name, c.Host)

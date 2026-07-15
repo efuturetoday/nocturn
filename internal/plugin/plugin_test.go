@@ -22,7 +22,7 @@ func validManifest() plugin.Manifest {
 	return plugin.Manifest{
 		Name: "ok", Version: "1",
 		Tools:    []plugin.ToolDecl{{Name: "t", Parameters: []byte(`{"type":"object"}`)}},
-		Requires: []plugin.Require{{Capability: "http.read", Host: "x.com"}},
+		Requires: []plugin.Require{{Capability: "http.read", Target: "x.com"}},
 	}
 }
 
@@ -31,14 +31,14 @@ func TestManifest_Validate_FailClosed(t *testing.T) {
 		t.Fatalf("valid manifest rejected: %v", err)
 	}
 	bad := map[string]func(*plugin.Manifest){
-		"empty name":     func(m *plugin.Manifest) { m.Name = "" },
-		"spaced name":    func(m *plugin.Manifest) { m.Name = "Bad Name" },
-		"no version":     func(m *plugin.Manifest) { m.Version = "" },
-		"no tools":       func(m *plugin.Manifest) { m.Tools = nil },
-		"dup tool":       func(m *plugin.Manifest) { m.Tools = append(m.Tools, m.Tools[0]) },
-		"non-obj params": func(m *plugin.Manifest) { m.Tools[0].Parameters = []byte(`"nope"`) },
-		"empty req cap":  func(m *plugin.Manifest) { m.Requires[0].Capability = "" },
-		"empty req host": func(m *plugin.Manifest) { m.Requires[0].Host = "" },
+		"empty name":       func(m *plugin.Manifest) { m.Name = "" },
+		"spaced name":      func(m *plugin.Manifest) { m.Name = "Bad Name" },
+		"no version":       func(m *plugin.Manifest) { m.Version = "" },
+		"no tools":         func(m *plugin.Manifest) { m.Tools = nil },
+		"dup tool":         func(m *plugin.Manifest) { m.Tools = append(m.Tools, m.Tools[0]) },
+		"non-obj params":   func(m *plugin.Manifest) { m.Tools[0].Parameters = []byte(`"nope"`) },
+		"empty req cap":    func(m *plugin.Manifest) { m.Requires[0].Capability = "" },
+		"empty req target": func(m *plugin.Manifest) { m.Requires[0].Target = "" },
 	}
 	for name, mut := range bad {
 		m := validManifest()
@@ -91,8 +91,8 @@ func TestPlugin_CeilingBoundsEffects_E2E(t *testing.T) {
 	notifier.resolve = engine.Resolve
 	guard := &gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
-			{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
-			{Capability: "http.write", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+			{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+			{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 		}},
 		Approvals: engine,
 		TTL:       time.Second,

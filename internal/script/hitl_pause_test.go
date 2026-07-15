@@ -57,7 +57,7 @@ func TestHITL_ApprovalOutlastsBudget_ScriptStillCompletes(t *testing.T) {
 	netCap := &netcap.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
-				{Capability: "http.write", HostGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
 			}},
 			Approvals: engine,
 			Epochs:    capability.NewEpochRegistry(),

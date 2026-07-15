@@ -10,15 +10,15 @@ import (
 func call(cap, host string) capability.Call {
 	c := capability.Call{Capability: cap}
 	if host != "" {
-		c.Attrs = map[string]string{"host": host}
+		c.Target = host
 	}
 	return c
 }
 
 func TestCeiling_Allows(t *testing.T) {
 	c := capability.NewCeiling(
-		capability.Pair{Capability: "http.read", HostGlob: "*.example.com"},
-		capability.Pair{Capability: "dns.resolve", HostGlob: "*"},
+		capability.Pair{Capability: "http.read", TargetGlob: "*.example.com"},
+		capability.Pair{Capability: "dns.resolve", TargetGlob: "*"},
 	)
 	cases := []struct {
 		cap, host string
@@ -61,11 +61,11 @@ func TestWithinCeilings_NoneIsVacuouslyTrue(t *testing.T) {
 // inner ceiling can only subtract.
 func TestCeilingChain_Intersects(t *testing.T) {
 	outer := capability.NewCeiling(
-		capability.Pair{Capability: "http.read", HostGlob: "*.example.com"},
-		capability.Pair{Capability: "http.write", HostGlob: "*.example.com"},
+		capability.Pair{Capability: "http.read", TargetGlob: "*.example.com"},
+		capability.Pair{Capability: "http.write", TargetGlob: "*.example.com"},
 	)
 	inner := capability.NewCeiling(
-		capability.Pair{Capability: "http.read", HostGlob: "api.example.com"}, // read only, one host
+		capability.Pair{Capability: "http.read", TargetGlob: "api.example.com"}, // read only, one host
 	)
 	ctx := capability.WithCeiling(capability.WithCeiling(context.Background(), outer), inner)
 

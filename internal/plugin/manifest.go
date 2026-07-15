@@ -36,10 +36,11 @@ type ToolDecl struct {
 	Parameters  json.RawMessage `json:"parameters"` // JSON-schema object
 }
 
-// Require is one (capability, host-glob) the plugin may attempt — a ceiling entry.
+// Require is one (capability, target-glob) the plugin may attempt — a ceiling
+// entry. Target is capability-defined: a host for http.*, a path glob for file.*.
 type Require struct {
 	Capability string `json:"capability"`
-	Host       string `json:"host"`
+	Target     string `json:"target"`
 }
 
 // CredentialDecl declares a credential the host injects for the plugin (never seen
@@ -83,8 +84,8 @@ func (m Manifest) Validate() error {
 		}
 	}
 	for _, r := range m.Requires {
-		if r.Capability == "" || r.Host == "" {
-			return fmt.Errorf("plugin: requires entry needs a capability and host (got %q, %q)", r.Capability, r.Host)
+		if r.Capability == "" || r.Target == "" {
+			return fmt.Errorf("plugin: requires entry needs a capability and target (got %q, %q)", r.Capability, r.Target)
 		}
 	}
 	for _, c := range m.Credentials {
@@ -99,7 +100,7 @@ func (m Manifest) Validate() error {
 func (m Manifest) Ceiling() capability.Ceiling {
 	pairs := make([]capability.Pair, 0, len(m.Requires))
 	for _, r := range m.Requires {
-		pairs = append(pairs, capability.Pair{Capability: r.Capability, HostGlob: r.Host})
+		pairs = append(pairs, capability.Pair{Capability: r.Capability, TargetGlob: r.Target})
 	}
 	return capability.NewCeiling(pairs...)
 }

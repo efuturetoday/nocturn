@@ -312,7 +312,7 @@ func TestBrain_Integration_FetchThroughGateway(t *testing.T) {
 
 	netCap := &netcap.Net{Guard: &gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
-			{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+			{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
 		}},
 	}}
 

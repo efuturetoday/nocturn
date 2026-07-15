@@ -84,7 +84,7 @@ func autoAllowNet(client *http.Client) *netcap.Net {
 	return &netcap.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
-				{Capability: "http.read", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+				{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
 			}},
 		},
 		Scanner: secret.NewScanner(secret.NewStore()),

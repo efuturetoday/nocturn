@@ -68,7 +68,7 @@ func (g *Grants) Record(call Call, scope Scope) error {
 		g.mu.Lock()
 		g.session = append(g.session, Rule{
 			Capability: call.Capability,
-			HostGlob:   call.Attrs["host"], // exact host; "" matches hostless calls
+			TargetGlob: call.Target, // exact target; "" matches targetless calls
 			Effect:     Allow,
 			Epoch:      g.Epoch,
 		})

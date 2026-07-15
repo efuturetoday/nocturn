@@ -13,3 +13,6 @@ internal/script/qjs/.buildcache/
 
 # macOS
 .DS_Store
+
+# filecap workspace (runtime, not source)
+workspace/

@@ -9,12 +9,12 @@ import (
 	"github.com/efuturetoday/nocturn/internal/gateway"
 )
 
-var probeCall = capability.Call{Capability: "probe", Attrs: map[string]string{"host": "example.com"}}
+var probeCall = capability.Call{Capability: "probe", Target: "example.com"}
 
 // Do runs the effect only when the call is allowed, and returns its result.
 func TestDo_AllowedRunsEffect(t *testing.T) {
 	g := &gateway.Guard{Policy: capability.Policy{Rules: []capability.Rule{
-		{Capability: "probe", HostGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Capability: "probe", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}}
 
 	ran := false
