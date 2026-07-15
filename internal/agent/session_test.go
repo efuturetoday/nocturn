@@ -43,14 +43,18 @@ func convContains(conv []brain.Message, substr string) bool {
 	return false
 }
 
-// Ask threads the session's epoch through the context down to the tool, and
-// Reset rotates it to a fresh, different epoch.
-func TestSession_ThreadsEpoch_ResetRotatesIt(t *testing.T) {
+// Ask threads the session's permission context (carrying its epoch) through ctx
+// down to the tool, and Reset rotates it to a fresh, different epoch.
+func TestSession_ThreadsContext_ResetRotatesEpoch(t *testing.T) {
 	var seen []capability.EpochID
 	tools := []brain.Tool{{
 		ToolSpec: brain.ToolSpec{Name: "probe"},
 		Invoke: func(ctx context.Context, _ string) (string, error) {
-			seen = append(seen, capability.EpochFrom(ctx))
+			if c := capability.ContextFrom(ctx); c != nil {
+				seen = append(seen, c.Epoch)
+			} else {
+				seen = append(seen, 0)
+			}
 			return "ok", nil
 		},
 	}}
@@ -61,7 +65,7 @@ func TestSession_ThreadsEpoch_ResetRotatesIt(t *testing.T) {
 
 	b := &brain.Brain{Model: model, Registry: brain.NewRegistry(tools)}
 	epochs := capability.NewEpochRegistry()
-	s := agent.New(b, &gateway.Guard{Epochs: epochs}, epochs)
+	s := agent.New(b, &gateway.Guard{Epochs: epochs}, epochs, nil)
 
 	if _, err := s.Ask(context.Background(), "first"); err != nil {
 		t.Fatalf("first ask: %v", err)
@@ -140,7 +144,7 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 	}}
 
 	b := &brain.Brain{Model: model, Registry: brain.NewRegistry(tools)}
-	s := agent.New(b, guard, epochs)
+	s := agent.New(b, guard, epochs, nil)
 
 	if _, err := s.Ask(context.Background(), "fetch it once"); err != nil {
 		t.Fatalf("first ask: %v", err)

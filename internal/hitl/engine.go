@@ -30,6 +30,9 @@ const (
 	Denied Outcome = iota
 	Approved
 	ApprovedSession
+	// ApprovedAlways approves this call and asks the caller to remember the grant
+	// persistently (across restarts), scoped to the current context/workspace.
+	ApprovedAlways
 )
 
 func (o Outcome) String() string {
@@ -38,6 +41,8 @@ func (o Outcome) String() string {
 		return "Approved"
 	case ApprovedSession:
 		return "ApprovedSession"
+	case ApprovedAlways:
+		return "ApprovedAlways"
 	default:
 		return "Denied"
 	}

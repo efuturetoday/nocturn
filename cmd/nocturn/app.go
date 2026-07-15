@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -120,7 +121,13 @@ func tuiCmd(_ []string) error {
 		ToolTimeout: 20 * time.Second,
 		OnToken:     func(tok string) { p.Send(tokenMsg(tok)) },
 	}
-	session := agent.New(b, netCap.Guard, epochs)
+	// Durable "always" grants: the user's persistent per-workspace permission
+	// decisions (missing file = none).
+	var grants capability.PersistentGrants
+	if dir, err := os.UserConfigDir(); err == nil {
+		grants = gateway.LoadGrantsStore(filepath.Join(dir, "nocturn", "grants.json"))
+	}
+	session := agent.New(b, netCap.Guard, epochs, grants)
 	defer session.Close()
 	startTurn := func(input string) context.CancelFunc {
 		turnCtx, cancel := context.WithCancel(ctx)

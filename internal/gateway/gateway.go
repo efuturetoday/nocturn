@@ -13,7 +13,6 @@ package gateway
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
@@ -25,7 +24,9 @@ import (
 var ErrDenied = errors.New("gateway: capability denied")
 
 // Guard authorizes capability calls. It is host-trusted and shared by every
-// capability group.
+// capability group. It is a pure COMPOSER: the standing-grant state lives on the
+// active capability.Context (not on the Guard), and upper bounds live in the
+// ceiling chain carried by ctx — so the Guard holds no per-session mutable state.
 type Guard struct {
 	Policy    capability.Policy
 	Approvals *hitl.Engine
@@ -33,9 +34,6 @@ type Guard struct {
 	Rate      *capability.RateLimiter
 	TTL       time.Duration
 	Now       func() time.Time
-
-	mu     sync.Mutex
-	grants []capability.Rule // "Allow this session" grants, each bound to a session epoch
 }
 
 func (g *Guard) now() time.Time {
@@ -49,15 +47,22 @@ func (g *Guard) now() time.Time {
 var approvalChoices = []hitl.Choice{
 	{Label: "Allow once", Outcome: hitl.Approved},
 	{Label: "Allow this session", Outcome: hitl.ApprovedSession},
+	{Label: "Allow always", Outcome: hitl.ApprovedAlways},
 	{Label: "Deny", Outcome: hitl.Denied},
 }
 
-// Authorize runs a call through the broker and, on Ask, through out-of-band
-// human approval. It returns nil if the call may proceed, ErrDenied otherwise.
-// "Allow this session" additionally remembers the grant, bound to the epoch
-// carried by ctx, so the same capability and host is not asked again — until
-// that epoch is closed, which revokes the grant.
+// Authorize composes the decision:
+//  1. Ceiling chain (ctx): outside the intersection of all in-scope upper bounds
+//     → hard deny, never even asking — so a prompt-injected caller can't get you
+//     to approve something it was never allowed to attempt.
+//  2. Base policy: Allow → proceed; Deny → deny (deny-wins hard rail).
+//  3. On Ask: a standing grant in the active context (session or always) short-
+//     circuits; otherwise out-of-band human approval, and the chosen scope
+//     (once/session/always) is recorded as a grant on the context.
 func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent string) error {
+	if !capability.WithinCeilings(ctx, call) {
+		return ErrDenied
+	}
 	env := capability.Env{Now: g.now(), Epochs: g.Epochs}
 	if g.Rate != nil {
 		env.RateAllow = func(c capability.Call) bool { return g.Rate.Allow(c.Capability) }
@@ -67,19 +72,24 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 	case capability.Allow:
 		return nil
 	case capability.Ask:
-		// A session grant short-circuits the ask — but only an Ask, never an
-		// explicit Deny (deny-wins stays a hard rail). The grant is epoch-aware:
-		// a grant whose epoch has been closed no longer matches.
-		if g.sessionAllows(call, env) {
-			return nil
+		cx := capability.ContextFrom(ctx)
+		if cx != nil && cx.Allows(call, env) {
+			return nil // standing grant (session or always)
 		}
 		out, err := g.Approvals.Request(ctx, intent, approvalChoices, g.TTL)
 		if err != nil {
 			return err
 		}
 		switch out {
+		case hitl.ApprovedAlways:
+			if cx != nil {
+				_ = cx.Record(call, capability.Always) // persist error must not block the allow
+			}
+			return nil
 		case hitl.ApprovedSession:
-			g.grant(capability.EpochFrom(ctx), call)
+			if cx != nil {
+				_ = cx.Record(call, capability.Session)
+			}
 			return nil
 		case hitl.Approved:
 			return nil
@@ -105,41 +115,4 @@ func Do[T any](ctx context.Context, g *Guard, call capability.Call, intent strin
 		return zero, err
 	}
 	return effect()
-}
-
-// sessionAllows reports whether a call is covered by a live session grant. It
-// evaluates the grants with the same Env, so a grant bound to a closed epoch
-// (IsAlive == false) fails to match — revocation for free.
-func (g *Guard) sessionAllows(call capability.Call, env capability.Env) bool {
-	g.mu.Lock()
-	grants := g.grants
-	g.mu.Unlock()
-	if len(grants) == 0 {
-		return false
-	}
-	return capability.Policy{Rules: grants}.Evaluate(call, env) == capability.Allow
-}
-
-// grant remembers a call's capability + host as allowed for the given epoch, so
-// the same call is auto-allowed without asking again while that epoch is alive.
-// Closing the epoch (EpochRegistry.Close) revokes it. Dead-epoch grants are
-// pruned on the way in, so the slice cannot grow across revoked sessions.
-func (g *Guard) grant(epoch capability.EpochID, call capability.Call) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.Epochs != nil {
-		kept := g.grants[:0]
-		for _, r := range g.grants {
-			if g.Epochs.IsAlive(r.Epoch) {
-				kept = append(kept, r)
-			}
-		}
-		g.grants = kept
-	}
-	g.grants = append(g.grants, capability.Rule{
-		Capability: call.Capability,
-		HostGlob:   call.Attrs["host"], // exact host; "" matches hostless calls
-		Effect:     capability.Allow,
-		Epoch:      epoch,
-	})
 }

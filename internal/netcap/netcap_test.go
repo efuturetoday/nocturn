@@ -170,7 +170,8 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 	epochs := capability.NewEpochRegistry()
 	epoch := epochs.Open()
 	g := &netcap.Net{Guard: &gateway.Guard{Policy: askRead(), Approvals: engine, Epochs: epochs, TTL: time.Second}}
-	ctx := capability.WithEpoch(context.Background(), epoch)
+	// The permission context owns the session grant, bound to the epoch.
+	ctx := capability.WithContext(context.Background(), capability.NewContext("test", epoch, nil))
 
 	// first call: asked, ApprovedSession granted for this host, bound to epoch
 	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}); err != nil {
