@@ -16,3 +16,6 @@ internal/script/qjs/.buildcache/
 
 # filecap workspace (runtime, not source)
 workspace/
+
+# local runtime plugins (not source; testdata/example documents the format)
+plugins/
