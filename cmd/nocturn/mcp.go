@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/oauth2"
-
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/mcpcap"
@@ -27,7 +25,7 @@ import (
 // a declined server is skipped, not fatal. Run before bubbletea grabs the
 // terminal: the review prompt AND any OAuth consent URL use stdin/stdout.
 // It is a no-op when no config exists.
-func loadMCP(ctx context.Context, reg *tool.Registry, guard *gateway.Guard, inj *secret.Injector, scanner *secret.Scanner, wsDir string) error {
+func loadMCP(ctx context.Context, reg *tool.Registry, guard *gateway.Guard, inj *secret.Injector, scanner *secret.Scanner, vault *secret.Vault, wsDir string) error {
 	servers, err := mcpcap.LoadConfig(filepath.Join(wsDir, "mcp.json"))
 	if err != nil || len(servers) == 0 {
 		return err
@@ -45,7 +43,7 @@ func loadMCP(ctx context.Context, reg *tool.Registry, guard *gateway.Guard, inj 
 		if err != nil {
 			return err
 		}
-		if err := wireMCPOAuth(ctx, inj, srv); err != nil {
+		if err := wireMCPCredential(ctx, inj, vault, srv); err != nil {
 			return err
 		}
 		// The operator's "y" IS the human approval for the two setup calls
@@ -58,7 +56,21 @@ func loadMCP(ctx context.Context, reg *tool.Registry, guard *gateway.Guard, inj 
 		setupCtx := capability.WithGrants(ctx, setup)
 
 		if err := conn.Connect(setupCtx); err != nil {
-			return err
+			// The server answered non-2xx (StatusError) — a rejected request is a
+			// plausible sign of a bad/expired/revoked/rotated token, and forcing a
+			// full vault purge to fix ONE credential is a footgun. Offer to re-enter
+			// just this token and retry once. A network failure (no StatusError)
+			// leaves the token untouched.
+			retried, rerr := reenterOnRejection(ctx, inj, vault, srv, err)
+			if rerr != nil {
+				return rerr
+			}
+			if !retried {
+				return err
+			}
+			if err := conn.Connect(setupCtx); err != nil {
+				return err
+			}
 		}
 		tools, err := conn.Tools(setupCtx)
 		if err != nil {
@@ -87,43 +99,139 @@ func reviewMCP(srv mcpcap.Server) bool {
 	if o := srv.OAuth; o != nil {
 		fmt.Printf("    oauth  %s (scopes: %s)\n", o.AuthURL, strings.Join(o.Scopes, " "))
 	}
+	if srv.Auth == "token" {
+		fmt.Print("    token  static bearer — you'll be prompted once; stored encrypted in the vault, injected host-side\n")
+	}
 	fmt.Printf("    Its tools join the registry as %q; every call is a gated http.write to its host.\n", srv.Name+".*")
 	fmt.Print("Connect? [y/N] ")
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	return strings.EqualFold(strings.TrimSpace(line), "y")
 }
 
-// wireMCPOAuth runs the server's config-declared OAuth provider (mirroring
-// wirePluginOAuth): build the config from its endpoints, load-or-authorize a
-// token (persisted per server), and register a refreshing Bearer source under
-// the connection's owner-namespaced credential — so the injector stamps it,
-// host-side, only onto this connection's requests. Neither the model nor the
-// server config chooses the header; mcpcap.New bound it at construction.
-func wireMCPOAuth(ctx context.Context, inj *secret.Injector, srv mcpcap.Server) error {
-	if srv.OAuth == nil || inj == nil {
+// wireMCPCredential supplies the value behind the connection's owner-namespaced
+// credential binding (added by mcpcap.New). For auth "token" the host prompts
+// once (no echo) and stores the entered Bearer in the encrypted vault under the
+// binding's secret name — never from mcp.json or the environment, so nothing
+// secret leaks and the config stays committable; a token already in the vault
+// (a later run) skips the prompt. An OAuth declaration runs the provider flow
+// (mirroring wirePluginOAuth): build the config from its endpoints, load-or-
+// authorize a token (kept in the vault, keyed per server), and register a
+// refreshing Bearer source — so the injector stamps it, host-side, only onto
+// this connection's requests. Neither the model nor the server config chooses
+// the header; mcpcap.New bound it at construction. Validate made auth/oauth
+// mutually exclusive.
+func wireMCPCredential(ctx context.Context, inj *secret.Injector, vault *secret.Vault, srv mcpcap.Server) error {
+	if inj == nil {
+		return nil
+	}
+	// Same namespaced key the binding from mcpcap.New resolves, so only THIS
+	// connection's binding can reach this source — never another owner's.
+	name := mcpcap.SecretName(mcpcap.Owner(srv.Name), mcpcap.CredentialName)
+	if srv.Auth == "token" {
+		// A CLEAN token already in the vault (an earlier run) → no prompt. The
+		// stored value is injected verbatim as "Bearer <v>", so anything but a
+		// bare, whitespace-free token counts as absent and re-prompts (then
+		// overwrites) — otherwise a stray space/newline yields "Bearer …\n", which
+		// the server rejects as a badly formatted header (HTTP 400).
+		if v, ok := vault.Get(name); ok && validBearer(string(v)) {
+			return nil
+		}
+		token, err := readPassphrase(fmt.Sprintf("Bearer token for MCP server %q: ", srv.Name))
+		if err != nil {
+			return fmt.Errorf("mcp %s: read token: %w", srv.Name, err)
+		}
+		token = strings.TrimSpace(token)
+		if !validBearer(token) {
+			return fmt.Errorf("mcp %s: token must be non-empty and contain no whitespace", srv.Name)
+		}
+		if err := vault.Set(name, []byte(token)); err != nil {
+			return fmt.Errorf("mcp %s: persist token: %w", srv.Name, err)
+		}
+		return nil
+	}
+	if srv.OAuth == nil {
 		return nil
 	}
 	o := srv.OAuth
 	cfg := oauth.Provider(o.AuthURL, o.TokenURL, o.ClientID, o.ClientSecret, o.Scopes...)
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(dir, "nocturn", "oauth", "mcp-"+srv.Name+".json")
-	tok, ok := loadTokenAt(path)
+	tok, ok := vaultToken(vault, name)
 	if !ok {
 		fmt.Printf("\nMCP server %q needs authorization (scopes: %s)\n", srv.Name, strings.Join(o.Scopes, " "))
+		var err error
 		if tok, err = oauth.Authorize(ctx, cfg, nil); err != nil { // nil prompt = print the URL
 			return fmt.Errorf("mcp %s: authorize: %w", srv.Name, err)
 		}
-		if err := saveTokenAt(path, tok); err != nil {
+		if err := saveVaultToken(vault, name, tok); err != nil {
 			return fmt.Errorf("mcp %s: persist token: %w", srv.Name, err)
 		}
 	}
-	p := path
-	// Same namespaced key the binding from mcpcap.New resolves, so only THIS
-	// connection's binding can reach this source — never another owner's.
-	inj.SetResolver(mcpcap.SecretName(mcpcap.Owner(srv.Name), mcpcap.CredentialName),
-		oauth.NewCredential(cfg, tok, func(t *oauth2.Token) { _ = saveTokenAt(p, t) }))
+	inj.SetResolver(name, oauth.NewCredential(cfg, tok, persistToken(vault, name)))
 	return nil
+}
+
+// validBearer reports whether s is usable verbatim as a Bearer credential: a
+// non-empty token with no surrounding or internal whitespace. Any space or
+// newline would produce a malformed "Authorization: Bearer …" header, which
+// servers reject with HTTP 400.
+func validBearer(s string) bool {
+	return s != "" && s == strings.TrimSpace(s) && !strings.ContainsAny(s, " \t\r\n\f\v")
+}
+
+// reenterOnRejection recovers from a rejected credential at connect time WITHOUT
+// purging the vault: a stored token that is bad, expired, revoked, rotated, or
+// (as here) a leftover placeholder must be fixable one credential at a time.
+// It acts ONLY on a server rejection (a non-2xx StatusError — the server was
+// reached); a network/transport failure leaves the credential untouched. For a
+// static token it re-prompts (no echo) and overwrites the vault entry; for OAuth
+// it re-runs the authorization flow and swaps in the fresh refreshing source.
+// Returns whether a retry is worthwhile (a new credential was stored).
+func reenterOnRejection(ctx context.Context, inj *secret.Injector, vault *secret.Vault, srv mcpcap.Server, cause error) (bool, error) {
+	if !mcpcap.IsServerRejection(cause) {
+		return false, nil // no response from the server — not a credential problem
+	}
+	name := mcpcap.SecretName(mcpcap.Owner(srv.Name), mcpcap.CredentialName)
+	switch {
+	case srv.Auth == "token":
+		fmt.Printf("\nMCP server %q rejected the stored token (%v).\n", srv.Name, cause)
+		if !askYesNo("Re-enter the bearer token?") {
+			return false, nil
+		}
+		token, err := readPassphrase(fmt.Sprintf("Bearer token for MCP server %q: ", srv.Name))
+		if err != nil {
+			return false, fmt.Errorf("mcp %s: read token: %w", srv.Name, err)
+		}
+		token = strings.TrimSpace(token)
+		if !validBearer(token) {
+			return false, fmt.Errorf("mcp %s: token must be non-empty and contain no whitespace", srv.Name)
+		}
+		if err := vault.Set(name, []byte(token)); err != nil {
+			return false, fmt.Errorf("mcp %s: persist token: %w", srv.Name, err)
+		}
+		return true, nil
+	case srv.OAuth != nil:
+		fmt.Printf("\nMCP server %q rejected the stored OAuth token (%v).\n", srv.Name, cause)
+		if !askYesNo("Re-authorize now?") {
+			return false, nil
+		}
+		o := srv.OAuth
+		cfg := oauth.Provider(o.AuthURL, o.TokenURL, o.ClientID, o.ClientSecret, o.Scopes...)
+		tok, err := oauth.Authorize(ctx, cfg, nil)
+		if err != nil {
+			return false, fmt.Errorf("mcp %s: authorize: %w", srv.Name, err)
+		}
+		if err := saveVaultToken(vault, name, tok); err != nil {
+			return false, fmt.Errorf("mcp %s: persist token: %w", srv.Name, err)
+		}
+		inj.SetResolver(name, oauth.NewCredential(cfg, tok, persistToken(vault, name)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// askYesNo prints a [y/N] prompt on the plain terminal (pre-TUI) and reports
+// whether the operator answered yes.
+func askYesNo(prompt string) bool {
+	fmt.Printf("%s [y/N] ", prompt)
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	return strings.EqualFold(strings.TrimSpace(line), "y")
 }

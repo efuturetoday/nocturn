@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/oauth2"
-
 	"github.com/efuturetoday/nocturn/internal/oauth"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -25,7 +23,7 @@ import (
 // A plugin declaring a scary ceiling is shown verbatim and installed only on an
 // explicit "y". (Follow-up: a manifest-hash "already approved" record so an
 // unchanged plugin needs no re-prompt on every boot.)
-func loadPlugins(ctx context.Context, reg *tool.Registry, inj *secret.Injector, wsDir string) error {
+func loadPlugins(ctx context.Context, reg *tool.Registry, inj *secret.Injector, vault *secret.Vault, wsDir string) error {
 	pluginsDir := filepath.Join(wsDir, "plugins")
 	entries, err := os.ReadDir(pluginsDir)
 	if err != nil {
@@ -47,43 +45,39 @@ func loadPlugins(ctx context.Context, reg *tool.Registry, inj *secret.Injector, 
 		// The plugin declares its own OAuth providers; the host runs the flow and
 		// injects the token — the plugin never sees it (ADR-5). Runs after a
 		// successful install (its credential bindings are now in place).
-		if err := wirePluginOAuth(ctx, inj, l.Manifest); err != nil {
+		if err := wirePluginOAuth(ctx, inj, vault, l.Manifest); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// wirePluginOAuth runs each OAuth provider a plugin declares: build a config from
-// its manifest endpoints, load-or-authorize a token (persisted per plugin+name),
-// and register a refreshing Bearer source under the credential's name — so the
-// injector stamps it, host-side, for the plugin's declared destination. The guest
-// never sees the token.
-func wirePluginOAuth(ctx context.Context, inj *secret.Injector, m plugin.Manifest) error {
+// wirePluginOAuth runs each OAuth provider a plugin declares: build a config
+// from its manifest endpoints, load-or-authorize a token (kept in the encrypted
+// vault, keyed per plugin+name), and register a refreshing Bearer source under
+// the credential's name — so the injector stamps it, host-side, for the
+// plugin's declared destination. The guest never sees the token.
+func wirePluginOAuth(ctx context.Context, inj *secret.Injector, vault *secret.Vault, m plugin.Manifest) error {
 	if inj == nil {
 		return nil
 	}
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return err
-	}
 	for _, o := range m.OAuth {
 		cfg := oauth.Provider(o.AuthURL, o.TokenURL, o.ClientID, o.ClientSecret, o.Scopes...)
-		path := filepath.Join(dir, "nocturn", "oauth", m.Name+"-"+o.Name+".json")
-		tok, ok := loadTokenAt(path)
+		// Same namespaced key the install binding resolves (plugin.SecretName), so
+		// only THIS plugin's binding can reach this source — never another's.
+		name := plugin.SecretName(plugin.Owner(m.Name), o.Name)
+		tok, ok := vaultToken(vault, name)
 		if !ok {
 			fmt.Printf("\nPlugin %q needs to authorize %q (scopes: %s)\n", m.Name, o.Name, strings.Join(o.Scopes, " "))
+			var err error
 			if tok, err = oauth.Authorize(ctx, cfg, nil); err != nil { // nil prompt = print the URL
 				return fmt.Errorf("plugin %s: authorize %s: %w", m.Name, o.Name, err)
 			}
-			if err := saveTokenAt(path, tok); err != nil {
+			if err := saveVaultToken(vault, name, tok); err != nil {
 				return fmt.Errorf("plugin %s: persist %s token: %w", m.Name, o.Name, err)
 			}
 		}
-		p := path
-		// Same namespaced key the install binding resolves (plugin.SecretName), so
-		// only THIS plugin's binding can reach this source — never another's.
-		inj.SetResolver(plugin.SecretName(plugin.Owner(m.Name), o.Name), oauth.NewCredential(cfg, tok, func(t *oauth2.Token) { _ = saveTokenAt(p, t) }))
+		inj.SetResolver(name, oauth.NewCredential(cfg, tok, persistToken(vault, name)))
 	}
 	return nil
 }

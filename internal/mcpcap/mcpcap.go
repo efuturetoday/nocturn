@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,6 +46,28 @@ func Owner(name string) string { return "mcp:" + name }
 // secret under its OWN owner.
 func SecretName(owner, credential string) string { return owner + "/" + credential }
 
+// StatusError is a non-2xx HTTP response from an MCP server: the server WAS
+// reached and rejected the request (unlike a network error, where no response
+// arrived). It carries the status so the setup layer can offer to fix the
+// credential — a rejected request is a plausible sign of a bad/expired/revoked
+// token — without touching anything on a mere connectivity failure.
+type StatusError struct {
+	Server string
+	Status int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("mcpcap: %s: HTTP %d", e.Server, e.Status)
+}
+
+// IsServerRejection reports whether err is a StatusError — i.e. the server
+// answered with a non-2xx status (as opposed to a network/transport failure).
+// Callers use it to decide whether re-entering a credential could help.
+func IsServerRejection(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se)
+}
+
 // Conn is a gated connection to one remote MCP server. Its transport is the
 // ONE path any byte takes to the server; the ceiling fixed at construction
 // bounds every call to the server's own host.
@@ -63,8 +86,11 @@ type Conn struct {
 // New builds a gated connection to srv. It parses the server host, fixes the
 // connection's ceiling to exactly that host (http.read + http.write — the
 // connection can never reach anywhere else, regardless of policy), and — if
-// the server declares OAuth — binds its host-owned Bearer credential under
-// owner "mcp:<name>". No I/O happens here; Connect performs the handshake.
+// the server declares a credential (OAuth, or a static token) — binds its
+// host-owned Bearer under owner "mcp:<name>". The binding only names the
+// secret; the value is resolved at injection time (a refreshing OAuth source
+// set by the caller, or the static token the caller stored in the vault).
+// No I/O happens here; Connect performs the handshake.
 func New(srv Server, guard *gateway.Guard, creds *secret.Injector, scanner *secret.Scanner, httpClient *http.Client) (*Conn, error) {
 	u, err := url.Parse(srv.URL)
 	if err != nil || u.Hostname() == "" {
@@ -79,7 +105,7 @@ func New(srv Server, guard *gateway.Guard, creds *secret.Injector, scanner *secr
 		),
 	}
 	c.client = mcp.New(c.transport)
-	if srv.OAuth != nil && creds != nil {
+	if (srv.OAuth != nil || srv.Auth == "token") && creds != nil {
 		owner := Owner(srv.Name)
 		creds.AddBinding(owner, secret.Binding{
 			Secret: SecretName(owner, CredentialName), Capability: "http.write", Host: c.host,
@@ -150,7 +176,7 @@ func (c *Conn) transport(ctx context.Context, body []byte, header http.Header) (
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			resp.Body.Close()
-			return nil, fmt.Errorf("mcpcap: %s: HTTP %d", c.server.Name, resp.StatusCode)
+			return nil, &StatusError{Server: c.server.Name, Status: resp.StatusCode}
 		}
 		// Ingress redaction at the boundary, BEFORE protocol parsing — a stored
 		// secret echoed back never reaches the model, whichever shape the server

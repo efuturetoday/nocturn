@@ -104,11 +104,32 @@ Festgehalten, was fehlt und warum:
 - **Elicitation / Roots / Completion:** nicht implementiert — alles server-initiierte bzw.
   FS-offenlegende Features; kollidiert mit Zero-Ambient-Authority (Roots) bzw. braucht
   eigenes UI (Elicitation).
-- **OAuth Discovery/DCR (RFC 9728/8414/7591):** Spec-Clients MÜSSEN eigentlich Protected-
-  Resource-Metadata-Discovery; wir machen bewusst **Config-based OAuth** (Endpoints +
-  client_id in `mcp.json`, wie Plugin-Manifeste): Discovery hieße, URLs aus einer
-  *untrusted* Server-Antwort zu fetchen und dorthin Tokens zu schicken — erst mit
-  Validierungs-/Review-Konzept. `WWW-Authenticate`-Parsing + 401-Flow ebenso offen.
+- **OAuth-Discovery/DCR/Resource-Indicator nach Spec (RFC 9728/8414/7591/8707) — geplant,
+  pausiert.** Heute-Stand: **kein Secret mehr in `mcp.json`/Env.** Zwei leak-freie Modi:
+  `auth:"token"` → beim Setup no-echo-Prompt → verschlüsselter Vault; **manuelles** `oauth:{}`
+  (Endpoints + client_id in der Config, `client_secret` folgt später via Vault). **Bearer ist
+  auf dem Draht immer Pflicht** (Spec *Access Token Usage*); OAuth vs. Token = nur, woher das
+  Bearer kommt. **Verifiziert:** GitHub-Remote-MCP (`api.githubcopilot.com/mcp/`) macht volle
+  Spec-OAuth (PRM im `WWW-Authenticate` → AS `github.com/login/oauth`, RFC 8414, `S256`),
+  **aber kein DCR** (`registration_endpoint` fehlt) → man muss eh eine OAuth-App vorregistrieren.
+  **Der approved-aber-pausierte Ausbau** (Plan: `~/.claude/plans/immutable-conjuring-moon.md`):
+  - `internal/mcp/oauth.go` **NEU** (stdlib, injizierter `*http.Client`, host-seitig ungegated —
+    holt nur öffentliche Metadata): `DiscoverAuth` = 401-Probe → `WWW-Authenticate`.`resource_metadata`
+    parsen (+ `scope`) **oder** Well-Known-Fallback `…/.well-known/oauth-protected-resource[/<pfad>]`
+    → PRM (`authorization_servers[0]`, `scopes_supported`, `resource`) → AS-Metadata über die
+    **Pflicht-Prioritätsliste** (`/.well-known/oauth-authorization-server/<pfad>` → OIDC-Varianten)
+    → PKCE prüfen (`code_challenge_methods_supported` nichtleer, sonst **verweigern**). `RegisterClient`
+    = RFC-7591-DCR (nur wenn `registration_endpoint`).
+  - `internal/oauth`: `Authorize`/`NewCredential` **generalisieren** — `WithResource(uri)` (RFC 8707:
+    `resource` auf Auth- **und** Token-Request **und Refresh**; kanonische URI = PRM.`resource`),
+    Google-Spezifika (`access_type=offline`+`prompt=consent`) hinter `WithOfflineConsent()` (nur Google).
+  - `mcpcap.Server` → `{name, url, auth∈{"","token","oauth"}, client_id?}`, `OAuthDecl` (Endpoints) entfällt;
+    `wireMCPCredential(oauth)`: Discovery → client_id aus Config **→ sonst DCR → sonst Fehler**,
+    `client_secret` no-echo→Vault → `Authorize(…WithResource)` → Vault.
+  - **Client-Priorität** (Spec): pre-registered client_id → DCR → Prompt. **CIMD bewusst N/A**
+    (lokales Single-Binary hat keine öffentliche HTTPS-URL zum Hosten eines Client-Metadata-Dokuments).
+  - **Deferred bleibt:** Step-up bei `403 insufficient_scope` (Laufzeit-Re-Auth), Auswahl-UI bei
+    mehreren `authorization_servers`.
 - **SSE-Reconnect/Resumability:** `Last-Event-ID`/`retry`/GET-Stream nicht implementiert —
   ein abgerissener Stream ist ein Fehler (fail-closed), kein Auto-Retry. Ebenso kein
   GET-Listening-Stream (server-initiierte Nachrichten interessieren uns nicht, s.o.).
@@ -137,3 +158,21 @@ Festgehalten, was fehlt und warum:
   (TUI-Command + `plugins.go`-Verdrahtung). Dann in einem Rutsch: Uninstall → Bindings/Source weg (steht) →
   Token-Datei löschen → optional revoke.
 - **Status:** In-Memory-Teil erledigt; Datei/Revoke festgehalten, an Manage-Flow gekoppelt.
+
+### 7. Channel-agnostische Credential-/Approval-Erfassung (TUI ist nur EIN Channel)
+
+- **Kontext:** Die TUI ist nur *ein* Channel von Nocturn — eine **REST-Schnittstelle + Web-UI** ist geplant
+  (bequemer für Skills-Katalog, Workspace-Management etc.). Jede terminal-gebundene Interaktion muss daher
+  hinter einen **Port** (wie `hitl.Notifier`), damit die Web-UI dieselbe Logik über einen anderen Adapter bedient.
+- **Heute sauber genug:** Der *Mechanismus* ist channel-agnostisch in `internal/` (`secret.Vault`, `mcpcap` —
+  keine Prompts). Die terminal-I/O ist **auf `cmd/nocturn/` beschränkt** (`readPassphrase`/`term`, `askYesNo`,
+  `reviewMCP`, `wireMCPCredential`, `reenterOnRejection`) → kein Terminal-Coupling im Kern.
+- **Offen (mit REST/Web):**
+  1. **Vault-Unlock** (`unlockVault`, `term.ReadPassword`) → Port „Passphrase-Provider" (Web-Login-Form, ggf.
+     Session-gehaltener Vault statt Prompt-pro-Start).
+  2. **Setup-Prompts** (Plugin-Install-Review, MCP-`Connect?`, Token-Eingabe, `reenterOnRejection`-Re-Auth) →
+     channel-neutrale Orchestrierung mit injiziertem „Prompter"/„Approver"; `loadMCP`/`loadPlugins` sind derzeit
+     TUI-Setup und wandern in eine Channel-übergreifende Schicht.
+  3. **HITL** hat den Port schon (`hitl.Notifier` → ntfy) — Muster für die obigen übernehmen.
+- **Merke:** Nichts Terminal-Only in `internal/` wachsen lassen; neue interaktive Schritte immer als Port +
+  TUI-Adapter, damit der REST-Adapter bruchfrei danebentreten kann.

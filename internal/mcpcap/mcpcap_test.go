@@ -264,6 +264,42 @@ func TestConn_CredentialInjection_OwnerScoped(t *testing.T) {
 	}
 }
 
+// A server declared with a static token (a PAT, no OAuth): mcpcap.New adds the
+// same owner-namespaced binding, the value sits in the store (the cmd layer
+// puts it there from the encrypted vault), and every request carries it as
+// "Authorization: Bearer …" — the model never saw the token.
+func TestConn_StaticToken_Injected(t *testing.T) {
+	f := &fakeMCP{}
+	srv := f.start()
+	defer srv.Close()
+
+	store := secret.NewStore()
+	inj := secret.NewInjector(store)
+	conn, err := mcpcap.New(mcpcap.Server{Name: "test", URL: srv.URL, Auth: "token"},
+		&gateway.Guard{Policy: allowWrite()}, inj, nil, nil)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	// The cmd wiring stores the config token under the connection's namespaced
+	// secret (vault-backed in production); the binding's store resolver finds it.
+	store.Set(mcpcap.SecretName(mcpcap.Owner("test"), mcpcap.CredentialName), []byte("ghp_pat123"))
+
+	if err := conn.Connect(context.Background()); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.auth) == 0 {
+		t.Fatal("no requests reached the server")
+	}
+	for i, a := range f.auth {
+		if a != "Bearer ghp_pat123" {
+			t.Errorf("request %d Authorization = %q, want the static bearer", i, a)
+		}
+	}
+}
+
 // A stored secret in the model-supplied tool arguments is exfiltration: the
 // egress scan blocks the call before any byte leaves the process.
 func TestConn_LeakScan_BlocksEgress(t *testing.T) {

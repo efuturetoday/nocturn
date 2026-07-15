@@ -57,6 +57,22 @@ func tuiCmd(_ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	// The workspace is the portable, versionable unit of state (ADR-10). The model
+	// inhabits ONLY <ws>/mnt/ (filecap Root + the sandbox /work mount); skills/,
+	// grants.json, and secrets.age are host-managed siblings OUTSIDE that mount, so
+	// the model can neither see nor write them — a structural control-plane/
+	// data-plane split.
+	const wsDir = "workspaces/default"
+
+	// Unlock (or, first run, create) the encrypted secret vault — ALL secret
+	// material, OAuth refresh tokens included, lives age-encrypted in
+	// <ws>/secrets.age; the workspace on disk carries only ciphertext and stays
+	// committable. Prompted on the plain terminal, before bubbletea.
+	vault, err := unlockVault(filepath.Join(wsDir, "secrets.age"))
+	if err != nil {
+		return err
+	}
+
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return err
@@ -68,7 +84,7 @@ func tuiCmd(_ []string) error {
 	notifier.resolve = engine.Resolve
 
 	epochs := capability.NewEpochRegistry()
-	store := secret.NewStore()
+	store := vault.Store()
 	// Host-owned credential injection: a Bearer for gmail.googleapis.com, resolved
 	// through a source registered by wireGoogleCredential below (a refreshing OAuth
 	// token if configured). The guest never sees the token — it is stamped in only
@@ -95,12 +111,6 @@ func tuiCmd(_ []string) error {
 		Scanner:     scanner,
 		HTTP:        &http.Client{Timeout: 15 * time.Second},
 	}
-	// The workspace is the portable, versionable unit of state (ADR-10). The model
-	// inhabits ONLY <ws>/mnt/ (filecap Root + the sandbox /work mount); skills/
-	// and grants.json are host-managed siblings OUTSIDE that mount, so the model
-	// can neither see nor write them — a structural control-plane/data-plane split.
-	const wsDir = "workspaces/default"
-
 	// The filesystem capability group (file.read/file.write), confined to the
 	// workspace mount — the second capability family, gated by the same Guard as
 	// netcap. The target the broker sees is the mount-relative path, so a
@@ -127,14 +137,14 @@ func tuiCmd(_ []string) error {
 	// Host-managed OAuth (ADR-5): if Google is configured, run the one-time consent
 	// ceremony (prints a URL) and register a refreshing Bearer source for Gmail —
 	// before bubbletea grabs the terminal. No-op when unconfigured.
-	if err := wireGoogleCredential(ctx, inj); err != nil {
+	if err := wireGoogleCredential(ctx, inj, vault); err != nil {
 		return err
 	}
 
 	// Install sandboxed plugins from <ws>/plugins/ (reviews each ceiling on stdin,
 	// before the TUI). Their tools join the shared registry; effects stay bounded
 	// by each plugin's ceiling + the broker + HITL.
-	if err := loadPlugins(ctx, reg, inj, wsDir); err != nil {
+	if err := loadPlugins(ctx, reg, inj, vault, wsDir); err != nil {
 		return err
 	}
 
@@ -143,7 +153,7 @@ func tuiCmd(_ []string) error {
 	// tools join the shared registry namespaced <server>.<tool>; every call is
 	// a gated http.write to the server's own host (ceiling-bounded, leak-
 	// scanned, credential-injected under owner mcp:<server>).
-	if err := loadMCP(ctx, reg, netCap.Guard, inj, scanner, wsDir); err != nil {
+	if err := loadMCP(ctx, reg, netCap.Guard, inj, scanner, vault, wsDir); err != nil {
 		return err
 	}
 
@@ -194,6 +204,6 @@ func tuiCmd(_ []string) error {
 	dark := lipgloss.HasDarkBackground()
 	p = tea.NewProgram(newChatModel(startTurn, session.Reset, skills, session.MarkSkill, modelName, dark), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	notifier.p = p
-	_, err := p.Run()
+	_, err = p.Run()
 	return err
 }

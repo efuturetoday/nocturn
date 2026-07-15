@@ -42,6 +42,33 @@ func TestLoadConfig_MissingFile(t *testing.T) {
 	}
 }
 
+// The static-token/OAuth matrix: either one alone (or neither) is valid;
+// both together are ambiguous and rejected fail-closed.
+func TestServer_Validate_TokenOAuthMatrix(t *testing.T) {
+	oauth := &mcpcap.OAuthDecl{
+		AuthURL: "https://a.example.com", TokenURL: "https://t.example.com",
+		ClientID: "c", Scopes: []string{"s"},
+	}
+	cases := []struct {
+		label string
+		srv   mcpcap.Server
+		ok    bool
+	}{
+		{"neither", mcpcap.Server{Name: "a", URL: "https://x.example.com"}, true},
+		{"token only", mcpcap.Server{Name: "a", URL: "https://x.example.com", Auth: "token"}, true},
+		{"oauth only", mcpcap.Server{Name: "a", URL: "https://x.example.com", OAuth: oauth}, true},
+		{"both", mcpcap.Server{Name: "a", URL: "https://x.example.com", Auth: "token", OAuth: oauth}, false},
+		{"bad auth", mcpcap.Server{Name: "a", URL: "https://x.example.com", Auth: "env"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.label, func(t *testing.T) {
+			if err := c.srv.Validate(); (err == nil) != c.ok {
+				t.Fatalf("Validate() = %v, want ok=%v", err, c.ok)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_FailClosed(t *testing.T) {
 	cases := map[string]string{
 		"http url":        `{"servers":[{"name":"a","url":"http://mcp.example.com/mcp"}]}`,
@@ -50,6 +77,8 @@ func TestLoadConfig_FailClosed(t *testing.T) {
 		"duplicate name":  `{"servers":[{"name":"a","url":"https://x.example.com"},{"name":"a","url":"https://y.example.com"}]}`,
 		"unknown field":   `{"servers":[{"name":"a","url":"https://x.example.com","exec":"/bin/sh"}]}`,
 		"oauth no client": `{"servers":[{"name":"a","url":"https://x.example.com","oauth":{"auth_url":"https://a.example.com","token_url":"https://t.example.com","scopes":["s"]}}]}`,
+		"token and oauth": `{"servers":[{"name":"a","url":"https://x.example.com","auth":"token","oauth":{"auth_url":"https://a.example.com","token_url":"https://t.example.com","client_id":"c","scopes":["s"]}}]}`,
+		"bad auth mode":   `{"servers":[{"name":"a","url":"https://x.example.com","auth":"env"}]}`,
 		"oauth http":      `{"servers":[{"name":"a","url":"https://x.example.com","oauth":{"auth_url":"http://a.example.com","token_url":"https://t.example.com","client_id":"c","scopes":["s"]}}]}`,
 		"not json":        `servers: [yaml]`,
 	}

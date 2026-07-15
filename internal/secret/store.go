@@ -3,10 +3,10 @@
 // its value.
 //
 // The store is kind-agnostic — it holds bytes, so an API key, a password, or an
-// OAuth bearer are all just secrets. OAuth's extra lifecycle (authorization
-// flow + token refresh) is a credential concern layered on top later, not part
-// of the store itself. The store is in-memory for now; an OS-keychain backend
-// comes later.
+// OAuth bearer (a serialized token, refresh token included) are all just
+// secrets. OAuth's extra lifecycle (authorization flow + token refresh) is a
+// credential concern layered on top, not part of the store itself. The store is
+// the in-memory surface; Vault (vault.go) is its encrypted persistence.
 package secret
 
 import "sync"
@@ -47,6 +47,19 @@ func (s *Store) value(name string) ([]byte, bool) {
 	defer s.mu.Unlock()
 	v, ok := s.secrets[name]
 	return v, ok
+}
+
+// snapshot returns a copy of the full name→value map. Host-internal like
+// value — never exposed to a guest; used only by the Vault to serialize the
+// store for encrypted persistence.
+func (s *Store) snapshot() map[string][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string][]byte, len(s.secrets))
+	for k, v := range s.secrets {
+		out[k] = v
+	}
+	return out
 }
 
 // knownValues returns a snapshot of every stored secret value. Host-internal
