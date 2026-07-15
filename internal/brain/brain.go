@@ -170,7 +170,14 @@ func (b *Brain) invoke(ctx context.Context, tc ToolCall) string {
 	if err != nil {
 		return truncate("error: "+timeoutCause(ctx, err).Error(), maxToolOutput)
 	}
-	return truncate(out, maxToolOutput)
+	// Most results are bounded at maxToolOutput to keep the context small; a tool
+	// whose output is durable instruction text (a skill body) may raise its own
+	// budget via Spec.MaxResult so it is not silently corrupted by truncation.
+	budget := maxToolOutput
+	if m := b.Registry.MaxResult(tc.Tool); m > maxToolOutput {
+		budget = m
+	}
+	return truncate(out, budget)
 }
 
 func truncate(s string, n int) string {

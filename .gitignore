@@ -19,3 +19,6 @@ workspace/
 
 # local runtime plugins (not source; testdata/example documents the format)
 plugins/
+
+# per-workspace runtime state (mnt data, .skills, grants.json) — not source
+workspaces/

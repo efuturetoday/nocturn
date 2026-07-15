@@ -341,3 +341,31 @@ func TestBrain_Integration_FetchThroughGateway(t *testing.T) {
 		t.Fatal("the gateway-fetched body was not fed back to the model")
 	}
 }
+
+// A tool that sets Spec.MaxResult (a skill body) is fed back to the model
+// UNtruncated; the same output from an ordinary tool is capped at maxToolOutput.
+func TestBrain_MaxResultBypassesTruncation(t *testing.T) {
+	big := strings.Repeat("x", 5000) // > maxToolOutput (4000)
+	run := func(maxResult int) []brain.Message {
+		reg := tool.NewRegistry([]tool.Tool{{
+			Spec:   tool.Spec{Name: "probe", MaxResult: maxResult},
+			Invoke: func(context.Context, string) (string, error) { return big, nil },
+		}})
+		model := &scriptedModel{steps: []brain.Step{
+			{ToolCalls: []brain.ToolCall{{ID: "1", Tool: "probe", Args: "{}"}}},
+			{Answer: "done"},
+		}}
+		b := &brain.Brain{Model: model, Registry: reg}
+		if _, err := b.Run(context.Background(), "go"); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		return model.convs[len(model.convs)-1] // what the model saw on its final turn
+	}
+
+	if !convContains(run(64<<10), big) {
+		t.Error("skill-sized result with MaxResult was truncated")
+	}
+	if convContains(run(0), big) {
+		t.Error("ordinary result without MaxResult should be truncated at maxToolOutput")
+	}
+}

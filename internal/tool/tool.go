@@ -17,6 +17,10 @@ type Spec struct {
 	Name        string
 	Description string
 	Parameters  json.RawMessage
+	// MaxResult overrides the caller's default per-result byte budget when > 0.
+	// Set it only for tools whose output is durable instruction text (e.g. a
+	// skill body) that must not be truncated like a bounded tool result.
+	MaxResult int
 }
 
 // Tool is an invocable capability. Invoke receives the raw JSON arguments; it is

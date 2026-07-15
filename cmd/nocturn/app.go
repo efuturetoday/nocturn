@@ -27,6 +27,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
@@ -93,12 +94,17 @@ func tuiCmd(_ []string) error {
 		Scanner:     secret.NewScanner(store),
 		HTTP:        &http.Client{Timeout: 15 * time.Second},
 	}
-	// The filesystem capability group (file.read/file.write), confined to a
-	// ./workspace dir under the working directory — the second capability family,
-	// gated by the same Guard as netcap. The target the broker sees is the
-	// workspace-relative path, so a grant/ceiling scopes by path exactly as http
-	// scopes by host.
-	fileCap := filecap.New(netCap.Guard, "workspace")
+	// The workspace is the portable, versionable unit of state (ADR-10). The model
+	// inhabits ONLY <ws>/mnt/ (filecap Root + the sandbox /work mount); .skills/
+	// and grants.json are host-managed siblings OUTSIDE that mount, so the model
+	// can neither see nor write them — a structural control-plane/data-plane split.
+	const wsDir = "workspaces/default"
+
+	// The filesystem capability group (file.read/file.write), confined to the
+	// workspace mount — the second capability family, gated by the same Guard as
+	// netcap. The target the broker sees is the mount-relative path, so a
+	// grant/ceiling scopes by path exactly as http scopes by host.
+	fileCap := filecap.New(netCap.Guard, filepath.Join(wsDir, "mnt"))
 
 	// One shared Registry dispatches every tool call — the model's AND the
 	// script's — so its OnCall observer sees them all in one place, nested by
@@ -131,6 +137,16 @@ func tuiCmd(_ []string) error {
 		return err
 	}
 
+	// Skills (agentskills.io): host-side procedural knowledge from <ws>/.skills/,
+	// surfaced to the model as the single skill.load meta-tool (catalog in its
+	// description, name constrained to an enum), whose body loads on demand. Skills
+	// are CONTEXT, not tools, and carry zero authority — every effect they steer
+	// toward still passes the broker + HITL. Registered only if a visible skill exists.
+	skills := skill.Discover([]skill.Scope{{Dir: filepath.Join(wsDir, ".skills"), Location: "workspace"}})
+	if lt, ok := skills.LoadTool(); ok {
+		reg.Add(lt)
+	}
+
 	var p *tea.Program
 	reg.OnCall = func(ev tool.Event) { p.Send(toolEventMsg(ev)) }
 	b := &brain.Brain{
@@ -139,12 +155,10 @@ func tuiCmd(_ []string) error {
 		ToolTimeout: 20 * time.Second,
 		OnToken:     func(tok string) { p.Send(tokenMsg(tok)) },
 	}
-	// Durable "always" grants: the user's persistent per-workspace permission
-	// decisions (missing file = none).
-	var grants capability.GrantStore
-	if dir, err := os.UserConfigDir(); err == nil {
-		grants = agent.LoadGrantsStore(filepath.Join(dir, "nocturn", "grants.json"))
-	}
+	// Durable "always" grants live IN the workspace (ADR-10): per-workspace,
+	// portable, versionable — and host-managed, outside the model's mount, so the
+	// model can never write itself a standing grant. Missing file = none.
+	grants := agent.LoadGrantsStore(filepath.Join(wsDir, "grants.json"))
 	session := agent.New(b, netCap.Guard, epochs, grants)
 	defer session.Close()
 	startTurn := func(input string) context.CancelFunc {

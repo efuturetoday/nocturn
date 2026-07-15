@@ -91,6 +91,14 @@ func (r *Registry) Has(name string) bool {
 	return ok
 }
 
+// MaxResult returns the registered tool's per-result byte budget override, or 0
+// if the tool is unknown or sets none (the caller then applies its own default).
+func (r *Registry) MaxResult(name string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.tools[name].MaxResult
+}
+
 // Specs returns the tool declarations for the Model, sorted by name.
 func (r *Registry) Specs() []Spec {
 	r.mu.RLock()
