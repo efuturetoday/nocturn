@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/tool"
@@ -157,11 +158,13 @@ func (e *noticeEntry) render(m *chatModel, width int) string {
 }
 
 type chatModel struct {
-	startTurn func(string) context.CancelFunc
-	reset     func()       // starts a new session: revokes session grants, clears history
-	skills    *skill.Index // discovered skills, for /name + /skills (never nil)
-	markSkill func(string) // mark a /name-activated skill loaded, so skill.load dedups
-	model     string       // model name, shown in the header
+	startTurn  func(string) context.CancelFunc
+	startAgent func(name, task string) context.CancelFunc // run a workspace agent (/<name> <task>)
+	agents     []agent.Definition                         // workspace agents, for /agents + /<name> dispatch
+	reset      func()                                      // starts a new session: revokes session grants, clears history
+	skills     *skill.Index                               // discovered skills, for /name + /skills (never nil)
+	markSkill  func(string)                               // mark a /name-activated skill loaded, so skill.load dedups
+	model      string                                     // model name, shown in the header
 
 	vp   viewport.Model
 	ta   textarea.Model
@@ -190,7 +193,7 @@ type chatModel struct {
 	ready     bool
 }
 
-func newChatModel(startTurn func(string) context.CancelFunc, reset func(), skills *skill.Index, markSkill func(string), model string, dark bool) chatModel {
+func newChatModel(startTurn func(string) context.CancelFunc, startAgent func(name, task string) context.CancelFunc, agents []agent.Definition, reset func(), skills *skill.Index, markSkill func(string), model string, dark bool) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Message…"
 	ta.Prompt = "› "
@@ -199,7 +202,8 @@ func newChatModel(startTurn func(string) context.CancelFunc, reset func(), skill
 	ta.SetHeight(1)
 	ta.Focus()
 	return chatModel{
-		startTurn: startTurn, reset: reset, skills: skills, markSkill: markSkill,
+		startTurn: startTurn, startAgent: startAgent, agents: agents,
+		reset: reset, skills: skills, markSkill: markSkill,
 		model: model, dark: dark, inputH: 1,
 		ta:   ta,
 		spin: spinner.New(spinner.WithSpinner(spinner.Dot)),
@@ -298,6 +302,34 @@ func (m *chatModel) skillsListing() string {
 		fmt.Fprintf(&b, "\n  [%s] %s", d.Level, d.Message)
 	}
 	return b.String()
+}
+
+// hasAgent reports whether name is a defined workspace agent.
+func (m chatModel) hasAgent(name string) bool {
+	for _, d := range m.agents {
+		if d.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// agentsListing renders /agents: every workspace agent as an invocable /<name>
+// with its one-line description.
+func (m chatModel) agentsListing() string {
+	if len(m.agents) == 0 {
+		return "No agents. Add one at <ws>/agents/<name>.md (prompt + tools + when)."
+	}
+	var b strings.Builder
+	b.WriteString("Agents (run with /<name> <task>):\n")
+	for _, d := range m.agents {
+		b.WriteString("  /" + d.Name)
+		if d.Description != "" {
+			b.WriteString(" — " + d.Description)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // --- streaming (progressive markdown, kept for live rendering) ---------------
@@ -683,6 +715,28 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.layout()
 					m.syncViewport()
 					return m, nil
+				}
+				if cmd == "agents" {
+					m.entries = append(m.entries, &noticeEntry{text: m.agentsListing()})
+					m.layout()
+					m.syncViewport()
+					return m, nil
+				}
+				// /<name> <task> runs a workspace agent (checked before skills): a fresh
+				// epoch + its own grant set + budget + only its tools, streamed like a turn.
+				if m.hasAgent(cmd) {
+					task := strings.TrimSpace(rest)
+					if task == "" {
+						task = "Do your task."
+					}
+					m.ta.Blur()
+					m.entries = append(m.entries, &userEntry{text: input})
+					m.resetStream()
+					m.running = true
+					m.cancel = m.startAgent(cmd, task)
+					m.layout()
+					m.syncViewport()
+					return m, tea.Batch(m.sw.Reset(), m.sw.Start())
 				}
 				s, found := m.skills.Get(cmd)
 				if !found {

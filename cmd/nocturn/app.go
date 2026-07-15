@@ -179,6 +179,15 @@ func tuiCmd(_ []string) error {
 		reg.Add(skills.ReadTool())
 	}
 
+	// Workspace agents (<ws>/agents/*.md): host-side control-plane, validated here
+	// and run from the TUI with /<name> <task>. Each is a prompt + the tools it may
+	// use + when it runs; the model cannot author them (outside its mount, ADR-10).
+	agentDefs, err := agent.LoadAgents(filepath.Join(wsDir, "agents"))
+	if err != nil {
+		return err
+	}
+	reportAgents(agentDefs)
+
 	var p *tea.Program
 	reg.OnCall = func(ev tool.Event) { p.Send(toolEventMsg(ev)) }
 	b := &brain.Brain{
@@ -201,6 +210,25 @@ func tuiCmd(_ []string) error {
 		}()
 		return cancel
 	}
+	// Running an agent reuses the SAME brain (so its token stream + tool events flow
+	// to the TUI like a normal turn) but through agent.RunTask: a fresh epoch + the
+	// agent's own grant set + budget + a registry limited to its tools. The model
+	// checks the name is a real agent before calling, so the lookup always resolves.
+	startAgent := func(name, task string) context.CancelFunc {
+		var def agent.Definition
+		for _, d := range agentDefs {
+			if d.Name == name {
+				def = d
+				break
+			}
+		}
+		turnCtx, cancel := context.WithCancel(ctx)
+		go func() {
+			_, err := agent.RunTask(turnCtx, b, epochs, grants, def, task)
+			p.Send(doneMsg{err: err})
+		}()
+		return cancel
+	}
 
 	// Detect the terminal background ONCE, here, before bubbletea takes over stdin
 	// — so glamour never re-queries it mid-run (that OSC response would leak into
@@ -208,7 +236,7 @@ func tuiCmd(_ []string) error {
 	// viewport; the model also filters stray SGR mouse reports (which some
 	// terminals emit at the scroll edge) so they never land in the input.
 	dark := lipgloss.HasDarkBackground()
-	p = tea.NewProgram(newChatModel(startTurn, session.Reset, skills, session.MarkSkill, modelName, dark), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p = tea.NewProgram(newChatModel(startTurn, startAgent, agentDefs, session.Reset, skills, session.MarkSkill, modelName, dark), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	notifier.p = p
 	_, err = p.Run()
 	return err
