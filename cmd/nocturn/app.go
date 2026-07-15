@@ -127,7 +127,7 @@ func tuiCmd(_ []string) error {
 	// Install sandboxed plugins from ./plugins/ (reviews each ceiling on stdin,
 	// before the TUI). Their tools join the shared registry; effects stay bounded
 	// by each plugin's ceiling + the broker + HITL.
-	if err := loadPlugins(reg, inj); err != nil {
+	if err := loadPlugins(ctx, reg, inj); err != nil {
 		return err
 	}
 

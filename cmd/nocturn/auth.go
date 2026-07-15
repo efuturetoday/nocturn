@@ -67,14 +67,26 @@ func tokenPath() (string, error) {
 	return filepath.Join(dir, "nocturn", "google.json"), nil
 }
 
-// loadToken reads a previously persisted token; ok is false if none/invalid (no
-// refresh token means we cannot refresh, so treat it as absent and re-auth).
 func loadToken() (*oauth2.Token, bool) {
 	p, err := tokenPath()
 	if err != nil {
 		return nil, false
 	}
-	data, err := os.ReadFile(p)
+	return loadTokenAt(p)
+}
+
+func saveToken(tok *oauth2.Token) error {
+	p, err := tokenPath()
+	if err != nil {
+		return err
+	}
+	return saveTokenAt(p, tok)
+}
+
+// loadTokenAt reads a persisted token from path; ok is false if none/invalid (no
+// refresh token means we cannot refresh, so treat it as absent and re-auth).
+func loadTokenAt(path string) (*oauth2.Token, bool) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false
 	}
@@ -85,19 +97,15 @@ func loadToken() (*oauth2.Token, bool) {
 	return &tok, true
 }
 
-// saveToken persists the token, dir 0700 / file 0600 (owner-only). It holds the
-// long-lived refresh token; Keychain-encryption-at-rest is a later step.
-func saveToken(tok *oauth2.Token) error {
-	p, err := tokenPath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+// saveTokenAt persists the token to path, dir 0700 / file 0600 (owner-only). It
+// holds the long-lived refresh token; Keychain-encryption-at-rest is a later step.
+func saveTokenAt(path string, tok *oauth2.Token) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	data, err := json.Marshal(tok)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0o600)
+	return os.WriteFile(path, data, 0o600)
 }

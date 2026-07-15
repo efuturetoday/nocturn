@@ -49,6 +49,41 @@ func TestManifest_Validate_FailClosed(t *testing.T) {
 	}
 }
 
+// oauthManifest is a valid manifest whose oauth block links to a matching
+// credential — the shape a Gmail-style plugin uses.
+func oauthManifest() plugin.Manifest {
+	m := validManifest()
+	m.Requires = append(m.Requires, plugin.Require{Capability: "http.write", Target: "x.com"})
+	m.Credentials = []plugin.CredentialDecl{{Name: "acct", Capability: "http.read", Host: "x.com", Header: "Authorization"}}
+	m.OAuth = []plugin.OAuthDecl{{
+		Name: "acct", ClientID: "cid",
+		AuthURL: "https://auth.example.com/a", TokenURL: "https://token.example.com/t",
+		Scopes: []string{"read"},
+	}}
+	return m
+}
+
+func TestManifest_OAuthValidation(t *testing.T) {
+	if err := oauthManifest().Validate(); err != nil {
+		t.Fatalf("valid oauth manifest rejected: %v", err)
+	}
+	bad := map[string]func(*plugin.Manifest){
+		"no client_id":       func(m *plugin.Manifest) { m.OAuth[0].ClientID = "" },
+		"no scopes":          func(m *plugin.Manifest) { m.OAuth[0].Scopes = nil },
+		"http auth_url":      func(m *plugin.Manifest) { m.OAuth[0].AuthURL = "http://auth.example.com/a" },
+		"empty token_url":    func(m *plugin.Manifest) { m.OAuth[0].TokenURL = "" },
+		"no matching cred":   func(m *plugin.Manifest) { m.OAuth[0].Name = "orphan" },
+		"cred name mismatch": func(m *plugin.Manifest) { m.Credentials[0].Name = "other" },
+	}
+	for name, mut := range bad {
+		m := oauthManifest()
+		mut(&m)
+		if err := m.Validate(); err == nil {
+			t.Errorf("%s: expected a validation error", name)
+		}
+	}
+}
+
 func TestLoad_JSPlugin(t *testing.T) {
 	l, err := plugin.Load("testdata/example")
 	if err != nil {

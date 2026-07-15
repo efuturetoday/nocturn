@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,6 +28,21 @@ type Manifest struct {
 	Tools       []ToolDecl       `json:"tools"`
 	Requires    []Require        `json:"requires"`    // the ceiling: capabilities × hosts
 	Credentials []CredentialDecl `json:"credentials"` // host-injected credentials it uses
+	OAuth       []OAuthDecl      `json:"oauth"`       // OAuth providers the host runs on its behalf
+}
+
+// OAuthDecl declares an OAuth2 provider the plugin needs — so the plugin brings
+// its own provider instead of the host hard-coding every one. The host runs the
+// authorization-code (+PKCE) flow at install time, holds and refreshes the token,
+// and injects it as the credential named Name (which must match a CredentialDecl).
+// The guest never sees the token. client_id is a public/PKCE client id (shipped by
+// the plugin author, registered with the provider); no client_secret is needed.
+type OAuthDecl struct {
+	Name     string   `json:"name"`      // links to a CredentialDecl.Name (the injected secret)
+	AuthURL  string   `json:"auth_url"`  // https authorization endpoint
+	TokenURL string   `json:"token_url"` // https token endpoint
+	ClientID string   `json:"client_id"`
+	Scopes   []string `json:"scopes"`
 }
 
 // ToolDecl declares a tool the plugin exposes to the model. Intent is an optional
@@ -93,12 +109,33 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("plugin: requires entry needs a capability and target (got %q, %q)", r.Capability, r.Target)
 		}
 	}
+	creds := map[string]bool{}
 	for _, c := range m.Credentials {
 		if c.Name == "" || c.Capability == "" || c.Host == "" || c.Header == "" {
 			return fmt.Errorf("plugin: credential %q needs name, capability, host and header", c.Name)
 		}
+		creds[c.Name] = true
+	}
+	for _, o := range m.OAuth {
+		if o.Name == "" || o.ClientID == "" || len(o.Scopes) == 0 {
+			return fmt.Errorf("plugin: oauth %q needs a name, client_id and at least one scope", o.Name)
+		}
+		if !isHTTPSURL(o.AuthURL) || !isHTTPSURL(o.TokenURL) {
+			return fmt.Errorf("plugin: oauth %q auth_url and token_url must be https URLs", o.Name)
+		}
+		if !creds[o.Name] {
+			// The token has to be injected SOMEWHERE — an oauth block with no matching
+			// credential would fetch a token nothing ever uses.
+			return fmt.Errorf("plugin: oauth %q has no matching credential of the same name", o.Name)
+		}
 	}
 	return nil
+}
+
+// isHTTPSURL reports whether s is a well-formed https:// URL with a host.
+func isHTTPSURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Host != ""
 }
 
 // Ceiling builds the plugin's upper bound from its Requires.

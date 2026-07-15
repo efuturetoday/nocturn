@@ -138,7 +138,7 @@ getestet, bevor die nächste kam:
 | `plugin` | **Sandboxed Ersatz für MCP-Server.** Artefakt (`plugin.js` auf dem geteilten QuickJS **oder** `plugin.wasm`) + Sidecar `plugin.json` (`Manifest`: `tools[]`, `requires[]`=Ceiling, `credentials[]`; `Validate()` fail-closed; `Load(dir)` **ohne** Ausführung). `Plugin.Tools()` → namespaced `<name>.<tool>` in die geteilte `tool.Registry`; **stateless** (frische Sandbox-Instanz pro Call, Cross-Call-State via `/work`). `runGuest` stempelt das **Plugin-Ceiling** in ctx (**einzige** Stelle, `SECURITY:`-Kommentar) → Effekte hart auf `requires` begrenzt; leeres Manifest = deny-all. `Host.Install`/`Uninstall` (eine HITL-Freigabe der Decke, **keine** Effekt-Grants; Uninstall lässt Context-Grants leben). **Semantisches HITL-Wording:** `ToolDecl.intent` = install-reviewtes Template (`{feld}`-Platzhalter aus den Args); der Host rendert es (`renderIntent`) + stempelt `gateway.WithIntent` → der Guard zeigt *„Send email to x@a"* statt Transport. Nur Wording — die gegatete `(capability, target)` bleibt; das Template ist trusted (Manifest, kein Gast-Code). |
 | `filecap` | **Zweite Capability-Familie (nach netcap) — der Beweis, dass das Broker-Modell nicht HTTP-förmig ist.** `Files{Guard, Root}` → Tools **`file.read`**/**`file.write`** über *einen* Workspace-`Root`. `Target` = **workspace-relativer Pfad** (glob-gematcht wie ein Host) → ein Grant/Ceiling scoped per Pfad (`file.write @ notes/*`) exakt wie http per Host. Jeder Pfad **confined** zu `Root` (Escape via `..`/absolut = harter Fehler *vor* dem Broker); dann `Guard.Do` (Broker + HITL + Grants). |
 | `llm` | OpenAI-kompatibler Adapter (go-openai), native `tool_calls`, SSE-Streaming. `Next(...[]tool.Spec...)` erfüllt `brain.Model`. |
-| `oauth` | Host-managed OAuth (ADR-5). Google-Config + Loopback-PKCE-`Authorize`; refreshing `Source` (wrappt `golang.org/x/oauth2`-TokenSource) → an `secret.Injector` als Bearer-Quelle; Gast sieht das Token nie. |
+| `oauth` | Host-managed OAuth (ADR-5). **`Provider(authURL, tokenURL, clientID, …)`** = provider-agnostisch (Plugin bringt eigene Endpoints/Scopes mit; `Google()` = dünner Wrapper); Loopback-PKCE-`Authorize`; refreshing `Source` (wrappt `golang.org/x/oauth2`-TokenSource) → an `secret.Injector` als Bearer-Quelle; Gast sieht das Token nie. |
 | `agent` | **Session-Lifecycle-Owner.** `Session` bündelt `brain.Conversation` + geteilten `gateway.Guard` + geteilte `EpochRegistry` + die eigene **`capability.Grants`** + `GrantStore`. `Ask` stempelt die Grants via `capability.WithGrants` (+ optional Workspace-`Ceiling`) in ctx; `Reset` schließt die Epoche (widerruft Session-Grants), öffnet frische Grants+Conversation (`always`-Grants überleben); `Close` schließt die Epoche. Enthält **`GrantsStore`** (file-backed `capability.GrantStore`, `<config>/nocturn/grants.json`, 0600; ehem. in `gateway`). |
 
 `cmd/nocturn` — **die TUI ist das ganze Interface** (parameterlos, `go run ./cmd/nocturn`);
@@ -347,10 +347,21 @@ fälschen, den es gar nicht versuchen darf (Ceiling bounded weiterhin das echte 
 Unit + Plugin-E2E durch echtes QuickJS (`msg:"hi"` → gerenderter Prompt am HITL). **Offen (Phase D, optional):**
 Consent am Tool-Boundary + semantischer Grant-Key (statt host-level) — nur falls per-Effekt-Asks nerven.
 
-**Erledigt (OAuth, ADR-5):** `internal/oauth` — Google Loopback-PKCE-`Authorize` (einmalige Consent-
+**Erledigt (OAuth, ADR-5):** `internal/oauth` — Loopback-PKCE-`Authorize` (einmalige Consent-
 Zeremonie, druckt URL) + refreshing `Source` über `golang.org/x/oauth2`; via `secret.Injector`
-host-seitig als Bearer an der Grenze injiziert (Gast sieht das Token nie). `cmd` verdrahtet Gmail
-vor dem TUI-Start.
+host-seitig als Bearer an der Grenze injiziert (Gast sieht das Token nie).
+
+**Erledigt (Plugin bringt eigenen OAuth-Provider — IronClaw-`auth.oauth`-Modell):** `oauth.Google`→
+generisches **`oauth.Provider(authURL, tokenURL, clientID, scopes…)`** (Endpoint war der einzige
+Google-Unterschied). `plugin.Manifest.OAuth []OAuthDecl{Name, AuthURL, TokenURL, ClientID, Scopes}` —
+`Validate` erzwingt https + `Name` muss auf ein `credentials`-Entry linken. `cmd/plugins.go`:
+`wirePluginOAuth` fährt pro Decl den Flow **install-time** (stdin, vor TUI), persistiert Token per
+`(plugin,name)` unter `<config>/nocturn/oauth/`, `inj.SetSource(name, refreshing-source)` — das
+`AddBinding` (read+send) macht `Install`. **Host bleibt provider-agnostisch, `plugin`-Paket bleibt
+`oauth`-frei** (Orchestrierung in `cmd`). Install-Review zeigt `auth_url`+Scopes. Sicherheit: Token
+host-gehalten/gast-blind, `client_id` = public PKCE (kein Secret). Echtes `plugins/gmail/` (search+send,
+base64url-RFC2822 in JS) + `plugins/weather/` als lokale Referenz (gitignored; `testdata/example`
+dokumentiert das Format committed). Manifest-`oauth`-Validierung getestet.
 
 **Erledigt (Autorisierung neu komponiert + `tool`-Extraktion):** (1) **`Guard` = reiner Komponierer**
 — Ceiling-Kette (`capability.Ceiling`, Schnittmenge, ctx-getragen) ∩ stehende **`capability.Grants`**

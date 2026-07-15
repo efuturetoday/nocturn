@@ -30,19 +30,28 @@ const GmailReadonlyScope = "https://www.googleapis.com/auth/gmail.readonly"
 // authTimeout bounds the interactive ceremony (the human has to click through).
 const authTimeout = 3 * time.Minute
 
-// Google builds an OAuth2 config for Google's endpoints. clientSecret may be ""
-// for a public (PKCE) desktop client. With no scopes it defaults to Gmail
-// read-only. RedirectURL is set later by Authorize (the loopback address).
+// Provider builds an OAuth2 config for ANY provider from its endpoints — so the
+// host is provider-agnostic and a plugin can bring its own (auth_url, token_url,
+// client_id, scopes) in its manifest. clientSecret may be "" for a public (PKCE)
+// client, which is the norm for a shipped client_id. RedirectURL is set later by
+// Authorize (the loopback address).
+func Provider(authURL, tokenURL, clientID, clientSecret string, scopes ...string) *oauth2.Config {
+	return &oauth2.Config{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		Endpoint:     oauth2.Endpoint{AuthURL: authURL, TokenURL: tokenURL},
+		Scopes:       scopes,
+	}
+}
+
+// Google builds a Provider config for Google's endpoints. With no scopes it
+// defaults to Gmail read-only. A convenience over Provider for the built-in Google
+// wiring; plugins use Provider directly with their manifest endpoints.
 func Google(clientID, clientSecret string, scopes ...string) *oauth2.Config {
 	if len(scopes) == 0 {
 		scopes = []string{GmailReadonlyScope}
 	}
-	return &oauth2.Config{
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		Endpoint:     endpoints.Google,
-		Scopes:       scopes,
-	}
+	return Provider(endpoints.Google.AuthURL, endpoints.Google.TokenURL, clientID, clientSecret, scopes...)
 }
 
 // Authorize runs the interactive authorization-code flow with PKCE and returns
