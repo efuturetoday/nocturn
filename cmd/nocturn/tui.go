@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
@@ -157,8 +158,10 @@ func (e *noticeEntry) render(m *chatModel, width int) string {
 
 type chatModel struct {
 	startTurn func(string) context.CancelFunc
-	reset     func() // starts a new session: revokes session grants, clears history
-	model     string // model name, shown in the header
+	reset     func()       // starts a new session: revokes session grants, clears history
+	skills    *skill.Index // discovered skills, for /name + /skills (never nil)
+	markSkill func(string) // mark a /name-activated skill loaded, so skill.load dedups
+	model     string       // model name, shown in the header
 
 	vp   viewport.Model
 	ta   textarea.Model
@@ -187,7 +190,7 @@ type chatModel struct {
 	ready     bool
 }
 
-func newChatModel(startTurn func(string) context.CancelFunc, reset func(), model string, dark bool) chatModel {
+func newChatModel(startTurn func(string) context.CancelFunc, reset func(), skills *skill.Index, markSkill func(string), model string, dark bool) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Message…"
 	ta.Prompt = "› "
@@ -196,7 +199,8 @@ func newChatModel(startTurn func(string) context.CancelFunc, reset func(), model
 	ta.SetHeight(1)
 	ta.Focus()
 	return chatModel{
-		startTurn: startTurn, reset: reset, model: model, dark: dark, inputH: 1,
+		startTurn: startTurn, reset: reset, skills: skills, markSkill: markSkill,
+		model: model, dark: dark, inputH: 1,
 		ta:   ta,
 		spin: spinner.New(spinner.WithSpinner(spinner.Dot)),
 		sw:   stopwatch.NewWithInterval(100 * time.Millisecond),
@@ -277,6 +281,23 @@ func (m *chatModel) growInput() {
 		m.ta.SetHeight(rows)
 		m.layout()
 	}
+}
+
+// skillsListing renders /skills: every discovered skill as an invocable /name
+// with its description, plus any discovery diagnostics (skipped/shadowed skills).
+func (m *chatModel) skillsListing() string {
+	if m.skills.Len() == 0 {
+		return "no skills in this workspace (.skills/)"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "skills (%d):", m.skills.Len())
+	for _, s := range m.skills.Skills() {
+		fmt.Fprintf(&b, "\n  /%-16s %s", s.Name, s.Description)
+	}
+	for _, d := range m.skills.Diags {
+		fmt.Fprintf(&b, "\n  [%s] %s", d.Level, d.Message)
+	}
+	return b.String()
 }
 
 // --- streaming (progressive markdown, kept for live rendering) ---------------
@@ -645,14 +666,51 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.ta.Reset()
-			m.ta.Blur()
 			m.inputH = 1
 			m.ta.SetHeight(1)
 			m.notice = ""
+
+			// Slash commands: /skills lists them (no turn); /<name> explicitly
+			// activates a skill — the harness injects its body (the model does not
+			// take an activation action), and marks it loaded so a later skill.load
+			// deduplicates. The transcript shows the typed line; the model gets the
+			// expanded input.
+			turnInput := input
+			if name, ok := strings.CutPrefix(input, "/"); ok {
+				cmd, rest, _ := strings.Cut(name, " ")
+				if cmd == "skills" {
+					m.entries = append(m.entries, &noticeEntry{text: m.skillsListing()})
+					m.layout()
+					m.syncViewport()
+					return m, nil
+				}
+				s, found := m.skills.Get(cmd)
+				if !found {
+					m.entries = append(m.entries, &noticeEntry{text: "unknown skill: /" + cmd + " (try /skills)", err: true})
+					m.layout()
+					m.syncViewport()
+					return m, nil
+				}
+				body, err := s.Body()
+				if err != nil {
+					m.entries = append(m.entries, &noticeEntry{text: "skill " + cmd + ": " + err.Error(), err: true})
+					m.layout()
+					m.syncViewport()
+					return m, nil
+				}
+				m.markSkill(cmd)
+				req := strings.TrimSpace(rest)
+				if req == "" {
+					req = "Follow the skill's instructions."
+				}
+				turnInput = skill.WrapBody(cmd, body) + "\n\n<user_request>\n" + req + "\n</user_request>"
+			}
+
+			m.ta.Blur()
 			m.entries = append(m.entries, &userEntry{text: input})
 			m.resetStream()
 			m.running = true
-			m.cancel = m.startTurn(input)
+			m.cancel = m.startTurn(turnInput)
 			m.layout()
 			m.syncViewport()
 			return m, tea.Batch(m.sw.Reset(), m.sw.Start()) // start the "thinking" timer

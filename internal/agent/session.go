@@ -7,7 +7,8 @@
 //
 //   - a brain.Conversation (the message history),
 //   - a shared gateway.Guard (the pure authorization composer),
-//   - a shared capability.EpochRegistry plus the session's own capability.Grants.
+//   - a shared capability.EpochRegistry plus the session's own capability.Grants,
+//   - the set of skills loaded into this conversation (for skill.load dedup).
 //
 // Every request runs under the session's Grants (threaded through ctx), which
 // owns the standing decisions: "Allow this session" grants bind to the grants'
@@ -24,6 +25,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
+	"github.com/efuturetoday/nocturn/internal/skill"
 )
 
 // grantSetID is the id of the default (single) session's grant set. A future
@@ -39,6 +41,7 @@ type Session struct {
 
 	conv   *brain.Conversation
 	grants *capability.Grants
+	skills *skill.Active // skills loaded into THIS conversation (dedup); reset with it
 }
 
 // New opens a session on the given brain and guard, sharing the epoch registry r
@@ -53,6 +56,7 @@ func New(b *brain.Brain, g *gateway.Guard, r *capability.EpochRegistry, store ca
 		store:  store,
 		conv:   b.NewConversation(),
 		grants: capability.NewGrants(grantSetID, r.Open(), store),
+		skills: skill.NewActive(),
 	}
 }
 
@@ -64,8 +68,14 @@ func (s *Session) Ask(ctx context.Context, input string) (string, error) {
 	if s.grants.Ceiling != nil {
 		ctx = capability.WithCeiling(ctx, *s.grants.Ceiling)
 	}
+	ctx = skill.WithActive(ctx, s.skills) // so skill.load deduplicates within this conversation
 	return s.conv.Send(ctx, input)
 }
+
+// MarkSkill records a skill as already loaded in this conversation — used by the
+// explicit /name path, which injects the body itself, so a later model-issued
+// skill.load for the same skill is deduplicated instead of re-injecting it.
+func (s *Session) MarkSkill(name string) { s.skills.Mark(name) }
 
 // Reset ends the current session and starts a new one: it closes the old epoch
 // (revoking every "Allow this session" grant bound to it), opens a fresh epoch +
@@ -75,6 +85,7 @@ func (s *Session) Reset() {
 	s.epochs.Close(s.grants.Epoch)
 	s.grants = capability.NewGrants(grantSetID, s.epochs.Open(), s.store)
 	s.conv = s.brain.NewConversation()
+	s.skills = skill.NewActive() // a fresh conversation has no skills loaded
 }
 
 // Close ends the session, closing its epoch so its session grants are revoked.

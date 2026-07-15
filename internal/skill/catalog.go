@@ -88,7 +88,7 @@ func (ix *Index) LoadTool() (tool.Tool, bool) {
 			if !ok || s.Metadata[metaInvocationKey] == "never" {
 				return "", fmt.Errorf("unknown skill %q", a.Name)
 			}
-			if act := ActiveFrom(ctx); act != nil && !act.mark(a.Name) {
+			if act := ActiveFrom(ctx); act != nil && !act.Mark(a.Name) {
 				return "skill " + a.Name + " is already loaded in this conversation.", nil
 			}
 			body, err := s.Body()

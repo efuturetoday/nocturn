@@ -17,9 +17,9 @@ type Active struct {
 // NewActive returns an empty activation set.
 func NewActive() *Active { return &Active{names: map[string]bool{}} }
 
-// mark records name as loaded and reports whether it was newly added (false = it
+// Mark records name as loaded and reports whether it was newly added (false = it
 // was already active).
-func (a *Active) mark(name string) bool {
+func (a *Active) Mark(name string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.names[name] {

@@ -176,7 +176,7 @@ func tuiCmd(_ []string) error {
 	// viewport; the model also filters stray SGR mouse reports (which some
 	// terminals emit at the scroll edge) so they never land in the input.
 	dark := lipgloss.HasDarkBackground()
-	p = tea.NewProgram(newChatModel(startTurn, session.Reset, modelName, dark), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p = tea.NewProgram(newChatModel(startTurn, session.Reset, skills, session.MarkSkill, modelName, dark), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	notifier.p = p
 	_, err := p.Run()
 	return err

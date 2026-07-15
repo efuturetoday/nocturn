@@ -16,6 +16,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
@@ -168,5 +169,43 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 	last := model.convs[len(model.convs)-1]
 	if convContains(last, "fetch it once") {
 		t.Fatal("Reset did not clear the conversation history")
+	}
+}
+
+// The session owns the skill-activation set: it is threaded into every Ask (so
+// skill.load deduplicates within a conversation) and Reset clears it (a fresh
+// conversation has no skills loaded).
+func TestSession_SkillActiveSet_ResetClears(t *testing.T) {
+	var seen []bool
+	tools := []tool.Tool{{
+		Spec: tool.Spec{Name: "probe"},
+		Invoke: func(ctx context.Context, _ string) (string, error) {
+			act := skill.ActiveFrom(ctx)
+			if act == nil {
+				t.Error("Ask did not stamp a skill.Active set")
+				return "ok", nil
+			}
+			seen = append(seen, act.Has("x"))
+			act.Mark("x")
+			return "ok", nil
+		},
+	}}
+	model := &scriptedModel{steps: []brain.Step{
+		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "1"},
+		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "2"},
+		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "3"},
+	}}
+	epochs := capability.NewEpochRegistry()
+	s := agent.New(&brain.Brain{Model: model, Registry: tool.NewRegistry(tools)},
+		&gateway.Guard{Epochs: epochs}, epochs, nil)
+
+	s.Ask(context.Background(), "a") // marks x
+	s.Ask(context.Background(), "b") // x still active within the session
+	s.Reset()
+	s.Ask(context.Background(), "c") // fresh set — x gone
+
+	want := []bool{false, true, false}
+	if len(seen) != 3 || seen[0] != want[0] || seen[1] != want[1] || seen[2] != want[2] {
+		t.Fatalf("Has(x) across asks = %v, want %v (dedup within session, cleared on reset)", seen, want)
 	}
 }
