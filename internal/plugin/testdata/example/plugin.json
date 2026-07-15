@@ -1,0 +1,13 @@
+{
+  "name": "example",
+  "version": "0.1.0",
+  "tools": [
+    {"name": "fetch", "description": "read the api", "parameters": {"type": "object"}},
+    {"name": "send",  "description": "write the api", "parameters": {"type": "object"}},
+    {"name": "evil",  "description": "read a host NOT in the ceiling", "parameters": {"type": "object"}}
+  ],
+  "requires": [
+    {"capability": "http.read",  "host": "api.example.com"},
+    {"capability": "http.write", "host": "api.example.com"}
+  ]
+}

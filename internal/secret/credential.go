@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // ErrNotFound is returned when a credential is referenced but not in the store,
@@ -72,34 +73,76 @@ func (s storeSource) Value(context.Context) ([]byte, error) {
 	return v, nil
 }
 
+// ownedBinding tags a binding with the owner that installed it (a plugin name,
+// or "" for host defaults), so a plugin's bindings can be dropped on uninstall.
+type ownedBinding struct {
+	owner string
+	Binding
+}
+
 // Injector is the host-owned credential set — the "cookie jar". It maps a
 // destination host to the credential(s) that may ride along to it. The guest
 // never references it: like a browser attaching an HttpOnly cookie, the host
 // consults it by destination host at the boundary and stamps the secret in.
 // Each binding's secret is resolved through a Source; by default a static
 // store-backed one, but SetSource can swap in a dynamic (e.g. OAuth) source.
+// Bindings and sources are mutated at runtime (plugins add/remove them), so the
+// Injector is concurrency-safe.
 type Injector struct {
+	mu       sync.Mutex
+	store    *Store
 	sources  map[string]Source // secret name -> source; seeded from the store
-	bindings []Binding
+	bindings []ownedBinding
 }
 
-// NewInjector returns an injector over store with the given host bindings. Every
-// referenced secret is seeded with a static store-backed Source; use SetSource
-// to override one with a dynamic (refreshing) source.
+// NewInjector returns an injector over store with the given host bindings (owner
+// ""). Every referenced secret is seeded with a static store-backed Source; use
+// SetSource to override one with a dynamic (refreshing) source.
 func NewInjector(store *Store, bindings ...Binding) *Injector {
-	in := &Injector{sources: make(map[string]Source), bindings: bindings}
+	in := &Injector{store: store, sources: make(map[string]Source)}
 	for _, b := range bindings {
-		if _, ok := in.sources[b.Secret]; !ok {
-			in.sources[b.Secret] = storeSource{store: store, name: b.Secret}
-		}
+		in.addBindingLocked("", b)
 	}
 	return in
 }
 
+func (in *Injector) addBindingLocked(owner string, b Binding) {
+	in.bindings = append(in.bindings, ownedBinding{owner: owner, Binding: b})
+	if _, ok := in.sources[b.Secret]; !ok {
+		in.sources[b.Secret] = storeSource{store: in.store, name: b.Secret}
+	}
+}
+
+// AddBinding installs a binding tagged with owner (a plugin name), seeding a
+// static store-backed Source for its secret if none exists yet.
+func (in *Injector) AddBinding(owner string, b Binding) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.addBindingLocked(owner, b)
+}
+
+// RemoveBindingsFor drops every binding installed by owner (plugin uninstall).
+// Sources are left in place (a dropped binding already stops injection; a shared
+// source must not vanish under another owner).
+func (in *Injector) RemoveBindingsFor(owner string) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	kept := in.bindings[:0]
+	for _, b := range in.bindings {
+		if b.owner != owner {
+			kept = append(kept, b)
+		}
+	}
+	in.bindings = kept
+}
+
 // SetSource overrides the Source for a secret name with a dynamic one (e.g. an
-// OAuth token source that refreshes). Host-side setup only — call during
-// composition, before the Injector is served concurrently.
-func (in *Injector) SetSource(name string, src Source) { in.sources[name] = src }
+// OAuth token source that refreshes).
+func (in *Injector) SetSource(name string, src Source) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.sources[name] = src
+}
 
 // InjectMatching stamps every binding matching both the capability and the
 // destination host into req, host-side (the guest never saw the value). Each
@@ -112,21 +155,35 @@ func (in *Injector) InjectMatching(ctx context.Context, req *Request, capability
 	if in == nil {
 		return nil, nil
 	}
-	var injected []string
-	for _, b := range in.bindings {
-		if !capMatches(b.Capability, capability) || !hostMatches(b.Host, host) {
+	// Snapshot the matching (binding, source) pairs under the lock; resolve the
+	// values OUTSIDE it — Source.Value may refresh (I/O) and must not hold the lock.
+	type match struct {
+		b   Binding
+		src Source
+	}
+	var matches []match
+	in.mu.Lock()
+	for _, ob := range in.bindings {
+		if !capMatches(ob.Capability, capability) || !hostMatches(ob.Host, host) {
 			continue
 		}
-		src, ok := in.sources[b.Secret]
+		src, ok := in.sources[ob.Secret]
 		if !ok { // a binding with no registered source is fail-closed
-			return nil, fmt.Errorf("credential %q for %s: %w", b.Secret, host, ErrNotFound)
+			in.mu.Unlock()
+			return nil, fmt.Errorf("credential %q for %s: %w", ob.Secret, host, ErrNotFound)
 		}
-		value, err := src.Value(ctx)
+		matches = append(matches, match{b: ob.Binding, src: src})
+	}
+	in.mu.Unlock()
+
+	var injected []string
+	for _, m := range matches {
+		value, err := m.src.Value(ctx)
 		if err != nil { // any source error aborts: no half-authenticated request
-			return nil, fmt.Errorf("credential %q for %s: %w", b.Secret, host, err)
+			return nil, fmt.Errorf("credential %q for %s: %w", m.b.Secret, host, err)
 		}
-		applyTo(req, b, value)
-		injected = append(injected, b.Secret)
+		applyTo(req, m.b, value)
+		injected = append(injected, m.b.Secret)
 	}
 	return injected, nil
 }

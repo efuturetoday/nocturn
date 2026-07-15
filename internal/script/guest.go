@@ -22,3 +22,8 @@ var interpreterGuest []byte
 func New(reg *brain.Registry) *Runner {
 	return NewWithGuest(interpreterGuest, reg)
 }
+
+// InterpreterGuest returns the embedded QuickJS interpreter wasm — the shared JS
+// runtime the plugin layer uses to run a plugin.js without a per-plugin build.
+// The returned bytes are read-only; do not mutate.
+func InterpreterGuest() []byte { return interpreterGuest }

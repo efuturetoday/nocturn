@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"sync"
 	"sync/atomic"
 )
 
@@ -35,10 +36,11 @@ type ToolEvent struct {
 // Registry is the one place tool calls are dispatched: it maps names to Tools,
 // hands their specs to the Model, and runs a named tool's Invoke. It is shared
 // by the Brain (model-issued calls) and the script interpreter (script-issued
-// calls), so its OnCall observer sees every tool call from both. Invoke is safe
-// for concurrent use: the tools map is set up before any Invoke and not mutated
-// during one, and call ids come from an atomic counter.
+// calls), so its OnCall observer sees every tool call from both. The tools map is
+// mutated at runtime (plugins install/uninstall tools), so it is guarded by mu;
+// call ids come from an atomic counter. OnCall is set once at wiring.
 type Registry struct {
+	mu     sync.RWMutex
 	tools  map[string]Tool
 	nextID atomic.Uint64
 	OnCall func(ToolEvent) // observability sink; nil = off
@@ -67,16 +69,36 @@ func NewRegistry(tools []Tool) *Registry {
 	return &Registry{tools: reg}
 }
 
-// Add registers a tool after construction — used for code.run, which needs the
-// Registry to exist first so the interpreter can dispatch back into it.
-func (r *Registry) Add(t Tool) { r.tools[t.Name] = t }
+// Add registers a tool after construction — code.run, or a plugin's tools.
+func (r *Registry) Add(t Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools[t.Name] = t
+}
+
+// Remove unregisters a tool (plugin uninstall). A missing name is a no-op.
+func (r *Registry) Remove(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.tools, name)
+}
+
+// Has reports whether a tool name is registered (collision check on install).
+func (r *Registry) Has(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.tools[name]
+	return ok
+}
 
 // Specs returns the tool declarations for the Model, sorted by name.
 func (r *Registry) Specs() []ToolSpec {
+	r.mu.RLock()
 	specs := make([]ToolSpec, 0, len(r.tools))
 	for _, t := range r.tools {
 		specs = append(specs, t.ToolSpec)
 	}
+	r.mu.RUnlock()
 	sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
 	return specs
 }
@@ -89,7 +111,9 @@ func (r *Registry) Invoke(ctx context.Context, name, args string) (out string, e
 	parent := callIDFrom(ctx)
 	ctx = withCallID(ctx, id) // so a nested Invoke records this call as its parent
 	r.emit(ToolEvent{ID: id, Parent: parent, Tool: name, Args: args, Phase: ToolStart})
+	r.mu.RLock()
 	tool, ok := r.tools[name]
+	r.mu.RUnlock() // release before Invoke: it may run long and re-enter the registry
 	if !ok {
 		err = errors.New("unknown tool " + name)
 	} else {
