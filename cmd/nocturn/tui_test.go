@@ -76,7 +76,7 @@ func TestToolHeadline_Compact(t *testing.T) {
 // The approval prompt reserves exactly the rows it renders (guards the layout
 // off-by-one that used to clip the transcript during an approval).
 func TestApprovalHeight_MatchesRender(t *testing.T) {
-	m := chatModel{width: 40, approval: &approval{
+	m := chatModel{width: 40, approval: &approvalPrompt{
 		intent:  "POST api.example.com",
 		options: []hitl.Option{{Label: "Allow once"}, {Label: "Allow session"}, {Label: "Deny"}},
 	}}

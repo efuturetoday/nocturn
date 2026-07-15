@@ -186,10 +186,13 @@ Festgehalten, was fehlt und warum:
   (InjectMatching fail-closed). Gleiche URL = gleicher Key = Token überlebt Neustart. Exfil-Regressionstest
   `TestConn_HostRebind_NoCrossHostExfil`. Owner-Scoping (`mcp:<name>`) bleibt namensbasiert.
 - **Offen (Follow-ups):**
-  1. **Purge-on-removal:** Wird ein Server aus `mcp.json` entfernt, bleibt `mcp:<name>@<host>/oauth` als
-     **Waise** im Vault (harmlos — keine Binding referenziert sie). Aufräumen braucht eine
-     **Vault-Key-Enumeration** (heute `store.snapshot()` unexported) + Config-Diff → an den „Manage-Flow"
-     koppeln (wie Plugin-Uninstall, #6). Optional OAuth-Revoke beim Entfernen.
+  1. **Purge-on-removal (EIN Reconcile über 3 Dateien):** Ein entfernter Server/Plugin hinterlässt Waisen in
+     **`secrets.age`** (Token), **`grants.json`** (Always-Grants) **und** **`approved.json`** (Review-Memo) —
+     alle **harmlos** (kein Binding/Consultant referenziert sie; Loader lesen nur existierende Einträge).
+     Der richtige Fix ist **ein** Reconcile-Pass am „Manage-Flow" (Workspace = Source of Truth, ADR-10), der
+     abgeleiteten State für nicht mehr vorhandene Plugins/Server gebündelt prunt — bewusst „melden + explizit
+     prunen", nicht still-aggressiv (temporär deaktiviert soll State behalten). Braucht u. a. eine
+     **Vault-Key-Enumeration** (heute `store.snapshot()` unexported). Optional OAuth-Revoke beim Entfernen. (#6)
   2. **Plugin-Pendant — erledigt:** `plugin.SecretName(owner, cred, host)` → **`plugin:<name>/<cred>@<host>`**
      (install.go), OAuth-Token host-gekeyt (plugins.go `wirePluginOAuth`). Manifest-Host-Wechsel bei gleichem
      Plugin-/Credential-Namen → anderer Key → Re-Auth, kein stiller Cross-Host-Reuse. Zusätzlich erzwingt
@@ -198,3 +201,34 @@ Festgehalten, was fehlt und warum:
      Ceiling + Install-Review-bei-jedem-Start; jetzt zusätzlich strukturell host-gebunden.)
   3. **Granularität:** Bindung an Hostname (kein Port), konsistent mit dem `hostMatches`-Scope; Host:Port
      später optional, falls je nötig.
+- **Approved-Record (erledigt):** `internal/approval` (`<ws>/approved.json`, control-plane, 0600, fail-safe).
+  Unveränderte Plugins/MCP-Server installieren/verbinden **ohne Re-Prompt**, geänderte re-promoten **mit Diff**
+  (Hash für Gleichheit, Deklaration für den Diff). **Nur Review-Memo, keine Autorität** (Broker/HITL/Ceiling
+  unverändert; ≠ `grants.json`). Verdrahtet in `loadPlugins`/`loadMCP`; Diff via `printApprovalDiff`.
+
+### 9. Runtime-Reload von Plugins/MCP + laufende Agenten (REST/WebGUI-Zukunft)
+
+Heute: **Boot-only, EIN Workspace** (`workspaces/default` hart in app.go). `loadPlugins`/`loadMCP` verdrahten
+**einmal** beim Start (stdin, vor der TUI); kein Laufzeit-Install/-Reload.
+
+- **Primitive sind bereit:** `plugin.Host.Install/Uninstall`, `tool.Registry.Add/Remove/Has` (RWMutex),
+  `secret.Injector.AddBinding/RemoveBindingsFor` (Mutex), Epoch/Grants — je **einzeln** concurrency-safe.
+  Laufzeit-Add/Remove ist also mechanisch möglich.
+- **Was für REST/WebGUI fehlt:**
+  1. **Channel-agnostische Install/Uninstall/Reload-Operation** — die Orchestrierung (Dir walken, Review, OAuth)
+     liegt heute in cmd-Startup; muss hinter einen **Port** (Prompter/Approver, #7), damit die WebGUI dieselbe
+     Logik fährt statt sie zu duplizieren.
+  2. **Reload-Atomizität:** ein Reload ist mehrstufig (Tools raus → Bindings raus → neue Tools/Bindings → OAuth).
+     **Nicht atomar** → ein gleichzeitiger Tool-Call kann einen Halbzustand sehen → **transient fail-closed**
+     (sauberer Fehler, **keine** Korruption). Fix: **per-Workspace-Reload-Lock**, der Tool-Invocation kurz
+     quiesct → Reload atomar ggü. Calls.
+  3. **Bricken laufende Agenten? Nein — graceful degrade:** ein bereits aufgelöster In-Flight-Call läuft zu Ende
+     (Plugins **stateless**, frische Instanz pro Call); ein Call auf ein gerade entferntes Tool → „tool not
+     found" → das Modell bekommt einen Fehler und macht weiter; neue Tools erscheinen **nächste Runde** (der
+     brain-Loop liest `Specs` je Runde). **Kein Shared-State-Schaden.**
+  4. **Modell-Konsistenz je Runde:** das Tool-Set kann sich zwischen Runden ändern; innerhalb einer Runde kann
+     das Modell ein inzwischen entferntes Tool rufen (→ Fehler). Akzeptabel; optional Tool-Set je Runde snapshotten.
+  5. **Pro-Workspace-Isolation:** Multi-Workspace = eigener Stack je Workspace (Registry/Injector/Guard/Grants);
+     Reload in A berührt B nie. Setzt die **Workspace-Schicht** voraus (eigene id + Persistenz + Ceiling, CLAUDE §11).
+- **Synergie:** Approved-Record + Host-Binding (#8) sind bereits die Enabler — ein geänderter Plugin re-promptet
+  mit Diff, ein repointeter Credential erzwingt Re-Auth: genau die Sicherheits-Checks, die ein Live-Reload braucht.

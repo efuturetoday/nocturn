@@ -18,6 +18,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/efuturetoday/nocturn/internal/agent"
+	"github.com/efuturetoday/nocturn/internal/approval"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/filecap"
@@ -141,10 +142,15 @@ func tuiCmd(_ []string) error {
 		return err
 	}
 
+	// The approved-record (control-plane, model-unreachable) lets an UNCHANGED
+	// plugin/MCP server install/connect without re-prompting every boot; a changed
+	// one re-surfaces with a diff. It gates only the review, never effect authority.
+	approvals := approval.Load(filepath.Join(wsDir, "approved.json"))
+
 	// Install sandboxed plugins from <ws>/plugins/ (reviews each ceiling on stdin,
 	// before the TUI). Their tools join the shared registry; effects stay bounded
 	// by each plugin's ceiling + the broker + HITL.
-	if err := loadPlugins(ctx, reg, inj, vault, wsDir); err != nil {
+	if err := loadPlugins(ctx, reg, inj, vault, approvals, wsDir); err != nil {
 		return err
 	}
 
@@ -153,7 +159,7 @@ func tuiCmd(_ []string) error {
 	// tools join the shared registry namespaced <server>.<tool>; every call is
 	// a gated http.write to the server's own host (ceiling-bounded, leak-
 	// scanned, credential-injected under owner mcp:<server>).
-	if err := loadMCP(ctx, reg, netCap.Guard, inj, scanner, vault, wsDir); err != nil {
+	if err := loadMCP(ctx, reg, netCap.Guard, inj, scanner, vault, approvals, wsDir); err != nil {
 		return err
 	}
 

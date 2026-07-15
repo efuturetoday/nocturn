@@ -2,12 +2,17 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/efuturetoday/nocturn/internal/approval"
 	"github.com/efuturetoday/nocturn/internal/oauth"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -21,9 +26,10 @@ import (
 // URL both use stdin/stdout.
 //
 // A plugin declaring a scary ceiling is shown verbatim and installed only on an
-// explicit "y". (Follow-up: a manifest-hash "already approved" record so an
-// unchanged plugin needs no re-prompt on every boot.)
-func loadPlugins(ctx context.Context, reg *tool.Registry, inj *secret.Injector, vault *secret.Vault, wsDir string) error {
+// explicit "y" — but an UNCHANGED plugin (same manifest + artifact as last
+// approved) installs silently via the approved-record; a changed one re-prompts
+// with a diff, so a manifest change is the signal instead of noise.
+func loadPlugins(ctx context.Context, reg *tool.Registry, inj *secret.Injector, vault *secret.Vault, approvals *approval.Store, wsDir string) error {
 	pluginsDir := filepath.Join(wsDir, "plugins")
 	entries, err := os.ReadDir(pluginsDir)
 	if err != nil {
@@ -39,7 +45,11 @@ func loadPlugins(ctx context.Context, reg *tool.Registry, inj *secret.Injector, 
 		if err != nil {
 			return fmt.Errorf("plugin %s: %w", e.Name(), err)
 		}
-		if err := host.Install(l, reviewPlugin); err != nil {
+		content, err := pluginApprovalContent(l)
+		if err != nil {
+			return fmt.Errorf("plugin %s: %w", l.Manifest.Name, err)
+		}
+		if err := host.Install(l, approvePlugin(approvals, content)); err != nil {
 			return fmt.Errorf("plugin %s: %w", l.Manifest.Name, err)
 		}
 		// The plugin declares its own OAuth providers; the host runs the flow and
@@ -50,6 +60,70 @@ func loadPlugins(ctx context.Context, reg *tool.Registry, inj *secret.Injector, 
 		}
 	}
 	return nil
+}
+
+// pluginApprovalContent is the canonical declaration whose change triggers a
+// re-review: the manifest (the authority the operator judges) plus the artifact's
+// hash (integrity — the binary itself cannot be meaningfully diffed).
+func pluginApprovalContent(l plugin.Loaded) ([]byte, error) {
+	sum := sha256.Sum256(l.Artifact)
+	return json.Marshal(struct {
+		Manifest plugin.Manifest `json:"manifest"`
+		Artifact string          `json:"artifact_sha256"`
+	}{l.Manifest, hex.EncodeToString(sum[:])})
+}
+
+// approvePlugin is the install approve-callback gated by the approved-record: an
+// unchanged plugin installs silently; a new or changed one is reviewed (with a
+// diff of what changed) and, on "y", recorded for next time.
+func approvePlugin(approvals *approval.Store, content []byte) func(plugin.Manifest) (bool, error) {
+	return func(m plugin.Manifest) (bool, error) {
+		ok, prior := approvals.Status("plugin", m.Name, content)
+		if ok {
+			return true, nil // unchanged since last approved — no prompt
+		}
+		if prior != nil {
+			fmt.Printf("\n⚠  plugin %q changed since you last approved it:\n", m.Name)
+			printApprovalDiff(prior, content)
+		}
+		yes, err := reviewPlugin(m)
+		if err != nil || !yes {
+			return false, err
+		}
+		return true, approvals.Approve("plugin", m.Name, content)
+	}
+}
+
+// printApprovalDiff shows a crude line diff of two canonical JSON declarations —
+// enough to surface WHAT changed (a repointed host, a widened ceiling, a bumped
+// version) without a full diff library.
+func printApprovalDiff(prior, current []byte) {
+	oldL, newL := indentLines(prior), indentLines(current)
+	inNew, inOld := map[string]bool{}, map[string]bool{}
+	for _, l := range newL {
+		inNew[l] = true
+	}
+	for _, l := range oldL {
+		inOld[l] = true
+	}
+	for _, l := range oldL {
+		if !inNew[l] {
+			fmt.Printf("    - %s\n", strings.TrimSpace(l))
+		}
+	}
+	for _, l := range newL {
+		if !inOld[l] {
+			fmt.Printf("    + %s\n", strings.TrimSpace(l))
+		}
+	}
+}
+
+func indentLines(raw []byte) []string {
+	var buf bytes.Buffer
+	if json.Indent(&buf, raw, "", "  ") != nil {
+		return strings.Split(string(raw), "\n")
+	}
+	return strings.Split(buf.String(), "\n")
 }
 
 // wirePluginOAuth runs each OAuth provider a plugin declares: build a config

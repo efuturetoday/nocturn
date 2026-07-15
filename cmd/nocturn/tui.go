@@ -69,7 +69,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{{k.send, k.newline}, {k.newSession, k.cancel}, {k.scroll, k.quit}}
 }
 
-type approval struct {
+type approvalPrompt struct {
 	intent  string
 	options []hitl.Option
 	cursor  int
@@ -183,7 +183,7 @@ type chatModel struct {
 	pausedAt  time.Time // when the current approval wait began; zero = not waiting
 	running   bool
 	cancel    context.CancelFunc
-	approval  *approval
+	approval  *approvalPrompt
 	notice    string // transient one-line status (e.g. "new session"); cleared on next input
 	width     int
 	height    int
@@ -745,7 +745,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case approvalMsg:
-		m.approval = &approval{intent: msg.intent, options: msg.options, reply: msg.reply}
+		m.approval = &approvalPrompt{intent: msg.intent, options: msg.options, reply: msg.reply}
 		m.pausedAt = time.Now() // mark the human wait so tool durations can discount it
 		m.layout()
 		m.syncViewport()

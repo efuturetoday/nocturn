@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/efuturetoday/nocturn/internal/approval"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/mcpcap"
@@ -25,7 +27,7 @@ import (
 // a declined server is skipped, not fatal. Run before bubbletea grabs the
 // terminal: the review prompt AND any OAuth consent URL use stdin/stdout.
 // It is a no-op when no config exists.
-func loadMCP(ctx context.Context, reg *tool.Registry, guard *gateway.Guard, inj *secret.Injector, scanner *secret.Scanner, vault *secret.Vault, wsDir string) error {
+func loadMCP(ctx context.Context, reg *tool.Registry, guard *gateway.Guard, inj *secret.Injector, scanner *secret.Scanner, vault *secret.Vault, approvals *approval.Store, wsDir string) error {
 	servers, err := mcpcap.LoadConfig(filepath.Join(wsDir, "mcp.json"))
 	if err != nil || len(servers) == 0 {
 		return err
@@ -35,9 +37,24 @@ func loadMCP(ctx context.Context, reg *tool.Registry, guard *gateway.Guard, inj 
 	// the body read, so a stalling server cannot hang a tool call forever.
 	httpClient := &http.Client{Timeout: 60 * time.Second}
 	for _, srv := range servers {
-		if !reviewMCP(srv) {
-			fmt.Printf("MCP server %q skipped.\n", srv.Name)
-			continue
+		// An unchanged server (same name/url/auth as last approved) connects
+		// silently; a new or changed one is reviewed (with a diff) and recorded.
+		content, err := json.Marshal(srv)
+		if err != nil {
+			return err
+		}
+		if ok, prior := approvals.Status("mcp", srv.Name, content); !ok {
+			if prior != nil {
+				fmt.Printf("\n⚠  MCP server %q changed since you last approved it:\n", srv.Name)
+				printApprovalDiff(prior, content)
+			}
+			if !reviewMCP(srv) {
+				fmt.Printf("MCP server %q skipped.\n", srv.Name)
+				continue
+			}
+			if err := approvals.Approve("mcp", srv.Name, content); err != nil {
+				return err
+			}
 		}
 		conn, err := mcpcap.New(srv, guard, inj, scanner, httpClient)
 		if err != nil {
