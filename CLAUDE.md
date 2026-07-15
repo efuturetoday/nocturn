@@ -177,6 +177,67 @@ bringt eigenen Agent-Loop der unsere Sicherheit umgeht).
   validiert (unmarshal + Retry-bei-Fehler). Extism/Javy-Skill-Schicht **geparkt**
   (beide gespiket) — die erste echte Capability (`net.fetch`) ist host-native und
   braucht sie nicht.
+- **ADR-6: Produkt-Identität = sicherer persönlicher Assistent, NICHT Coding-Agent.**
+  Der verteidigbare Moat ist die Kombination *verpflichtendes Out-of-band-HITL + WASM-
+  Isolation + Capability-Broker + single binary* — den hat niemand. Jeder Schritt Richtung
+  „Voll-Coding-Agent" (Ambient-`exec`, lokale MCP-Server, Node/Python-Runtime sandboxen)
+  **erodiert genau diesen Moat** und macht Nocturn zu einem schlechteren Claude Code.
+  Darum: **Assistent-first als Default.** Coding-Navigation (grep/read/edit/git-Porzellan)
+  wird trotzdem abgedeckt — ohne `exec`. „Alles was *Coding*-Agents nutzen" ist die falsche
+  Messlatte. Nicht irreversibel: die `exec`-Escape-Hatch (s. ADR-7) lässt sich später
+  bruchfrei ergänzen, ohne den Default zu kippen.
+- **ADR-7: Tool-Taxonomie = 3-Eimer-Kompass** (klassifiziere nach *was das Tool tut*, nicht
+  „es ist ein CLI"): **(A) lokales Lesen/Rechnen** (grep/find/ls/jq/Text) → **`code.run`**
+  (Modell schreibt JS im QuickJS-Sandbox, liest via `file.read`, **null neue Caps**) oder eine
+  `file.search`-Cap. **(B) API-Client-„CLIs"** (gh, aws, gcloud, stripe, linear, curl) →
+  **Plugin über `http.read/write` + host-injizierter Token** — *sicherer* als das echte CLI
+  (Token host-gehalten, Ceiling-bounded, HITL auf Writes); der Sweet-Spot des Modells.
+  **(C) echtes Arbitrary-Exec** (npm test, go build, make) → **einzige `exec`-Escape-Hatch**
+  (OS-Sandbox + Allowlist + HITL, ADR-2 „letzte Option"), **nie Default**. A+B decken die
+  überwältigende Mehrheit ab, ohne `exec`.
+- **ADR-8: Kernel-vs-Plugin-Grenze — „lässt es sich durch die Primitive ausdrücken? → Plugin."**
+  Der **Host bleibt ein minimaler Kernel**: Broker + HITL + Interpreter (`code.run`) + die
+  **Primitive, die einen echten Syscall brauchen** (`http`, `file`, `dns` — ein Gast kann
+  selbst keinen Socket/kein FS öffnen). **Alles, was sich durch diese Primitive ausdrücken
+  lässt → Plugin** (git = `file` auf `/work` + `http` für push/pull; gmail/github = `http`).
+  Trusted-First-Party-Code in ein Plugin zu geben bringt *keine* Isolation, aber hält die
+  **TCB klein** (Säule 4) + einheitliches Erweiterungsmodell + signier-/versionierbar — das
+  wiegt schwerer als der Sandbox-Overhead. **git-Weg konkret: go-git nach `GOOS=wasip1
+  GOARCH=wasm` als `plugin.wasm`** (Go kann das nativ; go-git-Dep lebt im Plugin-Build, nie
+  im Host). **NICHT** `wasm-git`/libgit2 (Emscripten↔wazero-Bruch) und **kein** CGo. Kosten
+  bewusst: WASI-FS langsamer, Plugin schreibt den http-Transport selbst, lokale git-FS-Ops
+  laufen über den `/work`-Mount (confined, nicht per-op HITL) — nur push/commit-Gate gebrokert.
+- **ADR-9: MCP-Linie — remote (HTTP) JA, lokal (stdio) NEIN.** *Lokales* stdio-MCP = fremder
+  **Prozess auf deiner Maschine** mit deinen Rechten → die Supply-Chain-Bedrohung, die wir
+  meiden. *Remote* MCP = Dienst auf **fremder Infra**; lokal läuft **kein Code** → architektonisch
+  identisch zu „HTTP-API aufrufen" und passt exakt ins Modell (MCP-Client als JSON-RPC-über-HTTP:
+  `tools/list` → `tool.Spec`, `tools/call` → gebrokerter `http.write` an den MCP-Host, OAuth
+  host-injiziert, HITL auf Writes, Ergebnisse leak-gescannt/untrusted). **Kein Sandbox nötig
+  (kein fremder Code).** Öffnet das wachsende **Hosted-MCP-Ökosystem** (GitHub, Notion, Linear,
+  Sentry, Atlassian …) *ohne* Modell-Bruch — und dorthin bewegt sich MCP ohnehin. Damit ist die
+  „MCP-Nachteil"-Sorge weitgehend erledigt: wir nehmen den **sicheren** Teil (remote), lassen den
+  unsicheren (lokale Prozesse) weg. Erinnerung (Anhang B): das *größte* Assistant-Ökosystem sind
+  ohnehin **Markdown-Skills** (5.400+), nicht MCP — die adoptiert Nocturn un-sandboxed-safe, weil
+  ein Skill nur über gegatete Tools wirkt.
+- **ADR-10: Workspace = portable/versionierbare Einheit; das LLM bewohnt nur `mnt/`.** Kein DB —
+  der **Workspace-Ordner IST der Zustand** (Daten + Skills + stehende Rechte), kopier-/gitt-bar als
+  Ganzes. Struktur:
+  ```
+  workspaces/default/
+    mnt/          ← das EINZIGE, was das LLM sieht: filecap.Root + sandbox /work (Data-Plane)
+    .skills/      ← von Go/Host gelesen, NICHT gemountet (Control-Plane)
+    .agents/      ← Subagents (TBD)
+    grants.json   ← host-managed, außerhalb des Mounts
+  ```
+  **Control-Plane/Data-Plane-Split ist strukturell (Mount-Scope), nicht per Deny-Regel:** das Modell
+  kann `.skills`/`.agents`/`grants` **weder sehen noch schreiben**, weil sie schlicht nicht im Mount
+  liegen — Confinement by construction. Damit ist der Self-Modification-Threat gratis gelöst. **Severity-
+  Klärung:** ein selbst-geschriebener Skill verleiht *keine* Autorität (Broker liest keine Skills,
+  `allowed-tools` ignoriert) → niedrig; der **load-bearing** Schutz gilt `grants.json` (autoritäts-
+  verleihend — dürfte das Modell es schreiben, könnte eine Injection sich stehende Grants setzen →
+  HITL stumm → Broker umgangen). `grants.json` wandert damit von `~/.config` in den Workspace
+  (per-Workspace-Rechte, portabel) — genau der „persistente Workspace = Drop-in", den `capability.Grants`
+  schon vorsah.
 
 ---
 
