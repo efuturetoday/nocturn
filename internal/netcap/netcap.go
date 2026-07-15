@@ -93,7 +93,7 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 		// Host-owned, capability- and host-scoped credential injection: only a
 		// credential whose binding matches this capability AND destination host
 		// rides along (nil Injector = none).
-		if _, err := n.Credentials.InjectMatching(&req, capName, host); err != nil {
+		if _, err := n.Credentials.InjectMatching(ctx, &req, capName, host); err != nil {
 			return nil, err
 		}
 

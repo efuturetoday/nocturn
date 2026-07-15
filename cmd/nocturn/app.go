@@ -65,6 +65,14 @@ func tuiCmd(_ []string) error {
 
 	epochs := capability.NewEpochRegistry()
 	store := secret.NewStore()
+	// Host-owned credential injection: a Bearer for gmail.googleapis.com, resolved
+	// through a source registered by wireGoogleCredential below (a refreshing OAuth
+	// token if configured). The guest never sees the token — it is stamped in only
+	// at the gateway boundary, for this destination.
+	inj := secret.NewInjector(store, secret.Binding{
+		Secret: googleCredentialName, Capability: "http.read", Host: "gmail.googleapis.com",
+		Header: "Authorization", Prefix: "Bearer ",
+	})
 	netCap := &netcap.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
@@ -76,8 +84,9 @@ func tuiCmd(_ []string) error {
 			Epochs:    epochs, // shared with the session, so "Allow this session" grants are revocable
 			TTL:       2 * time.Minute,
 		},
-		Scanner: secret.NewScanner(store),
-		HTTP:    &http.Client{Timeout: 15 * time.Second},
+		Credentials: inj,
+		Scanner:     secret.NewScanner(store),
+		HTTP:        &http.Client{Timeout: 15 * time.Second},
 	}
 	// One shared Registry dispatches every tool call — the model's AND the
 	// script's — so its OnCall observer sees them all in one place, nested by
@@ -95,6 +104,13 @@ func tuiCmd(_ []string) error {
 	runner := script.New(reg)
 	runner.Timeout = 60 * time.Second
 	reg.Add(runner.Tool())
+
+	// Host-managed OAuth (ADR-5): if Google is configured, run the one-time consent
+	// ceremony (prints a URL) and register a refreshing Bearer source for Gmail —
+	// before bubbletea grabs the terminal. No-op when unconfigured.
+	if err := wireGoogleCredential(ctx, inj); err != nil {
+		return err
+	}
 
 	var p *tea.Program
 	reg.OnCall = func(ev brain.ToolEvent) { p.Send(toolEventMsg(ev)) }

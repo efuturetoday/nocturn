@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -48,27 +49,66 @@ type Request struct {
 	Body    []byte
 }
 
+// Source yields a credential's current value at injection time. A plain vault
+// secret and a refreshing OAuth token are both Sources; the Injector never
+// distinguishes them. Value may perform I/O (a token refresh) and must be
+// concurrency-safe; ctx bounds any such I/O.
+type Source interface {
+	Value(ctx context.Context) ([]byte, error)
+}
+
+// storeSource is the default Source: a static read from the byte store. It
+// preserves the pre-OAuth behavior (and ErrNotFound) for plain vault secrets.
+type storeSource struct {
+	store *Store
+	name  string
+}
+
+func (s storeSource) Value(context.Context) ([]byte, error) {
+	v, ok := s.store.value(s.name)
+	if !ok {
+		return nil, fmt.Errorf("secret %q: %w", s.name, ErrNotFound)
+	}
+	return v, nil
+}
+
 // Injector is the host-owned credential set — the "cookie jar". It maps a
 // destination host to the credential(s) that may ride along to it. The guest
 // never references it: like a browser attaching an HttpOnly cookie, the host
 // consults it by destination host at the boundary and stamps the secret in.
+// Each binding's secret is resolved through a Source; by default a static
+// store-backed one, but SetSource can swap in a dynamic (e.g. OAuth) source.
 type Injector struct {
-	store    *Store
+	sources  map[string]Source // secret name -> source; seeded from the store
 	bindings []Binding
 }
 
-// NewInjector returns an injector over store with the given host bindings.
+// NewInjector returns an injector over store with the given host bindings. Every
+// referenced secret is seeded with a static store-backed Source; use SetSource
+// to override one with a dynamic (refreshing) source.
 func NewInjector(store *Store, bindings ...Binding) *Injector {
-	return &Injector{store: store, bindings: bindings}
+	in := &Injector{sources: make(map[string]Source), bindings: bindings}
+	for _, b := range bindings {
+		if _, ok := in.sources[b.Secret]; !ok {
+			in.sources[b.Secret] = storeSource{store: store, name: b.Secret}
+		}
+	}
+	return in
 }
 
+// SetSource overrides the Source for a secret name with a dynamic one (e.g. an
+// OAuth token source that refreshes). Host-side setup only — call during
+// composition, before the Injector is served concurrently.
+func (in *Injector) SetSource(name string, src Source) { in.sources[name] = src }
+
 // InjectMatching stamps every binding matching both the capability and the
-// destination host into req, host-side (the guest never saw the value). A
-// binding that matches but whose secret is absent from the store is an error
-// (fail closed: no half-authenticated request). It returns the names of the
-// injected secrets, so a later leak scan can redact them if they echo back. A
-// nil Injector injects nothing.
-func (in *Injector) InjectMatching(req *Request, capability, host string) ([]string, error) {
+// destination host into req, host-side (the guest never saw the value). Each
+// value comes from the binding's Source (a static store read, or a refreshing
+// OAuth token). A missing source or any Source error is fail-closed: no
+// half-authenticated request leaves. It returns the names of the injected
+// secrets, so a later leak scan can redact them if they echo back. A nil
+// Injector injects nothing.
+func (in *Injector) InjectMatching(ctx context.Context, req *Request, capability, host string) ([]string, error) {
 	if in == nil {
 		return nil, nil
 	}
@@ -77,9 +117,13 @@ func (in *Injector) InjectMatching(req *Request, capability, host string) ([]str
 		if !capMatches(b.Capability, capability) || !hostMatches(b.Host, host) {
 			continue
 		}
-		value, ok := in.store.value(b.Secret)
-		if !ok {
-			return nil, fmt.Errorf("credential %q for %s: secret %q: %w", b.Secret, host, b.Secret, ErrNotFound)
+		src, ok := in.sources[b.Secret]
+		if !ok { // a binding with no registered source is fail-closed
+			return nil, fmt.Errorf("credential %q for %s: %w", b.Secret, host, ErrNotFound)
+		}
+		value, err := src.Value(ctx)
+		if err != nil { // any source error aborts: no half-authenticated request
+			return nil, fmt.Errorf("credential %q for %s: %w", b.Secret, host, err)
 		}
 		applyTo(req, b, value)
 		injected = append(injected, b.Secret)

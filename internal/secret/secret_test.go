@@ -1,6 +1,7 @@
 package secret_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -45,7 +46,7 @@ func TestInjector_StampsMatchingAtBorder(t *testing.T) {
 
 	// The guest built this request by URL only — no credential in sight.
 	req := &secret.Request{Method: "GET", URL: "https://graph.microsoft.com/v1.0/me"}
-	names, err := in.InjectMatching(req, "http.read", "graph.microsoft.com")
+	names, err := in.InjectMatching(context.Background(), req, "http.read", "graph.microsoft.com")
 	if err != nil {
 		t.Fatalf("inject failed: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestInjector_NonMatchingHost_NoInjection(t *testing.T) {
 	})
 
 	req := &secret.Request{URL: "https://evil.example.com/"}
-	names, err := in.InjectMatching(req, "http.read", "evil.example.com")
+	names, err := in.InjectMatching(context.Background(), req, "http.read", "evil.example.com")
 	if err != nil {
 		t.Fatalf("inject: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestInjector_WrongCapability_NoInjection(t *testing.T) {
 	})
 
 	req := &secret.Request{}
-	names, err := in.InjectMatching(req, "http.write", "graph.microsoft.com")
+	names, err := in.InjectMatching(context.Background(), req, "http.write", "graph.microsoft.com")
 	if err != nil {
 		t.Fatalf("inject: %v", err)
 	}
@@ -108,11 +109,11 @@ func TestInjector_WildcardSuffix(t *testing.T) {
 	in := secret.NewInjector(s, secret.Binding{Secret: "k", Capability: "*", Host: "*.example.com", Header: "X-Token"})
 
 	sub := &secret.Request{}
-	if _, err := in.InjectMatching(sub, "http.read", "a.example.com"); err != nil || sub.Headers["X-Token"] != "v" {
+	if _, err := in.InjectMatching(context.Background(), sub, "http.read", "a.example.com"); err != nil || sub.Headers["X-Token"] != "v" {
 		t.Fatalf("sub-domain should match: err=%v header=%q", err, sub.Headers["X-Token"])
 	}
 	bare := &secret.Request{}
-	if _, err := in.InjectMatching(bare, "http.read", "example.com"); err != nil {
+	if _, err := in.InjectMatching(context.Background(), bare, "http.read", "example.com"); err != nil {
 		t.Fatalf("bare: %v", err)
 	}
 	if _, present := bare.Headers["X-Token"]; present {
@@ -127,10 +128,62 @@ func TestInjector_MissingSecret_FailsClosed(t *testing.T) {
 	in := secret.NewInjector(s, secret.Binding{Secret: "absent", Capability: "*", Host: "api.example.com", Header: "Authorization"})
 
 	req := &secret.Request{URL: "https://api.example.com"}
-	if _, err := in.InjectMatching(req, "http.read", "api.example.com"); !errors.Is(err, secret.ErrNotFound) {
+	if _, err := in.InjectMatching(context.Background(), req, "http.read", "api.example.com"); !errors.Is(err, secret.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 	if _, present := req.Headers["Authorization"]; present {
 		t.Fatal("no header must be set when the bound secret is missing")
+	}
+}
+
+// A dynamic Source is consulted at injection time (not read once): two calls
+// through a rotating source stamp different values, proving injection is no
+// longer a static store read. This is the seam OAuth refresh rides on.
+type rotatingSource struct {
+	vals []string
+	i    int
+}
+
+func (s *rotatingSource) Value(context.Context) ([]byte, error) {
+	v := s.vals[s.i%len(s.vals)]
+	s.i++
+	return []byte(v), nil
+}
+
+func TestInjector_DynamicSourceConsulted(t *testing.T) {
+	b := secret.Binding{Secret: "tok", Capability: "*", Host: "api.example.com", Header: "X-Token"}
+	in := secret.NewInjector(secret.NewStore(), b)
+	in.SetSource("tok", &rotatingSource{vals: []string{"one", "two"}})
+
+	req1 := &secret.Request{URL: "https://api.example.com"}
+	if _, err := in.InjectMatching(context.Background(), req1, "http.read", "api.example.com"); err != nil {
+		t.Fatalf("inject 1: %v", err)
+	}
+	req2 := &secret.Request{URL: "https://api.example.com"}
+	if _, err := in.InjectMatching(context.Background(), req2, "http.read", "api.example.com"); err != nil {
+		t.Fatalf("inject 2: %v", err)
+	}
+	if req1.Headers["X-Token"] != "one" || req2.Headers["X-Token"] != "two" {
+		t.Fatalf("dynamic source not consulted per call: %q then %q", req1.Headers["X-Token"], req2.Headers["X-Token"])
+	}
+}
+
+// A Source that errors is fail-closed: the request gets no header and the error
+// propagates (a refresh failure must never send a half-authenticated request).
+type errSource struct{ err error }
+
+func (s errSource) Value(context.Context) ([]byte, error) { return nil, s.err }
+
+func TestInjector_SourceError_FailsClosed(t *testing.T) {
+	b := secret.Binding{Secret: "tok", Capability: "*", Host: "api.example.com", Header: "Authorization"}
+	in := secret.NewInjector(secret.NewStore(), b)
+	in.SetSource("tok", errSource{err: errors.New("refresh boom")})
+
+	req := &secret.Request{URL: "https://api.example.com"}
+	if _, err := in.InjectMatching(context.Background(), req, "http.read", "api.example.com"); err == nil {
+		t.Fatal("expected the source error to propagate")
+	}
+	if _, present := req.Headers["Authorization"]; present {
+		t.Fatal("no header must be set when the source errors")
 	}
 }
