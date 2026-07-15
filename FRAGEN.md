@@ -50,3 +50,40 @@ Erledigte wandern nach **Geklärt** (mit kurzer Antwort) oder raus.
     (`call net.fetch({...})`) *zusätzlich* zum `⚙`-Indicator → doppelt/verwirrend.
     Unterdrücken? (Systemprompt „nicht ankündigen" / eigenen assistant-„call …"-Text
     nicht in die History der TUI, nur den ⚙-Indicator.)
+
+### 4. Skill-/Workspace-Scripts per Pfad ausführen (`code.run{path}`), statt sie durchs Modell zu schleifen
+
+- **Hintergrund / Problem:** Ein Skill kann ein Helfer-Script bündeln (`.skills/<name>/scripts/x.js`).
+  Um es heute laufen zu lassen, muss das Modell:
+  1. `skill.read` → die **Script-Source landet im Modell-Kontext** (Tokens),
+  2. daraus `code.run{source}` bauen → die **Source geht nochmal durchs Modell** (Tokens),
+  3. dabei kann das Modell den Code **verhunzen** (Escaping, Auslassungen).
+  Also: doppelter Token-Verbrauch + Korrektheitsrisiko, nur um ein Script auszuführen, das der Host
+  ohnehin auf der Platte hat.
+- **Idee:** `code.run` nimmt **`path` statt (oder XOR) `source`** (+ optional `input`). Der Host lädt
+  die Source **von der Platte** und führt sie aus → **die Source erreicht das Modell nie. Null Tokens,
+  keine Modell-Komposition.**
+- **Boundary (offene Entscheidung):** zwei read-only Wurzeln, beide confined + QuickJS-sandboxed +
+  Effekte weiter gegated:
+  1. **`mnt/`** — Workspace-Scripts (der Data-Plane, den das Modell ohnehin sieht),
+  2. **`.skills/<GELADENER-skill>/`** — Skill-gebündelte Scripts (host-managed, install-reviewed).
+  *Nur `mnt` würde Skill-Scripts nichts bringen* (die liegen außerhalb mnt in `.skills`) → für das
+  eigentliche Motiv (Skill-Scripts) müssen die Dirs *geladener* Skills mit rein. Frage: beide Wurzeln
+  oder strikt nur mnt?
+- **Wichtige Klarstellung (kam beim Ausdiskutieren):** Das **Script muss sich NICHT „ändern"** — der
+  Mechanismus ist unabhängig davon. Der Umweg entstand nur, weil das erste Beispiel (`analyze.js`) als
+  **Library** geschrieben war (definiert `analyze(text)`, tut von selbst nichts) → dann braucht es
+  jemanden, der `print(analyze(...))` dranhängt. Ein **lauffähiges Programm** (macht beim Ausführen sein
+  Ding, liest seinen Input, `print`t das Ergebnis — wie jedes CLI-Script `argv`/stdin liest) läuft mit
+  `code.run{path}` direkt. Also: keine aufgezwungene Konvention; „Library vs. Programm" ist die Wahl des
+  Script-Autors.
+- **Input (offene Entscheidung):** ein parametrisiertes Script braucht den User-Input. Zwei Wege:
+  (a) `input`-JSON → Host injiziert `globalThis.INPUT = …` davor, Script liest `INPUT`; oder
+  (b) Host ruft eine deklarierte Entry-Funktion (`code.run{path, entry:"analyze", input:…}` →
+  `…source…; print(JSON.stringify(analyze(INPUT)))`). (a) ist simpler, (b) lässt Library-Scripts unverändert.
+- **Layering:** `code.run`/`script.Runner` bleibt **generisch** — es kriegt einen injizierten
+  `SourceLoader(path) → (src, err)`, der mnt + geladene Skills auflöst. Die Boundary-Logik liegt in der
+  Wiring-Schicht (`cmd`/`skill`/`filecap`), nicht im Runner.
+- **Sicherheit:** unverändert — egal ob Source inline oder per Pfad geladen, sie läuft im QuickJS-Sandbox,
+  jeder Effekt via `nocturn.call` → Broker + HITL. Pfad-Confinement (symlink-aufgelöst) wie `filecap`/`skill.read`.
+- **Status:** nur festgehalten, **noch nicht umsetzen** (User).
