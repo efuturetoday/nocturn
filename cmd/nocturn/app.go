@@ -143,6 +143,7 @@ func tuiCmd(_ []string) error {
 	// are CONTEXT, not tools, and carry zero authority — every effect they steer
 	// toward still passes the broker + HITL. Registered only if a visible skill exists.
 	skills := skill.Discover([]skill.Scope{{Dir: filepath.Join(wsDir, ".skills"), Location: "workspace"}})
+	reportSkills(skills) // FYI summary + diagnostics, before the TUI (no prompt — skills carry no authority)
 	if lt, ok := skills.LoadTool(); ok {
 		reg.Add(lt)
 	}
