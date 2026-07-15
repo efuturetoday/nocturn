@@ -121,19 +121,35 @@ func (in *Injector) AddBinding(owner string, b Binding) {
 	in.addBindingLocked(owner, b)
 }
 
-// RemoveBindingsFor drops every binding installed by owner (plugin uninstall).
-// Sources are left in place (a dropped binding already stops injection; a shared
-// source must not vanish under another owner).
+// RemoveBindingsFor drops every binding installed by owner (plugin uninstall) AND
+// each source those bindings referenced, once no remaining binding uses it — so an
+// uninstall forgets the plugin's in-memory credential material, not just stops
+// injecting it. This is safe now that credentials are owner-namespaced
+// (plugin.SecretName): a source is owner-private, so it can't vanish under another
+// owner. (The persisted token file is the caller's concern.)
 func (in *Injector) RemoveBindingsFor(owner string) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
+	var removed []string
 	kept := in.bindings[:0]
 	for _, b := range in.bindings {
-		if b.owner != owner {
+		if b.owner == owner {
+			removed = append(removed, b.Secret)
+		} else {
 			kept = append(kept, b)
 		}
 	}
 	in.bindings = kept
+
+	stillUsed := make(map[string]bool, len(kept))
+	for _, b := range kept {
+		stillUsed[b.Secret] = true
+	}
+	for _, s := range removed {
+		if !stillUsed[s] {
+			delete(in.sources, s)
+		}
+	}
 }
 
 // SetSource overrides the Source for a secret name with a dynamic one (e.g. an
@@ -144,17 +160,21 @@ func (in *Injector) SetSource(name string, src Source) {
 	in.sources[name] = src
 }
 
-// InjectMatching stamps every binding matching both the capability and the
-// destination host into req, host-side (the guest never saw the value). Each
-// value comes from the binding's Source (a static store read, or a refreshing
-// OAuth token). A missing source or any Source error is fail-closed: no
-// half-authenticated request leaves. It returns the names of the injected
-// secrets, so a later leak scan can redact them if they echo back. A nil
-// Injector injects nothing.
+// InjectMatching stamps every binding matching the capability, the destination
+// host, AND the calling owner into req, host-side (the guest never saw the
+// value). Owner scoping (via WithOwner on ctx) keeps a plugin's credential on
+// its OWN calls only: a binding rides along iff it is unowned (an app default) or
+// owned by the calling plugin — so plugin B can never pick up plugin A's token,
+// even when both declare the same host. Each value comes from the binding's
+// Source (a static store read, or a refreshing OAuth token). A missing source or
+// any Source error is fail-closed: no half-authenticated request leaves. It
+// returns the names of the injected secrets, so a later leak scan can redact them
+// if they echo back. A nil Injector injects nothing.
 func (in *Injector) InjectMatching(ctx context.Context, req *Request, capability, host string) ([]string, error) {
 	if in == nil {
 		return nil, nil
 	}
+	caller := ownerFrom(ctx)
 	// Snapshot the matching (binding, source) pairs under the lock; resolve the
 	// values OUTSIDE it — Source.Value may refresh (I/O) and must not hold the lock.
 	type match struct {
@@ -164,7 +184,7 @@ func (in *Injector) InjectMatching(ctx context.Context, req *Request, capability
 	var matches []match
 	in.mu.Lock()
 	for _, ob := range in.bindings {
-		if !capMatches(ob.Capability, capability) || !hostMatches(ob.Host, host) {
+		if !ownerMatches(ob.owner, caller) || !capMatches(ob.Capability, capability) || !hostMatches(ob.Host, host) {
 			continue
 		}
 		src, ok := in.sources[ob.Secret]
@@ -196,6 +216,31 @@ func applyTo(req *Request, b Binding, value []byte) {
 		req.Headers = make(map[string]string)
 	}
 	req.Headers[b.Header] = b.Prefix + string(value)
+}
+
+// ownerKey carries the identity of the plugin whose sandbox issued the current
+// call, so credential injection stays plugin-scoped.
+type ownerKey struct{}
+
+// WithOwner marks ctx as originating from a specific plugin (its manifest name).
+// The plugin layer stamps it before running a plugin's guest, so a credential
+// injected on effects from that guest is limited to the plugin's own bindings
+// (plus the app's unowned defaults). Calls without it — the model's own tool
+// calls, or a script's — see only the unowned defaults.
+func WithOwner(ctx context.Context, owner string) context.Context {
+	return context.WithValue(ctx, ownerKey{}, owner)
+}
+
+func ownerFrom(ctx context.Context) string {
+	o, _ := ctx.Value(ownerKey{}).(string)
+	return o
+}
+
+// ownerMatches reports whether a binding owned by bindingOwner may ride along on
+// a call from caller: an unowned binding (owner "") is an app default shared by
+// all callers; an owned binding rides ONLY on its owner's own calls.
+func ownerMatches(bindingOwner, caller string) bool {
+	return bindingOwner == "" || bindingOwner == caller
 }
 
 // capMatches reports whether a call's capability is covered by a binding's

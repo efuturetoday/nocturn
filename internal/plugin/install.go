@@ -32,6 +32,20 @@ func NewHost(reg *tool.Registry, inj *secret.Injector) *Host {
 	return &Host{Registry: reg, Injector: inj, active: map[string]*installed{}}
 }
 
+// Owner is the credential-injection owner id for a plugin: "plugin:<name>". The
+// typed prefix means plugins, and later other injecting owners (a remote-MCP
+// connection would be "mcp:<server>"), share ONE owner namespace without
+// colliding — a plugin "github" and an MCP server "github" get distinct owners.
+func Owner(name string) string { return "plugin:" + name }
+
+// SecretName namespaces a credential under its owner: "<owner>/<credential>", so
+// the secret-store key a plugin resolves is always under its OWN owner — it can
+// never reference (and exfiltrate) another owner's credential by re-using a bare
+// name, since it can only build a name under its own Owner(). The OAuth wiring
+// registers the source under the same key. (Owner-scoped injection is the second
+// layer; this closes the shared-name vector.)
+func SecretName(owner, credential string) string { return owner + "/" + credential }
+
 // Install reviews and installs a loaded plugin. approve is called with the
 // manifest (the ceiling + credentials the operator sees) and returns true to
 // proceed — the caller decides HOW to review (a terminal prompt, a stored
@@ -68,9 +82,10 @@ func (h *Host) Install(l Loaded, approve func(Manifest) (bool, error)) error {
 		toolNames = append(toolNames, t.Name)
 	}
 	if h.Injector != nil {
+		owner := Owner(name)
 		for _, c := range l.Manifest.Credentials {
-			h.Injector.AddBinding(name, secret.Binding{
-				Secret: c.Name, Capability: c.Capability, Host: c.Host, Header: c.Header, Prefix: c.Prefix,
+			h.Injector.AddBinding(owner, secret.Binding{
+				Secret: SecretName(owner, c.Name), Capability: c.Capability, Host: c.Host, Header: c.Header, Prefix: c.Prefix,
 			})
 		}
 	}
@@ -93,7 +108,7 @@ func (h *Host) Uninstall(name string) error {
 		h.Registry.Remove(t)
 	}
 	if h.Injector != nil {
-		h.Injector.RemoveBindingsFor(name)
+		h.Injector.RemoveBindingsFor(Owner(name))
 	}
 	delete(h.active, name)
 	return nil

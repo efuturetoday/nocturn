@@ -12,6 +12,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/sandbox"
 	"github.com/efuturetoday/nocturn/internal/script"
+	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
@@ -156,6 +157,10 @@ func rawArgs(args string) json.RawMessage {
 // test TestPlugin_CeilingBoundsEffects_E2E locks the out-of-ceiling hard-deny.
 func (p *Plugin) runGuest(ctx context.Context, guest, stdin []byte) (string, error) {
 	ctx = capability.WithCeiling(ctx, p.ceiling)
+	// Scope credential injection to THIS plugin: an effect from its guest only
+	// picks up its own credential bindings (+ app defaults), never another
+	// plugin's token, even at a shared host.
+	ctx = secret.WithOwner(ctx, Owner(p.Manifest.Name))
 	gate := sandbox.HostFunc{Name: "call", Fn: p.dispatch}
 	res, err := sandbox.Run(ctx, guest, sandbox.Config{
 		Stdin:     stdin,

@@ -80,7 +80,9 @@ func wirePluginOAuth(ctx context.Context, inj *secret.Injector, m plugin.Manifes
 			}
 		}
 		p := path
-		inj.SetSource(o.Name, oauth.NewSource(cfg, tok, func(t *oauth2.Token) { _ = saveTokenAt(p, t) }))
+		// Same namespaced key the install binding resolves (plugin.SecretName), so
+		// only THIS plugin's binding can reach this source — never another's.
+		inj.SetSource(plugin.SecretName(plugin.Owner(m.Name), o.Name), oauth.NewSource(cfg, tok, func(t *oauth2.Token) { _ = saveTokenAt(p, t) }))
 	}
 	return nil
 }

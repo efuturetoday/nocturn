@@ -187,3 +187,90 @@ func TestInjector_SourceError_FailsClosed(t *testing.T) {
 		t.Fatal("no header must be set when the source errors")
 	}
 }
+
+// Credential injection is plugin-scoped: an owned binding rides ONLY on its
+// owner's calls (WithOwner), so plugin B never picks up plugin A's token even at
+// a shared host; an unowned binding (app default) rides on everyone's calls,
+// including the model's own (no owner).
+func TestInjector_OwnerScopesCredentials(t *testing.T) {
+	s := secret.NewStore()
+	s.Set("tok-a", []byte("AAA"))
+	s.Set("tok-b", []byte("BBB"))
+	s.Set("tok-default", []byte("DEF"))
+
+	in := secret.NewInjector(s, secret.Binding{
+		Secret: "tok-default", Capability: "*", Host: "api.example.com", Header: "Authorization", Prefix: "Bearer ",
+	})
+	in.AddBinding("plugin-a", secret.Binding{Secret: "tok-a", Capability: "*", Host: "api.example.com", Header: "X-A"})
+	in.AddBinding("plugin-b", secret.Binding{Secret: "tok-b", Capability: "*", Host: "api.example.com", Header: "X-B"})
+
+	// Plugin A: its own token + the app default; NOT plugin B's.
+	reqA := &secret.Request{}
+	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin-a"), reqA, "http.read", "api.example.com"); err != nil {
+		t.Fatalf("inject A: %v", err)
+	}
+	if reqA.Headers["X-A"] != "AAA" {
+		t.Errorf("plugin A missing its own token: %v", reqA.Headers)
+	}
+	if _, leaked := reqA.Headers["X-B"]; leaked {
+		t.Error("plugin A picked up plugin B's token — cross-plugin credential leak")
+	}
+	if reqA.Headers["Authorization"] != "Bearer DEF" {
+		t.Errorf("plugin A missing the app default: %v", reqA.Headers)
+	}
+
+	// Model / script (no owner): only the unowned default, neither plugin token.
+	reqM := &secret.Request{}
+	if _, err := in.InjectMatching(context.Background(), reqM, "http.read", "api.example.com"); err != nil {
+		t.Fatalf("inject model: %v", err)
+	}
+	if _, a := reqM.Headers["X-A"]; a {
+		t.Error("the model picked up plugin A's token")
+	}
+	if _, b := reqM.Headers["X-B"]; b {
+		t.Error("the model picked up plugin B's token")
+	}
+	if reqM.Headers["Authorization"] != "Bearer DEF" {
+		t.Errorf("model missing the app default: %v", reqM.Headers)
+	}
+}
+
+// Uninstall (RemoveBindingsFor) forgets the owner's credential material: the
+// source is dropped, so a later injection for that secret is fail-closed — not a
+// lingering token. Safe because owner-namespacing makes the source owner-private.
+func TestInjector_RemoveBindingsForDropsSource(t *testing.T) {
+	s := secret.NewStore()
+	in := secret.NewInjector(s)
+	in.AddBinding("plugin:gmail", secret.Binding{
+		Secret: "plugin:gmail/tok", Capability: "*", Host: "api.example.com", Header: "Authorization", Prefix: "Bearer ",
+	})
+	in.SetSource("plugin:gmail/tok", staticSrc("TOKEN"))
+
+	req := &secret.Request{}
+	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin:gmail"), req, "http.read", "api.example.com"); err != nil ||
+		req.Headers["Authorization"] != "Bearer TOKEN" {
+		t.Fatalf("before uninstall: err=%v header=%q", err, req.Headers["Authorization"])
+	}
+
+	in.RemoveBindingsFor("plugin:gmail")
+
+	req2 := &secret.Request{}
+	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin:gmail"), req2, "http.read", "api.example.com"); err != nil {
+		t.Fatalf("after uninstall the binding is gone, so nothing injects (no error): %v", err)
+	}
+	if _, present := req2.Headers["Authorization"]; present {
+		t.Fatal("credential still injected after uninstall")
+	}
+	// The source is gone: re-binding without re-setting it is fail-closed.
+	in.AddBinding("plugin:gmail", secret.Binding{
+		Secret: "plugin:gmail/tok", Capability: "*", Host: "api.example.com", Header: "Authorization",
+	})
+	req3 := &secret.Request{}
+	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin:gmail"), req3, "http.read", "api.example.com"); err == nil {
+		t.Fatal("source should be gone after uninstall — a re-bind without re-set must fail closed")
+	}
+}
+
+type staticSrc string
+
+func (s staticSrc) Value(context.Context) ([]byte, error) { return []byte(s), nil }

@@ -87,3 +87,19 @@ Erledigte wandern nach **Geklärt** (mit kurzer Antwort) oder raus.
 - **Sicherheit:** unverändert — egal ob Source inline oder per Pfad geladen, sie läuft im QuickJS-Sandbox,
   jeder Effekt via `nocturn.call` → Broker + HITL. Pfad-Confinement (symlink-aufgelöst) wie `filecap`/`skill.read`.
 - **Status:** nur festgehalten, **noch nicht umsetzen** (User).
+
+### 5. Plugin-Uninstall: persistierte Credentials + Server-Revoke aufräumen
+
+- **Aktuell (nach dem plugin-scoped-Injection-Fix):** `Host.Uninstall` entfernt Tools + Bindings, und
+  `Injector.RemoveBindingsFor` droppt jetzt **auch die In-Memory-Source** (sicher, weil Credentials
+  owner-namespaced sind: `plugin:<name>/<cred>`). Also: In-Memory-Credential wird beim Uninstall vergessen.
+- **Noch offen (cmd-Ebene):**
+  1. **Persistierte Token-Datei** `<config>/nocturn/oauth/<plugin>-<name>.json` beim Uninstall **löschen**
+     (best-effort) — sonst bleibt der OAuth-Refresh-Token nach „Uninstall" auf der Platte.
+  2. **Optional best-effort OAuth-Revoke** (Token server-seitig bei Google/Provider widerrufen) — sonst ist
+     das Token beim Provider weiter gültig, bis es abläuft.
+- **Blocker/Caveat:** es gibt **keine Runtime-Uninstall-Aktion** (kein „Plugin entfernen"-Command in der TUI);
+  `Host.Uninstall` ist API-only. Der Datei-/Revoke-Teil hängt daher an einem künftigen „Plugins verwalten"-Flow
+  (TUI-Command + `plugins.go`-Verdrahtung). Dann in einem Rutsch: Uninstall → Bindings/Source weg (steht) →
+  Token-Datei löschen → optional revoke.
+- **Status:** In-Memory-Teil erledigt; Datei/Revoke festgehalten, an Manage-Flow gekoppelt.

@@ -221,3 +221,48 @@ func TestPlugin_ManifestIntentReachesHITL(t *testing.T) {
 		t.Fatalf("HITL intent = %q, want the rendered manifest template", notifier.intent)
 	}
 }
+
+type staticSource string
+
+func (s staticSource) Value(context.Context) ([]byte, error) { return []byte(s), nil }
+
+// Exfil closure: an attacker plugin cannot reach another plugin's credential by
+// re-using its credential NAME. Credentials are namespaced plugin:<name>/<cred>,
+// so the attacker's binding resolves only its OWN (missing) source — never the
+// victim's token — and owner-scoped injection blocks its calls from matching the
+// victim's binding at all.
+func TestHost_CredentialsPluginNamespaced_NoExfil(t *testing.T) {
+	store := secret.NewStore()
+	inj := secret.NewInjector(store)
+	host := plugin.NewHost(tool.NewRegistry(nil), inj)
+	approve := func(plugin.Manifest) (bool, error) { return true, nil }
+
+	loaded := func(name, dest string) plugin.Loaded {
+		return plugin.Loaded{Kind: plugin.KindJS, Artifact: []byte("//x"), Manifest: plugin.Manifest{
+			Name: name, Version: "1",
+			Tools:       []plugin.ToolDecl{{Name: "t", Parameters: []byte(`{"type":"object"}`)}},
+			Requires:    []plugin.Require{{Capability: "http.read", Target: dest}},
+			Credentials: []plugin.CredentialDecl{{Name: "tok", Capability: "http.read", Host: dest, Header: "Authorization", Prefix: "Bearer "}},
+		}}
+	}
+
+	if err := host.Install(loaded("victim", "api.example.com"), approve); err != nil {
+		t.Fatal(err)
+	}
+	// The victim's OAuth wiring registers its source under the namespaced key.
+	inj.SetSource(plugin.SecretName(plugin.Owner("victim"), "tok"), staticSource("VICTIM-TOKEN"))
+
+	// The attacker declares the SAME credential name "tok", pointed at its own host.
+	if err := host.Install(loaded("attacker", "attacker.example.com"), approve); err != nil {
+		t.Fatal(err)
+	}
+
+	req := &secret.Request{}
+	_, err := inj.InjectMatching(secret.WithOwner(context.Background(), plugin.Owner("attacker")), req, "http.read", "attacker.example.com")
+	if got := req.Headers["Authorization"]; got == "Bearer VICTIM-TOKEN" {
+		t.Fatal("EXFIL: attacker resolved the victim's token via a shared credential name")
+	}
+	if err == nil {
+		t.Fatalf("attacker resolved SOME credential it should not have: %v", req.Headers)
+	}
+}
