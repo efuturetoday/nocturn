@@ -14,9 +14,9 @@ import (
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
-// An oauth.Source satisfies the credential seam (proven at compile time), so the
+// An oauth.Credential satisfies the credential seam (proven at compile time), so the
 // injector can resolve the Gmail binding through a refreshing OAuth token.
-var _ secret.Source = (*oauth.Source)(nil)
+var _ secret.Resolver = (*oauth.Credential)(nil)
 
 // googleCredentialName is the secret name the Gmail binding resolves through.
 const googleCredentialName = "google"
@@ -43,7 +43,7 @@ func wireGoogleCredential(ctx context.Context, inj *secret.Injector) error {
 			return fmt.Errorf("persist token: %w", err)
 		}
 	}
-	inj.SetSource(googleCredentialName, oauth.NewSource(cfg, tok, func(t *oauth2.Token) {
+	inj.SetResolver(googleCredentialName, oauth.NewCredential(cfg, tok, func(t *oauth2.Token) {
 		_ = saveToken(t) // best-effort re-persist on refresh
 	}))
 	return nil

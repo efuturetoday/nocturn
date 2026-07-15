@@ -287,7 +287,7 @@ func (m *chatModel) growInput() {
 // with its description, plus any discovery diagnostics (skipped/shadowed skills).
 func (m *chatModel) skillsListing() string {
 	if m.skills.Len() == 0 {
-		return "no skills in this workspace (.skills/)"
+		return "no skills in this workspace (skills/)"
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "skills (%d):", m.skills.Len())

@@ -16,7 +16,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
-// loadPlugins installs every plugin under ./plugins/<name>/ into the shared
+// loadPlugins installs every plugin under <ws>/plugins/<name>/ into the shared
 // registry + injector, reviewing each one's ceiling before it runs, then running
 // any OAuth flows it declares. It is a no-op if the plugins dir is absent. Run
 // BEFORE bubbletea grabs the terminal — the review prompt AND the OAuth consent
@@ -25,8 +25,9 @@ import (
 // A plugin declaring a scary ceiling is shown verbatim and installed only on an
 // explicit "y". (Follow-up: a manifest-hash "already approved" record so an
 // unchanged plugin needs no re-prompt on every boot.)
-func loadPlugins(ctx context.Context, reg *tool.Registry, inj *secret.Injector) error {
-	entries, err := os.ReadDir("plugins")
+func loadPlugins(ctx context.Context, reg *tool.Registry, inj *secret.Injector, wsDir string) error {
+	pluginsDir := filepath.Join(wsDir, "plugins")
+	entries, err := os.ReadDir(pluginsDir)
 	if err != nil {
 		return nil // no plugins dir → nothing to install
 	}
@@ -35,7 +36,7 @@ func loadPlugins(ctx context.Context, reg *tool.Registry, inj *secret.Injector) 
 		if !e.IsDir() {
 			continue
 		}
-		dir := filepath.Join("plugins", e.Name())
+		dir := filepath.Join(pluginsDir, e.Name())
 		l, err := plugin.Load(dir)
 		if err != nil {
 			return fmt.Errorf("plugin %s: %w", e.Name(), err)
@@ -82,7 +83,7 @@ func wirePluginOAuth(ctx context.Context, inj *secret.Injector, m plugin.Manifes
 		p := path
 		// Same namespaced key the install binding resolves (plugin.SecretName), so
 		// only THIS plugin's binding can reach this source — never another's.
-		inj.SetSource(plugin.SecretName(plugin.Owner(m.Name), o.Name), oauth.NewSource(cfg, tok, func(t *oauth2.Token) { _ = saveTokenAt(p, t) }))
+		inj.SetResolver(plugin.SecretName(plugin.Owner(m.Name), o.Name), oauth.NewCredential(cfg, tok, func(t *oauth2.Token) { _ = saveTokenAt(p, t) }))
 	}
 	return nil
 }

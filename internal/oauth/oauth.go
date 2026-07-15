@@ -1,13 +1,13 @@
 // Package oauth runs the host side of OAuth2 (ADR-5): it obtains and refreshes
 // access tokens so the gateway can inject a Bearer at the boundary. The guest
-// NEVER sees a token — Source yields the current access token host-side, and the
+// NEVER sees a token — Credential yields the current access token host-side, and the
 // credential injector stamps it in only for the bound destination host.
 //
 // It wraps golang.org/x/oauth2 for the flow (auth-code + PKCE + auto-refreshing,
 // concurrency-safe TokenSource) and adds only what that library leaves to the
 // application: the interactive authorization ceremony (a one-shot loopback
-// listener) and a Source adapter that persists refreshed tokens. This package
-// does not import internal/secret; Source satisfies secret.Source structurally.
+// listener) and a Credential adapter that persists refreshed tokens. This package
+// does not import internal/secret; Credential satisfies secret.Resolver structurally.
 package oauth
 
 import (

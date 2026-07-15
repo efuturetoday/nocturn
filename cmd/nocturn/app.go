@@ -77,6 +77,7 @@ func tuiCmd(_ []string) error {
 		Secret: googleCredentialName, Capability: "http.read", Host: "gmail.googleapis.com",
 		Header: "Authorization", Prefix: "Bearer ",
 	})
+	scanner := secret.NewScanner(store)
 	netCap := &netcap.Net{
 		Guard: &gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
@@ -91,11 +92,11 @@ func tuiCmd(_ []string) error {
 			TTL:       2 * time.Minute,
 		},
 		Credentials: inj,
-		Scanner:     secret.NewScanner(store),
+		Scanner:     scanner,
 		HTTP:        &http.Client{Timeout: 15 * time.Second},
 	}
 	// The workspace is the portable, versionable unit of state (ADR-10). The model
-	// inhabits ONLY <ws>/mnt/ (filecap Root + the sandbox /work mount); .skills/
+	// inhabits ONLY <ws>/mnt/ (filecap Root + the sandbox /work mount); skills/
 	// and grants.json are host-managed siblings OUTSIDE that mount, so the model
 	// can neither see nor write them — a structural control-plane/data-plane split.
 	const wsDir = "workspaces/default"
@@ -130,19 +131,28 @@ func tuiCmd(_ []string) error {
 		return err
 	}
 
-	// Install sandboxed plugins from ./plugins/ (reviews each ceiling on stdin,
+	// Install sandboxed plugins from <ws>/plugins/ (reviews each ceiling on stdin,
 	// before the TUI). Their tools join the shared registry; effects stay bounded
 	// by each plugin's ceiling + the broker + HITL.
-	if err := loadPlugins(ctx, reg, inj); err != nil {
+	if err := loadPlugins(ctx, reg, inj, wsDir); err != nil {
 		return err
 	}
 
-	// Skills (agentskills.io): host-side procedural knowledge from <ws>/.skills/,
+	// Connect remote MCP servers declared in the workspace control-plane
+	// (<ws>/mcp.json), reviewing each on stdin before the TUI. Their
+	// tools join the shared registry namespaced <server>.<tool>; every call is
+	// a gated http.write to the server's own host (ceiling-bounded, leak-
+	// scanned, credential-injected under owner mcp:<server>).
+	if err := loadMCP(ctx, reg, netCap.Guard, inj, scanner, wsDir); err != nil {
+		return err
+	}
+
+	// Skills (agentskills.io): host-side procedural knowledge from <ws>/skills/,
 	// surfaced to the model as the single skill.load meta-tool (catalog in its
 	// description, name constrained to an enum), whose body loads on demand. Skills
 	// are CONTEXT, not tools, and carry zero authority — every effect they steer
 	// toward still passes the broker + HITL. Registered only if a visible skill exists.
-	skills := skill.Discover([]skill.Scope{{Dir: filepath.Join(wsDir, ".skills"), Location: "workspace"}})
+	skills := skill.Discover([]skill.Scope{{Dir: filepath.Join(wsDir, "skills"), Location: "workspace"}})
 	reportSkills(skills) // FYI summary + diagnostics, before the TUI (no prompt — skills carry no authority)
 	if lt, ok := skills.LoadTool(); ok {
 		reg.Add(lt)

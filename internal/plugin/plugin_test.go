@@ -250,7 +250,7 @@ func TestHost_CredentialsPluginNamespaced_NoExfil(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The victim's OAuth wiring registers its source under the namespaced key.
-	inj.SetSource(plugin.SecretName(plugin.Owner("victim"), "tok"), staticSource("VICTIM-TOKEN"))
+	inj.SetResolver(plugin.SecretName(plugin.Owner("victim"), "tok"), staticSource("VICTIM-TOKEN"))
 
 	// The attacker declares the SAME credential name "tok", pointed at its own host.
 	if err := host.Install(loaded("attacker", "attacker.example.com"), approve); err != nil {

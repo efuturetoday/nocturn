@@ -50,22 +50,22 @@ type Request struct {
 	Body    []byte
 }
 
-// Source yields a credential's current value at injection time. A plain vault
+// Resolver yields a credential's current value at injection time. A plain vault
 // secret and a refreshing OAuth token are both Sources; the Injector never
 // distinguishes them. Value may perform I/O (a token refresh) and must be
 // concurrency-safe; ctx bounds any such I/O.
-type Source interface {
+type Resolver interface {
 	Value(ctx context.Context) ([]byte, error)
 }
 
-// storeSource is the default Source: a static read from the byte store. It
+// storeResolver is the default Resolver: a static read from the byte store. It
 // preserves the pre-OAuth behavior (and ErrNotFound) for plain vault secrets.
-type storeSource struct {
+type storeResolver struct {
 	store *Store
 	name  string
 }
 
-func (s storeSource) Value(context.Context) ([]byte, error) {
+func (s storeResolver) Value(context.Context) ([]byte, error) {
 	v, ok := s.store.value(s.name)
 	if !ok {
 		return nil, fmt.Errorf("secret %q: %w", s.name, ErrNotFound)
@@ -84,22 +84,22 @@ type ownedBinding struct {
 // destination host to the credential(s) that may ride along to it. The guest
 // never references it: like a browser attaching an HttpOnly cookie, the host
 // consults it by destination host at the boundary and stamps the secret in.
-// Each binding's secret is resolved through a Source; by default a static
-// store-backed one, but SetSource can swap in a dynamic (e.g. OAuth) source.
-// Bindings and sources are mutated at runtime (plugins add/remove them), so the
+// Each binding's secret is resolved through a Resolver; by default a static
+// store-backed one, but SetResolver can swap in a dynamic (e.g. OAuth) source.
+// Bindings and resolvers are mutated at runtime (plugins add/remove them), so the
 // Injector is concurrency-safe.
 type Injector struct {
-	mu       sync.Mutex
-	store    *Store
-	sources  map[string]Source // secret name -> source; seeded from the store
-	bindings []ownedBinding
+	mu        sync.Mutex
+	store     *Store
+	resolvers map[string]Resolver // secret name -> source; seeded from the store
+	bindings  []ownedBinding
 }
 
 // NewInjector returns an injector over store with the given host bindings (owner
-// ""). Every referenced secret is seeded with a static store-backed Source; use
-// SetSource to override one with a dynamic (refreshing) source.
+// ""). Every referenced secret is seeded with a static store-backed Resolver; use
+// SetResolver to override one with a dynamic (refreshing) source.
 func NewInjector(store *Store, bindings ...Binding) *Injector {
-	in := &Injector{store: store, sources: make(map[string]Source)}
+	in := &Injector{store: store, resolvers: make(map[string]Resolver)}
 	for _, b := range bindings {
 		in.addBindingLocked("", b)
 	}
@@ -108,13 +108,13 @@ func NewInjector(store *Store, bindings ...Binding) *Injector {
 
 func (in *Injector) addBindingLocked(owner string, b Binding) {
 	in.bindings = append(in.bindings, ownedBinding{owner: owner, Binding: b})
-	if _, ok := in.sources[b.Secret]; !ok {
-		in.sources[b.Secret] = storeSource{store: in.store, name: b.Secret}
+	if _, ok := in.resolvers[b.Secret]; !ok {
+		in.resolvers[b.Secret] = storeResolver{store: in.store, name: b.Secret}
 	}
 }
 
 // AddBinding installs a binding tagged with owner (a plugin name), seeding a
-// static store-backed Source for its secret if none exists yet.
+// static store-backed Resolver for its secret if none exists yet.
 func (in *Injector) AddBinding(owner string, b Binding) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -147,17 +147,17 @@ func (in *Injector) RemoveBindingsFor(owner string) {
 	}
 	for _, s := range removed {
 		if !stillUsed[s] {
-			delete(in.sources, s)
+			delete(in.resolvers, s)
 		}
 	}
 }
 
-// SetSource overrides the Source for a secret name with a dynamic one (e.g. an
+// SetResolver overrides the Resolver for a secret name with a dynamic one (e.g. an
 // OAuth token source that refreshes).
-func (in *Injector) SetSource(name string, src Source) {
+func (in *Injector) SetResolver(name string, src Resolver) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	in.sources[name] = src
+	in.resolvers[name] = src
 }
 
 // InjectMatching stamps every binding matching the capability, the destination
@@ -166,8 +166,8 @@ func (in *Injector) SetSource(name string, src Source) {
 // its OWN calls only: a binding rides along iff it is unowned (an app default) or
 // owned by the calling plugin — so plugin B can never pick up plugin A's token,
 // even when both declare the same host. Each value comes from the binding's
-// Source (a static store read, or a refreshing OAuth token). A missing source or
-// any Source error is fail-closed: no half-authenticated request leaves. It
+// Resolver (a static store read, or a refreshing OAuth token). A missing source or
+// any Resolver error is fail-closed: no half-authenticated request leaves. It
 // returns the names of the injected secrets, so a later leak scan can redact them
 // if they echo back. A nil Injector injects nothing.
 func (in *Injector) InjectMatching(ctx context.Context, req *Request, capability, host string) ([]string, error) {
@@ -176,10 +176,10 @@ func (in *Injector) InjectMatching(ctx context.Context, req *Request, capability
 	}
 	caller := ownerFrom(ctx)
 	// Snapshot the matching (binding, source) pairs under the lock; resolve the
-	// values OUTSIDE it — Source.Value may refresh (I/O) and must not hold the lock.
+	// values OUTSIDE it — Resolver.Value may refresh (I/O) and must not hold the lock.
 	type match struct {
 		b   Binding
-		src Source
+		src Resolver
 	}
 	var matches []match
 	in.mu.Lock()
@@ -187,7 +187,7 @@ func (in *Injector) InjectMatching(ctx context.Context, req *Request, capability
 		if !ownerMatches(ob.owner, caller) || !capMatches(ob.Capability, capability) || !hostMatches(ob.Host, host) {
 			continue
 		}
-		src, ok := in.sources[ob.Secret]
+		src, ok := in.resolvers[ob.Secret]
 		if !ok { // a binding with no registered source is fail-closed
 			in.mu.Unlock()
 			return nil, fmt.Errorf("credential %q for %s: %w", ob.Secret, host, ErrNotFound)

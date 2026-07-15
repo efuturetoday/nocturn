@@ -136,7 +136,7 @@ func TestInjector_MissingSecret_FailsClosed(t *testing.T) {
 	}
 }
 
-// A dynamic Source is consulted at injection time (not read once): two calls
+// A dynamic Resolver is consulted at injection time (not read once): two calls
 // through a rotating source stamp different values, proving injection is no
 // longer a static store read. This is the seam OAuth refresh rides on.
 type rotatingSource struct {
@@ -153,7 +153,7 @@ func (s *rotatingSource) Value(context.Context) ([]byte, error) {
 func TestInjector_DynamicSourceConsulted(t *testing.T) {
 	b := secret.Binding{Secret: "tok", Capability: "*", Host: "api.example.com", Header: "X-Token"}
 	in := secret.NewInjector(secret.NewStore(), b)
-	in.SetSource("tok", &rotatingSource{vals: []string{"one", "two"}})
+	in.SetResolver("tok", &rotatingSource{vals: []string{"one", "two"}})
 
 	req1 := &secret.Request{URL: "https://api.example.com"}
 	if _, err := in.InjectMatching(context.Background(), req1, "http.read", "api.example.com"); err != nil {
@@ -168,7 +168,7 @@ func TestInjector_DynamicSourceConsulted(t *testing.T) {
 	}
 }
 
-// A Source that errors is fail-closed: the request gets no header and the error
+// A Resolver that errors is fail-closed: the request gets no header and the error
 // propagates (a refresh failure must never send a half-authenticated request).
 type errSource struct{ err error }
 
@@ -177,7 +177,7 @@ func (s errSource) Value(context.Context) ([]byte, error) { return nil, s.err }
 func TestInjector_SourceError_FailsClosed(t *testing.T) {
 	b := secret.Binding{Secret: "tok", Capability: "*", Host: "api.example.com", Header: "Authorization"}
 	in := secret.NewInjector(secret.NewStore(), b)
-	in.SetSource("tok", errSource{err: errors.New("refresh boom")})
+	in.SetResolver("tok", errSource{err: errors.New("refresh boom")})
 
 	req := &secret.Request{URL: "https://api.example.com"}
 	if _, err := in.InjectMatching(context.Background(), req, "http.read", "api.example.com"); err == nil {
@@ -244,7 +244,7 @@ func TestInjector_RemoveBindingsForDropsSource(t *testing.T) {
 	in.AddBinding("plugin:gmail", secret.Binding{
 		Secret: "plugin:gmail/tok", Capability: "*", Host: "api.example.com", Header: "Authorization", Prefix: "Bearer ",
 	})
-	in.SetSource("plugin:gmail/tok", staticSrc("TOKEN"))
+	in.SetResolver("plugin:gmail/tok", staticSrc("TOKEN"))
 
 	req := &secret.Request{}
 	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin:gmail"), req, "http.read", "api.example.com"); err != nil ||

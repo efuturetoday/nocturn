@@ -88,7 +88,41 @@ Erledigte wandern nach **Geklärt** (mit kurzer Antwort) oder raus.
   jeder Effekt via `nocturn.call` → Broker + HITL. Pfad-Confinement (symlink-aufgelöst) wie `filecap`/`skill.read`.
 - **Status:** nur festgehalten, **noch nicht umsetzen** (User).
 
-### 5. Plugin-Uninstall: persistierte Credentials + Server-Revoke aufräumen
+### 5. Remote-MCP: bewusst NICHT gebaut (deny-by-default) + Folgearbeiten
+
+Der Remote-MCP-Client (`internal/mcp` Protokoll + `internal/mcpcap` Gating, Spec-Revision
+2025-11-25, tools über Streamable HTTP) implementiert absichtlich nur die Tools-Teilmenge.
+Festgehalten, was fehlt und warum:
+
+- **Sampling: VERWEIGERT — Sicherheitsentscheidung, keine Lücke.** Sampling hieße: ein
+  *remote* Server schickt uns Prompts, die UNSER LLM mit UNSEREM Key ausführt — ein fremder
+  Server im Fahrersitz unseres Brains, ideale Prompt-Injection-Rampe. Der Client deklariert
+  deshalb `capabilities: {}` und überspringt strukturell JEDE server-initiierte Anfrage
+  (SSE-Frames mit `method` werden verworfen). Nicht nachrüsten.
+- **Resources / Prompts:** nicht implementiert — Tools-first (MVP); Ressourcen wären ein
+  zweiter Ingress-Kanal für untrusted Content, erst mit eigenem Review-Konzept.
+- **Elicitation / Roots / Completion:** nicht implementiert — alles server-initiierte bzw.
+  FS-offenlegende Features; kollidiert mit Zero-Ambient-Authority (Roots) bzw. braucht
+  eigenes UI (Elicitation).
+- **OAuth Discovery/DCR (RFC 9728/8414/7591):** Spec-Clients MÜSSEN eigentlich Protected-
+  Resource-Metadata-Discovery; wir machen bewusst **Config-based OAuth** (Endpoints +
+  client_id in `mcp.json`, wie Plugin-Manifeste): Discovery hieße, URLs aus einer
+  *untrusted* Server-Antwort zu fetchen und dorthin Tokens zu schicken — erst mit
+  Validierungs-/Review-Konzept. `WWW-Authenticate`-Parsing + 401-Flow ebenso offen.
+- **SSE-Reconnect/Resumability:** `Last-Event-ID`/`retry`/GET-Stream nicht implementiert —
+  ein abgerissener Stream ist ein Fehler (fail-closed), kein Auto-Retry. Ebenso kein
+  GET-Listening-Stream (server-initiierte Nachrichten interessieren uns nicht, s.o.).
+- **Session-Lifecycle-Reste:** HTTP 404 auf `Mcp-Session-Id` → Spec will Re-Initialize;
+  wir geben den Fehler hoch. `DELETE` zum Session-Beenden (SHOULD) fehlt (Transport ist
+  POST-only). `notifications/tools/list_changed` wird ignoriert — Tools werden einmal beim
+  Start gelistet + registriert.
+- **Version-Pragmatik:** Wir sprechen 2025-11-25, akzeptieren aber auch 2025-06-18 und
+  2025-03-26 vom Server (unsere Teilmenge ist in allen identisch); alles andere bricht
+  fail-closed ab.
+- **Decline = Skip:** Ein beim Start-Review abgelehnter MCP-Server wird übersprungen (App
+  läuft ohne ihn weiter) — anders als ein abgelehntes Plugin (Startabbruch). Angleichen?
+
+### 6. Plugin-Uninstall: persistierte Credentials + Server-Revoke aufräumen
 
 - **Aktuell (nach dem plugin-scoped-Injection-Fix):** `Host.Uninstall` entfernt Tools + Bindings, und
   `Injector.RemoveBindingsFor` droppt jetzt **auch die In-Memory-Source** (sicher, weil Credentials

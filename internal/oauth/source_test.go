@@ -29,7 +29,7 @@ func TestSource_RefreshesAndPersists(t *testing.T) {
 	expired := &oauth2.Token{AccessToken: "old", RefreshToken: "r", Expiry: time.Now().Add(-time.Hour)}
 
 	var saved *oauth2.Token
-	src := oauth.NewSource(cfg, expired, func(tok *oauth2.Token) { saved = tok })
+	src := oauth.NewCredential(cfg, expired, func(tok *oauth2.Token) { saved = tok })
 
 	v, err := src.Value(context.Background())
 	if err != nil {
@@ -58,7 +58,7 @@ func TestSource_CachesValid(t *testing.T) {
 	valid := &oauth2.Token{AccessToken: "good", RefreshToken: "r", Expiry: time.Now().Add(time.Hour)}
 
 	fired := false
-	src := oauth.NewSource(cfg, valid, func(*oauth2.Token) { fired = true })
+	src := oauth.NewCredential(cfg, valid, func(*oauth2.Token) { fired = true })
 	v, err := src.Value(context.Background())
 	if err != nil || string(v) != "good" {
 		t.Fatalf("v=%q err=%v, want good/nil", v, err)
@@ -81,7 +81,7 @@ func TestSource_Concurrent(t *testing.T) {
 
 	cfg := &oauth2.Config{ClientID: "id", Endpoint: oauth2.Endpoint{TokenURL: srv.URL}}
 	expired := &oauth2.Token{AccessToken: "old", RefreshToken: "r", Expiry: time.Now().Add(-time.Hour)}
-	src := oauth.NewSource(cfg, expired, nil)
+	src := oauth.NewCredential(cfg, expired, nil)
 
 	const n = 20
 	var wg sync.WaitGroup
@@ -117,7 +117,7 @@ func TestSource_RefreshError_FailsClosed(t *testing.T) {
 
 	cfg := &oauth2.Config{ClientID: "id", Endpoint: oauth2.Endpoint{TokenURL: srv.URL}}
 	expired := &oauth2.Token{AccessToken: "old", RefreshToken: "r", Expiry: time.Now().Add(-time.Hour)}
-	src := oauth.NewSource(cfg, expired, nil)
+	src := oauth.NewCredential(cfg, expired, nil)
 
 	if _, err := src.Value(context.Background()); err == nil {
 		t.Fatal("expected an error on refresh failure, got nil")
