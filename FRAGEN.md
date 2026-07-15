@@ -142,6 +142,16 @@ Festgehalten, was fehlt und warum:
   fail-closed ab.
 - **Decline = Skip:** Ein beim Start-Review abgelehnter MCP-Server wird übersprungen (App
   läuft ohne ihn weiter) — anders als ein abgelehntes Plugin (Startabbruch). Angleichen?
+- **Offline beim Start = Startabbruch (Bug, Sofort-Fix):** Scheitert `conn.Connect` mit einem
+  **Netzwerk**fehler (kein `StatusError`), gibt `loadMCP` den Fehler hoch → die **ganze App startet
+  nicht**. Ein flakiger Remote-Server darf den Assistenten/Agent-Run nie blockieren → offline soll
+  **skippen + Notiz** (wie „decline = skip"), mit den vorhandenen Tools weiterlaufen. Klein, unabhängig machbar.
+- **Tool-Schema-Cache + lazy connect (Resilienz für die Agent-Schicht):** bei erfolgreichem Connect das
+  `tools/list` in `<ws>`-State cachen (wie `approved.json`) → ein offline-at-start-Server kann seine Tools
+  **trotzdem registrieren** (der Agent „hat" `github.*`); die Verbindung wird **lazy** (erst beim ersten Call
+  verbunden/reconnected), ein Call gegen einen offline Server → **sauberer Fehler** ans Modell (kein Crash),
+  autonomer Run **retryt beim nächsten Tick**. Zusammen mit Auto-Re-Init (#… Session-Lifecycle) die MCP-Resilienz:
+  „Tool *definiert*" ≠ „Server *jetzt* erreichbar".
 
 ### 6. Plugin-Uninstall: persistierte Credentials + Server-Revoke aufräumen
 

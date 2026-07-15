@@ -63,46 +63,57 @@ func loadMCP(ctx context.Context, reg *tool.Registry, guard *gateway.Guard, inj 
 		if err := wireMCPCredential(ctx, inj, vault, srv, conn.Host()); err != nil {
 			return err
 		}
-		// The operator's "y" IS the human approval for the two setup calls
-		// (initialize + tools/list): a grant for exactly (http.write, <host>),
-		// carried ONLY by this setup context — the TUI notifier is not running
-		// yet, and runtime tool calls still ask (the turn ctx never sees this
-		// grant set).
-		setup := capability.NewGrants("mcp-setup:"+srv.Name, capability.Permanent, nil)
-		_ = setup.Record(capability.Call{Capability: "http.write", Target: conn.Host()}, capability.ScopeSession)
-		setupCtx := capability.WithGrants(ctx, setup)
-
-		if err := conn.Connect(setupCtx); err != nil {
-			// The server answered non-2xx (StatusError) — a rejected request is a
-			// plausible sign of a bad/expired/revoked/rotated token, and forcing a
-			// full vault purge to fix ONE credential is a footgun. Offer to re-enter
-			// just this token and retry once. A network failure (no StatusError)
-			// leaves the token untouched.
-			retried, rerr := reenterOnRejection(ctx, inj, vault, srv, conn.Host(), err)
-			if rerr != nil {
-				return rerr
-			}
-			if !retried {
-				return err
-			}
-			if err := conn.Connect(setupCtx); err != nil {
-				return err
-			}
+		if err := establishMCP(ctx, conn, srv, reg, inj, vault); err != nil {
+			// A flaky or offline remote must NEVER brick startup (or an agent run):
+			// skip this server with a notice and keep the assistant running with the
+			// tools that ARE reachable. (Lazy connect + schema cache — FRAGEN #5 — is
+			// the fuller resilience; this is the no-brick floor.)
+			fmt.Printf("MCP server %q skipped — could not connect: %v\n", srv.Name, err)
+			continue
 		}
-		tools, err := conn.Tools(setupCtx)
-		if err != nil {
+	}
+	return nil
+}
+
+// establishMCP performs the handshake and registers the server's tools. Every
+// failure — an unreachable/offline server, a rejected or malformed handshake, a
+// tool-name collision — is RETURNED (not fatal), so loadMCP skips just this
+// server. The credential re-entry on a server rejection still happens here.
+func establishMCP(ctx context.Context, conn *mcpcap.Conn, srv mcpcap.Server, reg *tool.Registry, inj *secret.Injector, vault *secret.Vault) error {
+	// The operator's approval IS the human ok for the two setup calls (initialize +
+	// tools/list): an ephemeral grant for exactly (http.write, <host>), carried ONLY
+	// by this setup context — runtime tool calls still ask (the turn ctx never sees it).
+	setup := capability.NewGrants("mcp-setup:"+srv.Name, capability.Permanent, nil)
+	_ = setup.Record(capability.Call{Capability: "http.write", Target: conn.Host()}, capability.ScopeSession)
+	setupCtx := capability.WithGrants(ctx, setup)
+
+	if err := conn.Connect(setupCtx); err != nil {
+		// A non-2xx (StatusError) is a plausible bad/expired/revoked token — offer to
+		// re-enter it and retry once. A network failure leaves the token untouched.
+		retried, rerr := reenterOnRejection(ctx, inj, vault, srv, conn.Host(), err)
+		if rerr != nil {
+			return rerr
+		}
+		if !retried {
 			return err
 		}
-		for _, t := range tools { // reject collisions before touching anything
-			if reg.Has(t.Name) {
-				return fmt.Errorf("mcp %s: tool %q collides with an existing tool", srv.Name, t.Name)
-			}
+		if err := conn.Connect(setupCtx); err != nil {
+			return err
 		}
-		for _, t := range tools {
-			reg.Add(t)
-		}
-		fmt.Printf("MCP server %q connected — %d tool(s) registered.\n", srv.Name, len(tools))
 	}
+	tools, err := conn.Tools(setupCtx)
+	if err != nil {
+		return err
+	}
+	for _, t := range tools { // reject collisions before touching anything
+		if reg.Has(t.Name) {
+			return fmt.Errorf("tool %q collides with an existing tool", t.Name)
+		}
+	}
+	for _, t := range tools {
+		reg.Add(t)
+	}
+	fmt.Printf("MCP server %q connected — %d tool(s) registered.\n", srv.Name, len(tools))
 	return nil
 }
 
