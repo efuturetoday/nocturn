@@ -184,6 +184,12 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 		if r := intentFrom(ctx); r != "" {
 			prompt = r + "\n" + factLine(toolName, call)
 		}
+		// A source label (e.g. the workspace of a background/unattended run) prefixes the
+		// prompt so a human answering out of band knows WHICH context is asking — "[work]
+		// Send email …" rather than a context-free prompt on the phone.
+		if lbl := labelFrom(ctx); lbl != "" {
+			prompt = "[" + lbl + "] " + prompt
+		}
 		// A consequential effect offers only once-or-deny: no "session"/"always", so it
 		// can never become a standing grant.
 		choices := approvalChoicesFor(toolName, call)
@@ -246,6 +252,22 @@ func WithIntent(ctx context.Context, intent string) context.Context {
 
 func intentFrom(ctx context.Context) string {
 	s, _ := ctx.Value(intentKey{}).(string)
+	return s
+}
+
+// labelKey carries a source label for the current operation — e.g. the workspace of a
+// background/unattended run — prefixed onto the HITL prompt so a human answering out
+// of band knows which context is asking. Purely presentational (never gates anything).
+type labelKey struct{}
+
+// WithLabel attaches a source label (e.g. a workspace name) shown as a prefix on the
+// approval prompt. Set by a trusted layer (the scheduler/composition root), not guest code.
+func WithLabel(ctx context.Context, label string) context.Context {
+	return context.WithValue(ctx, labelKey{}, label)
+}
+
+func labelFrom(ctx context.Context) string {
+	s, _ := ctx.Value(labelKey{}).(string)
 	return s
 }
 

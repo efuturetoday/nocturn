@@ -200,6 +200,9 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 	quietReg := reg.Select(func(string) bool { return true })
 	quietReg.OnCall = nil
 	sched, err := agent.NewScheduler(agentDefs, func(runCtx context.Context, def agent.Definition) error {
+		// Label this background run with its workspace, so an out-of-band ask on the
+		// phone reads "[work] …" instead of a context-free prompt.
+		runCtx = gateway.WithLabel(runCtx, wsName)
 		qb := *b
 		qb.OnToken = nil
 		qb.Registry = quietReg

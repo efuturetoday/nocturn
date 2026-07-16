@@ -3,12 +3,52 @@ package gateway_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 )
+
+// promptNotifier records the prompt text it was shown, then approves.
+type promptNotifier struct {
+	prompt  string
+	resolve func(string) error
+}
+
+func (n *promptNotifier) Notify(prompt string, options []hitl.Option) error {
+	n.prompt = prompt
+	for _, o := range options {
+		if o.Outcome == hitl.Approved {
+			return n.resolve(o.Token)
+		}
+	}
+	return errors.New("promptNotifier: no approve option")
+}
+
+// A source label (the workspace of a background run) prefixes the HITL prompt, so a
+// human answering out of band knows which context is asking.
+func TestAuthorize_WorkspaceLabelPrefixesPrompt(t *testing.T) {
+	n := &promptNotifier{}
+	eng := hitl.NewEngine([]byte("k"), n)
+	n.resolve = eng.Resolve
+	g := &gateway.Guard{
+		Policy: capability.Policy{Rules: []capability.Rule{
+			{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Ask, Epoch: capability.Permanent},
+		}},
+		Approvals: eng,
+		TTL:       time.Second,
+	}
+	ctx := gateway.WithLabel(capability.WithAutonomy(context.Background(), capability.AutonomyGuarded), "work")
+	if err := g.Authorize(ctx, read("api.example.com"), "read api"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(n.prompt, "[work] ") {
+		t.Fatalf("prompt = %q, want a [work] prefix", n.prompt)
+	}
+}
 
 // The autonomy dial resolves an Ask on an UNATTENDED run without a live human:
 // strict denies, full auto-allows, guarded/attended still ask out of band, and a
