@@ -1,6 +1,7 @@
-// The composition root: assemble the security stack (policy → guard → net →
-// registry → brain → agent → ntfy/HITL) and run the bubbletea program. Kept out
-// of tui.go so the view logic stays separate from the wiring.
+// The composition root: assemble the shared spine (master, HITL engine, LLM client,
+// ntfy) and build ONE isolated stack per workspace, then run the bubbletea program.
+// Kept out of tui.go so the view logic stays separate from the wiring; the
+// per-workspace stack construction itself lives in stack.go.
 package main
 
 import (
@@ -8,32 +9,21 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joho/godotenv"
 
-	"github.com/efuturetoday/nocturn/internal/agent"
-	"github.com/efuturetoday/nocturn/internal/approval"
-	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
-	"github.com/efuturetoday/nocturn/internal/filecap"
-	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/hitl/ntfy"
 	"github.com/efuturetoday/nocturn/internal/llm"
-	"github.com/efuturetoday/nocturn/internal/netcap"
-	"github.com/efuturetoday/nocturn/internal/script"
-	"github.com/efuturetoday/nocturn/internal/secret"
-	"github.com/efuturetoday/nocturn/internal/skill"
-	"github.com/efuturetoday/nocturn/internal/tool"
+	"github.com/efuturetoday/nocturn/internal/timecap"
 )
 
 // tuiNotifier bridges HITL approval into the TUI.
@@ -50,20 +40,18 @@ func (n *tuiNotifier) Notify(intent string, options []hitl.Option) error {
 
 var wsNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-// resolveWorkspace picks the workspace from the optional first CLI argument,
+// resolveWorkspace picks the ACTIVE workspace from the optional first CLI argument,
 // defaulting to "default". The name is confined to a safe folder name — no path
 // separators or traversal — so `nocturn <name>` can never point outside workspaces/.
-// A fresh name is created on first run (new vault + empty everything), so switching
-// or adding a workspace is just a different launch argument.
-func resolveWorkspace(args []string) (name, dir string, err error) {
+func resolveWorkspace(args []string) (name string, err error) {
 	name = "default"
 	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
 		name = strings.TrimSpace(args[0])
 	}
 	if !wsNameRe.MatchString(name) {
-		return "", "", fmt.Errorf("invalid workspace name %q (want %s)", name, wsNameRe)
+		return "", fmt.Errorf("invalid workspace name %q (want %s)", name, wsNameRe)
 	}
-	return name, filepath.Join("workspaces", name), nil
+	return name, nil
 }
 
 func tuiCmd(args []string) error {
@@ -80,30 +68,16 @@ func tuiCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	// The workspace is the portable, versionable unit of state (ADR-10) AND the
-	// isolation unit: everything below reads from wsDir (vault, grants, agents,
-	// plugins, skills, filecap root), so a different workspace is a fully separate
-	// context. The model inhabits ONLY <ws>/mnt/ (filecap Root + the sandbox /work
-	// mount); skills/, grants.json, and secrets.age are host-managed siblings OUTSIDE
-	// that mount, so the model can neither see nor write them — a structural
-	// control-plane/data-plane split. One workspace at a time (multi-tenant = FRAGEN #12).
-	wsName, wsDir, err := resolveWorkspace(args)
+	// The ACTIVE workspace (what the TUI opens on); every discovered workspace is also
+	// built (below) so its scheduler runs. `nocturn <name>` picks the active one.
+	activeName, err := resolveWorkspace(args)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Workspace: %s\n", wsName)
 
-	// Unlock the secret vault. ONE master passphrase (asked once) derives this
-	// workspace's key (HKDF) — the same passphrase opens every workspace without
-	// sharing a key. ALL secret material (OAuth refresh tokens included) lives
-	// AES-256-GCM-encrypted in <ws>/secrets.vault; the workspace on disk carries only
-	// ciphertext (+ the non-secret workspaces/master.json salt) and stays committable.
-	// A legacy <ws>/secrets.age is migrated on first run. Prompted before bubbletea.
+	// ONE master passphrase (asked once) derives every workspace's vault key (HKDF).
+	// Shared across all workspaces; the descriptor (salt/verifier) is non-secret.
 	master, err := unlockMaster(filepath.Join("workspaces", "master.json"))
-	if err != nil {
-		return err
-	}
-	vault, err := unlockVault(master, filepath.Join(wsDir, "secrets.vault"), wsName, filepath.Join(wsDir, "secrets.age"))
 	if err != nil {
 		return err
 	}
@@ -117,9 +91,8 @@ func tuiCmd(args []string) error {
 	// Out-of-band channel (optional): if an ntfy topic pair is configured, an
 	// UNATTENDED run's approval is pushed to the phone instead of the console. The
 	// engine routes per request (attended → TUI, unattended → phone); with no config
-	// the router returns nil and everything asks inline exactly as before. Topics are
-	// public — the HMAC single-use token is the real integrity control (a topic reader
-	// still cannot forge an approval).
+	// the router returns nil and everything asks inline. Topics are public — the HMAC
+	// single-use token is the real integrity control.
 	ntfyBase := os.Getenv("NTFY_BASE_URL")
 	if ntfyBase == "" {
 		ntfyBase = "https://ntfy.sh"
@@ -136,9 +109,8 @@ func tuiCmd(args []string) error {
 		oob = hitl.Serialize(ntfy.New(ntfyBase, reqTopic, ntfyBase+"/"+respTopic, pubOpts...))
 	}
 
-	// Serialize approvals: tool calls may run concurrently, but the human sees one
-	// prompt at a time (auto-allowed effects never reach the notifier and stay parallel).
-	// WithRouter sends an unattended run's Ask to the phone; attended stays on the TUI.
+	// One HITL engine for ALL workspaces (it is workspace-agnostic — routes by
+	// autonomy, not workspace). Serialized so the human sees one prompt at a time.
 	engine := hitl.NewEngine(key, hitl.Serialize(notifier), hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
 		if oob != nil && capability.AutonomyFrom(rctx) != capability.AutonomyAttended {
 			return oob
@@ -147,194 +119,70 @@ func tuiCmd(args []string) error {
 	}))
 	notifier.resolve = engine.Resolve
 	if oob != nil {
-		// Outbound-only: subscribe the response topic and hand each posted token to the
-		// same engine that issued it (one token space). Stops when ctx is cancelled.
 		go func() { _ = ntfy.NewListener(ntfyBase, respTopic, engine.Resolve, lisOpts...).Run(ctx) }()
 		fmt.Printf("Out-of-band approvals via ntfy %s (req=%s, resp=%s)\n", ntfyBase, reqTopic, respTopic)
 	}
 
-	epochs := capability.NewEpochRegistry()
-	store := vault.Store()
-	// Host-owned credential injection: a Bearer for gmail.googleapis.com, resolved
-	// through a source registered by wireGoogleCredential below (a refreshing OAuth
-	// token if configured). The guest never sees the token — it is stamped in only
-	// at the gateway boundary, for this destination.
-	inj := secret.NewInjector(store, secret.Binding{
-		Secret: googleCredentialName, Capability: "http", Host: "gmail.googleapis.com",
-		Header: "Authorization", Prefix: "Bearer ",
-	})
-	scanner := secret.NewScanner(store)
-	netCap := &netcap.Net{
-		Guard: &gateway.Guard{
-			// Base policy on the WIRKUNG axis: reads run still, writes ask — for every
-			// family at once (§3). Reach is bounded per caller by cages + grants.
-			Policy: capability.Policy{Rules: []capability.Rule{
-				{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
-				{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchWrite, Effect: capability.Ask, Epoch: capability.Permanent},
-			}},
-			Approvals: engine,
-			Epochs:    epochs, // shared with the session, so "Allow this session" grants are revocable
-			TTL:       2 * time.Minute,
-		},
-		Credentials: inj,
-		Scanner:     scanner,
-		HTTP:        &http.Client{Timeout: 15 * time.Second},
-	}
-	// The filesystem capability group (file.read/file.write), confined to the
-	// workspace mount — the second capability family, gated by the same Guard as
-	// netcap. The target the broker sees is the mount-relative path, so a
-	// grant/cage scopes by path exactly as http scopes by host.
-	fileCap := filecap.New(netCap.Guard, filepath.Join(wsDir, "mnt"))
-
-	// One shared Registry dispatches every tool call — the model's AND the
-	// script's — so its OnCall observer sees them all in one place, nested by
-	// call order.
-	reg := tool.NewRegistry(append(netCap.Tools(), fileCap.Tools()...))
-
-	// A script interpreter (QuickJS on the sandbox) exposed as code.run: the
-	// model can run multi-step JS that reaches effects via one generic host gate
-	// (nocturn.call), dispatched back through the SAME Registry — every effect
-	// still passes Guard.Authorize + out-of-band HITL. Pure compute needs no
-	// approval. The Timeout is a backstop; the brain's ToolTimeout (via ctx)
-	// governs normally. code.run is added after the runner exists so the
-	// interpreter can dispatch back into the Registry; a script may not re-enter
-	// it (the runner's dispatch refuses code.run).
-	runner := script.New(reg)
-	runner.Timeout = 60 * time.Second
-	reg.Add(runner.Tool())
-
-	// Host-managed OAuth (ADR-5): if Google is configured, run the one-time consent
-	// ceremony (prints a URL) and register a refreshing Bearer source for Gmail —
-	// before bubbletea grabs the terminal. No-op when unconfigured.
-	if err := wireGoogleCredential(ctx, inj, vault); err != nil {
-		return err
+	// The shared spine handed to every stack. `p` is bound after the stacks exist, so
+	// send captures it late.
+	var p *tea.Program
+	sh := shared{
+		ctx:       ctx,
+		master:    master,
+		engine:    engine,
+		llmModel:  llm.New(baseURL, apiKey, modelName),
+		timeCap:   timecap.New(),
+		send:      func(m tea.Msg) { p.Send(m) },
+		modelName: modelName,
 	}
 
-	// The approved-record (control-plane, model-unreachable) lets an UNCHANGED
-	// plugin/MCP server install/connect without re-prompting every boot; a changed
-	// one re-surfaces with a diff. It gates only the review, never effect authority.
-	approvals := approval.Load(filepath.Join(wsDir, "approved.json"))
-
-	// Install sandboxed plugins from <ws>/plugins/ (reviews each cage on stdin,
-	// before the TUI). Their tools join the shared registry; effects stay bounded
-	// by each plugin's cage + the broker + HITL.
-	if err := loadPlugins(ctx, reg, inj, vault, approvals, wsDir); err != nil {
-		return err
-	}
-
-	// Connect remote MCP servers declared in the workspace control-plane
-	// (<ws>/mcp.json), reviewing each on stdin before the TUI. Their
-	// tools join the shared registry namespaced <server>.<tool>; every call is
-	// a gated http.write to the server's own host (cage-bounded, leak-
-	// scanned, credential-injected under owner mcp:<server>).
-	if err := loadMCP(ctx, reg, netCap.Guard, inj, scanner, vault, approvals, wsDir); err != nil {
-		return err
-	}
-
-	// Skills (agentskills.io): host-side procedural knowledge from <ws>/skills/,
-	// surfaced to the model as the single skill.load meta-tool (catalog in its
-	// description, name constrained to an enum), whose body loads on demand. Skills
-	// are CONTEXT, not tools, and carry zero authority — every effect they steer
-	// toward still passes the broker + HITL. Registered only if a visible skill exists.
-	skills := skill.Discover([]skill.Scope{{Dir: filepath.Join(wsDir, "skills"), Location: "workspace"}})
-	reportSkills(skills) // FYI summary + diagnostics, before the TUI (no prompt — skills carry no authority)
-	if lt, ok := skills.LoadTool(); ok {
-		reg.Add(lt)
-	}
-	if skills.Len() > 0 {
-		// skill.read serves any loaded skill's bundled files (incl. a /name-only,
-		// model-invocation:never skill), so it registers whenever any skill exists.
-		reg.Add(skills.ReadTool())
-	}
-
-	// Workspace agents (<ws>/agents/*.md): host-side control-plane, validated here
-	// and run from the TUI with /<name> <task>. Each is a prompt + the tools it may
-	// use + when it runs; the model cannot author them (outside its mount, ADR-10).
-	agentsDir := filepath.Join(wsDir, "agents")
-	agentDefs, err := agent.LoadAgents(agentsDir)
+	// Build ALL workspaces (the active one ∪ every directory under workspaces/). Each
+	// gets its OWN isolated stack; a fresh active name is created on first build.
+	names, err := discoverWorkspaces("workspaces")
 	if err != nil {
 		return err
 	}
-	reportAgents(agentDefs)
-
-	var p *tea.Program
-	reg.OnCall = func(ev tool.Event) { p.Send(toolEventMsg(ev)) }
-	b := &brain.Brain{
-		Model:       llm.New(baseURL, apiKey, modelName),
-		Registry:    reg,
-		ToolTimeout: 20 * time.Second,
-		OnToken:     func(tok string) { p.Send(tokenMsg(tok)) },
+	if !contains(names, activeName) {
+		names = append(names, activeName)
 	}
-	// Durable "always" grants live IN the workspace (ADR-10): per-workspace,
-	// portable, versionable — and host-managed, outside the model's mount, so the
-	// model can never write itself a standing grant. Missing file = none.
-	// The interactive session's own "always" grants (the workspace-root file). Each
-	// AGENT gets its OWN store inside its folder (built per run below) — strict
-	// per-owner isolation, no cross-owner sharing (KONZEPT §9).
-	sessionGrants := agent.LoadGrantsStore(filepath.Join(wsDir, "grants.json"))
-	session := agent.New(b, netCap.Guard, epochs, sessionGrants)
-	defer session.Close()
-	startTurn := func(input string) context.CancelFunc {
-		turnCtx, cancel := context.WithCancel(ctx)
-		go func() {
-			_, err := session.Ask(turnCtx, input)
-			p.Send(doneMsg{err: err})
-		}()
-		return cancel
-	}
-	// Running an agent reuses the SAME brain (so its token stream + tool events flow
-	// to the TUI like a normal turn) but through agent.RunTask: a fresh epoch + the
-	// agent's own grant set + budget + a registry limited to its tools. The model
-	// checks the name is a real agent before calling, so the lookup always resolves.
-	startAgent := func(name, task string) context.CancelFunc {
-		var def agent.Definition
-		for _, d := range agentDefs {
-			if d.Name == name {
-				def = d
-				break
-			}
+	stacks := make(map[string]*stack, len(names))
+	for _, name := range names {
+		fmt.Printf("Workspace: %s\n", name)
+		st, err := buildStack(sh, name, filepath.Join("workspaces", name))
+		if err != nil {
+			return fmt.Errorf("workspace %s: %w", name, err)
 		}
-		// This agent's OWN durable grants live inside its folder — never the session's.
-		agentStore := agent.LoadGrantsStore(agent.GrantsPath(agentsDir, name))
-		turnCtx, cancel := context.WithCancel(ctx)
-		go func() {
-			_, err := agent.RunTask(turnCtx, b, epochs, agentStore, def, task)
-			p.Send(doneMsg{err: err})
-		}()
-		return cancel
+		stacks[name] = st
+		defer st.session.Close()
 	}
+	active := stacks[activeName]
 
-	// Detect the terminal background ONCE, here, before bubbletea takes over stdin
-	// — so glamour never re-queries it mid-run (that OSC response would leak into
-	// the input on every resize). Mouse motion enables wheel scrolling in the
-	// viewport; the model also filters stray SGR mouse reports (which some
-	// terminals emit at the scroll edge) so they never land in the input.
+	// Detect the terminal background ONCE, before bubbletea takes over stdin. The TUI
+	// opens on the active workspace; /ws switches among all built stacks.
 	dark := lipgloss.HasDarkBackground()
-	p = tea.NewProgram(newChatModel(startTurn, startAgent, agentDefs, session.Reset, skills, session.MarkSkill, modelName, dark), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p = tea.NewProgram(newChatModel(active, stacks, names, modelName, dark), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	notifier.p = p
 
-	// Background scheduler: fire cron-triggered agents unattended while the TUI runs.
-	// Each firing runs HEADLESS (a quiet brain copy, so a background run never hijacks
-	// the interactive token stream) with the agent's declared autonomy level — the
-	// broker + HITL still gate every effect. Firing/skip/result lines surface as dim
-	// system notices. One run per agent at a time (overlap-skip) is enforced inside.
+	// Start EVERY workspace's scheduler — one instance fires all workspaces' cron
+	// agents (each through its own isolated stack; log lines are workspace-tagged).
 	schedCtx, cancelSched := context.WithCancel(ctx)
 	defer cancelSched()
-	sched, err := agent.NewScheduler(agentDefs, func(runCtx context.Context, def agent.Definition) error {
-		qb := *b
-		qb.OnToken = nil // a scheduled run must not dump its prose into the live chat
-		store := agent.LoadGrantsStore(agent.GrantsPath(agentsDir, def.Name))
-		_, err := agent.RunTask(runCtx, &qb, epochs, store, def, "Run your scheduled task now.")
-		return err
-	}, agent.WithLog(func(line string) { p.Send(schedulerMsg(line)) }))
-	if err != nil {
-		return err
+	for _, st := range stacks {
+		if s := st.scheduler.Scheduled(); len(s) > 0 {
+			fmt.Printf("Scheduled [%s]: %s\n", st.name, strings.Join(s, ", "))
+		}
+		st.scheduler.Start(schedCtx)
 	}
-	if s := sched.Scheduled(); len(s) > 0 {
-		fmt.Printf("Scheduled: %s\n", strings.Join(s, ", "))
-	}
-	sched.Start(schedCtx)
 
 	_, err = p.Run()
 	return err
+}
+
+func contains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }

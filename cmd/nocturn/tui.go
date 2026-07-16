@@ -167,6 +167,10 @@ type chatModel struct {
 	markSkill  func(string)                               // mark a /name-activated skill loaded, so skill.load dedups
 	model      string                                     // model name, shown in the header
 
+	stacks  map[string]*stack // all built workspaces, for /ws switching
+	wsNames []string          // workspace names, for the /ws listing
+	ws      string            // the active workspace name
+
 	vp   viewport.Model
 	ta   textarea.Model
 	spin spinner.Model
@@ -194,7 +198,7 @@ type chatModel struct {
 	ready     bool
 }
 
-func newChatModel(startTurn func(string) context.CancelFunc, startAgent func(name, task string) context.CancelFunc, agents []agent.Definition, reset func(), skills *skill.Index, markSkill func(string), model string, dark bool) chatModel {
+func newChatModel(active *stack, stacks map[string]*stack, names []string, model string, dark bool) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Message…"
 	ta.Prompt = "› "
@@ -202,9 +206,8 @@ func newChatModel(startTurn func(string) context.CancelFunc, startAgent func(nam
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
 	ta.SetHeight(1)
 	ta.Focus()
-	return chatModel{
-		startTurn: startTurn, startAgent: startAgent, agents: agents,
-		reset: reset, skills: skills, markSkill: markSkill,
+	m := chatModel{
+		stacks: stacks, wsNames: names,
 		model: model, dark: dark, inputH: 1,
 		ta:   ta,
 		spin: spinner.New(spinner.WithSpinner(spinner.Dot)),
@@ -212,6 +215,35 @@ func newChatModel(startTurn func(string) context.CancelFunc, startAgent func(nam
 		help: help.New(),
 		keys: newKeyMap(),
 	}
+	m.bindStack(active) // points startTurn/startAgent/agents/reset/skills/markSkill at the active workspace
+	return m
+}
+
+// bindStack points the model's per-workspace closures at st and records it active.
+// The single indirection that makes /ws switching a pure rebind — no rebuild.
+func (m *chatModel) bindStack(st *stack) {
+	m.startTurn = st.startTurn
+	m.startAgent = st.startAgent
+	m.agents = st.agentDefs
+	m.reset = st.reset
+	m.skills = st.skills
+	m.markSkill = st.markSkill
+	m.ws = st.name
+}
+
+// workspaceListing renders /ws: every built workspace as an invocable /ws <name>,
+// the active one marked.
+func (m *chatModel) workspaceListing() string {
+	var b strings.Builder
+	b.WriteString("Workspaces — switch with /ws <name>:\n")
+	for _, name := range m.wsNames {
+		mark := "  "
+		if name == m.ws {
+			mark = "▸ "
+		}
+		fmt.Fprintf(&b, "%s/ws %s\n", mark, name)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // resumeAfterApproval shifts every in-flight tool's start forward by the wait it
@@ -726,6 +758,25 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if cmd == "agents" {
 					m.entries = append(m.entries, &noticeEntry{text: m.agentsListing()})
+					m.layout()
+					m.syncViewport()
+					return m, nil
+				}
+				// /ws lists workspaces; /ws <name> switches the active one — rebinds this
+				// model to that workspace's isolated stack (its agents/skills/session) and
+				// clears the visible transcript (its own history lives in its session).
+				if cmd == "ws" {
+					if target := strings.TrimSpace(rest); target == "" {
+						m.entries = append(m.entries, &noticeEntry{text: m.workspaceListing()})
+					} else if st, ok := m.stacks[target]; ok {
+						m.bindStack(st)
+						m.entries = nil
+						m.resetStream()
+						m.active, m.roots = nil, nil
+						m.notice = "workspace: " + target
+					} else {
+						m.entries = append(m.entries, &noticeEntry{text: "unknown workspace: /ws " + target + " (try /ws)", err: true})
+					}
 					m.layout()
 					m.syncViewport()
 					return m, nil
