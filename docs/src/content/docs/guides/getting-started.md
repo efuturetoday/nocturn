@@ -51,9 +51,10 @@ Start Nocturn again:
 ./nocturn
 ```
 
-The first time, it asks you to choose a passphrase. This locks a small encrypted vault
-where Nocturn keeps things like sign-in tokens, so nothing sensitive is ever stored in the
-clear. You enter it once each time you start up.
+The first time, it asks you to choose a **master passphrase**. This locks a small encrypted
+vault where Nocturn keeps things like sign-in tokens, so nothing sensitive is ever stored in
+the clear. One master passphrase opens every workspace's vault, and you enter it once each
+time you start up.
 
 Keep this passphrase safe. It cannot be recovered. If you lose it, Nocturn cannot open the
 vault, and you set up your connected accounts again from scratch.

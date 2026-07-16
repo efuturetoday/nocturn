@@ -44,6 +44,7 @@ Type these at the start of a message:
 | --- | --- |
 | `/skills` | List the skills available in this workspace |
 | `/agents` | List the agents available in this workspace |
+| `/ws` | List your workspaces; `/ws <name>` switches the one you are talking to |
 | `/<name>` | Run the skill or agent with that name; you can add text after it as a task or input |
 
 For example, `/summarize-url https://example.com` runs a skill, and `/morning-briefing

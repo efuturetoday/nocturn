@@ -11,12 +11,20 @@ works.
 ## The vault
 
 Every secret, whether an API key or a sign-in token, lives in an encrypted vault. It is a
-single file in your workspace, `secrets.age`. It is locked with the passphrase you chose on
-first run, and the passphrase is never written anywhere. Nothing sensitive is ever stored
-in the clear.
+single file in your workspace, `secrets.vault` (AES-256-GCM). It is locked with a **master
+passphrase** you choose on first run: one passphrase opens every workspace's vault, yet no
+two workspaces share a key — each vault's key is derived from the master for that workspace
+alone. The passphrase is never written anywhere, and nothing sensitive is ever stored in
+the clear.
 
 Because the vault is encrypted, copying your [workspace](/guides/the-workspace/) to another
 machine copies the locked vault. Your tokens cannot be read without you there to unlock it.
+
+:::note[Upgrading an older workspace]
+A vault from an earlier version (`secrets.age`) is migrated automatically the first time you
+open it: you enter its old passphrase once, and it is re-sealed under the new master. The old
+file is kept as `secrets.age.bak` until you delete it.
+:::
 
 ## The agent never sees the secret
 

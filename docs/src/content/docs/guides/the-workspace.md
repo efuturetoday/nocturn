@@ -33,7 +33,7 @@ workspaces/default/
 │  └─ summary.md
 │
 │  ── everything below is yours, and invisible to the agent ──
-├─ secrets.age   ← encrypted vault (connected accounts, tokens)
+├─ secrets.vault ← encrypted vault (connected accounts, tokens)
 ├─ grants.json   ← the standing permissions you have granted
 ├─ mcp.json      ← remote MCP servers you have connected
 ├─ agents/       ← the agents defined in this workspace
@@ -72,12 +72,25 @@ project folder:
 An agent is not tied to the machine it was born on. It is a folder you own and move around.
 
 :::note[One secret stays out of the copy]
-The vault (`secrets.age`) is encrypted with your passphrase. Copying the folder copies the
-locked vault, and the tokens inside cannot be read without you. See
+The vault (`secrets.vault`) is encrypted with your master passphrase. Copying the folder
+copies the locked vault, and the tokens inside cannot be read without you. See
 [Secrets](/guides/connecting-accounts/).
 :::
 
-## Where it is on disk
+## Several workspaces, one instance
 
-By default, Nocturn uses `workspaces/default/`, created next to wherever you run the
-program. Support for multiple workspaces on one machine is on the way.
+By default, Nocturn opens `workspaces/default/`. Run `nocturn <name>` to open a different
+one — a fully separate context, created on first run. Every workspace under `workspaces/`
+is loaded together in a single instance: each keeps its own isolated stack (its own vault,
+permissions, agents, and scheduled runs), and all of their scheduled agents run side by
+side. Switch the one you are interacting with using `/ws <name>`; `/ws` on its own lists
+them.
+
+One **master passphrase**, asked once at startup, opens every workspace's vault — no two of
+them share a key, so you remember one secret, not one per workspace. When a background run
+in another workspace needs approval, the prompt is tagged with its workspace (`[work] …`) so
+you always know which one is asking.
+
+Isolation between workspaces is structural, not a policy: each has its own vault, its own
+permissions, and its own view of the world. A hijacked agent in one workspace has no path to
+another's secrets, because they were never in its hands to begin with.
