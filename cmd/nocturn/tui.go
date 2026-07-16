@@ -161,7 +161,7 @@ type chatModel struct {
 	startTurn  func(string) context.CancelFunc
 	startAgent func(name, task string) context.CancelFunc // run a workspace agent (/<name> <task>)
 	agents     []agent.Definition                         // workspace agents, for /agents + /<name> dispatch
-	reset      func()                                      // starts a new session: revokes session grants, clears history
+	reset      func()                                     // starts a new session: revokes session grants, clears history
 	skills     *skill.Index                               // discovered skills, for /name + /skills (never nil)
 	markSkill  func(string)                               // mark a /name-activated skill loaded, so skill.load dedups
 	model      string                                     // model name, shown in the header

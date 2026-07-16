@@ -55,45 +55,33 @@ func (d Definition) Matches(toolName string) bool {
 }
 
 type frontmatter struct {
-	Name        string           `yaml:"name"`
-	Description string           `yaml:"description"`
-	Model       string           `yaml:"model"`
-	Tools       []string         `yaml:"tools"`
-	When        string           `yaml:"when"`
-	Budget      string           `yaml:"budget"` // Go duration, e.g. "5m"; "" = default
-	Policy      []policyRuleFM   `yaml:"policy"`
-	Cage     []cageEntryFM `yaml:"cage"`
+	Name        string         `yaml:"name"`
+	Description string         `yaml:"description"`
+	Model       string         `yaml:"model"`
+	Tools       []string       `yaml:"tools"`
+	When        string         `yaml:"when"`
+	Budget      string         `yaml:"budget"` // Go duration, e.g. "5m"; "" = default
+	Policy      []policyRuleFM `yaml:"policy"`
+	Cage        []cageEntryFM  `yaml:"cage"`
 }
 
-// policyRuleFM is one author-declared policy rule. Access ∈ read|write|any (default
-// any); Effect ∈ deny|ask (allow/loosening is the deferred autonomy dial).
+// policyRuleFM is one author-declared policy rule. access is a list of read/write
+// (an omitted access means "any", so a deny with no access denies both); Effect ∈
+// deny|ask (allow/loosening is the deferred autonomy dial).
 type policyRuleFM struct {
-	Effect string `yaml:"effect"`
-	Family string `yaml:"family"`
-	Target string `yaml:"target"`
-	Access string `yaml:"access"`
+	Effect string   `yaml:"effect"`
+	Family string   `yaml:"family"`
+	Target string   `yaml:"target"`
+	Access []string `yaml:"access"`
 }
 
-// cageEntryFM is one reachability upper-bound entry (like a plugin Require:
-// mutates=true grants read+write, write⊇read; false is read-only).
+// cageEntryFM is one reachability upper-bound entry: family + target + the access
+// it permits there (access: [read] / [write] / [read, write]). Access is explicit —
+// an omitted access is a fail-closed error, never a silent read-only default.
 type cageEntryFM struct {
-	Family  string `yaml:"family"`
-	Target  string `yaml:"target"`
-	Mutates bool   `yaml:"mutates"`
-}
-
-// accessMatch maps an author's access string to the mutation-match class.
-func accessMatch(access string) (capability.Match, error) {
-	switch access {
-	case "", "any":
-		return capability.MatchAny, nil
-	case "read":
-		return capability.MatchRead, nil
-	case "write":
-		return capability.MatchWrite, nil
-	default:
-		return capability.MatchNone, fmt.Errorf("access must be read, write or any (got %q)", access)
-	}
+	Family string   `yaml:"family"`
+	Target string   `yaml:"target"`
+	Access []string `yaml:"access"`
 }
 
 // buildPolicy turns author policy rules into a capability.Policy. Only deny/ask are
@@ -116,25 +104,32 @@ func buildPolicy(rules []policyRuleFM) (capability.Policy, error) {
 		default:
 			return capability.Policy{}, fmt.Errorf("policy effect must be deny or ask (got %q)", r.Effect)
 		}
-		writes, err := accessMatch(r.Access)
+		writes, err := capability.ParseAccess(r.Access)
 		if err != nil {
 			return capability.Policy{}, err
+		}
+		if writes == capability.MatchNone {
+			writes = capability.MatchAny // an unscoped deny/ask applies to reads and writes
 		}
 		out = append(out, capability.Rule{Family: r.Family, TargetGlob: r.Target, Writes: writes, Effect: eff, Epoch: capability.Permanent})
 	}
 	return capability.Policy{Rules: out}, nil
 }
 
-// buildCage turns author cage entries into capability.Pairs.
+// buildCage turns author cage entries into capability.Pairs. Access is required and
+// explicit (fail closed): an entry that names no read/write reach is rejected.
 func buildCage(entries []cageEntryFM) ([]capability.Pair, error) {
 	pairs := make([]capability.Pair, 0, len(entries))
 	for _, e := range entries {
 		if e.Family == "" || e.Target == "" {
 			return nil, fmt.Errorf("cage entry needs family and target")
 		}
-		writes := capability.MatchRead
-		if e.Mutates {
-			writes = capability.MatchAny
+		writes, err := capability.ParseAccess(e.Access)
+		if err != nil {
+			return nil, fmt.Errorf("cage entry (%s %s): %w", e.Family, e.Target, err)
+		}
+		if writes == capability.MatchNone {
+			return nil, fmt.Errorf("cage entry (%s %s) needs access [read] and/or [write]", e.Family, e.Target)
 		}
 		pairs = append(pairs, capability.Pair{Family: e.Family, TargetGlob: e.Target, Writes: writes})
 	}

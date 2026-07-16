@@ -84,9 +84,9 @@ type Conn struct {
 	scanner *secret.Scanner  // bidirectional leak scanner; nil = no scanning
 	http    *http.Client
 
-	host    string
-	cage capability.Cage
-	client  *mcp.Client
+	host   string
+	cage   capability.Cage
+	client *mcp.Client
 }
 
 // New builds a gated connection to srv. It parses the server host, fixes the
@@ -122,7 +122,7 @@ func New(srv Server, guard *gateway.Guard, creds *secret.Injector, scanner *secr
 }
 
 // readOnlyKey carries a per-tool read-only hint from a tool's Invoke down to the
-// transport, which turns it into the Call's Mutates flag (read runs still, write asks).
+// transport, which turns it into the Call's Write flag (read runs still, write asks).
 type readOnlyKey struct{}
 
 func withReadOnly(ctx context.Context, readOnly bool) context.Context {
@@ -156,7 +156,7 @@ func (c *Conn) transport(ctx context.Context, body []byte, header http.Header) (
 	// gates on the SEMANTIC mutation: a tool the server marked read-only (readOnlyHint)
 	// is a read and runs still; everything else (writes, and setup calls with no hint)
 	// asks. The cage is read+write either way, so a read is always within it.
-	call := capability.Call{Family: "http", Mutates: !readOnlyFrom(ctx), Target: c.host}
+	call := capability.Call{Family: "http", Write: !readOnlyFrom(ctx), Target: c.host}
 	intent := "MCP " + c.server.Name + ": POST " + c.server.URL // overridden by the semantic WithIntent upstream
 	return gateway.Do(ctx, c.guard, call, intent, func() (*mcp.Response, error) {
 		// Egress leak scan on the model-reachable surfaces (URL, protocol headers,

@@ -26,7 +26,7 @@ type Manifest struct {
 	Name        string           `json:"name"`
 	Version     string           `json:"version"`
 	Tools       []ToolDecl       `json:"tools"`
-	Requires    []Require        `json:"requires"`    // the cage: reach (family + target) × mutation
+	Cage        []CageEntry      `json:"cage"`        // the reach cage: (family + target) × access
 	Credentials []CredentialDecl `json:"credentials"` // host-injected credentials it uses
 	OAuth       []OAuthDecl      `json:"oauth"`       // OAuth providers the host runs on its behalf
 }
@@ -69,14 +69,15 @@ type ToolDecl struct {
 	Consequential bool `json:"consequential"`
 }
 
-// Require is one reach entry of a plugin's cage: a Family (the host primitive —
+// CageEntry is one reach entry of a plugin's cage: a Family (the host primitive —
 // "http", "file", "dns") + Target (a host for http, a path glob for file) and the
-// access level. Mutates=true grants read AND write (write is the higher privilege —
-// if you may write a target you may certainly read it); Mutates=false is read-only.
-type Require struct {
-	Family  string `json:"family"`
-	Target  string `json:"target"`
-	Mutates bool   `json:"mutates"`
+// Access it may exercise there — ["read"], ["write"], or ["read","write"]. Access
+// is explicit (no bool default): a missing access is a fail-closed error at Validate,
+// so a cage entry never silently grants more (or less) than the author wrote.
+type CageEntry struct {
+	Family string   `json:"family"`
+	Target string   `json:"target"`
+	Access []string `json:"access"`
 }
 
 // CredentialDecl declares a credential the host injects for the plugin (never seen
@@ -93,9 +94,9 @@ type CredentialDecl struct {
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // Validate rejects a malformed manifest fail-closed: an empty/odd name, no tools,
-// duplicate tool names, a non-object schema, or a requires/credential entry with
-// an empty capability or host (which would fail-closed later anyway, but is
-// rejected early so the operator never reviews a nonsensical cage).
+// duplicate tool names, a non-object schema, or a cage/credential entry with an
+// empty capability or host (which would fail-closed later anyway, but is rejected
+// early so the operator never reviews a nonsensical cage).
 func (m Manifest) Validate() error {
 	if !nameRe.MatchString(m.Name) {
 		return fmt.Errorf("plugin: invalid name %q (want ^[a-z0-9][a-z0-9._-]*$)", m.Name)
@@ -120,12 +121,19 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("plugin: tool %q parameters must be a JSON object schema", t.Name)
 		}
 	}
-	for _, r := range m.Requires {
-		if r.Family == "" || r.Target == "" {
-			return fmt.Errorf("plugin: requires entry needs a family and target (got %q, %q)", r.Family, r.Target)
+	for _, e := range m.Cage {
+		if e.Family == "" || e.Target == "" {
+			return fmt.Errorf("plugin: cage entry needs a family and target (got %q, %q)", e.Family, e.Target)
+		}
+		w, err := capability.ParseAccess(e.Access)
+		if err != nil {
+			return fmt.Errorf("plugin: cage entry (%s %s): %w", e.Family, e.Target, err)
+		}
+		if w == capability.MatchNone {
+			return fmt.Errorf("plugin: cage entry (%s %s) needs access [read] and/or [write]", e.Family, e.Target)
 		}
 	}
-	ceil := m.Cage()
+	cage := cageOf(m.Cage)
 	creds := map[string]bool{}
 	for _, c := range m.Credentials {
 		if c.Name == "" || c.Family == "" || c.Host == "" || c.Header == "" {
@@ -136,9 +144,9 @@ func (m Manifest) Validate() error {
 		// a mismatch is a red flag (a credential quietly pointed at another host than
 		// the cage allows). A bearer injects on both reads and writes, so it is
 		// coherent as long as the host is reachable in EITHER class.
-		if !ceil.Allows(capability.Call{Family: c.Family, Mutates: false, Target: c.Host}) &&
-			!ceil.Allows(capability.Call{Family: c.Family, Mutates: true, Target: c.Host}) {
-			return fmt.Errorf("plugin: credential %q (%s %s) is outside the requires cage", c.Name, c.Family, c.Host)
+		if !cage.Allows(capability.Call{Family: c.Family, Write: false, Target: c.Host}) &&
+			!cage.Allows(capability.Call{Family: c.Family, Write: true, Target: c.Host}) {
+			return fmt.Errorf("plugin: credential %q (%s %s) is outside the cage", c.Name, c.Family, c.Host)
 		}
 		creds[c.Name] = true
 	}
@@ -164,17 +172,15 @@ func isHTTPSURL(s string) bool {
 	return err == nil && u.Scheme == "https" && u.Host != ""
 }
 
-// Cage builds the plugin's upper bound from its Requires: each entry becomes an
-// Allow reach on (family, target). A write entry grants read+write (MatchAny — write
-// implies read); a read entry is read-only (MatchRead).
-func (m Manifest) Cage() capability.Cage {
-	pairs := make([]capability.Pair, 0, len(m.Requires))
-	for _, r := range m.Requires {
-		writes := capability.MatchRead
-		if r.Mutates {
-			writes = capability.MatchAny
-		}
-		pairs = append(pairs, capability.Pair{Family: r.Family, TargetGlob: r.Target, Writes: writes})
+// cageOf builds the reach cage from a plugin's declared entries: each becomes an
+// Allow reach on (family, target) with the entry's parsed access as the write axis.
+// An entry with unparseable/empty access contributes MatchNone (grants nothing) —
+// but Validate rejects those first, so a loaded manifest never reaches here with one.
+func cageOf(entries []CageEntry) capability.Cage {
+	pairs := make([]capability.Pair, 0, len(entries))
+	for _, e := range entries {
+		writes, _ := capability.ParseAccess(e.Access)
+		pairs = append(pairs, capability.Pair{Family: e.Family, TargetGlob: e.Target, Writes: writes})
 	}
 	return capability.NewCage(pairs...)
 }

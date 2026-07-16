@@ -30,7 +30,7 @@ type Plugin struct {
 	artifact []byte
 	kind     Kind
 	reg      *tool.Registry
-	cage  capability.Cage
+	cage     capability.Cage
 
 	Timeout  time.Duration
 	MaxPages uint32
@@ -44,7 +44,7 @@ func New(l Loaded, reg *tool.Registry) *Plugin {
 		artifact: l.Artifact,
 		kind:     l.Kind,
 		reg:      reg,
-		cage:  l.Manifest.Cage(),
+		cage:     cageOf(l.Manifest.Cage),
 		Timeout:  defaultTimeout,
 	}
 }

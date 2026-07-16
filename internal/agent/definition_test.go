@@ -106,10 +106,10 @@ func TestLoadAgents_PolicyAndCage(t *testing.T) {
 name: triage
 tools: [http.read, http.write]
 policy:
-  - { effect: deny, family: http, target: "*.internal.corp", access: write }
-  - { effect: ask,  family: file, target: "*",              access: read }
+  - { effect: deny, family: http, target: "*.internal.corp", access: [write] }
+  - { effect: ask,  family: file, target: "*",              access: [read] }
 cage:
-  - { family: http, target: "api.github.com", mutates: true }
+  - { family: http, target: "api.github.com", access: [read, write] }
 ---
 Triage the inbox.
 `)

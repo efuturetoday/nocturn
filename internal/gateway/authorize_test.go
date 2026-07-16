@@ -46,11 +46,11 @@ func askGuard(t *testing.T, want hitl.Outcome) (*gateway.Guard, *countNotifier) 
 }
 
 func read(host string) capability.Call {
-	return capability.Call{Family: "http", Mutates: false, Target: host}
+	return capability.Call{Family: "http", Write: false, Target: host}
 }
 
 func write(host string) capability.Call {
-	return capability.Call{Family: "http", Mutates: true, Target: host}
+	return capability.Call{Family: "http", Write: true, Target: host}
 }
 
 // optsNotifier records the outcomes it was offered and resolves with a chosen one.
@@ -195,7 +195,7 @@ func TestAuthorize_OutsideCage_HardDeniesWithoutAsking(t *testing.T) {
 type memGrants struct{ recs map[string]bool }
 
 func (m *memGrants) key(tool string, c capability.Call) string {
-	return fmt.Sprintf("%s|%s|%v|%s", tool, c.Family, c.Mutates, c.Target)
+	return fmt.Sprintf("%s|%s|%v|%s", tool, c.Family, c.Write, c.Target)
 }
 func (m *memGrants) Allows(tool string, c capability.Call) bool { return m.recs[m.key(tool, c)] }
 func (m *memGrants) Record(tool string, c capability.Call) error {

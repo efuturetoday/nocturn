@@ -11,7 +11,7 @@ import (
 type memStore struct{ recs map[string]bool }
 
 func (m *memStore) key(tool string, c capability.Call) string {
-	return fmt.Sprintf("%s|%s|%v|%s", tool, c.Family, c.Mutates, c.Target)
+	return fmt.Sprintf("%s|%s|%v|%s", tool, c.Family, c.Write, c.Target)
 }
 func (m *memStore) Allows(tool string, c capability.Call) bool {
 	return m.recs[m.key(tool, c)]
@@ -29,7 +29,7 @@ func TestGrants_AlwaysIsToolScoped(t *testing.T) {
 	store := &memStore{recs: map[string]bool{}}
 	g := capability.NewGrants(capability.Permanent, store)
 
-	call := capability.Call{Family: "http", Mutates: true, Target: "gmail.googleapis.com"}
+	call := capability.Call{Family: "http", Write: true, Target: "gmail.googleapis.com"}
 	if err := g.Record("gmail.send", call, capability.ScopeAlways); err != nil {
 		t.Fatalf("record: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestGrants_SessionIsToolScopedAndEpochBound(t *testing.T) {
 	g := capability.NewGrants(ep, nil)
 	env := capability.Env{Epochs: reg}
 
-	call := capability.Call{Family: "http", Mutates: true, Target: "api.github.com"}
+	call := capability.Call{Family: "http", Write: true, Target: "api.github.com"}
 	if err := g.Record("github.create_issue", call, capability.ScopeSession); err != nil {
 		t.Fatalf("record: %v", err)
 	}

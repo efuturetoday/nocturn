@@ -18,13 +18,13 @@ func TestNew_CageBoundsToServerHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := []capability.Call{
-		{Family: "http", Mutates: true, Target: "mcp.example.com"},
-		{Family: "http", Mutates: false, Target: "mcp.example.com"},
+		{Family: "http", Write: true, Target: "mcp.example.com"},
+		{Family: "http", Write: false, Target: "mcp.example.com"},
 	}
 	denied := []capability.Call{
-		{Family: "http", Mutates: true, Target: "evil.example.com"},
-		{Family: "dns", Mutates: false, Target: "mcp.example.com"},
-		{Family: "file", Mutates: true, Target: "/work/x"},
+		{Family: "http", Write: true, Target: "evil.example.com"},
+		{Family: "dns", Write: false, Target: "mcp.example.com"},
+		{Family: "file", Write: true, Target: "/work/x"},
 	}
 	for _, c := range allowed {
 		if !conn.cage.Allows(c) {

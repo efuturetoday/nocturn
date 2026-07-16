@@ -23,10 +23,10 @@ type GrantsStore struct {
 }
 
 type grantRecord struct {
-	Tool    string `json:"tool"`
-	Family  string `json:"family"`
-	Mutates bool   `json:"mutates"`
-	Target  string `json:"target"`
+	Tool   string `json:"tool"`
+	Family string `json:"family"`
+	Write  bool   `json:"write"`
+	Target string `json:"target"`
 }
 
 var _ capability.GrantStore = (*GrantsStore)(nil)
@@ -74,10 +74,10 @@ func (s *GrantsStore) Record(tool string, call capability.Call) error {
 
 // GrantView is one persisted "always" grant, for listing/revoking in the UI.
 type GrantView struct {
-	Tool    string
-	Family  string
-	Mutates bool
-	Target  string
+	Tool   string
+	Family string
+	Write  bool
+	Target string
 }
 
 // List returns the persisted "always" grants (a snapshot), for a /grants listing.
@@ -107,7 +107,7 @@ func (s *GrantsStore) Remove(g GrantView) error {
 }
 
 func recordFor(tool string, call capability.Call) grantRecord {
-	return grantRecord{Tool: tool, Family: call.Family, Mutates: call.Mutates, Target: call.Target}
+	return grantRecord{Tool: tool, Family: call.Family, Write: call.Write, Target: call.Target}
 }
 
 func (s *GrantsStore) persist() error {

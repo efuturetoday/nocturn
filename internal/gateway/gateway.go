@@ -84,7 +84,7 @@ func factLine(toolName string, call capability.Call) string {
 	if name == "" {
 		name = call.Family
 	}
-	op := call.Family + " " + opWord(call.Mutates)
+	op := call.Family + " " + opWord(call.Write)
 	if call.Target != "" {
 		return "via " + name + " → " + op + " @ " + call.Target
 	}
@@ -92,8 +92,8 @@ func factLine(toolName string, call capability.Call) string {
 }
 
 // opWord renders the mutation axis for a human: reads vs writes.
-func opWord(mutates bool) string {
-	if mutates {
+func opWord(write bool) string {
+	if write {
 		return "write"
 	}
 	return "read"

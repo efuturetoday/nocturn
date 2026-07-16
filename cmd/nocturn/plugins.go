@@ -169,12 +169,8 @@ func wirePluginOAuth(ctx context.Context, inj *secret.Injector, vault *secret.Va
 // decision; per-effect asks still happen at runtime.
 func reviewPlugin(m plugin.Manifest) (bool, error) {
 	fmt.Printf("\nInstall plugin %q v%s — it may attempt:\n", m.Name, m.Version)
-	for _, r := range m.Requires {
-		access := "read"
-		if r.Mutates {
-			access = "write"
-		}
-		fmt.Printf("    %-5s %-5s %s\n", r.Family, access, r.Target)
+	for _, e := range m.Cage {
+		fmt.Printf("    %-5s %-11s %s\n", e.Family, strings.Join(e.Access, "+"), e.Target)
 	}
 	for _, td := range m.Tools {
 		mark := ""

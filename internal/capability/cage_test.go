@@ -7,9 +7,9 @@ import (
 	"github.com/efuturetoday/nocturn/internal/capability"
 )
 
-// call builds a Call on the reach + write axes. mutates=false is a read.
-func call(family string, mutates bool, host string) capability.Call {
-	c := capability.Call{Family: family, Mutates: mutates}
+// call builds a Call on the reach + write axes. write=false is a read.
+func call(family string, write bool, host string) capability.Call {
+	c := capability.Call{Family: family, Write: write}
 	if host != "" {
 		c.Target = host
 	}
@@ -22,19 +22,19 @@ func TestCage_Allows(t *testing.T) {
 		capability.Pair{Family: "dns", TargetGlob: "*", Writes: capability.MatchRead},
 	)
 	cases := []struct {
-		family  string
-		mutates bool
-		host    string
-		want    bool
+		family string
+		write  bool
+		host   string
+		want   bool
 	}{
 		{"http", false, "api.example.com", true},
-		{"http", false, "evil.com", false},        // host outside
-		{"http", true, "api.example.com", false},  // write outside a read-only reach
-		{"dns", false, "anything", true},          // wildcard host, read
+		{"http", false, "evil.com", false},       // host outside
+		{"http", true, "api.example.com", false}, // write outside a read-only reach
+		{"dns", false, "anything", true},         // wildcard host, read
 	}
 	for _, tc := range cases {
-		if got := c.Allows(call(tc.family, tc.mutates, tc.host)); got != tc.want {
-			t.Errorf("Allows(%s mutates=%v %s) = %v, want %v", tc.family, tc.mutates, tc.host, got, tc.want)
+		if got := c.Allows(call(tc.family, tc.write, tc.host)); got != tc.want {
+			t.Errorf("Allows(%s write=%v %s) = %v, want %v", tc.family, tc.write, tc.host, got, tc.want)
 		}
 	}
 }

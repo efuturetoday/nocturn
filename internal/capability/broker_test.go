@@ -109,13 +109,13 @@ func TestPolicy_Evaluate(t *testing.T) {
 		{
 			name:   "read-only rule does NOT match a write",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   capability.Call{Family: "http", Mutates: true, Target: "api.example.com"},
+			call:   capability.Call{Family: "http", Write: true, Target: "api.example.com"},
 			want:   capability.Deny,
 		},
 		{
 			name:   "write-only rule does NOT match a read",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchWrite, Effect: capability.Ask, Epoch: capability.Permanent}}},
-			call:   capability.Call{Family: "http", Mutates: false, Target: "api.example.com"},
+			call:   capability.Call{Family: "http", Write: false, Target: "api.example.com"},
 			want:   capability.Deny,
 		},
 	}
@@ -136,8 +136,8 @@ func TestPolicy_ReadsAllowWritesAsk(t *testing.T) {
 		{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
 		{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchWrite, Effect: capability.Ask, Epoch: capability.Permanent},
 	}}
-	read := capability.Call{Family: "http", Mutates: false, Target: "api.example.com"}
-	write := capability.Call{Family: "http", Mutates: true, Target: "api.example.com"}
+	read := capability.Call{Family: "http", Write: false, Target: "api.example.com"}
+	write := capability.Call{Family: "http", Write: true, Target: "api.example.com"}
 
 	if got := policy.Evaluate(read, capability.Env{}); got != capability.Allow {
 		t.Fatalf("read: got %v, want Allow (reads run still)", got)
@@ -250,7 +250,7 @@ func TestEvaluate_TargetGlobAndWildcard(t *testing.T) {
 		{"notes/*", "secrets/k", capability.Deny},
 	}
 	for _, tc := range cases {
-		got := rule(tc.glob).Evaluate(capability.Call{Family: "file", Mutates: true, Target: tc.target}, capability.Env{})
+		got := rule(tc.glob).Evaluate(capability.Call{Family: "file", Write: true, Target: tc.target}, capability.Env{})
 		if got != tc.want {
 			t.Errorf("glob %q target %q: got %v, want %v", tc.glob, tc.target, got, tc.want)
 		}

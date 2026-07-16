@@ -87,7 +87,7 @@ func establishMCP(ctx context.Context, conn *mcpcap.Conn, srv mcpcap.Server, reg
 	// sees no outermost tool name — record the ephemeral grant under tool "" to
 	// match, scoped to exactly (http.write, <host>) for this setup context only.
 	setup := capability.NewGrants(capability.Permanent, nil)
-	_ = setup.Record("", capability.Call{Family: "http", Mutates: true, Target: conn.Host()}, capability.ScopeSession)
+	_ = setup.Record("", capability.Call{Family: "http", Write: true, Target: conn.Host()}, capability.ScopeSession)
 	setupCtx := capability.WithGrants(ctx, setup)
 
 	if err := conn.Connect(setupCtx); err != nil {

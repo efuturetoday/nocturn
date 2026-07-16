@@ -206,7 +206,7 @@ Festgehalten, was fehlt und warum:
   2. **Plugin-Pendant — erledigt:** `plugin.SecretName(owner, cred, host)` → **`plugin:<name>/<cred>@<host>`**
      (install.go), OAuth-Token host-gekeyt (plugins.go `wirePluginOAuth`). Manifest-Host-Wechsel bei gleichem
      Plugin-/Credential-Namen → anderer Key → Re-Auth, kein stiller Cross-Host-Reuse. Zusätzlich erzwingt
-     `Manifest.Validate()` jetzt, dass jeder `credential.host` vom `requires`-Cage gedeckt ist (Kohärenz).
+     `Manifest.Validate()` jetzt, dass jeder `credential.host` vom `cage` gedeckt ist (Kohärenz).
      Regressionstest `TestHost_CredentialHostBound_NoCrossHostReuse`. (Plugins waren ohnehin besser umzäunt:
      Cage + Install-Review-bei-jedem-Start; jetzt zusätzlich strukturell host-gebunden.)
   3. **Granularität:** Bindung an Hostname (kein Port), konsistent mit dem `hostMatches`-Scope; Host:Port

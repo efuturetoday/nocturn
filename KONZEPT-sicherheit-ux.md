@@ -304,7 +304,7 @@ kritisch).
 | Tor 2 (Mensch fragt) | **Freigabe** | Zustimmung · Consent |
 | interne http/file/dns-Ebene | *(kein Nutzer-Name)* | Systemzugriff · Grundzugriff |
 
-Im Code bleibt Englisch (`hosts`, `access:[read,write]`, `tool.mutates`,
+Im Code bleibt Englisch (`hosts`, `access:[read,write]`, `Call.Write`,
 `tool.consequential`, `tool.intent`).
 
 ---
@@ -454,7 +454,7 @@ In `deny>ask>allow` gilt **ask schlägt allow**. Daraus:
 | `full` | `verändernd→Allow` für die Agent-Hosts (Präzedenz > Base-Ask), **minus kritisch-Floor** | trusted Pipelines |
 
 Read/verändernd-Klassifikation (für Preset-Ableitung): nativ per HTTP-Methode, Plugin per
-Tool-`mutates`, MCP per `readOnlyHint`; unklassifizierbar = verändernd (fail-closed).
+die `Call.Write`-Achse, MCP per `readOnlyHint`; unklassifizierbar = verändernd (fail-closed).
 
 **Der Unterschied attended/unattended:**
 
@@ -531,14 +531,15 @@ zeigt beide Zeilen. **Risiko:** niedrig (kein Broker-Kern). **Shipbar:** ja, sof
 **Ziel:** „Capability" (protokoll.verb) → zwei Achsen; der Zaun prüft Host+verändert?,
 die Policy eine Regel `verändernd→Ask, lesend→Allow`.
 **Umgesetzt (build/vet/`test -race` grün):**
-- `internal/capability/broker.go` — `Call{Family, Mutates, Target}`; **`Match`** (MatchNone/Read/
-  Write/Any, fail-closed-Null) auf `Rule`/`Pair` = die Schreibrecht-Achse; `matches` prüft `Writes.covers(Mutates)`.
+- `internal/capability/broker.go` — `Call{Family, Write, Target}`; **`Match`** (MatchNone/Read/
+  Write/Any, fail-closed-Null) auf `Rule`/`Pair` = die Schreibrecht-Achse; `matches` prüft `Writes.covers(Write)`.
+  `capability.ParseAccess([]string)` = die eine Stelle, wo Author-Tokens `read`/`write` → `Match` werden.
 - `internal/capability/cage.go` — `Pair{Family, TargetGlob, Writes}`.
-- `internal/capability/grants.go` + `internal/agent/grants_store.go` — Schlüssel `(Tool, Family, Mutates, Target)`.
-- `internal/netcap/*` — `mutatesForMethod` (GET=false, POST/…=true), Family=http; Credential family-scoped.
-- `internal/filecap/*` — Family=file, Mutates aus read/write. `internal/mcpcap/*` — ein `http`-Reach `MatchAny`.
-- `internal/plugin/{manifest,install}.go` — **kein Legacy-Bridge**: `Require{Family, Target, Mutates}`
-  (`mutates:true` = read+write, write⊇read), `CredentialDecl{Family}`; `plugin.json`-Manifeste migriert.
+- `internal/capability/grants.go` + `internal/agent/grants_store.go` — Schlüssel `(Tool, Family, Write, Target)`.
+- `internal/netcap/*` — `writeForMethod` (GET=false, POST/…=true), Family=http; Credential family-scoped.
+- `internal/filecap/*` — Family=file, Write aus read/write. `internal/mcpcap/*` — ein `http`-Reach `MatchAny`.
+- `internal/plugin/{manifest,install}.go` — **kein Legacy-Bridge**: `CageEntry{Family, Target, Access []string}`
+  (`access:[read,write]`, explizit/fail-closed), `CredentialDecl{Family}`; `plugin.json`-Manifeste migriert.
 - `internal/secret/*` — Callers injizieren mit `Family` ("http"); `Binding.Capability` bleibt generischer Scope-String.
 - `cmd/nocturn/app.go` — Base-Policy: `lesend→Allow, verändernd→Ask` (eine Regel-Paar).
 **Erreicht:** http/dns/file identisch gegated wie vorher (Bestandstests angepasst grün); `lesend` läuft still.
@@ -553,12 +554,12 @@ Grant-Host-Granularität (matchende Cage-Entry, §4) + Ordner-Normalisierung →
   `consequentialChoices` (nur once/deny), kein Record. + **Rate-Check auf dem Grant-Kurzschluss-Pfad**
   (Regression: „immer"-Grant kann nicht unbegrenzt repliziert werden).
 - `internal/plugin/runner.go` — stempelt `WithConsequential`, wenn `ToolDecl.Consequential`.
-- `internal/mcpcap/{tools,mcpcap}.go` — `readOnlyHint` → per-Tool ctx-Flag → `Call.Mutates=!readOnly`
+- `internal/mcpcap/{tools,mcpcap}.go` — `readOnlyHint` → per-Tool ctx-Flag → `Call.Write=!readOnly`
   (read-only MCP-Tool = read = still; Setup/Writes = Ask). Decke bleibt read+write (MatchAny).
 - `cmd/nocturn/plugins.go` — Install-Review markiert consequential Tools.
 - Tests: `TestAuthorize_Consequential_NeverAutoNeverRemembered` (fragt trotz Grant, nur once/deny),
   `TestAuthorize_StandingGrantRespectsRateCap`.
-**Hinweis:** Der Manifest-Achsen-Umbau (`requires{family,target,mutates}`, `CredentialDecl{family}`,
+**Hinweis:** Der Manifest-Achsen-Umbau (`cage{family,target,access}`, `CredentialDecl{family}`,
 Base-Policy reads-Allow/writes-Ask) wurde bereits in **Phase 1** mitgezogen (kein Legacy-Bridge).
 Offen für **Phase 4**: per-Tool `does:read/write` für die Autonomie-Preset-Ableitung.
 

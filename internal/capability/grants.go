@@ -37,9 +37,9 @@ type GrantStore interface {
 // already answered by a standing grant. Each owner (session / one agent) has its OWN
 // Grants over its OWN store — strict isolation, no cross-owner sharing.
 type Grants struct {
-	Epoch   EpochID    // session grants bind here; closing it revokes them
-	Cage *Cage   // optional workspace-level upper bound (nil = none)
-	always  GrantStore // durable always-grants for this owner; nil = none
+	Epoch  EpochID    // session grants bind here; closing it revokes them
+	Cage   *Cage      // optional workspace-level upper bound (nil = none)
+	always GrantStore // durable always-grants for this owner; nil = none
 
 	mu      sync.Mutex
 	session []sessionGrant
@@ -55,8 +55,8 @@ type sessionGrant struct {
 
 // writeMatch maps a call's mutation flag to the Match a recorded grant should use,
 // so a grant covers exactly the read/write class it was approved for.
-func writeMatch(mutates bool) Match {
-	if mutates {
+func writeMatch(write bool) Match {
+	if write {
 		return MatchWrite
 	}
 	return MatchRead
@@ -95,7 +95,7 @@ func (g *Grants) Record(tool string, call Call, scope Scope) error {
 		g.session = append(g.session, sessionGrant{tool: tool, rule: Rule{
 			Family:     call.Family,
 			TargetGlob: call.Target, // exact target; "" matches targetless calls
-			Writes:     writeMatch(call.Mutates),
+			Writes:     writeMatch(call.Write),
 			Effect:     Allow,
 			Epoch:      g.Epoch,
 		}})

@@ -15,7 +15,7 @@ func TestGrantsStore_PerOwnerIsolation(t *testing.T) {
 	sessionStore := agent.LoadGrantsStore(filepath.Join(dir, "grants.json"))
 	agentStore := agent.LoadGrantsStore(agent.GrantsPath(filepath.Join(dir, "agents"), "triage"))
 
-	call := capability.Call{Family: "http", Mutates: true, Target: "api.github.com"}
+	call := capability.Call{Family: "http", Write: true, Target: "api.github.com"}
 	if err := sessionStore.Record("github.create_issue", call); err != nil {
 		t.Fatalf("record: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestGrantsStore_PerOwnerIsolation(t *testing.T) {
 // A grant survives a reload of the SAME file (persistence), and Remove revokes it.
 func TestGrantsStore_PersistAndRevoke(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "grants.json")
-	call := capability.Call{Family: "http", Mutates: true, Target: "gmail.googleapis.com"}
+	call := capability.Call{Family: "http", Write: true, Target: "gmail.googleapis.com"}
 
 	s := agent.LoadGrantsStore(path)
 	if err := s.Record("gmail.send", call); err != nil {

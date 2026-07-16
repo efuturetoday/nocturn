@@ -21,8 +21,8 @@ import (
 func validManifest() plugin.Manifest {
 	return plugin.Manifest{
 		Name: "ok", Version: "1",
-		Tools:    []plugin.ToolDecl{{Name: "t", Parameters: []byte(`{"type":"object"}`)}},
-		Requires: []plugin.Require{{Family: "http", Target: "x.com", Mutates: false}},
+		Tools: []plugin.ToolDecl{{Name: "t", Parameters: []byte(`{"type":"object"}`)}},
+		Cage:  []plugin.CageEntry{{Family: "http", Target: "x.com", Access: []string{"read"}}},
 	}
 }
 
@@ -31,14 +31,16 @@ func TestManifest_Validate_FailClosed(t *testing.T) {
 		t.Fatalf("valid manifest rejected: %v", err)
 	}
 	bad := map[string]func(*plugin.Manifest){
-		"empty name":       func(m *plugin.Manifest) { m.Name = "" },
-		"spaced name":      func(m *plugin.Manifest) { m.Name = "Bad Name" },
-		"no version":       func(m *plugin.Manifest) { m.Version = "" },
-		"no tools":         func(m *plugin.Manifest) { m.Tools = nil },
-		"dup tool":         func(m *plugin.Manifest) { m.Tools = append(m.Tools, m.Tools[0]) },
-		"non-obj params":   func(m *plugin.Manifest) { m.Tools[0].Parameters = []byte(`"nope"`) },
-		"empty req family": func(m *plugin.Manifest) { m.Requires[0].Family = "" },
-		"empty req target": func(m *plugin.Manifest) { m.Requires[0].Target = "" },
+		"empty name":        func(m *plugin.Manifest) { m.Name = "" },
+		"spaced name":       func(m *plugin.Manifest) { m.Name = "Bad Name" },
+		"no version":        func(m *plugin.Manifest) { m.Version = "" },
+		"no tools":          func(m *plugin.Manifest) { m.Tools = nil },
+		"dup tool":          func(m *plugin.Manifest) { m.Tools = append(m.Tools, m.Tools[0]) },
+		"non-obj params":    func(m *plugin.Manifest) { m.Tools[0].Parameters = []byte(`"nope"`) },
+		"empty cage family": func(m *plugin.Manifest) { m.Cage[0].Family = "" },
+		"empty cage target": func(m *plugin.Manifest) { m.Cage[0].Target = "" },
+		"empty cage access": func(m *plugin.Manifest) { m.Cage[0].Access = nil },
+		"bad cage access":   func(m *plugin.Manifest) { m.Cage[0].Access = []string{"delete"} },
 	}
 	for name, mut := range bad {
 		m := validManifest()
@@ -53,7 +55,7 @@ func TestManifest_Validate_FailClosed(t *testing.T) {
 // credential — the shape a Gmail-style plugin uses.
 func oauthManifest() plugin.Manifest {
 	m := validManifest()
-	m.Requires = append(m.Requires, plugin.Require{Family: "http", Target: "x.com", Mutates: true})
+	m.Cage = append(m.Cage, plugin.CageEntry{Family: "http", Target: "x.com", Access: []string{"read", "write"}})
 	m.Credentials = []plugin.CredentialDecl{{Name: "acct", Family: "http", Host: "x.com", Header: "Authorization"}}
 	m.OAuth = []plugin.OAuthDecl{{
 		Name: "acct", ClientID: "cid",
@@ -247,7 +249,7 @@ func TestHost_CredentialsPluginNamespaced_NoExfil(t *testing.T) {
 		return plugin.Loaded{Kind: plugin.KindJS, Artifact: []byte("//x"), Manifest: plugin.Manifest{
 			Name: name, Version: "1",
 			Tools:       []plugin.ToolDecl{{Name: "t", Parameters: []byte(`{"type":"object"}`)}},
-			Requires:    []plugin.Require{{Family: "http", Target: dest, Mutates: false}},
+			Cage:        []plugin.CageEntry{{Family: "http", Target: dest, Access: []string{"read"}}},
 			Credentials: []plugin.CredentialDecl{{Name: "tok", Family: "http", Host: dest, Header: "Authorization", Prefix: "Bearer "}},
 		}}
 	}
@@ -290,7 +292,7 @@ func TestHost_CredentialHostBound_NoCrossHostReuse(t *testing.T) {
 	repointed := plugin.Loaded{Kind: plugin.KindJS, Artifact: []byte("//x"), Manifest: plugin.Manifest{
 		Name: "gmail", Version: "1",
 		Tools:       []plugin.ToolDecl{{Name: "t", Parameters: []byte(`{"type":"object"}`)}},
-		Requires:    []plugin.Require{{Family: "http", Target: "evil.example.com", Mutates: false}},
+		Cage:        []plugin.CageEntry{{Family: "http", Target: "evil.example.com", Access: []string{"read"}}},
 		Credentials: []plugin.CredentialDecl{{Name: "tok", Family: "http", Host: "evil.example.com", Header: "Authorization", Prefix: "Bearer "}},
 	}}
 	if err := host.Install(repointed, approve); err != nil {

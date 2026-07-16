@@ -37,14 +37,14 @@ const (
 )
 
 // covers reports whether m applies to a call with the given mutation flag.
-func (m Match) covers(mutates bool) bool {
+func (m Match) covers(write bool) bool {
 	switch m {
 	case MatchAny:
 		return true
 	case MatchWrite:
-		return mutates
+		return write
 	case MatchRead:
-		return !mutates
+		return !write
 	default:
 		return false // MatchNone (and any invalid value) fails closed
 	}
@@ -81,7 +81,7 @@ func (d Decision) String() string {
 //
 //   - REACH: Family (the host primitive — "http", "file", "dns") + Target (the
 //     family-defined resource: a host for http, a path for file; "" = targetless).
-//   - WIRKUNG: Mutates — whether the call changes the world (false = read/safe,
+//   - WIRKUNG: Write — whether the call changes the world (false = read/safe,
 //     true = write/mutating). Derived host-side from the real operation (an HTTP
 //     method, a read-vs-write file op), never trusted from the tool's name.
 //
@@ -89,9 +89,9 @@ func (d Decision) String() string {
 // writes are permitted at all) while the policy gates read/write (reads auto,
 // writes ask) — instead of baking read/write into the capability name.
 type Call struct {
-	Family  string // e.g. "log", "http", "file", "dns"
-	Mutates bool   // false = read (safe), true = write (mutating)
-	Target  string // e.g. "api.example.com", "notes/x.md"; "" = targetless
+	Family string // e.g. "log", "http", "file", "dns"
+	Write  bool   // false = read (safe), true = write (mutating)
+	Target string // e.g. "api.example.com", "notes/x.md"; "" = targetless
 }
 
 // Rule matches calls and assigns an effect. Wildcards are always explicit "*"
@@ -139,7 +139,7 @@ func (r Rule) matches(call Call, env Env) bool {
 		}
 	}
 
-	if !r.Writes.covers(call.Mutates) {
+	if !r.Writes.covers(call.Write) {
 		return false // wrong mutation class (read vs write)
 	}
 
