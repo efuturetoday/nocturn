@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -47,7 +48,25 @@ func (n *tuiNotifier) Notify(intent string, options []hitl.Option) error {
 	return n.resolve(<-reply)
 }
 
-func tuiCmd(_ []string) error {
+var wsNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// resolveWorkspace picks the workspace from the optional first CLI argument,
+// defaulting to "default". The name is confined to a safe folder name — no path
+// separators or traversal — so `nocturn <name>` can never point outside workspaces/.
+// A fresh name is created on first run (new vault + empty everything), so switching
+// or adding a workspace is just a different launch argument.
+func resolveWorkspace(args []string) (name, dir string, err error) {
+	name = "default"
+	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
+		name = strings.TrimSpace(args[0])
+	}
+	if !wsNameRe.MatchString(name) {
+		return "", "", fmt.Errorf("invalid workspace name %q (want %s)", name, wsNameRe)
+	}
+	return name, filepath.Join("workspaces", name), nil
+}
+
+func tuiCmd(args []string) error {
 	_ = godotenv.Load()
 	baseURL, apiKey := os.Getenv("FREELLM_BASE_URL"), os.Getenv("FREELLM_API_KEY")
 	modelName := os.Getenv("FREELLM_MODEL")
@@ -61,12 +80,18 @@ func tuiCmd(_ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	// The workspace is the portable, versionable unit of state (ADR-10). The model
-	// inhabits ONLY <ws>/mnt/ (filecap Root + the sandbox /work mount); skills/,
-	// grants.json, and secrets.age are host-managed siblings OUTSIDE that mount, so
-	// the model can neither see nor write them — a structural control-plane/
-	// data-plane split.
-	const wsDir = "workspaces/default"
+	// The workspace is the portable, versionable unit of state (ADR-10) AND the
+	// isolation unit: everything below reads from wsDir (vault, grants, agents,
+	// plugins, skills, filecap root), so a different workspace is a fully separate
+	// context. The model inhabits ONLY <ws>/mnt/ (filecap Root + the sandbox /work
+	// mount); skills/, grants.json, and secrets.age are host-managed siblings OUTSIDE
+	// that mount, so the model can neither see nor write them — a structural
+	// control-plane/data-plane split. One workspace at a time (multi-tenant = FRAGEN #12).
+	wsName, wsDir, err := resolveWorkspace(args)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Workspace: %s\n", wsName)
 
 	// Unlock (or, first run, create) the encrypted secret vault — ALL secret
 	// material, OAuth refresh tokens included, lives age-encrypted in
