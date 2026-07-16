@@ -72,11 +72,11 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	}
 	method = strings.ToUpper(method)
 
-	// The capability — http.read for safe methods, http.write for mutating ones —
-	// is what the policy and credential bindings key on. The raw HTTP method
-	// never reaches the security layer.
-	capName := capabilityForMethod(method)
-	call := capability.Call{Capability: capName, Target: host}
+	// The mutation axis — read for safe methods, write for mutating ones — is what
+	// the policy gates on; the family + host is the reach the ceiling and credential
+	// bindings key on. The raw HTTP method never reaches the security layer.
+	mutates := mutatesForMethod(method)
+	call := capability.Call{Family: "http", Mutates: mutates, Target: host}
 
 	// Everything past the gate runs only if Do authorizes: the leak-scan,
 	// credential injection, and the request itself are unreachable on a denied
@@ -90,10 +90,11 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 			return nil, err
 		}
 
-		// Host-owned, capability- and host-scoped credential injection: only a
-		// credential whose binding matches this capability AND destination host
-		// rides along (nil Injector = none).
-		if _, err := n.Credentials.InjectMatching(ctx, &req, capName, host); err != nil {
+		// Host-owned, family- and host-scoped credential injection: only a
+		// credential whose binding matches the "http" family AND destination host
+		// rides along (a bearer is action-agnostic — same for read and write; nil
+		// Injector = none).
+		if _, err := n.Credentials.InjectMatching(ctx, &req, "http", host); err != nil {
 			return nil, err
 		}
 
@@ -140,17 +141,16 @@ func egressParts(req secret.Request) []string {
 	return parts
 }
 
-// capabilityForMethod maps an HTTP method to the capability that gates it: safe
-// (read) methods to http.read, mutating (write) methods to http.write. The
-// capability — not the raw verb — is what the policy and credential bindings key
-// on, keeping read/write a first-class authority and the HTTP method out of the
-// security layer.
-func capabilityForMethod(method string) string {
+// mutatesForMethod maps an HTTP method to the mutation axis the broker gates on:
+// safe methods are reads (false), mutating methods are writes (true). The mutation
+// flag — not the raw verb — is what the policy keys on, keeping read/write a
+// first-class authority and the HTTP method out of the security layer.
+func mutatesForMethod(method string) bool {
 	switch method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return "http.read"
+		return false
 	default:
-		return "http.write"
+		return true
 	}
 }
 
@@ -174,7 +174,7 @@ func rejectManualCredentials(req secret.Request) error {
 // approval. This is a sibling capability sharing the same Guard: adding it grew
 // no god-object, just a small method with its own dependency (a resolver).
 func (n *Net) Resolve(ctx context.Context, host string) ([]string, error) {
-	call := capability.Call{Capability: "dns.resolve", Target: host}
+	call := capability.Call{Family: "dns", Mutates: false, Target: host}
 	return gateway.Do(ctx, n.Guard, call, "resolve "+host, func() ([]string, error) {
 		resolver := n.Resolver
 		if resolver == nil {

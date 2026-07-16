@@ -583,7 +583,14 @@ func (m chatModel) statusLine() string {
 func (m chatModel) approvalView() string {
 	var b strings.Builder
 	b.WriteString(m.rule() + "\n")
-	b.WriteString(askStyle.Render("Approve ") + m.approval.intent + "\n")
+	// The intent is a semantic head plus an optional host-computed fact line
+	// ("via <tool> → <cap> @ <host>") joined by a newline; render the head normally
+	// and the fact line faint so the human always sees what is really being gated.
+	head, fact, hasFact := strings.Cut(m.approval.intent, "\n")
+	b.WriteString(askStyle.Render("Approve ") + head + "\n")
+	if hasFact {
+		b.WriteString(hintStyle.Render(fact) + "\n")
+	}
 	for i, o := range m.approval.options {
 		if i == m.approval.cursor {
 			b.WriteString(selectedStyle.Render("▸ " + o.Label))

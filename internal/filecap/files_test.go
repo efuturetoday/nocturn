@@ -22,8 +22,7 @@ func allowGuard(rules ...capability.Rule) *gateway.Guard {
 
 func allowAll() *gateway.Guard {
 	return allowGuard(
-		capability.Rule{Capability: "file.read", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
-		capability.Rule{Capability: "file.write", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+		capability.Rule{Family: "file", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
 	)
 }
 
@@ -80,7 +79,7 @@ func TestFiles_ConfinesToWorkspace(t *testing.T) {
 func TestFiles_TargetIsPathGlobMatched(t *testing.T) {
 	root := t.TempDir()
 	guard := allowGuard(capability.Rule{
-		Capability: "file.write", TargetGlob: "notes/*", Effect: capability.Allow, Epoch: capability.Permanent,
+		Family: "file", TargetGlob: "notes/*", Writes: capability.MatchWrite, Effect: capability.Allow, Epoch: capability.Permanent,
 	})
 	write := toolByName(filecap.New(guard, root).Tools(), "file.write")
 

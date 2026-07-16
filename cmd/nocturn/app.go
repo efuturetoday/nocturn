@@ -91,18 +91,17 @@ func tuiCmd(_ []string) error {
 	// token if configured). The guest never sees the token — it is stamped in only
 	// at the gateway boundary, for this destination.
 	inj := secret.NewInjector(store, secret.Binding{
-		Secret: googleCredentialName, Capability: "http.read", Host: "gmail.googleapis.com",
+		Secret: googleCredentialName, Capability: "http", Host: "gmail.googleapis.com",
 		Header: "Authorization", Prefix: "Bearer ",
 	})
 	scanner := secret.NewScanner(store)
 	netCap := &netcap.Net{
 		Guard: &gateway.Guard{
+			// Base policy on the WIRKUNG axis: reads run still, writes ask — for every
+			// family at once (§3). Reach is bounded per caller by ceilings + grants.
 			Policy: capability.Policy{Rules: []capability.Rule{
-				{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
-				{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
-				{Capability: "dns.resolve", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
-				{Capability: "file.read", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
-				{Capability: "file.write", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
+				{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchWrite, Effect: capability.Ask, Epoch: capability.Permanent},
 			}},
 			Approvals: engine,
 			Epochs:    epochs, // shared with the session, so "Allow this session" grants are revocable
@@ -182,7 +181,8 @@ func tuiCmd(_ []string) error {
 	// Workspace agents (<ws>/agents/*.md): host-side control-plane, validated here
 	// and run from the TUI with /<name> <task>. Each is a prompt + the tools it may
 	// use + when it runs; the model cannot author them (outside its mount, ADR-10).
-	agentDefs, err := agent.LoadAgents(filepath.Join(wsDir, "agents"))
+	agentsDir := filepath.Join(wsDir, "agents")
+	agentDefs, err := agent.LoadAgents(agentsDir)
 	if err != nil {
 		return err
 	}
@@ -199,8 +199,11 @@ func tuiCmd(_ []string) error {
 	// Durable "always" grants live IN the workspace (ADR-10): per-workspace,
 	// portable, versionable — and host-managed, outside the model's mount, so the
 	// model can never write itself a standing grant. Missing file = none.
-	grants := agent.LoadGrantsStore(filepath.Join(wsDir, "grants.json"))
-	session := agent.New(b, netCap.Guard, epochs, grants)
+	// The interactive session's own "always" grants (the workspace-root file). Each
+	// AGENT gets its OWN store inside its folder (built per run below) — strict
+	// per-owner isolation, no cross-owner sharing (KONZEPT §9).
+	sessionGrants := agent.LoadGrantsStore(filepath.Join(wsDir, "grants.json"))
+	session := agent.New(b, netCap.Guard, epochs, sessionGrants)
 	defer session.Close()
 	startTurn := func(input string) context.CancelFunc {
 		turnCtx, cancel := context.WithCancel(ctx)
@@ -222,9 +225,11 @@ func tuiCmd(_ []string) error {
 				break
 			}
 		}
+		// This agent's OWN durable grants live inside its folder — never the session's.
+		agentStore := agent.LoadGrantsStore(agent.GrantsPath(agentsDir, name))
 		turnCtx, cancel := context.WithCancel(ctx)
 		go func() {
-			_, err := agent.RunTask(turnCtx, b, epochs, grants, def, task)
+			_, err := agent.RunTask(turnCtx, b, epochs, agentStore, def, task)
 			p.Send(doneMsg{err: err})
 		}()
 		return cancel

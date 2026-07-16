@@ -62,6 +62,30 @@ func callIDFrom(ctx context.Context) uint64 {
 	return id
 }
 
+// toolNameKey carries the OUTERMOST model-facing tool name — the one the human
+// sees at a prompt and grants against — down the call chain to the gate.
+type toolNameKey struct{}
+
+// withToolName stamps name as the outermost tool for this chain. Outermost-wins:
+// a nested Invoke (a plugin's inner nocturn.call that reaches http/file/dns) does
+// NOT overwrite it, so a standing grant is remembered against the tool the model
+// picked (e.g. "gmail.send"), not the primitive it reached underneath ("http.write").
+func withToolName(ctx context.Context, name string) context.Context {
+	if _, ok := ctx.Value(toolNameKey{}).(string); ok {
+		return ctx // outermost already set — keep it
+	}
+	return context.WithValue(ctx, toolNameKey{}, name)
+}
+
+// ToolName returns the outermost tool name stamped for the current call chain, or
+// "" if none. The gateway keys a standing grant on this (the model-facing tool)
+// rather than the reconstructed primitive, so approving "gmail.send" never
+// silently allows "gmail.delete" on the same host.
+func ToolName(ctx context.Context) string {
+	n, _ := ctx.Value(toolNameKey{}).(string)
+	return n
+}
+
 // NewRegistry builds a Registry over the given tools. A nil slice yields an empty
 // registry (every call reports "unknown tool"), which is convenient for tests.
 func NewRegistry(tools []Tool) *Registry {
@@ -137,7 +161,8 @@ func (r *Registry) Specs() []Spec {
 func (r *Registry) Invoke(ctx context.Context, name, args string) (out string, err error) {
 	id := r.nextID.Add(1)
 	parent := callIDFrom(ctx)
-	ctx = withCallID(ctx, id) // so a nested Invoke records this call as its parent
+	ctx = withCallID(ctx, id)     // so a nested Invoke records this call as its parent
+	ctx = withToolName(ctx, name) // outermost-wins: the tool the model picked is what a grant remembers
 	r.emit(Event{ID: id, Parent: parent, Tool: name, Args: args, Phase: Start})
 	r.mu.RLock()
 	t, ok := r.tools[name]

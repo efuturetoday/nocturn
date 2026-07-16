@@ -28,10 +28,6 @@ import (
 	"github.com/efuturetoday/nocturn/internal/skill"
 )
 
-// grantSetID is the id of the default (single) session's grant set. A future
-// workspace layer supplies distinct ids here.
-const grantSetID = "default"
-
 // Session is the owner of one interactive session's lifecycle.
 type Session struct {
 	brain  *brain.Brain
@@ -55,7 +51,7 @@ func New(b *brain.Brain, g *gateway.Guard, r *capability.EpochRegistry, store ca
 		epochs: r,
 		store:  store,
 		conv:   b.NewConversation(),
-		grants: capability.NewGrants(grantSetID, r.Open(), store),
+		grants: capability.NewGrants(r.Open(), store),
 		skills: skill.NewActive(),
 	}
 }
@@ -83,7 +79,7 @@ func (s *Session) MarkSkill(name string) { s.skills.Mark(name) }
 // the grant-set id) survive. The next Ask starts clean.
 func (s *Session) Reset() {
 	s.epochs.Close(s.grants.Epoch)
-	s.grants = capability.NewGrants(grantSetID, s.epochs.Open(), s.store)
+	s.grants = capability.NewGrants(s.epochs.Open(), s.store)
 	s.conv = s.brain.NewConversation()
 	s.skills = skill.NewActive() // a fresh conversation has no skills loaded
 }

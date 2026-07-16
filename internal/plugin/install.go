@@ -90,8 +90,10 @@ func (h *Host) Install(l Loaded, approve func(Manifest) (bool, error)) error {
 	if h.Injector != nil {
 		owner := Owner(name)
 		for _, c := range l.Manifest.Credentials {
+			// The binding is scoped by FAMILY (http/file/dns): netcap injects with the
+			// family, and a bearer is action-agnostic (used on both reads and writes).
 			h.Injector.AddBinding(owner, secret.Binding{
-				Secret: SecretName(owner, c.Name, c.Host), Capability: c.Capability, Host: c.Host, Header: c.Header, Prefix: c.Prefix,
+				Secret: SecretName(owner, c.Name, c.Host), Capability: c.Family, Host: c.Host, Header: c.Header, Prefix: c.Prefix,
 			})
 		}
 	}

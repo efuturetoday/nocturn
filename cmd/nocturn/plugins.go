@@ -170,11 +170,21 @@ func wirePluginOAuth(ctx context.Context, inj *secret.Injector, vault *secret.Va
 func reviewPlugin(m plugin.Manifest) (bool, error) {
 	fmt.Printf("\nInstall plugin %q v%s — it may attempt:\n", m.Name, m.Version)
 	for _, r := range m.Requires {
-		fmt.Printf("    %-12s %s\n", r.Capability, r.Target)
+		access := "read"
+		if r.Mutates {
+			access = "write"
+		}
+		fmt.Printf("    %-5s %-5s %s\n", r.Family, access, r.Target)
 	}
 	for _, td := range m.Tools {
+		mark := ""
+		if td.Consequential {
+			mark = " [consequential — always asks, never remembered]"
+		}
 		if td.Intent != "" {
-			fmt.Printf("    tool %-8s asks: %q\n", td.Name, td.Intent)
+			fmt.Printf("    tool %-8s asks: %q%s\n", td.Name, td.Intent, mark)
+		} else if mark != "" {
+			fmt.Printf("    tool %-8s%s\n", td.Name, mark)
 		}
 	}
 	for _, c := range m.Credentials {

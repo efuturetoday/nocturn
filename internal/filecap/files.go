@@ -60,7 +60,7 @@ func (f *Files) readTool() tool.Tool {
 				return "", err
 			}
 			// Target is the workspace-relative path — the string the broker gates on.
-			call := capability.Call{Capability: "file.read", Target: target}
+			call := capability.Call{Family: "file", Mutates: false, Target: target}
 			return gateway.Do(ctx, f.Guard, call, "read "+target, func() (string, error) {
 				data, err := os.ReadFile(abs)
 				if err != nil {
@@ -97,7 +97,7 @@ func (f *Files) writeTool() tool.Tool {
 			if err != nil {
 				return "", err
 			}
-			call := capability.Call{Capability: "file.write", Target: target}
+			call := capability.Call{Family: "file", Mutates: true, Target: target}
 			intent := fmt.Sprintf("write %s (%d bytes)", target, len(a.Content))
 			return gateway.Do(ctx, f.Guard, call, intent, func() (string, error) {
 				if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {

@@ -9,7 +9,7 @@ import (
 
 func TestPolicy_Evaluate(t *testing.T) {
 	cap := func(name string, host string) capability.Call {
-		c := capability.Call{Capability: name}
+		c := capability.Call{Family: name}
 		if host != "" {
 			c.Target = host
 		}
@@ -30,15 +30,15 @@ func TestPolicy_Evaluate(t *testing.T) {
 		},
 		{
 			name:   "matching allow permits",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "log", Effect: capability.Allow, Epoch: capability.Permanent}}},
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "log", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
 			call:   cap("log", ""),
 			want:   capability.Allow,
 		},
 		{
-			name: "deny wins over allow for same capability",
+			name: "deny wins over allow for same family",
 			policy: capability.Policy{Rules: []capability.Rule{
-				{Capability: "log", Effect: capability.Allow, Epoch: capability.Permanent},
-				{Capability: "log", Effect: capability.Deny, Epoch: capability.Permanent},
+				{Family: "log", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
+				{Family: "log", Writes: capability.MatchAny, Effect: capability.Deny, Epoch: capability.Permanent},
 			}},
 			call: cap("log", ""),
 			want: capability.Deny,
@@ -46,58 +46,76 @@ func TestPolicy_Evaluate(t *testing.T) {
 		{
 			name: "ask beats allow but loses to deny",
 			policy: capability.Policy{Rules: []capability.Rule{
-				{Capability: "net.fetch", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
-				{Capability: "net.fetch", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+				{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
+				{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Ask, Epoch: capability.Permanent},
 			}},
-			call: cap("net.fetch", "api.example.com"),
+			call: cap("http", "api.example.com"),
 			want: capability.Ask,
 		},
 		{
-			name:   "explicit star capability matches any",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			name:   "explicit star family matches any",
+			policy: capability.Policy{Rules: []capability.Rule{{Family: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
 			call:   cap("log", ""),
 			want:   capability.Allow,
 		},
 		{
-			name:   "empty capability matches nothing (fail closed)",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "", Effect: capability.Allow, Epoch: capability.Permanent}}},
+			name:   "empty family matches nothing (fail closed)",
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			call:   cap("log", ""),
+			want:   capability.Deny,
+		},
+		{
+			name:   "MatchNone (forgotten Writes) matches nothing (fail closed)",
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "log", Effect: capability.Allow, Epoch: capability.Permanent}}},
 			call:   cap("log", ""),
 			want:   capability.Deny,
 		},
 		{
 			name:   "forgotten host does NOT allow a host-bearing call",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("net.fetch", "evil.com"),
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			call:   cap("http", "evil.com"),
 			want:   capability.Deny,
 		},
 		{
 			name:   "explicit star host allows any host",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("net.fetch", "anything.com"),
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			call:   cap("http", "anything.com"),
 			want:   capability.Allow,
 		},
 		{
 			name:   "host rule does not match a hostless call",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("net.fetch", ""),
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			call:   cap("http", ""),
 			want:   capability.Deny,
 		},
 		{
-			name:   "capability mismatch falls through to default deny",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "log", Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("net.fetch", ""),
+			name:   "family mismatch falls through to default deny",
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "log", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			call:   cap("http", ""),
 			want:   capability.Deny,
 		},
 		{
 			name:   "host glob allows matching host",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", TargetGlob: "*.example.com", Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("net.fetch", "api.example.com"),
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: "*.example.com", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			call:   cap("http", "api.example.com"),
 			want:   capability.Allow,
 		},
 		{
 			name:   "host glob denies non-matching host by default",
-			policy: capability.Policy{Rules: []capability.Rule{{Capability: "net.fetch", TargetGlob: "*.example.com", Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("net.fetch", "evil.com"),
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: "*.example.com", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			call:   cap("http", "evil.com"),
+			want:   capability.Deny,
+		},
+		{
+			name:   "read-only rule does NOT match a write",
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent}}},
+			call:   capability.Call{Family: "http", Mutates: true, Target: "api.example.com"},
+			want:   capability.Deny,
+		},
+		{
+			name:   "write-only rule does NOT match a read",
+			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchWrite, Effect: capability.Ask, Epoch: capability.Permanent}}},
+			call:   capability.Call{Family: "http", Mutates: false, Target: "api.example.com"},
 			want:   capability.Deny,
 		},
 	}
@@ -111,11 +129,29 @@ func TestPolicy_Evaluate(t *testing.T) {
 	}
 }
 
+// The base "reads still, writes ask" policy: one MatchRead→Allow rule and one
+// MatchWrite→Ask rule cover every family at once, keyed only on the mutation axis.
+func TestPolicy_ReadsAllowWritesAsk(t *testing.T) {
+	policy := capability.Policy{Rules: []capability.Rule{
+		{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchWrite, Effect: capability.Ask, Epoch: capability.Permanent},
+	}}
+	read := capability.Call{Family: "http", Mutates: false, Target: "api.example.com"}
+	write := capability.Call{Family: "http", Mutates: true, Target: "api.example.com"}
+
+	if got := policy.Evaluate(read, capability.Env{}); got != capability.Allow {
+		t.Fatalf("read: got %v, want Allow (reads run still)", got)
+	}
+	if got := policy.Evaluate(write, capability.Env{}); got != capability.Ask {
+		t.Fatalf("write: got %v, want Ask", got)
+	}
+}
+
 func TestEvaluate_TimeWindow(t *testing.T) {
 	policy := capability.Policy{Rules: []capability.Rule{
-		{Capability: "email", Effect: capability.Allow, Epoch: capability.Permanent, Window: capability.Daily(8, 0, 22, 0)},
+		{Family: "email", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent, Window: capability.Daily(8, 0, 22, 0)},
 	}}
-	call := capability.Call{Capability: "email"}
+	call := capability.Call{Family: "email"}
 
 	inside := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	outside := time.Date(2026, 1, 1, 23, 0, 0, 0, time.UTC)
@@ -130,9 +166,9 @@ func TestEvaluate_TimeWindow(t *testing.T) {
 
 func TestEvaluate_WindowWrapsMidnight(t *testing.T) {
 	policy := capability.Policy{Rules: []capability.Rule{
-		{Capability: "backup", Effect: capability.Allow, Epoch: capability.Permanent, Window: capability.Daily(22, 0, 6, 0)},
+		{Family: "backup", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent, Window: capability.Daily(22, 0, 6, 0)},
 	}}
-	call := capability.Call{Capability: "backup"}
+	call := capability.Call{Family: "backup"}
 
 	at2am := time.Date(2026, 1, 1, 2, 0, 0, 0, time.UTC)
 	at2pm := time.Date(2026, 1, 1, 14, 0, 0, 0, time.UTC)
@@ -148,12 +184,12 @@ func TestEvaluate_WindowWrapsMidnight(t *testing.T) {
 func TestEvaluate_RateLimit(t *testing.T) {
 	now := time.Unix(1000, 0)
 	rl := capability.NewRateLimiter(2, time.Minute, capability.WithClock(func() time.Time { return now }))
-	env := capability.Env{RateAllow: func(c capability.Call) bool { return rl.Allow(c.Capability) }}
+	env := capability.Env{RateAllow: func(c capability.Call) bool { return rl.Allow(c.Family) }}
 
 	policy := capability.Policy{Rules: []capability.Rule{
-		{Capability: "email", Effect: capability.Allow, Epoch: capability.Permanent},
+		{Family: "email", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
-	call := capability.Call{Capability: "email"}
+	call := capability.Call{Family: "email"}
 
 	if policy.Evaluate(call, env) != capability.Allow {
 		t.Fatal("1st call within budget must be Allow")
@@ -176,14 +212,14 @@ func TestEvaluate_WindowAndRateCompose(t *testing.T) {
 		Now: time.Date(2026, 1, 1, 23, 0, 0, 0, time.UTC), // outside window
 		RateAllow: func(c capability.Call) bool {
 			rateCalls++
-			return rl.Allow(c.Capability)
+			return rl.Allow(c.Family)
 		},
 	}
 	policy := capability.Policy{Rules: []capability.Rule{
-		{Capability: "email", Effect: capability.Allow, Epoch: capability.Permanent, Window: capability.Daily(8, 0, 22, 0)},
+		{Family: "email", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent, Window: capability.Daily(8, 0, 22, 0)},
 	}}
 
-	if got := policy.Evaluate(capability.Call{Capability: "email"}, env); got != capability.Deny {
+	if got := policy.Evaluate(capability.Call{Family: "email"}, env); got != capability.Deny {
 		t.Fatalf("outside window: got %v, want Deny", got)
 	}
 	if rateCalls != 0 {
@@ -199,7 +235,7 @@ func TestEvaluate_WindowAndRateCompose(t *testing.T) {
 func TestEvaluate_TargetGlobAndWildcard(t *testing.T) {
 	rule := func(glob string) capability.Policy {
 		return capability.Policy{Rules: []capability.Rule{
-			{Capability: "file.write", TargetGlob: glob, Effect: capability.Allow, Epoch: capability.Permanent},
+			{Family: "file", TargetGlob: glob, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
 		}}
 	}
 	cases := []struct {
@@ -214,7 +250,7 @@ func TestEvaluate_TargetGlobAndWildcard(t *testing.T) {
 		{"notes/*", "secrets/k", capability.Deny},
 	}
 	for _, tc := range cases {
-		got := rule(tc.glob).Evaluate(capability.Call{Capability: "file.write", Target: tc.target}, capability.Env{})
+		got := rule(tc.glob).Evaluate(capability.Call{Family: "file", Mutates: true, Target: tc.target}, capability.Env{})
 		if got != tc.want {
 			t.Errorf("glob %q target %q: got %v, want %v", tc.glob, tc.target, got, tc.want)
 		}

@@ -13,7 +13,7 @@ import (
 
 func allowResolve(hostGlob string) capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "dns.resolve", TargetGlob: hostGlob, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Family: "dns", TargetGlob: hostGlob, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
 }
 
@@ -44,7 +44,7 @@ func TestResolve_HostAllowlist_DeniesOtherHost(t *testing.T) {
 
 func TestResolve_Ask_DenyBlocks(t *testing.T) {
 	policy := capability.Policy{Rules: []capability.Rule{
-		{Capability: "dns.resolve", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+		{Family: "dns", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Ask, Epoch: capability.Permanent},
 	}}
 	n := &netcap.Net{Guard: &gateway.Guard{Policy: policy, Approvals: askEngine(false), TTL: time.Second}}
 	if _, err := n.Resolve(context.Background(), "localhost"); !errors.Is(err, gateway.ErrDenied) {

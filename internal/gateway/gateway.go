@@ -17,6 +17,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // ErrDenied is returned when a capability call is not permitted (broker Deny, or
@@ -43,12 +44,59 @@ func (g *Guard) now() time.Time {
 	return time.Now()
 }
 
-// approvalChoices are the options a human is offered on Ask.
-var approvalChoices = []hitl.Choice{
+// approvalChoicesFor builds the options a human is offered on Ask, labelling the
+// session/always choices with EXACTLY what would be remembered — the model-facing
+// tool (and, for "always", the target). The label must name the grant's real
+// scope: a human who reads "Send email to Bob" must see that "always" remembers
+// "gmail.send @ gmail.googleapis.com" (any recipient), never a bare "Allow always"
+// that hides a broad standing grant behind a narrow prompt.
+func approvalChoicesFor(toolName string, call capability.Call) []hitl.Choice {
+	name := toolName
+	if name == "" {
+		name = call.Family // native/direct call: the primitive family is the tool
+	}
+	always := "Allow always: " + name
+	if call.Target != "" {
+		always += " @ " + call.Target
+	}
+	return []hitl.Choice{
+		{Label: "Allow once", Outcome: hitl.Approved},
+		{Label: "Allow this session: " + name, Outcome: hitl.ApprovedSession},
+		{Label: always, Outcome: hitl.ApprovedAlways},
+		{Label: "Deny", Outcome: hitl.Denied},
+	}
+}
+
+// consequentialChoices are the only options for a never-auto (consequential) effect:
+// once or deny — never a standing grant.
+var consequentialChoices = []hitl.Choice{
 	{Label: "Allow once", Outcome: hitl.Approved},
-	{Label: "Allow this session", Outcome: hitl.ApprovedSession},
-	{Label: "Allow always", Outcome: hitl.ApprovedAlways},
 	{Label: "Deny", Outcome: hitl.Denied},
+}
+
+// factLine is the unforgeable, host-computed line shown beneath a semantic intent
+// at every Ask: the model-facing tool and the reconstructed (capability, target)
+// it actually reaches. It comes only from the Call the host built — never from
+// guest or model text — so a semantic template can NEVER hide what is really
+// gated. Empty target (a targetless call like "log") omits the "@ target".
+func factLine(toolName string, call capability.Call) string {
+	name := toolName
+	if name == "" {
+		name = call.Family
+	}
+	op := call.Family + " " + opWord(call.Mutates)
+	if call.Target != "" {
+		return "via " + name + " → " + op + " @ " + call.Target
+	}
+	return "via " + name + " → " + op
+}
+
+// opWord renders the mutation axis for a human: reads vs writes.
+func opWord(mutates bool) string {
+	if mutates {
+		return "write"
+	}
+	return "read"
 }
 
 // Authorize composes the decision:
@@ -65,38 +113,71 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 	}
 	env := capability.Env{Now: g.now(), Epochs: g.Epochs}
 	if g.Rate != nil {
-		env.RateAllow = func(c capability.Call) bool { return g.Rate.Allow(c.Capability) }
+		env.RateAllow = func(c capability.Call) bool { return g.Rate.Allow(c.Family) }
 	}
 
-	switch g.Policy.Evaluate(call, env) {
+	// The never-auto floor: a consequential (irreversible/high-stakes) effect ALWAYS
+	// asks out of band — it can never be auto-allowed by policy, covered by a standing
+	// grant, or granted for a session/always. Stamped by a trusted layer (the plugin
+	// Host, from an install-reviewed ToolDecl), never by guest code.
+	consequential := consequentialFrom(ctx)
+
+	// Compose the verdict from the workspace base policy UNIONed with any scope
+	// (agent) policy carried on ctx — deny>ask>allow, so a scope can tighten (deny
+	// blacklist, or ask where the base allows). Loosening is the deferred autonomy
+	// dial (see capability.WithPolicy).
+	policy := g.Policy
+	if extra := capability.PolicyRulesFrom(ctx); len(extra) > 0 {
+		policy = capability.Policy{Rules: append(append([]capability.Rule(nil), g.Policy.Rules...), extra...)}
+	}
+	decision := policy.Evaluate(call, env)
+	if consequential && decision == capability.Allow {
+		decision = capability.Ask // escalate: consequential is never auto
+	}
+
+	switch decision {
 	case capability.Allow:
 		return nil
 	case capability.Ask:
 		grants := capability.GrantsFrom(ctx)
-		if grants != nil && grants.Allows(call, env) {
-			return nil // standing grant (session or always)
+		toolName := tool.ToolName(ctx) // the model-facing tool a grant is remembered against
+		if !consequential && grants != nil && grants.Allows(toolName, call, env) {
+			// A standing grant answers the Ask — but still respects the rate cap, so a
+			// remembered "always" cannot be replayed without bound (the grant path used
+			// to bypass the limiter).
+			if env.RateAllow != nil && !env.RateAllow(call) {
+				return ErrDenied
+			}
+			return nil // standing grant (session or always), scoped to this tool
 		}
 		// A higher, trusted layer (a plugin Host rendering an install-reviewed
-		// manifest template) may have stamped a semantic intent onto ctx — prefer
-		// it over the effect tool's transport-level default, so the human reads
-		// "Send email to x@a" instead of "http.write gmail.googleapis.com". The
-		// gated (capability, target) is unchanged; only the prompt wording is.
+		// manifest template) may have stamped a semantic intent onto ctx — show it
+		// as the human-readable HEAD so the human reads "Send email to x@a". But the
+		// host-computed fact line ALWAYS rides beneath it (never replaced), so a
+		// semantic template can't hide the real (capability, target) being gated.
+		prompt := intent
 		if r := intentFrom(ctx); r != "" {
-			intent = r
+			prompt = r + "\n" + factLine(toolName, call)
 		}
-		out, err := g.Approvals.Request(ctx, intent, approvalChoices, g.TTL)
+		// A consequential effect offers only once-or-deny: no "session"/"always", so it
+		// can never become a standing grant.
+		choices := approvalChoicesFor(toolName, call)
+		if consequential {
+			choices = consequentialChoices
+		}
+		out, err := g.Approvals.Request(ctx, prompt, choices, g.TTL)
 		if err != nil {
 			return err
 		}
 		switch out {
 		case hitl.ApprovedAlways:
-			if grants != nil {
-				_ = grants.Record(call, capability.ScopeAlways) // persist error must not block the allow
+			if grants != nil && !consequential {
+				_ = grants.Record(toolName, call, capability.ScopeAlways) // persist error must not block the allow
 			}
 			return nil
 		case hitl.ApprovedSession:
-			if grants != nil {
-				_ = grants.Record(call, capability.ScopeSession)
+			if grants != nil && !consequential {
+				_ = grants.Record(toolName, call, capability.ScopeSession)
 			}
 			return nil
 		case hitl.Approved:
@@ -141,4 +222,22 @@ func WithIntent(ctx context.Context, intent string) context.Context {
 func intentFrom(ctx context.Context) string {
 	s, _ := ctx.Value(intentKey{}).(string)
 	return s
+}
+
+// consequentialKey marks the current operation as never-auto (see ToolDecl.Consequential).
+type consequentialKey struct{}
+
+// WithConsequential marks the current operation as consequential (irreversible/
+// high-stakes): Authorize will always ask out of band and never let a standing
+// grant answer or be recorded. Set by a TRUSTED layer only (the plugin Host, from
+// an install-reviewed manifest flag), never by guest code — so a plugin cannot mark
+// its own effect as NON-consequential to dodge the floor (absence is the default,
+// and the flag only ever tightens).
+func WithConsequential(ctx context.Context) context.Context {
+	return context.WithValue(ctx, consequentialKey{}, true)
+}
+
+func consequentialFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(consequentialKey{}).(bool)
+	return v
 }

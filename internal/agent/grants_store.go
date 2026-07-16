@@ -9,11 +9,13 @@ import (
 	"github.com/efuturetoday/nocturn/internal/capability"
 )
 
-// GrantsStore is the durable "always" backing for a capability.Grants set
+// GrantsStore is the durable "always" backing for ONE owner's capability.Grants set
 // (implements capability.GrantStore): the grants a user chose to remember across
-// restarts, keyed by grant-set/workspace id. File-backed (0600), concurrency-safe.
-// A missing or unparsable file yields an empty store — fail-closed, so corrupt
-// persisted grants simply don't apply rather than crashing or widening authority.
+// restarts. The backing FILE is the owner boundary — a session's is <ws>/grants.json,
+// an agent's is <ws>/agents/<name>/grants.json — so records carry no owner id and two
+// owners can never cross-match (isolation is structural). File-backed (0600),
+// concurrency-safe. A missing or unparsable file yields an empty store — fail-closed,
+// so corrupt persisted grants simply don't apply rather than widening authority.
 type GrantsStore struct {
 	path string
 	mu   sync.Mutex
@@ -21,9 +23,10 @@ type GrantsStore struct {
 }
 
 type grantRecord struct {
-	GrantSet   string `json:"grant_set"`
-	Capability string `json:"capability"`
-	Target     string `json:"target"`
+	Tool    string `json:"tool"`
+	Family  string `json:"family"`
+	Mutates bool   `json:"mutates"`
+	Target  string `json:"target"`
 }
 
 var _ capability.GrantStore = (*GrantsStore)(nil)
@@ -37,10 +40,14 @@ func LoadGrantsStore(path string) *GrantsStore {
 	return s
 }
 
-// Allows reports whether an "always" grant exactly matches (grant-set, capability,
-// host) — grants are recorded from a live call, so the host is exact.
-func (s *GrantsStore) Allows(grantSetID string, call capability.Call) bool {
-	rec := recordFor(grantSetID, call)
+// Allows reports whether an "always" grant exactly matches (tool, family, mutation,
+// target) — grants are recorded from a live call, so the target is exact. The tool is
+// part of the key: an "always gmail.send" record never matches a call the model made
+// through "gmail.delete", even to the same host. Records written by an older format
+// (with a grant_set / capability field) decode with the new fields zero and so no
+// longer match any real call — fail-closed, the user simply re-approves once.
+func (s *GrantsStore) Allows(tool string, call capability.Call) bool {
+	rec := recordFor(tool, call)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.recs {
@@ -52,8 +59,8 @@ func (s *GrantsStore) Allows(grantSetID string, call capability.Call) bool {
 }
 
 // Record persists an "always" grant (idempotent), writing the file atomically.
-func (s *GrantsStore) Record(grantSetID string, call capability.Call) error {
-	rec := recordFor(grantSetID, call)
+func (s *GrantsStore) Record(tool string, call capability.Call) error {
+	rec := recordFor(tool, call)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.recs {
@@ -65,8 +72,42 @@ func (s *GrantsStore) Record(grantSetID string, call capability.Call) error {
 	return s.persist()
 }
 
-func recordFor(grantSetID string, call capability.Call) grantRecord {
-	return grantRecord{GrantSet: grantSetID, Capability: call.Capability, Target: call.Target}
+// GrantView is one persisted "always" grant, for listing/revoking in the UI.
+type GrantView struct {
+	Tool    string
+	Family  string
+	Mutates bool
+	Target  string
+}
+
+// List returns the persisted "always" grants (a snapshot), for a /grants listing.
+func (s *GrantsStore) List() []GrantView {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]GrantView, len(s.recs))
+	for i, r := range s.recs {
+		out[i] = GrantView(r)
+	}
+	return out
+}
+
+// Remove deletes one persisted grant (matched exactly) and rewrites the file. A
+// no-op if not present. Used to revoke an "always" grant from the UI.
+func (s *GrantsStore) Remove(g GrantView) error {
+	target := grantRecord(g)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, r := range s.recs {
+		if r == target {
+			s.recs = append(s.recs[:i], s.recs[i+1:]...)
+			return s.persist()
+		}
+	}
+	return nil
+}
+
+func recordFor(tool string, call capability.Call) grantRecord {
+	return grantRecord{Tool: tool, Family: call.Family, Mutates: call.Mutates, Target: call.Target}
 }
 
 func (s *GrantsStore) persist() error {

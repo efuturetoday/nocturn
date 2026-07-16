@@ -90,13 +90,13 @@ func (f *fakeMCP) hits() int {
 
 func allowWrite() capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchWrite, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
 }
 
 func askWrite() capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+		{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchWrite, Effect: capability.Ask, Epoch: capability.Permanent},
 	}}
 }
 
@@ -211,9 +211,15 @@ func TestConn_Ask_SemanticIntent(t *testing.T) {
 	if len(notifier.intents) != len(want) {
 		t.Fatalf("intents = %q, want %d prompts", notifier.intents, len(want))
 	}
+	// Each prompt is the semantic head plus the host-computed fact line beneath it;
+	// assert the head is the semantic intent and a fact line rides underneath.
 	for i, w := range want {
-		if notifier.intents[i] != w {
-			t.Errorf("intent[%d] = %q, want %q", i, notifier.intents[i], w)
+		head, fact, ok := strings.Cut(notifier.intents[i], "\n")
+		if head != w {
+			t.Errorf("intent[%d] head = %q, want %q", i, head, w)
+		}
+		if !ok || !strings.Contains(fact, "http write") {
+			t.Errorf("intent[%d] = %q, want a fact line naming the real http write reach", i, notifier.intents[i])
 		}
 	}
 }
@@ -248,8 +254,8 @@ func TestConn_CredentialInjection_OwnerScoped(t *testing.T) {
 	owner := mcpcap.Owner("test")
 	own := mcpcap.SecretName("test", conn.Host())
 	store.Set(own, []byte("own-token-123"))
-	inj.AddBinding(owner, secret.Binding{Secret: own, Capability: "http.write", Host: conn.Host(), Header: "Authorization", Prefix: "Bearer "})
-	inj.AddBinding("plugin:x", secret.Binding{Secret: "plugin:x/oauth", Capability: "http.write", Host: conn.Host(), Header: "X-Api-Key", Prefix: ""})
+	inj.AddBinding(owner, secret.Binding{Secret: own, Capability: "http", Host: conn.Host(), Header: "Authorization", Prefix: "Bearer "})
+	inj.AddBinding("plugin:x", secret.Binding{Secret: "plugin:x/oauth", Capability: "http", Host: conn.Host(), Header: "X-Api-Key", Prefix: ""})
 
 	if err := conn.Connect(context.Background()); err != nil {
 		t.Fatalf("connect: %v", err)

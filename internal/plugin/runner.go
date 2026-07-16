@@ -69,6 +69,11 @@ func (p *Plugin) Tools() []tool.Tool {
 				if intent := renderIntent(td.Intent, args); intent != "" {
 					ctx = gateway.WithIntent(ctx, intent)
 				}
+				// A consequential tool (install-reviewed) hits the never-auto floor:
+				// every effect it performs always asks out of band, ungrantable.
+				if td.Consequential {
+					ctx = gateway.WithConsequential(ctx)
+				}
 				return p.invoke(ctx, td.Name, args)
 			},
 		})

@@ -7,24 +7,24 @@ import (
 	"github.com/efuturetoday/nocturn/internal/gateway"
 )
 
-// New fixes the connection's ceiling to exactly the server's host: http.read +
-// http.write there, nothing anywhere else — a connection can never be talked
-// into reaching a different host or capability, regardless of base policy.
-// (The transport stamps this ceiling onto every call's ctx; that path is
-// exercised end-to-end by the external tests.)
+// New fixes the connection's ceiling to exactly the server's host: one http reach
+// there (read+write), nothing anywhere else — a connection can never be talked into
+// reaching a different host or family, regardless of base policy. (The transport
+// stamps this ceiling onto every call's ctx; that path is exercised end-to-end by
+// the external tests.)
 func TestNew_CeilingBoundsToServerHost(t *testing.T) {
 	conn, err := New(Server{Name: "test", URL: "https://mcp.example.com/mcp"}, &gateway.Guard{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	allowed := []capability.Call{
-		{Capability: "http.write", Target: "mcp.example.com"},
-		{Capability: "http.read", Target: "mcp.example.com"},
+		{Family: "http", Mutates: true, Target: "mcp.example.com"},
+		{Family: "http", Mutates: false, Target: "mcp.example.com"},
 	}
 	denied := []capability.Call{
-		{Capability: "http.write", Target: "evil.example.com"},
-		{Capability: "dns.resolve", Target: "mcp.example.com"},
-		{Capability: "file.write", Target: "/work/x"},
+		{Family: "http", Mutates: true, Target: "evil.example.com"},
+		{Family: "dns", Mutates: false, Target: "mcp.example.com"},
+		{Family: "file", Mutates: true, Target: "/work/x"},
 	}
 	for _, c := range allowed {
 		if !conn.ceiling.Allows(c) {

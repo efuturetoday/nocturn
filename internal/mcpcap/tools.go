@@ -55,6 +55,7 @@ func (c *Conn) Tools(ctx context.Context) ([]tool.Tool, error) {
 			return nil, fmt.Errorf("mcpcap: %s: tool %q inputSchema must be a JSON object schema", c.server.Name, info.Name)
 		}
 		name := info.Name
+		readOnly := info.Annotations.ReadOnlyHint // server's hint: a read runs still, a write asks
 		tools = append(tools, tool.Tool{
 			Spec: tool.Spec{
 				Name:        c.server.Name + "." + name,
@@ -66,6 +67,7 @@ func (c *Conn) Tools(ctx context.Context) ([]tool.Tool, error) {
 					return "", errors.New("invalid arguments: not valid JSON")
 				}
 				ctx = gateway.WithIntent(ctx, "MCP "+c.server.Name+": "+name)
+				ctx = withReadOnly(ctx, readOnly)
 				return c.client.CallTool(ctx, name, json.RawMessage(args))
 			},
 		})

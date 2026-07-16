@@ -32,9 +32,9 @@ func TestEvaluate_RevocationKillsGrant(t *testing.T) {
 	epoch := reg.Open()
 
 	policy := capability.Policy{Rules: []capability.Rule{
-		{Capability: "pay", Effect: capability.Allow, Epoch: epoch},
+		{Family: "pay", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: epoch},
 	}}
-	call := capability.Call{Capability: "pay"}
+	call := capability.Call{Family: "pay"}
 
 	if got := policy.Evaluate(call, capability.Env{Epochs: reg}); got != capability.Allow {
 		t.Fatalf("within a live epoch: got %v, want Allow", got)
@@ -53,9 +53,9 @@ func TestEvaluate_RevocationKillsGrant(t *testing.T) {
 func TestUnsetEpoch_FailsClosed(t *testing.T) {
 	reg := capability.NewEpochRegistry()
 	policy := capability.Policy{Rules: []capability.Rule{
-		{Capability: "log", Effect: capability.Allow}, // Epoch left unset (zero)
+		{Family: "log", Writes: capability.MatchAny, Effect: capability.Allow}, // Epoch left unset (zero)
 	}}
-	call := capability.Call{Capability: "log"}
+	call := capability.Call{Family: "log"}
 	if got := policy.Evaluate(call, capability.Env{}); got != capability.Deny {
 		t.Fatalf("unset epoch under Evaluate: got %v, want Deny", got)
 	}
@@ -68,9 +68,9 @@ func TestUnsetEpoch_FailsClosed(t *testing.T) {
 func TestPermanentGrant_UnaffectedByEpochs(t *testing.T) {
 	reg := capability.NewEpochRegistry()
 	policy := capability.Policy{Rules: []capability.Rule{
-		{Capability: "log", Effect: capability.Allow, Epoch: capability.Permanent},
+		{Family: "log", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
-	call := capability.Call{Capability: "log"}
+	call := capability.Call{Family: "log"}
 
 	if got := policy.Evaluate(call, capability.Env{}); got != capability.Allow {
 		t.Fatalf("Evaluate: permanent grant got %v, want Allow", got)
@@ -85,9 +85,9 @@ func TestPermanentGrant_UnaffectedByEpochs(t *testing.T) {
 // so forgetting the registry never silently grants authority.
 func TestEpochScopedGrant_FailsClosedWithoutRegistry(t *testing.T) {
 	policy := capability.Policy{Rules: []capability.Rule{
-		{Capability: "pay", Effect: capability.Allow, Epoch: 42},
+		{Family: "pay", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: 42},
 	}}
-	if got := policy.Evaluate(capability.Call{Capability: "pay"}, capability.Env{}); got != capability.Deny {
+	if got := policy.Evaluate(capability.Call{Family: "pay"}, capability.Env{}); got != capability.Deny {
 		t.Fatalf("epoch-scoped grant under plain Evaluate: got %v, want Deny", got)
 	}
 }
@@ -99,16 +99,16 @@ func TestRevocation_IsolatedPerEpoch(t *testing.T) {
 	research := reg.Open()
 
 	policy := capability.Policy{Rules: []capability.Rule{
-		{Capability: "pay", Effect: capability.Allow, Epoch: booking},
-		{Capability: "net.fetch", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: research},
+		{Family: "pay", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: booking},
+		{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: research},
 	}}
 
 	reg.Close(booking)
 
-	if got := policy.Evaluate(capability.Call{Capability: "pay"}, capability.Env{Epochs: reg}); got != capability.Deny {
+	if got := policy.Evaluate(capability.Call{Family: "pay"}, capability.Env{Epochs: reg}); got != capability.Deny {
 		t.Fatalf("revoked epoch grant: got %v, want Deny", got)
 	}
-	fetch := capability.Call{Capability: "net.fetch", Target: "example.com"}
+	fetch := capability.Call{Family: "http", Target: "example.com"}
 	if got := policy.Evaluate(fetch, capability.Env{Epochs: reg}); got != capability.Allow {
 		t.Fatalf("still-live epoch grant: got %v, want Allow", got)
 	}

@@ -83,8 +83,11 @@ func establishMCP(ctx context.Context, conn *mcpcap.Conn, srv mcpcap.Server, reg
 	// The operator's approval IS the human ok for the two setup calls (initialize +
 	// tools/list): an ephemeral grant for exactly (http.write, <host>), carried ONLY
 	// by this setup context — runtime tool calls still ask (the turn ctx never sees it).
-	setup := capability.NewGrants("mcp-setup:"+srv.Name, capability.Permanent, nil)
-	_ = setup.Record(capability.Call{Capability: "http.write", Target: conn.Host()}, capability.ScopeSession)
+	// The setup calls (Connect/Tools) run OUTSIDE the tool registry, so their gate
+	// sees no outermost tool name — record the ephemeral grant under tool "" to
+	// match, scoped to exactly (http.write, <host>) for this setup context only.
+	setup := capability.NewGrants(capability.Permanent, nil)
+	_ = setup.Record("", capability.Call{Family: "http", Mutates: true, Target: conn.Host()}, capability.ScopeSession)
 	setupCtx := capability.WithGrants(ctx, setup)
 
 	if err := conn.Connect(setupCtx); err != nil {

@@ -18,12 +18,16 @@ type Ceiling struct {
 	policy Policy
 }
 
-// Pair is one allowed (capability, target-glob) entry of a Ceiling. The same
-// fail-closed semantics as Rule apply: an empty Capability/TargetGlob matches
-// nothing, and a target-bearing call needs an explicit glob ("*" for any).
+// Pair is one allowed reach entry of a Ceiling: a Family + target-glob, plus the
+// Writes axis (the Schreibrecht — whether this reach permits reads, writes, or
+// both). The same fail-closed semantics as Rule apply: an empty Family/TargetGlob
+// matches nothing, a target-bearing call needs an explicit glob ("*" for any), and
+// the zero Writes (MatchNone) permits nothing — so a pair that forgets to declare
+// read/write grants no reach at all.
 type Pair struct {
-	Capability string
+	Family     string
 	TargetGlob string
+	Writes     Match
 }
 
 // NewCeiling builds a ceiling allowing exactly the given pairs (each a Permanent
@@ -32,8 +36,9 @@ func NewCeiling(pairs ...Pair) Ceiling {
 	rules := make([]Rule, 0, len(pairs))
 	for _, p := range pairs {
 		rules = append(rules, Rule{
-			Capability: p.Capability,
+			Family:     p.Family,
 			TargetGlob: p.TargetGlob,
+			Writes:     p.Writes,
 			Effect:     Allow,
 			Epoch:      Permanent,
 		})

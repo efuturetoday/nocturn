@@ -19,10 +19,14 @@ const (
 
 // GrantStore is the durable "always" backing for a Grants set. It is an interface
 // so the concrete store (a file) lives in an outer layer and this package stays
-// pure decision logic — no I/O. Consulted/updated by Grants, keyed by grant-set id.
+// pure decision logic — no I/O. ONE store = ONE owner (a session, or one agent): the
+// backing FILE is the owner boundary, so records carry no owner id — strict
+// isolation is structural (a different owner is a different file), not a shared file
+// keyed by a string (see KONZEPT §9). A grant is keyed by the model-facing TOOL and
+// the (family, mutation, target): "always gmail.send" never covers "gmail.delete".
 type GrantStore interface {
-	Allows(id string, call Call) bool
-	Record(id string, call Call) error
+	Allows(tool string, call Call) bool
+	Record(tool string, call Call) error
 }
 
 // Grants is a permission set: the user's standing "allow" decisions for a session
@@ -30,52 +34,75 @@ type GrantStore interface {
 // epoch — closing the epoch revokes them) and, via an injected store, always-
 // scoped grants that persist. It may also carry a workspace-level Ceiling. The
 // Guard consults the active Grants (carried in ctx) to see whether an Ask is
-// already answered by a standing grant. A later workspace layer supplies a
-// different id + a persistent store — no other change.
+// already answered by a standing grant. Each owner (session / one agent) has its OWN
+// Grants over its OWN store — strict isolation, no cross-owner sharing.
 type Grants struct {
-	ID      string
 	Epoch   EpochID    // session grants bind here; closing it revokes them
 	Ceiling *Ceiling   // optional workspace-level upper bound (nil = none)
-	always  GrantStore // durable always-grants keyed by ID; nil = none
+	always  GrantStore // durable always-grants for this owner; nil = none
 
 	mu      sync.Mutex
-	session []Rule
+	session []sessionGrant
 }
 
-// NewGrants builds a grant set. always may be nil (no durable grants — e.g. tests).
-func NewGrants(id string, epoch EpochID, always GrantStore) *Grants {
-	return &Grants{ID: id, Epoch: epoch, always: always}
+// sessionGrant is one session-scoped standing grant: the model-facing tool it was
+// recorded for, plus the epoch-bound match rule. A call is covered only if BOTH
+// the tool matches and the rule matches — same tool-scoping as the durable store.
+type sessionGrant struct {
+	tool string
+	rule Rule
 }
 
-// Allows reports whether call is covered by a live standing grant — a session
-// grant (bound to a still-alive epoch, via env) or a persisted always grant.
-func (g *Grants) Allows(call Call, env Env) bool {
-	g.mu.Lock()
-	sess := Policy{Rules: append([]Rule(nil), g.session...)}
-	g.mu.Unlock()
-	if sess.Evaluate(call, env) == Allow {
-		return true
+// writeMatch maps a call's mutation flag to the Match a recorded grant should use,
+// so a grant covers exactly the read/write class it was approved for.
+func writeMatch(mutates bool) Match {
+	if mutates {
+		return MatchWrite
 	}
-	return g.always != nil && g.always.Allows(g.ID, call)
+	return MatchRead
 }
 
-// Record stores a user's grant at scope. Once records nothing (the HITL outcome
-// alone allows the one call). Session appends an epoch-bound Allow rule. Always
-// persists through the durable store (a no-op if none is wired).
-func (g *Grants) Record(call Call, scope Scope) error {
+// NewGrants builds a grant set for one owner over its store (nil = no durable
+// grants — e.g. tests), bound to epoch for its session-scoped grants.
+func NewGrants(epoch EpochID, always GrantStore) *Grants {
+	return &Grants{Epoch: epoch, always: always}
+}
+
+// Allows reports whether call, made through tool, is covered by a live standing
+// grant — a session grant (bound to a still-alive epoch, via env) or a persisted
+// always grant. Both are tool-scoped: a grant recorded for one tool never covers a
+// call the model made through a different tool, even to the same target.
+func (g *Grants) Allows(tool string, call Call, env Env) bool {
+	g.mu.Lock()
+	sess := append([]sessionGrant(nil), g.session...)
+	g.mu.Unlock()
+	for _, sg := range sess {
+		if sg.tool == tool && sg.rule.matches(call, env) {
+			return true
+		}
+	}
+	return g.always != nil && g.always.Allows(tool, call)
+}
+
+// Record stores a user's grant at scope, remembered against tool (the model-facing
+// tool the human approved). Once records nothing (the HITL outcome alone allows the
+// one call). Session appends an epoch-bound Allow rule. Always persists through the
+// durable store (a no-op if none is wired).
+func (g *Grants) Record(tool string, call Call, scope Scope) error {
 	switch scope {
 	case ScopeSession:
 		g.mu.Lock()
-		g.session = append(g.session, Rule{
-			Capability: call.Capability,
+		g.session = append(g.session, sessionGrant{tool: tool, rule: Rule{
+			Family:     call.Family,
 			TargetGlob: call.Target, // exact target; "" matches targetless calls
+			Writes:     writeMatch(call.Mutates),
 			Effect:     Allow,
 			Epoch:      g.Epoch,
-		})
+		}})
 		g.mu.Unlock()
 	case ScopeAlways:
 		if g.always != nil {
-			return g.always.Record(g.ID, call)
+			return g.always.Record(tool, call)
 		}
 	}
 	return nil

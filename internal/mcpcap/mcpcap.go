@@ -106,18 +106,32 @@ func New(srv Server, guard *gateway.Guard, creds *secret.Injector, scanner *secr
 		server: srv, guard: guard, creds: creds, scanner: scanner, http: httpClient,
 		host: u.Hostname(),
 		ceiling: capability.NewCeiling(
-			capability.Pair{Capability: "http.read", TargetGlob: u.Hostname()},
-			capability.Pair{Capability: "http.write", TargetGlob: u.Hostname()},
+			// One reach: the server host over http, read + write (JSON-RPC POSTs are
+			// writes; the connection can never reach anywhere else).
+			capability.Pair{Family: "http", TargetGlob: u.Hostname(), Writes: capability.MatchAny},
 		),
 	}
 	c.client = mcp.New(c.transport)
 	if (srv.OAuth != nil || srv.Auth == "token") && creds != nil {
 		creds.AddBinding(Owner(srv.Name), secret.Binding{
-			Secret: SecretName(srv.Name, c.host), Capability: "http.write", Host: c.host,
+			Secret: SecretName(srv.Name, c.host), Capability: "http", Host: c.host,
 			Header: "Authorization", Prefix: "Bearer ",
 		})
 	}
 	return c, nil
+}
+
+// readOnlyKey carries a per-tool read-only hint from a tool's Invoke down to the
+// transport, which turns it into the Call's Mutates flag (read runs still, write asks).
+type readOnlyKey struct{}
+
+func withReadOnly(ctx context.Context, readOnly bool) context.Context {
+	return context.WithValue(ctx, readOnlyKey{}, readOnly)
+}
+
+func readOnlyFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(readOnlyKey{}).(bool)
+	return v
 }
 
 // Host returns the server's hostname — the broker target every call of this
@@ -138,7 +152,11 @@ func (c *Conn) Name() string { return c.server.Name }
 func (c *Conn) transport(ctx context.Context, body []byte, header http.Header) (*mcp.Response, error) {
 	ctx = capability.WithCeiling(ctx, c.ceiling)
 	ctx = secret.WithOwner(ctx, Owner(c.server.Name))
-	call := capability.Call{Capability: "http.write", Target: c.host}
+	// The JSON-RPC POST is transport-wise always a write to the host, but the broker
+	// gates on the SEMANTIC mutation: a tool the server marked read-only (readOnlyHint)
+	// is a read and runs still; everything else (writes, and setup calls with no hint)
+	// asks. The ceiling is read+write either way, so a read is always within it.
+	call := capability.Call{Family: "http", Mutates: !readOnlyFrom(ctx), Target: c.host}
 	intent := "MCP " + c.server.Name + ": POST " + c.server.URL // overridden by the semantic WithIntent upstream
 	return gateway.Do(ctx, c.guard, call, intent, func() (*mcp.Response, error) {
 		// Egress leak scan on the model-reachable surfaces (URL, protocol headers,
@@ -159,7 +177,7 @@ func (c *Conn) transport(ctx context.Context, body []byte, header http.Header) (
 		for k := range header {
 			req.Headers[k] = header.Get(k)
 		}
-		if _, err := c.creds.InjectMatching(ctx, &req, call.Capability, c.host); err != nil {
+		if _, err := c.creds.InjectMatching(ctx, &req, call.Family, c.host); err != nil {
 			return nil, err
 		}
 

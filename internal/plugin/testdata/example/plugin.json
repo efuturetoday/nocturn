@@ -7,7 +7,6 @@
     {"name": "evil",  "description": "read a host NOT in the ceiling", "parameters": {"type": "object"}}
   ],
   "requires": [
-    {"capability": "http.read",  "target": "api.example.com"},
-    {"capability": "http.write", "target": "api.example.com"}
+    {"family": "http", "target": "api.example.com", "mutates": true}
   ]
 }

@@ -7,18 +7,24 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/agent"
+	"github.com/efuturetoday/nocturn/internal/capability"
 )
 
-func writeAgent(t *testing.T, dir, file, content string) {
+// writeAgent creates <dir>/<name>/agent.md — an agent is a self-contained folder.
+func writeAgent(t *testing.T, dir, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o600); err != nil {
+	folder := filepath.Join(dir, name)
+	if err := os.MkdirAll(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "agent.md"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestLoadAgents_Valid(t *testing.T) {
 	dir := t.TempDir()
-	writeAgent(t, dir, "morning-brief.md", `---
+	writeAgent(t, dir, "morning-brief", `---
 name: morning-brief
 description: Summarize my morning
 when: cron("0 7 * * *")
@@ -43,10 +49,10 @@ Read my unread mail and summarize it.
 	}
 }
 
-// name defaults to the filename; when defaults to "manual".
+// name defaults to the folder name; when defaults to "manual".
 func TestLoadAgents_Defaults(t *testing.T) {
 	dir := t.TempDir()
-	writeAgent(t, dir, "helper.md", "---\ntools: [file]\n---\nDo a thing.\n")
+	writeAgent(t, dir, "helper", "---\ntools: [file]\n---\nDo a thing.\n")
 	defs, err := agent.LoadAgents(dir)
 	if err != nil || len(defs) != 1 {
 		t.Fatalf("defs=%+v err=%v", defs, err)
@@ -76,7 +82,7 @@ func TestLoadAgents_FailClosed(t *testing.T) {
 	for label, content := range cases {
 		t.Run(label, func(t *testing.T) {
 			dir := t.TempDir()
-			writeAgent(t, dir, "x.md", content)
+			writeAgent(t, dir, "x", content)
 			if _, err := agent.LoadAgents(dir); err == nil {
 				t.Fatalf("LoadAgents accepted %s", label)
 			}
@@ -86,10 +92,50 @@ func TestLoadAgents_FailClosed(t *testing.T) {
 
 func TestLoadAgents_DuplicateName(t *testing.T) {
 	dir := t.TempDir()
-	writeAgent(t, dir, "a.md", "---\nname: dup\ntools: [file]\n---\nbody\n")
-	writeAgent(t, dir, "b.md", "---\nname: dup\ntools: [file]\n---\nbody\n")
+	writeAgent(t, dir, "a", "---\nname: dup\ntools: [file]\n---\nbody\n")
+	writeAgent(t, dir, "b", "---\nname: dup\ntools: [file]\n---\nbody\n")
 	if _, err := agent.LoadAgents(dir); err == nil {
 		t.Fatal("duplicate agent name accepted")
+	}
+}
+
+// An agent author can declare its own policy (deny/ask, tightening) and ceiling.
+func TestLoadAgents_PolicyAndCeiling(t *testing.T) {
+	dir := t.TempDir()
+	writeAgent(t, dir, "triage", `---
+name: triage
+tools: [http.read, http.write]
+policy:
+  - { effect: deny, family: http, target: "*.internal.corp", access: write }
+  - { effect: ask,  family: file, target: "*",              access: read }
+ceiling:
+  - { family: http, target: "api.github.com", mutates: true }
+---
+Triage the inbox.
+`)
+	defs, err := agent.LoadAgents(dir)
+	if err != nil || len(defs) != 1 {
+		t.Fatalf("defs=%+v err=%v", defs, err)
+	}
+	d := defs[0]
+	if len(d.Policy.Rules) != 2 {
+		t.Fatalf("policy rules = %+v, want 2", d.Policy.Rules)
+	}
+	if d.Policy.Rules[0].Effect != capability.Deny || d.Policy.Rules[0].Writes != capability.MatchWrite {
+		t.Fatalf("rule[0] = %+v, want deny/write", d.Policy.Rules[0])
+	}
+	if len(d.Ceiling) != 1 || d.Ceiling[0].Writes != capability.MatchAny {
+		t.Fatalf("ceiling = %+v, want one read+write pair", d.Ceiling)
+	}
+}
+
+// "allow" in an agent policy is rejected — loosening is the deferred autonomy dial,
+// not a silent no-op.
+func TestLoadAgents_PolicyAllowRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeAgent(t, dir, "loose", "---\nname: loose\ntools: [http.write]\npolicy:\n  - { effect: allow, family: http, target: \"*\" }\n---\nbody\n")
+	if _, err := agent.LoadAgents(dir); err == nil {
+		t.Fatal("policy effect \"allow\" (loosening) must be rejected")
 	}
 }
 

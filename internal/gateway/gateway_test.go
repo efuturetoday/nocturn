@@ -3,6 +3,7 @@ package gateway_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl"
 )
 
-var probeCall = capability.Call{Capability: "probe", Target: "example.com"}
+var probeCall = capability.Call{Family: "probe", Target: "example.com"}
 
 // captureNotifier records the intent it was prompted with and approves once.
 type captureNotifier struct {
@@ -29,15 +30,17 @@ func (n *captureNotifier) Notify(intent string, options []hitl.Option) error {
 	return errors.New("no approve option")
 }
 
-// A trusted layer's ctx intent (WithIntent) is shown to the human instead of the
-// effect tool's own transport-level intent; without it, the tool's default is used.
+// A trusted layer's ctx intent (WithIntent) is shown to the human as the semantic
+// HEAD, with the host-computed fact line always riding beneath it (never replaced)
+// so a template can't hide the real (capability, target). Without a ctx intent, the
+// tool's own transport-level default is used as-is.
 func TestAuthorize_WithIntentOverridesPrompt(t *testing.T) {
 	notifier := &captureNotifier{}
 	engine := hitl.NewEngine([]byte("k"), notifier)
 	notifier.resolve = engine.Resolve
 	g := &gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
-			{Capability: "probe", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+			{Family: "probe", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Ask, Epoch: capability.Permanent},
 		}},
 		Approvals: engine,
 		TTL:       time.Second,
@@ -54,15 +57,21 @@ func TestAuthorize_WithIntentOverridesPrompt(t *testing.T) {
 	if err := g.Authorize(ctx, probeCall, "http.write example.com"); err != nil {
 		t.Fatalf("authorize: %v", err)
 	}
-	if notifier.intent != "Send email to x@a" {
-		t.Fatalf("intent = %q, want the ctx-supplied semantic intent", notifier.intent)
+	// Head = the semantic intent; a fact line naming the real (capability, target)
+	// rides beneath it so the wording can't hide what is gated.
+	head, fact, ok := strings.Cut(notifier.intent, "\n")
+	if !ok || head != "Send email to x@a" {
+		t.Fatalf("prompt head = %q, want the ctx-supplied semantic intent as the first line", notifier.intent)
+	}
+	if !strings.Contains(fact, probeCall.Family) || !strings.Contains(fact, probeCall.Target) {
+		t.Fatalf("fact line = %q, want it to name the real family %q and target %q", fact, probeCall.Family, probeCall.Target)
 	}
 }
 
 // Do runs the effect only when the call is allowed, and returns its result.
 func TestDo_AllowedRunsEffect(t *testing.T) {
 	g := &gateway.Guard{Policy: capability.Policy{Rules: []capability.Rule{
-		{Capability: "probe", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Family: "probe", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}}
 
 	ran := false

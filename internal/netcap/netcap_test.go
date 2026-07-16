@@ -22,21 +22,20 @@ import (
 
 func allowRead(hostGlob string) capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "http.read", TargetGlob: hostGlob, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Family: "http", TargetGlob: hostGlob, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
 }
 
 func askRead() capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+		{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Ask, Epoch: capability.Permanent},
 	}}
 }
 
-// allowReadWrite permits both http.read and http.write (for write/POST tests).
+// allowReadWrite permits both reads and writes over http (for write/POST tests).
 func allowReadWrite() capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
-		{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
 }
 
@@ -171,7 +170,7 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 	epoch := epochs.Open()
 	g := &netcap.Net{Guard: &gateway.Guard{Policy: askRead(), Approvals: engine, Epochs: epochs, TTL: time.Second}}
 	// The permission context owns the session grant, bound to the epoch.
-	ctx := capability.WithGrants(context.Background(), capability.NewGrants("test", epoch, nil))
+	ctx := capability.WithGrants(context.Background(), capability.NewGrants(epoch, nil))
 
 	// first call: asked, ApprovedSession granted for this host, bound to epoch
 	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}); err != nil {
@@ -217,7 +216,7 @@ func TestFetch_InjectsCredentialForBoundHost(t *testing.T) {
 	v := secret.NewStore()
 	v.Set("ms_graph", []byte("abc123"))
 	in := secret.NewInjector(v, secret.Binding{
-		Secret: "ms_graph", Capability: "http.read", Host: hostFromURL(t, srv.URL), Header: "Authorization", Prefix: "Bearer ",
+		Secret: "ms_graph", Capability: "http", Host: hostFromURL(t, srv.URL), Header: "Authorization", Prefix: "Bearer ",
 	})
 
 	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Credentials: in}
@@ -241,7 +240,7 @@ func TestFetch_NoInjectForOtherHost(t *testing.T) {
 	v := secret.NewStore()
 	v.Set("ms_graph", []byte("abc123"))
 	in := secret.NewInjector(v, secret.Binding{
-		Secret: "ms_graph", Capability: "http.read", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+		Secret: "ms_graph", Capability: "http", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
 	})
 
 	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Credentials: in}

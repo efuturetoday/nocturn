@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/efuturetoday/nocturn/internal/capability"
 	"gopkg.in/yaml.v3"
 )
 
@@ -29,6 +30,15 @@ type Definition struct {
 	Tools        []string      // group ("gmail") or exact ("github.search") tool names
 	When         string        // "manual" | a cron expr | "webhook" (v1: manual is what runs)
 	Budget       time.Duration // wall-clock budget per run; 0 = caller default
+	// Policy is the agent author's OWN standing policy, composed onto the workspace
+	// base for this agent's runs (deny>ask>allow union — see capability.WithPolicy).
+	// It can TIGHTEN: Deny (a blacklist, deny-wins) or Ask where the base allows.
+	// Loosening (Allow over a base Ask) is the deferred autonomy dial. This is author
+	// config — NEVER a grant (grants are runtime HITL consent, see KONZEPT §9).
+	Policy capability.Policy
+	// Ceiling is an optional per-agent reachability upper bound, intersected with any
+	// outer ceiling — e.g. confine a raw-http agent to one host regardless of its tools.
+	Ceiling []capability.Pair
 }
 
 // Matches reports whether a registry tool name is one this agent may use. A list
@@ -45,20 +55,113 @@ func (d Definition) Matches(toolName string) bool {
 }
 
 type frontmatter struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	Model       string   `yaml:"model"`
-	Tools       []string `yaml:"tools"`
-	When        string   `yaml:"when"`
-	Budget      string   `yaml:"budget"` // Go duration, e.g. "5m"; "" = default
+	Name        string           `yaml:"name"`
+	Description string           `yaml:"description"`
+	Model       string           `yaml:"model"`
+	Tools       []string         `yaml:"tools"`
+	When        string           `yaml:"when"`
+	Budget      string           `yaml:"budget"` // Go duration, e.g. "5m"; "" = default
+	Policy      []policyRuleFM   `yaml:"policy"`
+	Ceiling     []ceilingEntryFM `yaml:"ceiling"`
+}
+
+// policyRuleFM is one author-declared policy rule. Access ∈ read|write|any (default
+// any); Effect ∈ deny|ask (allow/loosening is the deferred autonomy dial).
+type policyRuleFM struct {
+	Effect string `yaml:"effect"`
+	Family string `yaml:"family"`
+	Target string `yaml:"target"`
+	Access string `yaml:"access"`
+}
+
+// ceilingEntryFM is one reachability upper-bound entry (like a plugin Require:
+// mutates=true grants read+write, write⊇read; false is read-only).
+type ceilingEntryFM struct {
+	Family  string `yaml:"family"`
+	Target  string `yaml:"target"`
+	Mutates bool   `yaml:"mutates"`
+}
+
+// accessMatch maps an author's access string to the mutation-match class.
+func accessMatch(access string) (capability.Match, error) {
+	switch access {
+	case "", "any":
+		return capability.MatchAny, nil
+	case "read":
+		return capability.MatchRead, nil
+	case "write":
+		return capability.MatchWrite, nil
+	default:
+		return capability.MatchNone, fmt.Errorf("access must be read, write or any (got %q)", access)
+	}
+}
+
+// buildPolicy turns author policy rules into a capability.Policy. Only deny/ask are
+// allowed (tightening); allow (loosening) is rejected with a clear message — it needs
+// the autonomy dial's precedence layer (Phase 4), not a silent no-op.
+func buildPolicy(rules []policyRuleFM) (capability.Policy, error) {
+	out := make([]capability.Rule, 0, len(rules))
+	for _, r := range rules {
+		if r.Family == "" || r.Target == "" {
+			return capability.Policy{}, fmt.Errorf("policy rule needs family and target (use \"*\" for any)")
+		}
+		var eff capability.Decision
+		switch r.Effect {
+		case "deny":
+			eff = capability.Deny
+		case "ask":
+			eff = capability.Ask
+		case "allow":
+			return capability.Policy{}, fmt.Errorf("policy effect \"allow\" (loosening) is not supported yet — that is the autonomy dial; use deny or ask")
+		default:
+			return capability.Policy{}, fmt.Errorf("policy effect must be deny or ask (got %q)", r.Effect)
+		}
+		writes, err := accessMatch(r.Access)
+		if err != nil {
+			return capability.Policy{}, err
+		}
+		out = append(out, capability.Rule{Family: r.Family, TargetGlob: r.Target, Writes: writes, Effect: eff, Epoch: capability.Permanent})
+	}
+	return capability.Policy{Rules: out}, nil
+}
+
+// buildCeiling turns author ceiling entries into capability.Pairs.
+func buildCeiling(entries []ceilingEntryFM) ([]capability.Pair, error) {
+	pairs := make([]capability.Pair, 0, len(entries))
+	for _, e := range entries {
+		if e.Family == "" || e.Target == "" {
+			return nil, fmt.Errorf("ceiling entry needs family and target")
+		}
+		writes := capability.MatchRead
+		if e.Mutates {
+			writes = capability.MatchAny
+		}
+		pairs = append(pairs, capability.Pair{Family: e.Family, TargetGlob: e.Target, Writes: writes})
+	}
+	return pairs, nil
 }
 
 const maxAgentBytes = 64 << 10
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-// LoadAgents reads every <dir>/*.md agent definition. A missing dir yields no
-// agents (nil, nil). A malformed file is an error naming the file, fail-closed —
+// An agent is a self-contained FOLDER: <dir>/<name>/agent.md (definition) plus,
+// once granted, <dir>/<name>/grants.json (this agent's own "always" grants). The
+// folder is the portable/purgeable unit (ADR-10, KONZEPT §9): deleting it removes
+// the agent AND its grants; its grants can never cross-match another owner's.
+const (
+	agentFile  = "agent.md"
+	grantsFile = "grants.json"
+)
+
+// GrantsPath returns the per-agent grants file inside its folder.
+func GrantsPath(agentsDir, name string) string {
+	return filepath.Join(agentsDir, name, grantsFile)
+}
+
+// LoadAgents reads every <dir>/<name>/agent.md agent definition. A missing dir
+// yields no agents (nil, nil). A subfolder without agent.md is skipped (it may hold
+// only grants). A malformed definition is an error naming the file, fail-closed —
 // the operator never gets a half-understood agent. Returned sorted by name.
 func LoadAgents(dir string) ([]Definition, error) {
 	entries, err := os.ReadDir(dir)
@@ -71,10 +174,14 @@ func LoadAgents(dir string) ([]Definition, error) {
 	var defs []Definition
 	seen := map[string]bool{}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
+		if !e.IsDir() {
+			continue // each agent is a folder
 		}
-		def, err := loadAgent(filepath.Join(dir, e.Name()))
+		md := filepath.Join(dir, e.Name(), agentFile)
+		if info, err := os.Stat(md); err != nil || info.IsDir() {
+			continue // folder without an agent.md — not an agent
+		}
+		def, err := loadAgent(md, e.Name())
 		if err != nil {
 			return nil, err
 		}
@@ -88,7 +195,7 @@ func LoadAgents(dir string) ([]Definition, error) {
 	return defs, nil
 }
 
-func loadAgent(path string) (Definition, error) {
+func loadAgent(path, defaultName string) (Definition, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Definition{}, fmt.Errorf("agent: read %s: %w", path, err)
@@ -107,7 +214,7 @@ func loadAgent(path string) (Definition, error) {
 
 	name := f.Name
 	if name == "" {
-		name = strings.TrimSuffix(filepath.Base(path), ".md")
+		name = defaultName // the agent's folder name
 	}
 	if !nameRe.MatchString(name) {
 		return Definition{}, fmt.Errorf("agent %s: invalid name %q (want %s)", path, name, nameRe)
@@ -129,9 +236,18 @@ func loadAgent(path string) (Definition, error) {
 	if when == "" {
 		when = "manual"
 	}
+	policy, err := buildPolicy(f.Policy)
+	if err != nil {
+		return Definition{}, fmt.Errorf("agent %s: %w", path, err)
+	}
+	ceiling, err := buildCeiling(f.Ceiling)
+	if err != nil {
+		return Definition{}, fmt.Errorf("agent %s: %w", path, err)
+	}
 	return Definition{
 		Name: name, Description: strings.TrimSpace(f.Description), Instructions: instructions,
 		Model: f.Model, Tools: f.Tools, When: when, Budget: budget,
+		Policy: policy, Ceiling: ceiling,
 	}, nil
 }
 

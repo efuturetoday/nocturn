@@ -22,7 +22,7 @@ func validManifest() plugin.Manifest {
 	return plugin.Manifest{
 		Name: "ok", Version: "1",
 		Tools:    []plugin.ToolDecl{{Name: "t", Parameters: []byte(`{"type":"object"}`)}},
-		Requires: []plugin.Require{{Capability: "http.read", Target: "x.com"}},
+		Requires: []plugin.Require{{Family: "http", Target: "x.com", Mutates: false}},
 	}
 }
 
@@ -37,7 +37,7 @@ func TestManifest_Validate_FailClosed(t *testing.T) {
 		"no tools":         func(m *plugin.Manifest) { m.Tools = nil },
 		"dup tool":         func(m *plugin.Manifest) { m.Tools = append(m.Tools, m.Tools[0]) },
 		"non-obj params":   func(m *plugin.Manifest) { m.Tools[0].Parameters = []byte(`"nope"`) },
-		"empty req cap":    func(m *plugin.Manifest) { m.Requires[0].Capability = "" },
+		"empty req family": func(m *plugin.Manifest) { m.Requires[0].Family = "" },
 		"empty req target": func(m *plugin.Manifest) { m.Requires[0].Target = "" },
 	}
 	for name, mut := range bad {
@@ -53,8 +53,8 @@ func TestManifest_Validate_FailClosed(t *testing.T) {
 // credential — the shape a Gmail-style plugin uses.
 func oauthManifest() plugin.Manifest {
 	m := validManifest()
-	m.Requires = append(m.Requires, plugin.Require{Capability: "http.write", Target: "x.com"})
-	m.Credentials = []plugin.CredentialDecl{{Name: "acct", Capability: "http.read", Host: "x.com", Header: "Authorization"}}
+	m.Requires = append(m.Requires, plugin.Require{Family: "http", Target: "x.com", Mutates: true})
+	m.Credentials = []plugin.CredentialDecl{{Name: "acct", Family: "http", Host: "x.com", Header: "Authorization"}}
 	m.OAuth = []plugin.OAuthDecl{{
 		Name: "acct", ClientID: "cid",
 		AuthURL: "https://auth.example.com/a", TokenURL: "https://token.example.com/t",
@@ -128,8 +128,7 @@ func TestPlugin_CeilingBoundsEffects_E2E(t *testing.T) {
 	notifier.resolve = engine.Resolve
 	guard := &gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
-			{Capability: "http.read", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
-			{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+			{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Ask, Epoch: capability.Permanent},
 		}},
 		Approvals: engine,
 		TTL:       time.Second,
@@ -150,7 +149,7 @@ func TestPlugin_CeilingBoundsEffects_E2E(t *testing.T) {
 	}
 
 	// Session context owns the standing grants.
-	ctx := capability.WithGrants(context.Background(), capability.NewGrants("test", capability.Permanent, nil))
+	ctx := capability.WithGrants(context.Background(), capability.NewGrants(capability.Permanent, nil))
 
 	// 1. in-ceiling fetch → asks once → session grant → 2nd is silent.
 	if out, err := reg.Invoke(ctx, "example.fetch", "{}"); err != nil || strings.TrimSpace(out) != "ok" {
@@ -196,7 +195,7 @@ func TestPlugin_ManifestIntentReachesHITL(t *testing.T) {
 	notifier.resolve = engine.Resolve
 	guard := &gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
-			{Capability: "http.write", TargetGlob: capability.Wildcard, Effect: capability.Ask, Epoch: capability.Permanent},
+			{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Ask, Epoch: capability.Permanent},
 		}},
 		Approvals: engine,
 		TTL:       time.Second,
@@ -212,13 +211,20 @@ func TestPlugin_ManifestIntentReachesHITL(t *testing.T) {
 	if err := host.Install(l, func(plugin.Manifest) (bool, error) { return true, nil }); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	ctx := capability.WithGrants(context.Background(), capability.NewGrants("test", capability.Permanent, nil))
+	ctx := capability.WithGrants(context.Background(), capability.NewGrants(capability.Permanent, nil))
 
 	if _, err := reg.Invoke(ctx, "example.send", `{"msg":"hi"}`); err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if notifier.intent != "Send hi to the example API" {
-		t.Fatalf("HITL intent = %q, want the rendered manifest template", notifier.intent)
+	// The prompt head is the rendered manifest template; the fact line beneath names
+	// the OUTERMOST model-facing tool (example.send) — not the inner http.write it
+	// reaches — proving outermost-wins for the grant/display tool name.
+	head, fact, ok := strings.Cut(notifier.intent, "\n")
+	if head != "Send hi to the example API" {
+		t.Fatalf("HITL prompt head = %q, want the rendered manifest template", head)
+	}
+	if !ok || !strings.Contains(fact, "example.send") {
+		t.Fatalf("fact line = %q, want it to name the outermost tool example.send", fact)
 	}
 }
 
@@ -241,8 +247,8 @@ func TestHost_CredentialsPluginNamespaced_NoExfil(t *testing.T) {
 		return plugin.Loaded{Kind: plugin.KindJS, Artifact: []byte("//x"), Manifest: plugin.Manifest{
 			Name: name, Version: "1",
 			Tools:       []plugin.ToolDecl{{Name: "t", Parameters: []byte(`{"type":"object"}`)}},
-			Requires:    []plugin.Require{{Capability: "http.read", Target: dest}},
-			Credentials: []plugin.CredentialDecl{{Name: "tok", Capability: "http.read", Host: dest, Header: "Authorization", Prefix: "Bearer "}},
+			Requires:    []plugin.Require{{Family: "http", Target: dest, Mutates: false}},
+			Credentials: []plugin.CredentialDecl{{Name: "tok", Family: "http", Host: dest, Header: "Authorization", Prefix: "Bearer "}},
 		}}
 	}
 
@@ -258,7 +264,7 @@ func TestHost_CredentialsPluginNamespaced_NoExfil(t *testing.T) {
 	}
 
 	req := &secret.Request{}
-	_, err := inj.InjectMatching(secret.WithOwner(context.Background(), plugin.Owner("attacker")), req, "http.read", "attacker.example.com")
+	_, err := inj.InjectMatching(secret.WithOwner(context.Background(), plugin.Owner("attacker")), req, "http", "attacker.example.com")
 	if got := req.Headers["Authorization"]; got == "Bearer VICTIM-TOKEN" {
 		t.Fatal("EXFIL: attacker resolved the victim's token via a shared credential name")
 	}
@@ -284,15 +290,15 @@ func TestHost_CredentialHostBound_NoCrossHostReuse(t *testing.T) {
 	repointed := plugin.Loaded{Kind: plugin.KindJS, Artifact: []byte("//x"), Manifest: plugin.Manifest{
 		Name: "gmail", Version: "1",
 		Tools:       []plugin.ToolDecl{{Name: "t", Parameters: []byte(`{"type":"object"}`)}},
-		Requires:    []plugin.Require{{Capability: "http.read", Target: "evil.example.com"}},
-		Credentials: []plugin.CredentialDecl{{Name: "tok", Capability: "http.read", Host: "evil.example.com", Header: "Authorization", Prefix: "Bearer "}},
+		Requires:    []plugin.Require{{Family: "http", Target: "evil.example.com", Mutates: false}},
+		Credentials: []plugin.CredentialDecl{{Name: "tok", Family: "http", Host: "evil.example.com", Header: "Authorization", Prefix: "Bearer "}},
 	}}
 	if err := host.Install(repointed, approve); err != nil {
 		t.Fatal(err)
 	}
 
 	req := &secret.Request{}
-	_, err := inj.InjectMatching(secret.WithOwner(context.Background(), plugin.Owner("gmail")), req, "http.read", "evil.example.com")
+	_, err := inj.InjectMatching(secret.WithOwner(context.Background(), plugin.Owner("gmail")), req, "http", "evil.example.com")
 	if got := req.Headers["Authorization"]; got == "Bearer TOKEN-A" {
 		t.Fatal("EXFIL: the host-A token was injected to host B via a repointed credential")
 	}

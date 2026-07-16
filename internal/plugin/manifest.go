@@ -26,7 +26,7 @@ type Manifest struct {
 	Name        string           `json:"name"`
 	Version     string           `json:"version"`
 	Tools       []ToolDecl       `json:"tools"`
-	Requires    []Require        `json:"requires"`    // the ceiling: capabilities × hosts
+	Requires    []Require        `json:"requires"`    // the ceiling: reach (family + target) × mutation
 	Credentials []CredentialDecl `json:"credentials"` // host-injected credentials it uses
 	OAuth       []OAuthDecl      `json:"oauth"`       // OAuth providers the host runs on its behalf
 }
@@ -62,23 +62,32 @@ type ToolDecl struct {
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"` // JSON-schema object
 	Intent      string          `json:"intent"`     // optional HITL template, {field} placeholders
+	// Consequential marks a tool as irreversible/high-stakes (delete, pay, send).
+	// It is the never-auto floor: such a tool ALWAYS asks out-of-band — it can never
+	// be covered by a standing grant nor be granted "session"/"always" (the moat).
+	// Install-reviewed and trusted (manifest, not guest code).
+	Consequential bool `json:"consequential"`
 }
 
-// Require is one (capability, target-glob) the plugin may attempt — a ceiling
-// entry. Target is capability-defined: a host for http.*, a path glob for file.*.
+// Require is one reach entry of a plugin's ceiling: a Family (the host primitive —
+// "http", "file", "dns") + Target (a host for http, a path glob for file) and the
+// access level. Mutates=true grants read AND write (write is the higher privilege —
+// if you may write a target you may certainly read it); Mutates=false is read-only.
 type Require struct {
-	Capability string `json:"capability"`
-	Target     string `json:"target"`
+	Family  string `json:"family"`
+	Target  string `json:"target"`
+	Mutates bool   `json:"mutates"`
 }
 
 // CredentialDecl declares a credential the host injects for the plugin (never seen
-// by the plugin), mirroring secret.Binding.
+// by the plugin), mirroring secret.Binding. Family scopes it to a host primitive
+// ("http"); a bearer is action-agnostic (injected on both reads and writes).
 type CredentialDecl struct {
-	Name       string `json:"name"`
-	Capability string `json:"capability"`
-	Host       string `json:"host"`
-	Header     string `json:"header"`
-	Prefix     string `json:"prefix"`
+	Name   string `json:"name"`
+	Family string `json:"family"`
+	Host   string `json:"host"`
+	Header string `json:"header"`
+	Prefix string `json:"prefix"`
 }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -112,22 +121,24 @@ func (m Manifest) Validate() error {
 		}
 	}
 	for _, r := range m.Requires {
-		if r.Capability == "" || r.Target == "" {
-			return fmt.Errorf("plugin: requires entry needs a capability and target (got %q, %q)", r.Capability, r.Target)
+		if r.Family == "" || r.Target == "" {
+			return fmt.Errorf("plugin: requires entry needs a family and target (got %q, %q)", r.Family, r.Target)
 		}
 	}
 	ceil := m.Ceiling()
 	creds := map[string]bool{}
 	for _, c := range m.Credentials {
-		if c.Name == "" || c.Capability == "" || c.Host == "" || c.Header == "" {
-			return fmt.Errorf("plugin: credential %q needs name, capability, host and header", c.Name)
+		if c.Name == "" || c.Family == "" || c.Host == "" || c.Header == "" {
+			return fmt.Errorf("plugin: credential %q needs name, family, host and header", c.Name)
 		}
 		// A credential is only ever injected on an effect the ceiling permits; one
-		// whose (capability, host) lies OUTSIDE requires could never be used, and a
-		// mismatch is a red flag (e.g. a credential quietly pointed at another host
-		// than the ceiling allows). Reject it so the manifest stays coherent.
-		if !ceil.Allows(capability.Call{Capability: c.Capability, Target: c.Host}) {
-			return fmt.Errorf("plugin: credential %q (%s %s) is outside the requires ceiling", c.Name, c.Capability, c.Host)
+		// whose (family, host) is unreachable in the ceiling could never be used, and
+		// a mismatch is a red flag (a credential quietly pointed at another host than
+		// the ceiling allows). A bearer injects on both reads and writes, so it is
+		// coherent as long as the host is reachable in EITHER class.
+		if !ceil.Allows(capability.Call{Family: c.Family, Mutates: false, Target: c.Host}) &&
+			!ceil.Allows(capability.Call{Family: c.Family, Mutates: true, Target: c.Host}) {
+			return fmt.Errorf("plugin: credential %q (%s %s) is outside the requires ceiling", c.Name, c.Family, c.Host)
 		}
 		creds[c.Name] = true
 	}
@@ -153,11 +164,17 @@ func isHTTPSURL(s string) bool {
 	return err == nil && u.Scheme == "https" && u.Host != ""
 }
 
-// Ceiling builds the plugin's upper bound from its Requires.
+// Ceiling builds the plugin's upper bound from its Requires: each entry becomes an
+// Allow reach on (family, target). A write entry grants read+write (MatchAny — write
+// implies read); a read entry is read-only (MatchRead).
 func (m Manifest) Ceiling() capability.Ceiling {
 	pairs := make([]capability.Pair, 0, len(m.Requires))
 	for _, r := range m.Requires {
-		pairs = append(pairs, capability.Pair{Capability: r.Capability, TargetGlob: r.Target})
+		writes := capability.MatchRead
+		if r.Mutates {
+			writes = capability.MatchAny
+		}
+		pairs = append(pairs, capability.Pair{Family: r.Family, TargetGlob: r.Target, Writes: writes})
 	}
 	return capability.NewCeiling(pairs...)
 }

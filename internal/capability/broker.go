@@ -8,14 +8,47 @@
 package capability
 
 import (
+	"context"
 	"path"
 	"time"
 )
 
-// Wildcard is the explicit "match any" token for Rule.Capability and
-// Rule.TargetGlob. An empty field never means "any" — use Wildcard so intent is
-// always visible and a forgotten field fails closed.
+// Wildcard is the explicit "match any" token for Rule.Family and Rule.TargetGlob.
+// An empty field never means "any" — use Wildcard so intent is always visible and
+// a forgotten field fails closed.
 const Wildcard = "*"
+
+// Match selects which mutation class a Rule applies to — the write axis, kept
+// separate from reachability (family + target). The zero value MatchNone matches
+// NOTHING (fail closed): a rule or ceiling entry that forgets to set it grants no
+// authority, so "may write" is never implicit. This is the Schreibrecht on a
+// ceiling pair and the read/write selector on a policy rule.
+type Match int
+
+const (
+	// MatchNone is the fail-closed zero: it matches neither reads nor writes.
+	MatchNone Match = iota
+	// MatchRead matches only non-mutating (read/safe) calls.
+	MatchRead
+	// MatchWrite matches only mutating (write) calls.
+	MatchWrite
+	// MatchAny matches both reads and writes (full read+write reach).
+	MatchAny
+)
+
+// covers reports whether m applies to a call with the given mutation flag.
+func (m Match) covers(mutates bool) bool {
+	switch m {
+	case MatchAny:
+		return true
+	case MatchWrite:
+		return mutates
+	case MatchRead:
+		return !mutates
+	default:
+		return false // MatchNone (and any invalid value) fails closed
+	}
+}
 
 // Decision is the broker's verdict on a capability call.
 type Decision int
@@ -43,28 +76,40 @@ func (d Decision) String() string {
 	}
 }
 
-// Call describes a capability invocation for the broker to evaluate. Target is
-// the capability-defined resource string the call acts on — the host for http,
-// a path for file.*, a command for exec — matched against Rule.TargetGlob. A
-// pure-compute or targetless capability (e.g. "log") leaves it "".
+// Call describes a capability invocation for the broker to evaluate on two
+// orthogonal axes (see KONZEPT-sicherheit-ux.md §3):
+//
+//   - REACH: Family (the host primitive — "http", "file", "dns") + Target (the
+//     family-defined resource: a host for http, a path for file; "" = targetless).
+//   - WIRKUNG: Mutates — whether the call changes the world (false = read/safe,
+//     true = write/mutating). Derived host-side from the real operation (an HTTP
+//     method, a read-vs-write file op), never trusted from the tool's name.
+//
+// Splitting these lets a ceiling gate reachability (which hosts, and whether
+// writes are permitted at all) while the policy gates read/write (reads auto,
+// writes ask) — instead of baking read/write into the capability name.
 type Call struct {
-	Capability string // e.g. "log", "http.read", "file.write"
-	Target     string // e.g. "api.example.com", "/work/notes.md"; "" = targetless
+	Family  string // e.g. "log", "http", "file", "dns"
+	Mutates bool   // false = read (safe), true = write (mutating)
+	Target  string // e.g. "api.example.com", "notes/x.md"; "" = targetless
 }
 
 // Rule matches calls and assigns an effect. Wildcards are always explicit "*"
 // — an empty field never means "any", so a half-filled rule fails closed
 // instead of silently granting everything.
 //
-//	Capability: "*" matches any capability; a name matches exactly; ""
-//	            (empty) matches nothing.
+//	Family:     "*" matches any family; a name matches exactly; "" (empty)
+//	            matches nothing.
+//	Writes:     which mutation class the rule applies to (MatchRead/Write/Any);
+//	            the zero MatchNone matches nothing (fail closed) — "may write" is
+//	            never implicit.
 //	TargetGlob: "*" matches any target; a shell glob (path.Match), e.g.
-//	            "*.example.com" or "/work/notes/*", matches that target; ""
-//	            (empty) is NOT target-scoped and matches only targetless calls
-//	            (e.g. "log") — it never matches a target-bearing call. This makes
-//	            it impossible to allow every target by forgetting to set one:
-//	            "any target" must be written explicitly as "*". path.Match's "*"
-//	            does not cross "/", so a path glob is depth-bounded for free.
+//	            "*.example.com" or "notes/*", matches that target; "" (empty) is
+//	            NOT target-scoped and matches only targetless calls (e.g. "log") —
+//	            it never matches a target-bearing call. This makes it impossible to
+//	            allow every target by forgetting to set one: "any target" must be
+//	            written explicitly as "*". path.Match's "*" does not cross "/", so a
+//	            path glob is depth-bounded for free.
 //	Epoch:      the zero value is unset and matches NOTHING (fail closed) —
 //	            permanence is never implicit. Use Permanent for a grant that
 //	            never expires, or an id from EpochRegistry.Open to bind the
@@ -74,23 +119,28 @@ type Call struct {
 //	Window:     nil is not time-constrained; a *Window restricts the rule to a
 //	            daily time range (checked against Env.Now).
 type Rule struct {
-	Capability string
+	Family     string
 	TargetGlob string
+	Writes     Match
 	Effect     Decision
 	Epoch      EpochID
 	Window     *Window
 }
 
 func (r Rule) matches(call Call, env Env) bool {
-	switch r.Capability {
+	switch r.Family {
 	case "":
-		return false // fail closed: an empty capability grants nothing
+		return false // fail closed: an empty family grants nothing
 	case Wildcard:
-		// matches any capability
+		// matches any family
 	default:
-		if r.Capability != call.Capability {
+		if r.Family != call.Family {
 			return false
 		}
+	}
+
+	if !r.Writes.covers(call.Mutates) {
+		return false // wrong mutation class (read vs write)
 	}
 
 	hasTarget := call.Target != ""
@@ -151,6 +201,36 @@ type Env struct {
 	Now       time.Time
 	Epochs    *EpochRegistry
 	RateAllow func(Call) bool
+}
+
+// A scope (an agent run) may layer its OWN policy rules onto the workspace base —
+// author-declared standing intent, NOT runtime grants. They travel through ctx like
+// the ceiling and compose by flat UNION with the base under deny>ask>allow: so a
+// scope can TIGHTEN (add Deny = a blacklist, deny-wins; add Ask where the base
+// allows, ask-beats-allow) immediately. LOOSENING (Allow where the base asks) does
+// NOT work by union (ask beats allow) and needs a precedence layer — that is the
+// autonomy dial, deferred (see KONZEPT §9). Grants never travel here; they are
+// runtime consent, consulted only after a policy Ask.
+
+type policyRulesKey struct{}
+
+// WithPolicy returns a ctx whose scoped-policy chain has p's rules appended. Every
+// authorization unions these with the guard's base policy.
+func WithPolicy(ctx context.Context, p Policy) context.Context {
+	if len(p.Rules) == 0 {
+		return ctx
+	}
+	prev := PolicyRulesFrom(ctx)
+	next := make([]Rule, 0, len(prev)+len(p.Rules))
+	next = append(next, prev...)
+	next = append(next, p.Rules...)
+	return context.WithValue(ctx, policyRulesKey{}, next)
+}
+
+// PolicyRulesFrom returns the scoped policy rules carried by ctx (nil if none).
+func PolicyRulesFrom(ctx context.Context) []Rule {
+	rules, _ := ctx.Value(policyRulesKey{}).([]Rule)
+	return rules
 }
 
 // Evaluate returns the decision for a call in env: deny > ask > allow precedence
