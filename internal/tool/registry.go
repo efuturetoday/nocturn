@@ -37,12 +37,15 @@ type Event struct {
 // hands their specs to the Model, and runs a named tool's Invoke. It is shared
 // by the Brain (model-issued calls) and the script interpreter (script-issued
 // calls), so its OnCall observer sees every tool call from both. The tools map is
-// mutated at runtime (plugins install/uninstall tools), so it is guarded by mu;
-// call ids come from an atomic counter. OnCall is set once at wiring.
+// mutated at runtime (plugins install/uninstall tools), so it is guarded by mu.
+// Call ids come from an atomic counter SHARED (a *pointer) with any Select'd view,
+// so ids stay globally unique — otherwise a nested call through the shared
+// registry could reuse the id its parent got from a filtered view, making a frame
+// its own ancestor and cycling the observer forest. OnCall is set once at wiring.
 type Registry struct {
 	mu     sync.RWMutex
 	tools  map[string]Tool
-	nextID atomic.Uint64
+	nextID *atomic.Uint64
 	OnCall func(Event) // observability sink; nil = off
 }
 
@@ -66,7 +69,7 @@ func NewRegistry(tools []Tool) *Registry {
 	for _, t := range tools {
 		reg[t.Name] = t
 	}
-	return &Registry{tools: reg}
+	return &Registry{tools: reg, nextID: new(atomic.Uint64)}
 }
 
 // Select returns a new Registry holding only the tools whose name satisfies
@@ -83,7 +86,7 @@ func (r *Registry) Select(keep func(name string) bool) *Registry {
 		}
 	}
 	r.mu.RUnlock()
-	return &Registry{tools: sub, OnCall: r.OnCall}
+	return &Registry{tools: sub, nextID: r.nextID, OnCall: r.OnCall}
 }
 
 // Add registers a tool after construction — code.run, or a plugin's tools.
