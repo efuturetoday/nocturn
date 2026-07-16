@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -15,12 +16,12 @@ import (
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
-// testWorkFactor keeps the vault's scrypt derivation cheap in tests.
-const testWorkFactor = 10
+// testVaultKey is a fixed 32-byte AES key (the vault takes a key, not a passphrase).
+var testVaultKey = bytes.Repeat([]byte{0x7C}, 32)
 
 func openTestVault(t *testing.T, path string) *secret.Vault {
 	t.Helper()
-	v, err := secret.OpenVault(path, "test-pass", secret.WithWorkFactor(testWorkFactor))
+	v, err := secret.OpenVault(path, testVaultKey)
 	if err != nil {
 		t.Fatalf("OpenVault: %v", err)
 	}

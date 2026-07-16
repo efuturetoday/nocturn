@@ -93,11 +93,17 @@ func tuiCmd(args []string) error {
 	}
 	fmt.Printf("Workspace: %s\n", wsName)
 
-	// Unlock (or, first run, create) the encrypted secret vault — ALL secret
-	// material, OAuth refresh tokens included, lives age-encrypted in
-	// <ws>/secrets.age; the workspace on disk carries only ciphertext and stays
-	// committable. Prompted on the plain terminal, before bubbletea.
-	vault, err := unlockVault(filepath.Join(wsDir, "secrets.age"))
+	// Unlock the secret vault. ONE master passphrase (asked once) derives this
+	// workspace's key (HKDF) — the same passphrase opens every workspace without
+	// sharing a key. ALL secret material (OAuth refresh tokens included) lives
+	// AES-256-GCM-encrypted in <ws>/secrets.vault; the workspace on disk carries only
+	// ciphertext (+ the non-secret workspaces/master.json salt) and stays committable.
+	// A legacy <ws>/secrets.age is migrated on first run. Prompted before bubbletea.
+	master, err := unlockMaster(filepath.Join("workspaces", "master.json"))
+	if err != nil {
+		return err
+	}
+	vault, err := unlockVault(master, filepath.Join(wsDir, "secrets.vault"), wsName, filepath.Join(wsDir, "secrets.age"))
 	if err != nil {
 		return err
 	}
