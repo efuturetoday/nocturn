@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,9 +43,12 @@ func New(guard *gateway.Guard, root string) *Files {
 	return &Files{Guard: guard, Root: root}
 }
 
-// Tools exposes file.read and file.write as model/script/plugin tools.
+// Tools exposes the filesystem capability as model/script/plugin tools. read,
+// list and stat are observations (Write:false → run silently under base policy);
+// write and remove are mutations (Write:true → ask). Every tool confines its path
+// to Root before the broker and then passes through the Guard.
 func (f *Files) Tools() []tool.Tool {
-	return []tool.Tool{f.readTool(), f.writeTool()}
+	return []tool.Tool{f.readTool(), f.writeTool(), f.listTool(), f.statTool(), f.removeTool()}
 }
 
 func (f *Files) readTool() tool.Tool {
@@ -107,6 +111,113 @@ func (f *Files) writeTool() tool.Tool {
 					return "", err
 				}
 				return fmt.Sprintf("wrote %d bytes to %s", len(a.Content), target), nil
+			})
+		},
+	}
+}
+
+func (f *Files) listTool() tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{
+			Name:        "file.list",
+			Description: "List the entries of a workspace directory. Returns a JSON array of {name, isDir, size}.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative directory (default the workspace root)"}}}`),
+		},
+		Invoke: func(ctx context.Context, args string) (string, error) {
+			var a struct {
+				Path string `json:"path"`
+			}
+			if err := json.Unmarshal([]byte(args), &a); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+			p := strings.TrimSpace(a.Path)
+			if p == "" {
+				p = "." // listing the workspace root is legal; target is "."
+			}
+			abs, target, err := f.resolvePath(p)
+			if err != nil {
+				return "", err
+			}
+			call := capability.Call{Family: "file", Write: false, Target: target}
+			return gateway.Do(ctx, f.Guard, call, "list "+target, func() (string, error) {
+				entries, err := os.ReadDir(abs)
+				if err != nil {
+					return "", err
+				}
+				type item struct {
+					Name  string `json:"name"`
+					IsDir bool   `json:"isDir"`
+					Size  int64  `json:"size"`
+				}
+				out := make([]item, 0, len(entries))
+				for _, e := range entries {
+					it := item{Name: e.Name(), IsDir: e.IsDir()}
+					if info, ierr := e.Info(); ierr == nil {
+						it.Size = info.Size()
+					}
+					out = append(out, it)
+				}
+				b, _ := json.Marshal(out)
+				return string(b), nil
+			})
+		},
+	}
+}
+
+func (f *Files) statTool() tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{
+			Name:        "file.stat",
+			Description: "Stat a workspace path. Returns JSON {exists, isDir, size}; a missing path returns {\"exists\":false}.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative path to stat"}},"required":["path"]}`),
+		},
+		Invoke: func(ctx context.Context, args string) (string, error) {
+			abs, target, err := f.resolve(args)
+			if err != nil {
+				return "", err
+			}
+			call := capability.Call{Family: "file", Write: false, Target: target}
+			return gateway.Do(ctx, f.Guard, call, "stat "+target, func() (string, error) {
+				type stat struct {
+					Exists bool  `json:"exists"`
+					IsDir  bool  `json:"isDir"`
+					Size   int64 `json:"size"`
+				}
+				info, err := os.Stat(abs)
+				var s stat
+				switch {
+				case err == nil:
+					s = stat{Exists: true, IsDir: info.IsDir(), Size: info.Size()}
+				case errors.Is(err, fs.ErrNotExist):
+					s = stat{Exists: false}
+				default:
+					return "", err
+				}
+				b, _ := json.Marshal(s)
+				return string(b), nil
+			})
+		},
+	}
+}
+
+func (f *Files) removeTool() tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{
+			Name:        "file.remove",
+			Description: "Remove a file (or empty directory) from the workspace. This is a write and may require approval.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative path to remove"}},"required":["path"]}`),
+		},
+		Invoke: func(ctx context.Context, args string) (string, error) {
+			abs, target, err := f.resolve(args)
+			if err != nil {
+				return "", err
+			}
+			call := capability.Call{Family: "file", Write: true, Target: target}
+			return gateway.Do(ctx, f.Guard, call, "remove "+target, func() (string, error) {
+				if err := os.Remove(abs); err != nil {
+					return "", err
+				}
+				return "removed " + target, nil
 			})
 		},
 	}

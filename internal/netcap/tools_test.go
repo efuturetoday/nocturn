@@ -56,8 +56,9 @@ func TestFetchTool_ValidatesArguments(t *testing.T) {
 	}
 }
 
-func TestFetchTool_Invoke_ReturnsBody(t *testing.T) {
+func TestFetchTool_Invoke_ReturnsEnvelope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("pong"))
 	}))
 	defer srv.Close()
@@ -69,7 +70,19 @@ func TestFetchTool_Invoke_ReturnsBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invoke: %v", err)
 	}
-	if !strings.Contains(out, "pong") {
-		t.Fatalf("out = %q, want it to contain pong", out)
+	var env struct {
+		Status     int               `json:"status"`
+		StatusText string            `json:"statusText"`
+		Headers    map[string]string `json:"headers"`
+		Body       string            `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("envelope %q: %v", out, err)
+	}
+	if env.Body != "pong" || env.Status != 200 {
+		t.Fatalf("envelope = %+v, want body=pong status=200", env)
+	}
+	if !strings.Contains(env.Headers["Content-Type"], "text/plain") {
+		t.Fatalf("headers = %v, want Content-Type text/plain", env.Headers)
 	}
 }

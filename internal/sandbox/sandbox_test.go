@@ -67,6 +67,26 @@ func TestRun_HostCallABI_ViaStdio(t *testing.T) {
 	}
 }
 
+// A HostFunc that returns an error does not crash the host: the ABI surfaces it to
+// the guest as an "error: <msg>" response string (which an interpreter's binding
+// turns into a language-level exception). Here the echo guest writes that response
+// straight to stdout, so we can assert the prefix + message round-trip.
+func TestRun_HostCallError_SurfacesAsErrorString(t *testing.T) {
+	host := sandbox.HostFunc{Name: "echo", Fn: func(context.Context, []byte) ([]byte, error) {
+		return nil, errors.New("kaboom")
+	}}
+	res, err := sandbox.Run(context.Background(), echoGuest, sandbox.Config{
+		Stdin: []byte("ignored"),
+		Hosts: []sandbox.HostFunc{host},
+	})
+	if err != nil {
+		t.Fatalf("run should not fail on a guest-visible host error: %v (stderr=%s)", err, res.Stderr)
+	}
+	if got := string(res.Stdout); got != "error: kaboom" {
+		t.Fatalf("stdout = %q, want %q", got, "error: kaboom")
+	}
+}
+
 // A runaway guest is trapped by the wall-clock deadline.
 func TestRun_DeadlineTrapsRunawayGuest(t *testing.T) {
 	_, err := sandbox.Run(context.Background(), loopGuest, sandbox.Config{

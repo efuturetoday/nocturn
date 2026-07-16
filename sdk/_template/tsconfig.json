@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020"],
+    "module": "ES2020",
+    "moduleResolution": "node",
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "checkJs": true,
+    "allowJs": true,
+    "skipLibCheck": true
+  },
+  "include": ["plugin.js", "plugin.ts", "../nocturn.d.ts"]
+}

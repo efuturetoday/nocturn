@@ -337,7 +337,7 @@ golangci-lint run         # (geplant)
 
 # Sandbox-WAT-Test-Gäste neu bauen (nach Änderung):
 wat2wasm internal/sandbox/testdata/echo.wat -o internal/sandbox/testdata/echo.wasm
-wat2wasm internal/script/testdata/gate.wat -o internal/script/testdata/gate.wasm
+wat2wasm internal/plugin/testdata/wasmprobe/plugin.wat -o internal/plugin/testdata/wasmprobe/plugin.wasm
 
 # QuickJS-Interpreter-wasm neu bauen (nur bei Shim-Änderung; braucht wasi-sdk):
 internal/script/qjs/build.sh

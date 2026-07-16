@@ -1,0 +1,14 @@
+{
+  "name": "wasmprobe",
+  "version": "1",
+  "tools": [
+    {
+      "name": "ping",
+      "description": "Forward the call through the gate to prove the runWASM round-trip.",
+      "parameters": { "type": "object" }
+    }
+  ],
+  "cage": [
+    { "family": "http", "target": "example.com", "access": ["read"] }
+  ]
+}

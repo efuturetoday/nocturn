@@ -34,39 +34,27 @@ const (
 	codeRunName = "code.run"
 )
 
-// Runner evaluates JS source on the interpreter guest, dispatching a script's
+// Runner evaluates JS source on the QuickJS interpreter, dispatching a script's
 // nocturn.call effects through a shared tool.Registry — the SAME registry the
 // model dispatches through, so script effects are gated and observed identically.
-// Build it with New (embedded interpreter) or NewWithGuest; the zero value
-// is not usable.
+// Build it with New; the zero value is not usable.
 type Runner struct {
-	Guest    []byte         // the interpreter wasm
+	Guest    []byte         // the QuickJS interpreter wasm
 	Registry *tool.Registry // shared dispatch registry (also the model's)
 	Timeout  time.Duration  // per-run wall-clock bound (0 = sandbox default)
 	MaxPages uint32         // memory cap in 64 KiB pages (0 = sandbox default)
 }
 
-// NewWithGuest builds a Runner over an explicit interpreter guest (e.g. a test
-// guest) and a shared dispatch Registry; most callers want New, which supplies
-// the embedded interpreter. A nil Registry yields an empty one (every effect
-// reports "unknown tool"). code.run may live in the shared Registry for the
-// model to call, but a script can never re-enter it — dispatch refuses code.run
-// (no recursive interpreter).
-func NewWithGuest(guest []byte, reg *tool.Registry) *Runner {
-	if reg == nil {
-		reg = tool.NewRegistry(nil)
-	}
-	return &Runner{Guest: guest, Registry: reg}
-}
-
 // Run evaluates source on the interpreter and returns what the script printed to
-// stdout. A trap, non-zero exit, memory exhaustion, or timeout returns an error
-// alongside any stderr the guest produced. Output is not truncated here — the
-// brain bounds what the model sees; a script's own effect results stay whole.
+// stdout. The runtime prelude (fetch/fs/btoa/…) is always prepended — a Runner
+// only ever drives the JS interpreter. A trap, non-zero exit, memory exhaustion,
+// or timeout returns an error alongside any stderr the guest produced. Output is
+// not truncated here — the brain bounds what the model sees; a script's own effect
+// results stay whole.
 func (r *Runner) Run(ctx context.Context, source string) (string, error) {
 	gate := sandbox.HostFunc{Name: gateName, Fn: r.dispatch}
 	res, err := sandbox.Run(ctx, r.Guest, sandbox.Config{
-		Stdin:    []byte(source),
+		Stdin:    []byte(withPrelude(source)),
 		Hosts:    []sandbox.HostFunc{gate},
 		Timeout:  r.Timeout,
 		MaxPages: r.MaxPages,

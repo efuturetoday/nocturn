@@ -1,12 +1,13 @@
-;; gate.wat — a minimal WASI guest that proves the script Runner's single gate
-;; end to end, independent of the QuickJS build. It reads its stdin as one gate
-;; request (JSON {"tool":...,"args":...}), passes it verbatim to the host import
-;; nocturn.call over the standard packed-ptr ABI, then writes the returned bytes
-;; to stdout. It exports memory + a bump malloc/free so the host can allocate the
-;; response inside it. This stands in for the real interpreter, whose JS binding
-;; nocturn.call(tool, args) drives the same import.
+;; plugin.wat — a minimal wasm32-wasi plugin guest that exercises the runWASM
+;; contract end to end. The host feeds it one request on stdin
+;; (JSON {"tool":...,"args":...}); it passes those bytes verbatim to the host
+;; import nocturn.call over the standard packed-ptr ABI, then writes the returned
+;; bytes to stdout. It exports memory + a bump malloc/free so the host can
+;; allocate the response inside it. This is the smallest possible plugin.wasm: it
+;; self-dispatches by forwarding, proving the {tool,args} stdin → gate → registry
+;; → stdout round-trip a real (Rust/Go→wasm) plugin would drive.
 ;;
-;; Build: wat2wasm gate.wat -o gate.wasm
+;; Build: wat2wasm plugin.wat -o plugin.wasm
 (module
   (import "wasi_snapshot_preview1" "fd_read"
     (func $fd_read (param i32 i32 i32 i32) (result i32)))

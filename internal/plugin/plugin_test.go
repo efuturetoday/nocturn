@@ -308,3 +308,51 @@ func TestHost_CredentialHostBound_NoCrossHostReuse(t *testing.T) {
 		t.Fatalf("host-B binding resolved a credential it should not have: %v", req.Headers)
 	}
 }
+
+// The runWASM path end to end: a KindWASM plugin feeds {"tool","args"} on stdin to
+// a real wasm32-wasi guest, which forwards it to the one gate; the dispatcher
+// routes to the shared registry and the result flows back on stdout. First
+// coverage of the plugin.wasm contract (distinct from the plugin.js path).
+func TestPlugin_WASM_DispatchesThroughGate_E2E(t *testing.T) {
+	l, err := plugin.Load("testdata/wasmprobe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Kind != plugin.KindWASM {
+		t.Fatalf("kind = %v, want KindWASM", l.Kind)
+	}
+
+	// The wasmprobe guest forwards {tool:"ping",args} verbatim to nocturn.call, so
+	// the gate dispatches to an effect tool literally named "ping".
+	var gotArgs string
+	ping := tool.Tool{
+		Spec: tool.Spec{Name: "ping"},
+		Invoke: func(_ context.Context, args string) (string, error) {
+			gotArgs = args
+			return "pong", nil
+		},
+	}
+	reg := tool.NewRegistry([]tool.Tool{ping})
+	p := plugin.New(l, reg)
+
+	var pluginTool tool.Tool
+	for _, tl := range p.Tools() {
+		if tl.Name == "wasmprobe.ping" {
+			pluginTool = tl
+		}
+	}
+	if pluginTool.Name == "" {
+		t.Fatal("wasmprobe.ping not exposed by the plugin")
+	}
+
+	out, err := pluginTool.Invoke(context.Background(), `{"n":7}`)
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if strings.TrimSpace(out) != "pong" {
+		t.Fatalf("out = %q, want pong", out)
+	}
+	if gotArgs != `{"n":7}` {
+		t.Fatalf("effect tool received args %q, want %q", gotArgs, `{"n":7}`)
+	}
+}

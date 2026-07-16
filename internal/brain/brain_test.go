@@ -324,8 +324,11 @@ func TestBrain_Integration_FetchThroughGateway(t *testing.T) {
 			if err := json.Unmarshal([]byte(args), &a); err != nil || a.URL == "" {
 				return "", fmt.Errorf("invalid arguments")
 			}
-			body, err := netCap.Fetch(ctx, secret.Request{URL: a.URL})
-			return string(body), err
+			resp, err := netCap.Fetch(ctx, secret.Request{URL: a.URL})
+			if err != nil {
+				return "", err
+			}
+			return string(resp.Body), nil
 		}),
 	})
 	model := &scriptedModel{steps: []brain.Step{

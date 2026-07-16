@@ -82,12 +82,15 @@ func TestFetch_Allow_ReturnsBody(t *testing.T) {
 	defer srv.Close()
 
 	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
-	body, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
+	resp, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	if string(body) != "pong" {
-		t.Fatalf("body = %q, want pong", body)
+	if string(resp.Body) != "pong" {
+		t.Fatalf("body = %q, want pong", resp.Body)
+	}
+	if resp.Status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Status)
 	}
 }
 
@@ -127,12 +130,12 @@ func TestFetch_Ask_ApprovePerformsRequest(t *testing.T) {
 	defer srv.Close()
 
 	n := &netcap.Net{Guard: &gateway.Guard{Policy: askRead(), Approvals: askEngine(true), TTL: time.Second}}
-	body, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
+	resp, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
 		t.Fatalf("approved fetch: %v", err)
 	}
-	if string(body) != "ok" {
-		t.Fatalf("body = %q, want ok", body)
+	if string(resp.Body) != "ok" {
+		t.Fatalf("body = %q, want ok", resp.Body)
 	}
 }
 
@@ -347,15 +350,37 @@ func TestFetch_IngressLeak_Redacted(t *testing.T) {
 	store.Set("tok", []byte("supersecretvalue123"))
 	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Scanner: secret.NewScanner(store)}
 
-	body, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
+	resp, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	if strings.Contains(string(body), "supersecretvalue123") {
+	if strings.Contains(string(resp.Body), "supersecretvalue123") {
 		t.Fatal("ingress secret was not redacted")
 	}
-	if !strings.Contains(string(body), "[REDACTED]") {
+	if !strings.Contains(string(resp.Body), "[REDACTED]") {
 		t.Fatal("no redaction marker in response body")
+	}
+}
+
+// A vault value echoed back in a RESPONSE HEADER is redacted too (the envelope now
+// exposes headers to the model, so they must be scanned like the body).
+func TestFetch_IngressLeak_RedactedInHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Echo", "supersecretvalue123")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	store := secret.NewStore()
+	store.Set("tok", []byte("supersecretvalue123"))
+	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Scanner: secret.NewScanner(store)}
+
+	resp, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if strings.Contains(resp.Headers["X-Echo"], "supersecretvalue123") {
+		t.Fatalf("header secret not redacted: %q", resp.Headers["X-Echo"])
 	}
 }
 

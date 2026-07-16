@@ -34,6 +34,21 @@ var sensitiveHeaders = map[string]bool{
 	"x-api-key":           true,
 }
 
+// strippedResponseHeaders are response headers the guest never receives (matched
+// case-insensitively): cookie-setting headers (the guest has no cookie jar and
+// must not hoard credential material) and auth-challenge/credential headers (the
+// host owns the credential channel). Every OTHER response header value is still
+// leak-scanned before it reaches the model — this list is the small set we drop
+// outright because they carry credential material by nature, not because of what
+// they happen to contain.
+var strippedResponseHeaders = map[string]bool{
+	"set-cookie":         true,
+	"set-cookie2":        true,
+	"authorization":      true,
+	"www-authenticate":   true,
+	"proxy-authenticate": true,
+}
+
 // Net groups the networking capabilities. It holds a shared *gateway.Guard plus
 // its own dependencies: the host-owned credential Injector (the "cookie jar") and
 // an HTTP client. Further networking capabilities (dns, ping) are added as sibling
@@ -48,13 +63,24 @@ type Net struct {
 	Resolver    *net.Resolver
 }
 
+// Response is the result of a gated outbound request, after ingress redaction.
+// It carries the status and (redacted) response headers as well as the body, so
+// a caller — the http tools, and through them fetch() in the guest — can be
+// honest about the outcome instead of mistaking a 404 body for success.
+type Response struct {
+	Status     int               // HTTP status code
+	StatusText string            // http.StatusText(Status)
+	Headers    map[string]string // canonical key -> comma-joined values, redacted (credential/cookie headers dropped)
+	Body       []byte            // <= maxResponseBytes, redacted
+}
+
 // Fetch performs an outbound HTTP request on the caller's behalf. The caller
 // builds req WITHOUT credentials; the gateway injects any credential bound to
 // the destination host at the boundary (the guest never sees the value, and
 // never chooses the credential — the destination does). The request is gated on
 // the destination host, so an unknown host escalates to human approval and a
 // denied host never leaves the process.
-func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
+func (n *Net) Fetch(ctx context.Context, req secret.Request) (*Response, error) {
 	host, err := hostOf(req.URL)
 	if err != nil {
 		return nil, err
@@ -82,7 +108,7 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	// credential injection, and the request itself are unreachable on a denied
 	// call. Keeping them inside the closure makes the guarded pipeline cohesive
 	// and a bypass impossible by construction.
-	return gateway.Do(ctx, n.Guard, call, method+" "+req.URL, func() ([]byte, error) {
+	return gateway.Do(ctx, n.Guard, call, method+" "+req.URL, func() (*Response, error) {
 		// Egress leak scan on the guest-built request (URL + headers + body), BEFORE
 		// the legitimate credential is stamped in below — so the host's own injected
 		// bearer is never flagged.
@@ -123,8 +149,23 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Ingress redaction: strip any secret echoed back before it reaches the model.
-		return n.Scanner.RedactIngress(respBody), nil
+		// Ingress redaction: strip any secret echoed back before it reaches the
+		// model — from the body AND from the response header values (a secret can
+		// come back in a header too). Set-Cookie is dropped outright: the guest has
+		// no cookie jar and raw cookies are a needless leak surface.
+		hdr := make(map[string]string, len(resp.Header))
+		for k, vs := range resp.Header {
+			if strippedResponseHeaders[strings.ToLower(k)] {
+				continue
+			}
+			hdr[k] = string(n.Scanner.RedactIngress([]byte(strings.Join(vs, ", "))))
+		}
+		return &Response{
+			Status:     resp.StatusCode,
+			StatusText: http.StatusText(resp.StatusCode),
+			Headers:    hdr,
+			Body:       n.Scanner.RedactIngress(respBody),
+		}, nil
 	})
 }
 

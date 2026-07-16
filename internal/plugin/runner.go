@@ -101,7 +101,9 @@ func (p *Plugin) runWASM(ctx context.Context, toolName, args string) (string, er
 // the plugin source followed by a bootstrap that dispatches the named tool and
 // prints its result. tool + args are embedded as sanitized JSON literals.
 func (p *Plugin) runJS(ctx context.Context, toolName, args string) (string, error) {
-	src := string(p.artifact) + jsBootstrap(toolName, args)
+	// Prelude first (defines fetch/fs/btoa/…), then the plugin (which sets
+	// globalThis.plugin), then the bootstrap that invokes the named tool.
+	src := script.Prelude() + "\n" + string(p.artifact) + jsBootstrap(toolName, args)
 	return p.runGuest(ctx, script.InterpreterGuest(), []byte(src))
 }
 

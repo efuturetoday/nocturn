@@ -30,15 +30,15 @@ func TestE2E_ScriptFetchesThroughGateway(t *testing.T) {
 	r := script.New(tool.NewRegistry(netCap.Tools()))
 
 	src := `
-		const body = nocturn.call("http.read", {url: ` + jsString(srv.URL) + `});
-		console.log("got: " + body);
+		const resp = JSON.parse(nocturn.call("http.read", {url: ` + jsString(srv.URL) + `}));
+		console.log("got: " + resp.body + " (" + resp.status + ")");
 	`
 	out, err := r.Run(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !strings.Contains(out, "got: payload-from-server") {
-		t.Fatalf("stdout = %q, want the server payload", out)
+	if !strings.Contains(out, "got: payload-from-server (200)") {
+		t.Fatalf("stdout = %q, want the server payload + status", out)
 	}
 }
 

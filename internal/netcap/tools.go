@@ -28,7 +28,7 @@ func (n *Net) readTool() tool.Tool {
 	return tool.Tool{
 		Spec: tool.Spec{
 			Name:        "http.read",
-			Description: "Read a URL over HTTP(S) with a safe method (GET/HEAD) and return the response body.",
+			Description: "Read a URL over HTTP(S) with a safe method (GET/HEAD). Returns a JSON object {status, statusText, headers, body} — the response text is in body.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
 				`"url":{"type":"string","description":"The URL to read"},` +
 				`"method":{"type":"string","enum":["GET","HEAD"],"description":"Safe HTTP method (default GET)"}` +
@@ -58,7 +58,7 @@ func (n *Net) writeTool() tool.Tool {
 	return tool.Tool{
 		Spec: tool.Spec{
 			Name:        "http.write",
-			Description: "Send data to a URL with a mutating method (POST/PUT/PATCH/DELETE). This is a write and may require approval.",
+			Description: "Send data to a URL with a mutating method (POST/PUT/PATCH/DELETE). Returns a JSON object {status, statusText, headers, body}. This is a write and may require approval.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
 				`"url":{"type":"string","description":"The URL to send to"},` +
 				`"method":{"type":"string","enum":["POST","PUT","PATCH","DELETE"],"description":"Mutating HTTP method (default POST)"},` +
@@ -103,10 +103,21 @@ func (n *Net) doRequest(ctx context.Context, method, url, body, contentType stri
 	if err != nil {
 		return "", err
 	}
-	// Not truncated here: the brain bounds what the model sees, and a script's
-	// nocturn.call gets the whole response to process. The raw read is already
-	// capped at maxResponseBytes (net.go).
-	return string(resp), nil
+	// Return a JSON envelope {status, statusText, headers, body} so the caller —
+	// the model, and fetch() in the guest — sees the real outcome, not just the
+	// body (a 404 is no longer mistaken for success). Not truncated here: the
+	// brain bounds what the model sees, and a script's nocturn.call gets the whole
+	// response. The body is already capped at maxResponseBytes (netcap.go).
+	out, err := json.Marshal(struct {
+		Status     int               `json:"status"`
+		StatusText string            `json:"statusText"`
+		Headers    map[string]string `json:"headers"`
+		Body       string            `json:"body"`
+	}{resp.Status, resp.StatusText, resp.Headers, string(resp.Body)})
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 func methodOrDefault(m, def string) string {

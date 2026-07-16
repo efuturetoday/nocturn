@@ -17,10 +17,14 @@ var interpreterGuest []byte
 
 // New builds a Runner over the embedded QuickJS interpreter and the given shared
 // dispatch Registry (the same one the model dispatches through, so script effects
-// are gated and observed identically). This is the ready-to-use constructor; use
-// NewWithGuest only to supply a different guest (e.g. in tests).
+// are gated and observed identically). This is the only constructor: a Runner
+// always drives the interpreter (and always prepends the runtime prelude). A nil
+// Registry yields an empty one (every effect reports "unknown tool").
 func New(reg *tool.Registry) *Runner {
-	return NewWithGuest(interpreterGuest, reg)
+	if reg == nil {
+		reg = tool.NewRegistry(nil)
+	}
+	return &Runner{Guest: interpreterGuest, Registry: reg}
 }
 
 // InterpreterGuest returns the embedded QuickJS interpreter wasm — the shared JS
