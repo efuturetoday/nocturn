@@ -17,6 +17,38 @@ The rule of thumb:
 So a normal research task flows without interruptions, and the assistant only stops you
 when it is about to *act*.
 
+## How the decision is made
+
+Behind that rule of thumb, every action the assistant proposes is judged on **two separate
+questions**. Keeping them apart is what lets the assistant be helpful without being reckless.
+
+1. **Where does it reach?** Every action goes through a **capability** — a specific power like
+   *reach the network* (`http`), *look up a name* (`dns`), or *touch a workspace file* (`file`)
+   — aimed at a **target**: a website, or a file path. The assistant has no other powers; if a
+   capability was not handed to it, it simply cannot do that thing. (See the
+   [capabilities reference](/reference/capabilities/) for the full list.)
+2. **What does it do — read or write?** This is the second axis. **Reading** looks something up
+   and changes nothing. **Writing** changes the world: sending, saving, deleting. This is worked
+   out from the real action, not from what it is called, so nothing can dress up a write as a
+   read.
+
+The **policy** is the standing rule over those two axes. Out of the box it is one line: *reads
+happen, writes ask.* That is why looking things up never interrupts you, while anything that
+acts stops for a yes.
+
+Two things refine it:
+
+- **Limits (cages).** A limit on *reach* — say, "this agent may only touch `*.github.com`".
+  Anything outside is denied flat, without even asking, so a hijacked chat cannot talk you into
+  approving something it was never allowed to attempt in the first place.
+- **Your standing answers (grants).** When you say "allow this session" or "allow always", that
+  answer is remembered — but **narrowly**, tied to the exact tool and target. Allowing *sending*
+  email never quietly allows *deleting* it, and allowing writes to one site never covers another.
+
+The order is always the same: outside the limits → denied; a read, or something you already
+allowed → runs; otherwise → asks you. You can follow one real action all the way through on the
+[request flow](/architecture/request-flow/) page.
+
 ## Answering a prompt
 
 When Nocturn asks, you see a short description of what it wants to do, for example *Send

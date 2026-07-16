@@ -3,7 +3,10 @@ title: Nocturn
 description: A personal AI assistant that always asks before it does anything that matters, and can ask on your phone.
 template: splash
 hero:
-  tagline: A personal AI assistant that always asks before it does anything that matters. It runs on your own machine, and it can ask for your approval right on your phone.
+  tagline: A personal AI assistant that works for you on its own — on your machine, in the background — and stops for your approval, on your phone, before it does anything you can't take back.
+  image:
+    file: ../../assets/mascot-logo.png
+    alt: The Nocturn mascot — a sleeping gopher in a nightcap and sleep mask, drifting through a starfield.
   actions:
     - text: Get started
       link: /guides/getting-started/
@@ -16,38 +19,25 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## What makes it different
+## Autonomy you can actually trust
 
 <CardGrid>
-	<Card title="You're always in the loop" icon="approve-check">
-		Looking things up is free, but sending, changing, or deleting always waits for
-		your yes. Nothing irreversible happens behind your back.
+	<Card title="Autonomous" icon="rocket">
+		Hand it a job and walk away. Anything irreversible waits for your yes.
 	</Card>
-	<Card title="Approve from your phone" icon="comment">
-		Get a push notification, tap Approve or Deny. Because the decision lives on a
-		second device, a hijacked chat can't approve its own actions.
+	<Card title="Phone-gated" icon="phone">
+		A push, one tap to approve. A hijacked agent can't tap for you.
 	</Card>
-	<Card title="Runs on your machine" icon="laptop">
-		One program. No cloud account, no database, nothing to install alongside it. Your
-		data stays in a folder you own.
+	<Card title="Hijack-proof" icon="warning">
+		Injection is assumed. Every effect is gated; the sandbox holds no power you didn't grant.
 	</Card>
-	<Card title="Extensible, safely" icon="puzzle">
-		Connect it to email, calendars, and APIs with plugins that run locked down and
-		still have to ask before they act.
+	<Card title="Leak-proof" icon="padlock">
+		It uses your keys but never sees them — and can't smuggle them out.
 	</Card>
-</CardGrid>
-
-## Start here
-
-<CardGrid stagger>
-	<Card title="Guides" icon="open-book">
-		[Download and run it](/guides/getting-started/), learn the
-		[everyday shortcuts](/guides/the-tui/), set up [phone approval](/guides/approvals/),
-		and [add new capabilities](/guides/writing-plugins/).
+	<Card title="Your experts" icon="puzzle">
+		A workspace per domain: its own skills, plugins, and secrets. Build specialists.
 	</Card>
-	<Card title="How it's kept safe" icon="setting">
-		The [threat model](/architecture/threat-model/), the [layered design](/architecture/the-onion/),
-		and a [step-by-step trace](/architecture/request-flow/) of what happens when the
-		assistant acts.
+	<Card title="One binary" icon="laptop">
+		No cloud, no database, no runtime. Download one file — done.
 	</Card>
 </CardGrid>

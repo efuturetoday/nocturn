@@ -13,6 +13,41 @@ export default defineConfig({
 		starlight({
 			title: 'Nocturn',
 			description: 'A secure personal AI assistant — mandatory out-of-band approval, WASM isolation, capability broker, in a single Go binary.',
+			customCss: ['./src/styles/brand.css'],
+			// Lightweight scroll parallax for the splash hero. Drives two CSS
+			// custom properties (--nebula-shift on .hero, --mascot-shift on the
+			// image); no-ops when there's no hero or reduced motion is preferred.
+			head: [
+				{
+					tag: 'script',
+					content: `(function(){
+	if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+	function init(){
+		var hero = document.querySelector('.hero');
+		if (!hero) return;
+		var img = hero.querySelector('img');
+		var ticking = false;
+		function update(){
+			ticking = false;
+			var y = window.scrollY || 0;
+			var s = Math.min(y, 700);
+			hero.style.setProperty('--nebula-shift', (s * 0.28) + 'px');
+			if (img) img.style.setProperty('--mascot-shift', (s * -0.14) + 'px');
+		}
+		function onScroll(){ if (!ticking){ ticking = true; requestAnimationFrame(update); } }
+		addEventListener('scroll', onScroll, { passive: true });
+		update();
+	}
+	if (document.readyState !== 'loading') init();
+	else addEventListener('DOMContentLoaded', init);
+})();`,
+				},
+			],
+			// Dark only: force the theme and drop the light/dark toggle.
+			components: {
+				ThemeProvider: './src/components/ThemeProviderDark.astro',
+				ThemeSelect: './src/components/ThemeSelectNone.astro',
+			},
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/efuturetoday/nocturn' }],
 			// Manual sidebar — explicit sections, order, and nesting.
 			// Only list pages that exist; add entries as pages are written.
@@ -47,6 +82,16 @@ export default defineConfig({
 						{ label: 'Plugins', slug: 'guides/writing-plugins' },
 						{ label: 'MCP', slug: 'guides/remote-mcp' },
 						{ label: 'Skills', slug: 'guides/skills' },
+					],
+				},
+				{
+					label: 'Capabilities',
+					items: [
+						{ label: 'Overview', slug: 'reference/capabilities' },
+						{ label: 'HTTP', slug: 'reference/http' },
+						{ label: 'DNS', slug: 'reference/dns' },
+						{ label: 'Files', slug: 'reference/files' },
+						{ label: 'WASM data format', slug: 'reference/wasm-abi' },
 					],
 				},
 				{

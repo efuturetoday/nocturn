@@ -1,0 +1,85 @@
+/* Nocturn brand palette — dark only, matched to the mascot artwork.
+   The proper Starlight way: override the full accent + gray colour scales on
+   :root (dark). Backgrounds and borders derive from the gray scale, so tuning
+   it (purple hue, darkest = the artwork's #0f071c) recolours the whole UI and
+   lets the hero crop blend edge-to-edge into the page. */
+
+:root {
+	/* Accent = the headset gopher's purple (≈ hsl(266 61% 58%)). Drives links,
+	   buttons, and the active nav item. */
+	--sl-color-accent-low: hsl(265 45% 24%);
+	--sl-color-accent: hsl(266 61% 60%);
+	--sl-color-accent-high: hsl(265 85% 84%);
+
+	/* Purple-tinted gray scale (hue 265) replacing Starlight's default blue. */
+	--sl-color-white: hsl(0 0% 100%);
+	--sl-color-gray-1: hsl(265 20% 94%);
+	--sl-color-gray-2: hsl(265 8% 77%);
+	--sl-color-gray-3: hsl(265 8% 56%);
+	--sl-color-gray-4: hsl(265 10% 37%);
+	--sl-color-gray-5: hsl(265 20% 22%);
+	--sl-color-gray-6: hsl(265 30% 15%);
+	/* Darkest = the artwork background #0f071c, so the hero image is seamless. */
+	--sl-color-black: hsl(263 60% 7%);
+}
+
+/* Hero: a full-bleed nebula (bg.jpeg) that spans the whole viewport width and
+   fades into the page background (#0f071c) at the bottom, so there's no seam.
+   `overflow-x: clip` on the panel contains the 100vw layer without creating a
+   scroll container (keeps the sticky header working). */
+.content-panel {
+	overflow-x: clip;
+}
+.hero {
+	position: relative;
+}
+.hero::before {
+	content: '';
+	position: absolute;
+	z-index: -1;
+	/* extend up under the fixed nav (opaque, masks the overshoot) so the nebula
+	   meets the nav with no gap; fade into the page at the bottom */
+	inset-block: -80px 0;
+	left: 50%;
+	width: 100vw;
+	transform: translateX(-50%);
+	/* The nebula layer shifts on scroll (--nebula-shift, set by the parallax
+	   script). Shifting the position inside a `cover` image never reveals an
+	   edge, so the effect is gap-free. The gradient overlay stays put. */
+	background:
+		linear-gradient(
+			to bottom,
+			hsl(263 60% 7% / 0.3),
+			hsl(263 60% 7% / 0.72) 62%,
+			hsl(263 60% 7%) 100%
+		),
+		url('/nebula.jpg') center calc(50% + var(--nebula-shift, 0px)) / cover no-repeat;
+}
+
+/* The mascot floats on the nebula — a soft purple glow lifts it off the field,
+   a slow bob + tilt gives it a gentle flying motion, and it drifts on scroll
+   (--mascot-shift) for depth. The parallax offset is folded into the keyframes
+   so the two transforms compose instead of overwriting each other. */
+.hero img {
+	filter: drop-shadow(0 12px 34px hsl(266 65% 45% / 0.5));
+	transform: translateY(var(--mascot-shift, 0px));
+	will-change: transform;
+	animation: mascot-float 6s ease-in-out infinite;
+}
+
+@keyframes mascot-float {
+	0%,
+	100% {
+		transform: translateY(var(--mascot-shift, 0px)) rotate(-0.6deg);
+	}
+	50% {
+		transform: translateY(calc(var(--mascot-shift, 0px) - 9px)) rotate(0.6deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.hero img {
+		animation: none;
+		transform: none;
+	}
+}

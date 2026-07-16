@@ -1,0 +1,12 @@
+---
+/**
+ * Overrides Starlight's ThemeProvider to force dark mode.
+ * The default reads localStorage / system preference and toggles `data-theme`.
+ * Nocturn is dark-only, so we hard-set it before first paint and render no
+ * `<template>` (the theme selector is overridden away — see ThemeSelectNone).
+ */
+---
+
+<script is:inline>
+	document.documentElement.dataset.theme = 'dark';
+</script>
