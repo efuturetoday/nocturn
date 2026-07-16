@@ -107,6 +107,9 @@ func opWord(write bool) string {
 //  3. On Ask: a standing grant in the active grant set (session or always) short-
 //     circuits; otherwise out-of-band human approval, and the chosen scope
 //     (once/session/always) is recorded as a grant on the grant set.
+//  4. On Ask with no standing grant, the autonomy dial (capability.AutonomyFrom)
+//     resolves an UNATTENDED run: strict → deny, full → auto-allow (non-consequential),
+//     attended/guarded → ask out of band. Inert for a normal (attended) run.
 func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent string) error {
 	if !capability.WithinCages(ctx, call) {
 		return ErrDenied
@@ -149,6 +152,24 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 				return ErrDenied
 			}
 			return nil // standing grant (session or always), scoped to this tool
+		}
+		// Autonomy dial: an UNATTENDED run (scheduled/webhook, no human at the console)
+		// has no one to answer a live prompt, so the Ask is resolved by the run's
+		// autonomy level instead. A standing grant (checked just above) already answered
+		// where one exists; the dial only governs an otherwise-live Ask. It never loosens
+		// the cage or a deny (those ran earlier and win), and a consequential effect is
+		// never auto-allowed (the floor wins). AutonomyAttended/Guarded fall through to
+		// the out-of-band request — Guarded's channel still reaches a human on their phone.
+		switch capability.AutonomyFrom(ctx) {
+		case capability.AutonomyStrict:
+			return ErrDenied // unattended + strict: never act without a human
+		case capability.AutonomyFull:
+			if !consequential {
+				if env.RateAllow != nil && !env.RateAllow(call) {
+					return ErrDenied
+				}
+				return nil // unattended + full: auto-allow within the cage + policy
+			}
 		}
 		// A higher, trusted layer (a plugin Host rendering an install-reviewed
 		// manifest template) may have stamped a semantic intent onto ctx — show it

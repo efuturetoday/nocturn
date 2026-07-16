@@ -139,6 +139,39 @@ func TestLoadAgents_PolicyAllowRejected(t *testing.T) {
 	}
 }
 
+func TestLoadAgents_Autonomy(t *testing.T) {
+	dir := t.TempDir()
+	// Default (omitted) → guarded.
+	writeAgent(t, dir, "d", "---\nname: d\ntools: [file]\n---\nbody\n")
+	// Explicit strict.
+	writeAgent(t, dir, "s", "---\nname: s\ntools: [file]\nautonomy: strict\n---\nbody\n")
+	// Bad value → error.
+	writeAgent(t, dir, "b", "---\nname: b\ntools: [file]\nautonomy: yolo\n---\nbody\n")
+
+	if _, err := agent.LoadAgents(dir); err == nil {
+		t.Fatal("autonomy: yolo must be rejected")
+	}
+
+	// Load just the two good ones.
+	good := t.TempDir()
+	writeAgent(t, good, "d", "---\nname: d\ntools: [file]\n---\nbody\n")
+	writeAgent(t, good, "s", "---\nname: s\ntools: [file]\nautonomy: strict\n---\nbody\n")
+	defs, err := agent.LoadAgents(good)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	byName := map[string]capability.Autonomy{}
+	for _, d := range defs {
+		byName[d.Name] = d.Autonomy
+	}
+	if byName["d"] != capability.AutonomyGuarded {
+		t.Errorf("default autonomy = %v, want guarded", byName["d"])
+	}
+	if byName["s"] != capability.AutonomyStrict {
+		t.Errorf("strict autonomy = %v, want strict", byName["s"])
+	}
+}
+
 func TestDefinition_Matches(t *testing.T) {
 	// Mix bare group, exact tool, and both wildcard spellings (VS Code "/*" and ".*").
 	d := agent.Definition{Tools: []string{"gmail", "github.search", "linear.*", "notion/*"}}

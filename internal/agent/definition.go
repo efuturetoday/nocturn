@@ -39,6 +39,11 @@ type Definition struct {
 	// Cage is an optional per-agent reachability upper bound, intersected with any
 	// outer cage — e.g. confine a raw-http agent to one host regardless of its tools.
 	Cage []capability.Pair
+	// Autonomy is how an Ask is resolved when this agent runs UNATTENDED (scheduled):
+	// guarded (default — ask out of band on the phone), strict (deny), or full
+	// (auto-allow within the cage, but consequential effects still ask). It is inert
+	// for a manual run (a human is present → normal HITL). See capability.Autonomy.
+	Autonomy capability.Autonomy
 }
 
 // Matches reports whether a registry tool name is one this agent may use. A list
@@ -63,6 +68,23 @@ type frontmatter struct {
 	Budget      string         `yaml:"budget"` // Go duration, e.g. "5m"; "" = default
 	Policy      []policyRuleFM `yaml:"policy"`
 	Cage        []cageEntryFM  `yaml:"cage"`
+	Autonomy    string         `yaml:"autonomy"` // guarded (default) | strict | full — for unattended runs
+}
+
+// parseAutonomy maps the author's autonomy string to the dial level. Empty defaults
+// to guarded (the safe unattended default: ask out of band). "attended" is not a
+// valid declaration — it is the manual-run default, not a schedulable level.
+func parseAutonomy(s string) (capability.Autonomy, error) {
+	switch strings.TrimSpace(s) {
+	case "", "guarded":
+		return capability.AutonomyGuarded, nil
+	case "strict":
+		return capability.AutonomyStrict, nil
+	case "full":
+		return capability.AutonomyFull, nil
+	default:
+		return capability.AutonomyGuarded, fmt.Errorf("autonomy must be guarded, strict or full (got %q)", s)
+	}
 }
 
 // policyRuleFM is one author-declared policy rule. access is a list of read/write
@@ -239,10 +261,14 @@ func loadAgent(path, defaultName string) (Definition, error) {
 	if err != nil {
 		return Definition{}, fmt.Errorf("agent %s: %w", path, err)
 	}
+	autonomy, err := parseAutonomy(f.Autonomy)
+	if err != nil {
+		return Definition{}, fmt.Errorf("agent %s: %w", path, err)
+	}
 	return Definition{
 		Name: name, Description: strings.TrimSpace(f.Description), Instructions: instructions,
 		Model: f.Model, Tools: f.Tools, When: when, Budget: budget,
-		Policy: policy, Cage: cage,
+		Policy: policy, Cage: cage, Autonomy: autonomy,
 	}, nil
 }
 
