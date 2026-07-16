@@ -26,6 +26,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/filecap"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/hitl/ntfy"
 	"github.com/efuturetoday/nocturn/internal/llm"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/script"
@@ -81,10 +82,45 @@ func tuiCmd(_ []string) error {
 		return err
 	}
 	notifier := &tuiNotifier{}
+
+	// Out-of-band channel (optional): if an ntfy topic pair is configured, an
+	// UNATTENDED run's approval is pushed to the phone instead of the console. The
+	// engine routes per request (attended → TUI, unattended → phone); with no config
+	// the router returns nil and everything asks inline exactly as before. Topics are
+	// public — the HMAC single-use token is the real integrity control (a topic reader
+	// still cannot forge an approval).
+	ntfyBase := os.Getenv("NTFY_BASE_URL")
+	if ntfyBase == "" {
+		ntfyBase = "https://ntfy.sh"
+	}
+	reqTopic, respTopic := os.Getenv("NTFY_REQ_TOPIC"), os.Getenv("NTFY_RESP_TOPIC")
+	var pubOpts []ntfy.Option
+	var lisOpts []ntfy.ListenerOption
+	if tok := os.Getenv("NTFY_TOKEN"); tok != "" { // self-hosted, access-controlled ntfy
+		pubOpts = append(pubOpts, ntfy.WithAuth(tok))
+		lisOpts = append(lisOpts, ntfy.ListenerWithAuth(tok))
+	}
+	var oob hitl.Notifier
+	if reqTopic != "" && respTopic != "" {
+		oob = hitl.Serialize(ntfy.New(ntfyBase, reqTopic, ntfyBase+"/"+respTopic, pubOpts...))
+	}
+
 	// Serialize approvals: tool calls may run concurrently, but the human sees one
 	// prompt at a time (auto-allowed effects never reach the notifier and stay parallel).
-	engine := hitl.NewEngine(key, hitl.Serialize(notifier))
+	// WithRouter sends an unattended run's Ask to the phone; attended stays on the TUI.
+	engine := hitl.NewEngine(key, hitl.Serialize(notifier), hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
+		if oob != nil && capability.AutonomyFrom(rctx) != capability.AutonomyAttended {
+			return oob
+		}
+		return nil
+	}))
 	notifier.resolve = engine.Resolve
+	if oob != nil {
+		// Outbound-only: subscribe the response topic and hand each posted token to the
+		// same engine that issued it (one token space). Stops when ctx is cancelled.
+		go func() { _ = ntfy.NewListener(ntfyBase, respTopic, engine.Resolve, lisOpts...).Run(ctx) }()
+		fmt.Printf("Out-of-band approvals via ntfy %s (req=%s, resp=%s)\n", ntfyBase, reqTopic, respTopic)
+	}
 
 	epochs := capability.NewEpochRegistry()
 	store := vault.Store()
