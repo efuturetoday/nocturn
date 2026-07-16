@@ -3,7 +3,7 @@
 // re-prompt on every boot while a CHANGED one is re-surfaced (as the
 // security-relevant event) with a diff. It is a REVIEW memo, NOT authority —
 // every effect an installed plugin or connected server performs is still gated
-// by the broker + HITL + ceiling. It deliberately does NOT touch capability
+// by the broker + HITL + cage. It deliberately does NOT touch capability
 // grants (grants.json), which are the standing effect-authority.
 //
 // File-backed (0600), concurrency-safe, stdlib-only, mirroring

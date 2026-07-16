@@ -206,14 +206,14 @@ Festgehalten, was fehlt und warum:
   2. **Plugin-Pendant — erledigt:** `plugin.SecretName(owner, cred, host)` → **`plugin:<name>/<cred>@<host>`**
      (install.go), OAuth-Token host-gekeyt (plugins.go `wirePluginOAuth`). Manifest-Host-Wechsel bei gleichem
      Plugin-/Credential-Namen → anderer Key → Re-Auth, kein stiller Cross-Host-Reuse. Zusätzlich erzwingt
-     `Manifest.Validate()` jetzt, dass jeder `credential.host` vom `requires`-Ceiling gedeckt ist (Kohärenz).
+     `Manifest.Validate()` jetzt, dass jeder `credential.host` vom `requires`-Cage gedeckt ist (Kohärenz).
      Regressionstest `TestHost_CredentialHostBound_NoCrossHostReuse`. (Plugins waren ohnehin besser umzäunt:
-     Ceiling + Install-Review-bei-jedem-Start; jetzt zusätzlich strukturell host-gebunden.)
+     Cage + Install-Review-bei-jedem-Start; jetzt zusätzlich strukturell host-gebunden.)
   3. **Granularität:** Bindung an Hostname (kein Port), konsistent mit dem `hostMatches`-Scope; Host:Port
      später optional, falls je nötig.
 - **Approved-Record (erledigt):** `internal/approval` (`<ws>/approved.json`, control-plane, 0600, fail-safe).
   Unveränderte Plugins/MCP-Server installieren/verbinden **ohne Re-Prompt**, geänderte re-promoten **mit Diff**
-  (Hash für Gleichheit, Deklaration für den Diff). **Nur Review-Memo, keine Autorität** (Broker/HITL/Ceiling
+  (Hash für Gleichheit, Deklaration für den Diff). **Nur Review-Memo, keine Autorität** (Broker/HITL/Cage
   unverändert; ≠ `grants.json`). Verdrahtet in `loadPlugins`/`loadMCP`; Diff via `printApprovalDiff`.
 
 ### 9. Runtime-Reload von Plugins/MCP + laufende Agenten (REST/WebGUI-Zukunft)
@@ -239,7 +239,7 @@ Heute: **Boot-only, EIN Workspace** (`workspaces/default` hart in app.go). `load
   4. **Modell-Konsistenz je Runde:** das Tool-Set kann sich zwischen Runden ändern; innerhalb einer Runde kann
      das Modell ein inzwischen entferntes Tool rufen (→ Fehler). Akzeptabel; optional Tool-Set je Runde snapshotten.
   5. **Pro-Workspace-Isolation:** Multi-Workspace = eigener Stack je Workspace (Registry/Injector/Guard/Grants);
-     Reload in A berührt B nie. Setzt die **Workspace-Schicht** voraus (eigene id + Persistenz + Ceiling, CLAUDE §11).
+     Reload in A berührt B nie. Setzt die **Workspace-Schicht** voraus (eigene id + Persistenz + Cage, CLAUDE §11).
 - **Synergie:** Approved-Record + Host-Binding (#8) sind bereits die Enabler — ein geänderter Plugin re-promptet
   mit Diff, ein repointeter Credential erzwingt Re-Auth: genau die Sicherheits-Checks, die ein Live-Reload braucht.
 

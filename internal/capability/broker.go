@@ -20,9 +20,9 @@ const Wildcard = "*"
 
 // Match selects which mutation class a Rule applies to — the write axis, kept
 // separate from reachability (family + target). The zero value MatchNone matches
-// NOTHING (fail closed): a rule or ceiling entry that forgets to set it grants no
+// NOTHING (fail closed): a rule or cage entry that forgets to set it grants no
 // authority, so "may write" is never implicit. This is the Schreibrecht on a
-// ceiling pair and the read/write selector on a policy rule.
+// cage pair and the read/write selector on a policy rule.
 type Match int
 
 const (
@@ -85,7 +85,7 @@ func (d Decision) String() string {
 //     true = write/mutating). Derived host-side from the real operation (an HTTP
 //     method, a read-vs-write file op), never trusted from the tool's name.
 //
-// Splitting these lets a ceiling gate reachability (which hosts, and whether
+// Splitting these lets a cage gate reachability (which hosts, and whether
 // writes are permitted at all) while the policy gates read/write (reads auto,
 // writes ask) — instead of baking read/write into the capability name.
 type Call struct {
@@ -205,7 +205,7 @@ type Env struct {
 
 // A scope (an agent run) may layer its OWN policy rules onto the workspace base —
 // author-declared standing intent, NOT runtime grants. They travel through ctx like
-// the ceiling and compose by flat UNION with the base under deny>ask>allow: so a
+// the cage and compose by flat UNION with the base under deny>ask>allow: so a
 // scope can TIGHTEN (add Deny = a blacklist, deny-wins; add Ask where the base
 // allows, ask-beats-allow) immediately. LOOSENING (Allow where the base asks) does
 // NOT work by union (ask beats allow) and needs a precedence layer — that is the

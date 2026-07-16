@@ -2,7 +2,7 @@
 
 > Verhandeltes Zielbild für Nocturns Autorisierungs-Modell — benutzbar wie eine App,
 > sicher gegen Prompt-Injection, ohne den Moat (verpflichtendes Out-of-band-HITL an
-> Trust-Boundaries) zu opfern. Baut nur die vorhandenen Primitive um (Broker, Ceiling,
+> Trust-Boundaries) zu opfern. Baut nur die vorhandenen Primitive um (Broker, Cage,
 > Grants, Epoch, Budget, HITL, Intent) — kein Neubau des Kerns. Teil A = Konzept, Teil B =
 > Implementierungsplan zum Absegnen. Code-Befunde gegen `internal/` verifiziert.
 
@@ -137,15 +137,15 @@ via issue_anlegen → schreibt auf  x.y.github.com          ← was JETZT passie
 
 ## 4b. Cage (= Tor 1 / Zaun): geschachtelt & der Konflikt-Fall
 
-Die **Cage** (heute im Code `capability.Ceiling`) ist die harte Reichweiten-Grenze —
+Die **Cage** (`capability.Cage`) ist die harte Reichweiten-Grenze —
 Tor 1 aus §2. Sie ist ein **komponierbarer oberer Bound** auf das, was überhaupt
 *versucht* werden darf (Family + Target + read/write). **Außerhalb = hard deny, nie ein
 Ask** (der Anti-Injection-Boden: man kann nicht dazu gebracht werden, etwas freizugeben,
 das gar nie erreichbar war).
 
-**Cages schachteln sich per Schnittmenge** (ctx-Kette, `WithinCeilings` = UND über alle):
+**Cages schachteln sich per Schnittmenge** (ctx-Kette, `WithinCages` = UND über alle):
 ```
-Workspace-Cage  ⊃  Plugin-Cage (manifest requires)  ⊃  Agent-Cage (ceiling:)  ⊃  MCP-Cage
+Workspace-Cage  ⊃  Plugin-Cage (manifest requires)  ⊃  Agent-Cage (cage:)  ⊃  MCP-Cage
 ```
 Eine innere Cage kann nur **subtrahieren**, nie erweitern — ein gekaperter innerer Scope
 (injiziertes Plugin/Agent) kann **strukturell nicht** aus der äußeren Cage ausbrechen
@@ -198,8 +198,8 @@ Autorität (Modell + Injection + Session); **explizit installierte Plugins trage
 reviewte Autorität und hallwayen hindurch.** Ein Workspace-Flag **„keine Hallways"** macht die
 Mauer für Compliance absolut (kein Plugin kann raus).
 
-**Impl-Skizze:** heute `runGuest` = `WithCeiling(ctx, p.ceiling)` (append). Hallway = zweiter
-Modus `WithOnlyCeiling` (Kette **reset**), Flag `hallway:true` im approved-Record. Rest (Policy,
+**Impl-Skizze:** heute `runGuest` = `WithCage(ctx, p.cage)` (append). Hallway = zweiter
+Modus `WithOnlyCage` (Kette **reset**), Flag `hallway:true` im approved-Record. Rest (Policy,
 HITL, Grants) unverändert. Gehört mit Workspace-Cage + Nutzer-Attenuation in **einen** späteren
 „Cage-Layer"-Schritt.
 
@@ -427,11 +427,11 @@ Kein neues Konzept: ein Agent ist ein **Scope** mit denselben zwei Knöpfen wie 
 
 | Knopf | Was | Semantik |
 |---|---|---|
-| **Ceiling** | Reichweite/Schreibrecht, hart | Schnittmenge (ctx-Kette), außerhalb = hard-deny, nie fragen |
+| **Cage** | Reichweite/Schreibrecht, hart | Schnittmenge (ctx-Kette), außerhalb = hard-deny, nie fragen |
 | **Policy** | Urteil (allow/ask/deny) | deny>ask>allow, komponiert mit der Base |
 
 - **Workspace** setzt die Base-Policy (`lesend→Allow, verändernd→Ask`).
-- **Agent** legt seine **eigene Policy** (+ optional Ceiling) obendrauf.
+- **Agent** legt seine **eigene Policy** (+ optional Cage) obendrauf.
 - **Grants** liegen *unter* beidem, rein zur Laufzeit.
 
 ### Tightening jetzt, Loosening (Autonomie) = Phase 4
@@ -441,9 +441,9 @@ In `deny>ask>allow` gilt **ask schlägt allow**. Daraus:
   (Blacklist); Agent-**Ask** wo Base allowt (z. B. Reads erzwingen fragen) — ask schlägt allow.
 - **Loosening ist der Autonomie-Fall:** Agent-**Allow** wo Base **Ask** sagt (`full`, „writes
   still") geht **nicht** per Union (ask>allow). Braucht eine **Präzedenz**:
-  > **Ceiling > Consequential-Floor > Deny (jede Ebene) > Agent-Urteil > Base-Urteil > Grants.**
+  > **Cage > Consequential-Floor > Deny (jede Ebene) > Agent-Urteil > Base-Urteil > Grants.**
 
-  So kann der Agent loosen **und** tighten, aber Deny/Ceiling/Floor bleiben unantastbar
+  So kann der Agent loosen **und** tighten, aber Deny/Cage/Floor bleiben unantastbar
   darüber. Das ist der **Autonomie-Regler** — nicht als Preset-Grants, sondern als
   **Agent-Policy** (der Autor schreibt/wählt sie). **Erst mit cron** (unattended pending).
 
@@ -533,7 +533,7 @@ die Policy eine Regel `verändernd→Ask, lesend→Allow`.
 **Umgesetzt (build/vet/`test -race` grün):**
 - `internal/capability/broker.go` — `Call{Family, Mutates, Target}`; **`Match`** (MatchNone/Read/
   Write/Any, fail-closed-Null) auf `Rule`/`Pair` = die Schreibrecht-Achse; `matches` prüft `Writes.covers(Mutates)`.
-- `internal/capability/ceiling.go` — `Pair{Family, TargetGlob, Writes}`.
+- `internal/capability/cage.go` — `Pair{Family, TargetGlob, Writes}`.
 - `internal/capability/grants.go` + `internal/agent/grants_store.go` — Schlüssel `(Tool, Family, Mutates, Target)`.
 - `internal/netcap/*` — `mutatesForMethod` (GET=false, POST/…=true), Family=http; Credential family-scoped.
 - `internal/filecap/*` — Family=file, Mutates aus read/write. `internal/mcpcap/*` — ein `http`-Reach `MatchAny`.
@@ -542,7 +542,7 @@ die Policy eine Regel `verändernd→Ask, lesend→Allow`.
 - `internal/secret/*` — Callers injizieren mit `Family` ("http"); `Binding.Capability` bleibt generischer Scope-String.
 - `cmd/nocturn/app.go` — Base-Policy: `lesend→Allow, verändernd→Ask` (eine Regel-Paar).
 **Erreicht:** http/dns/file identisch gegated wie vorher (Bestandstests angepasst grün); `lesend` läuft still.
-Grant-Host-Granularität (matchende Ceiling-Entry, §4) + Ordner-Normalisierung → **Phase 3**.
+Grant-Host-Granularität (matchende Cage-Entry, §4) + Ordner-Normalisierung → **Phase 3**.
 
 ### Phase 2 — kritisch-Floor + Rate-Härtung + MCP-Reads-still — ✅ ERLEDIGT
 **Ziel:** never-auto-Floor; Grant-Pfad respektiert Rate; read-only MCP-Tools laufen still.
@@ -574,7 +574,7 @@ einsehbar/widerrufbar.
   `<ws>/agents/<name>/grants.json`; **kein Cross-Tier-Lookup** (jeder Owner nur seine Datei).
 - `internal/capability/grants.go` — `ID` wird optional/entfällt (ein Store = ein Owner).
 - `cmd/nocturn/*` — `/grants`-Listing + Widerruf; Host-Match-Granularität aus der matchenden
-  Ceiling-Entry (exakt vs. Wildcard) im Label.
+  Cage-Entry (exakt vs. Wildcard) im Label.
 - **Deferred:** ein explizites „Workspace-weit"-Opt-in-Tier (nie impliziter Lookup, für
   unattended gesperrt) — erst falls real nötig.
 **Fertig wenn:** `/grants` zeigt+widerruft; Agent-Ordner-Löschen entfernt seine Grants; ein

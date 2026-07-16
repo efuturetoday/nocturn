@@ -13,7 +13,7 @@ import (
 // Registry and Injector the model uses — a plugin is just more tools on the same
 // gated path. Install does NOT grant any effect authority: it only makes the
 // plugin's tools available and binds its host-owned credentials. Every effect the
-// plugin later performs is still bounded by its ceiling (carried in ctx) and gated
+// plugin later performs is still bounded by its cage (carried in ctx) and gated
 // by the broker + HITL + the user's context grants — installing ≠ silently
 // allowing.
 type Host struct {
@@ -53,7 +53,7 @@ func SecretName(owner, credential, host string) string {
 }
 
 // Install reviews and installs a loaded plugin. approve is called with the
-// manifest (the ceiling + credentials the operator sees) and returns true to
+// manifest (the cage + credentials the operator sees) and returns true to
 // proceed — the caller decides HOW to review (a terminal prompt, a stored
 // manifest-hash approval, ntfy, …), keeping the host decoupled from the channel.
 // On approval the plugin's tools are registered and its credentials bound; on

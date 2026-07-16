@@ -16,8 +16,8 @@ func call(family string, mutates bool, host string) capability.Call {
 	return c
 }
 
-func TestCeiling_Allows(t *testing.T) {
-	c := capability.NewCeiling(
+func TestCage_Allows(t *testing.T) {
+	c := capability.NewCage(
 		capability.Pair{Family: "http", TargetGlob: "*.example.com", Writes: capability.MatchRead},
 		capability.Pair{Family: "dns", TargetGlob: "*", Writes: capability.MatchRead},
 	)
@@ -39,45 +39,45 @@ func TestCeiling_Allows(t *testing.T) {
 	}
 }
 
-func TestCeiling_EmptyAllowsNothing(t *testing.T) {
-	if capability.NewCeiling().Allows(call("http", false, "example.com")) {
-		t.Fatal("empty ceiling must allow nothing")
+func TestCage_EmptyAllowsNothing(t *testing.T) {
+	if capability.NewCage().Allows(call("http", false, "example.com")) {
+		t.Fatal("empty cage must allow nothing")
 	}
 }
 
-// No ceiling in ctx = unrestricted caller (model/script): WithinCeilings is
+// No cage in ctx = unrestricted caller (model/script): WithinCages is
 // vacuously true.
-// An empty chain is vacuously within — WithinCeilings is deliberately fail-OPEN
-// when no ceiling was stamped. That is safe ONLY because a ceiling is not the
+// An empty chain is vacuously within — WithinCages is deliberately fail-OPEN
+// when no cage was stamped. That is safe ONLY because a cage is not the
 // primary gate: the base policy still governs (deny-by-default for anything it
 // doesn't Allow), and every caller that MUST be bounded (plugins) stamps its
-// ceiling before any effect can reach the broker (see plugin.runGuest, the sole
+// cage before any effect can reach the broker (see plugin.runGuest, the sole
 // stamping site). This test pins that intent so a future "fail-closed by default"
 // change is a conscious decision, not an accident.
-func TestWithinCeilings_NoneIsVacuouslyTrue(t *testing.T) {
-	if !capability.WithinCeilings(context.Background(), call("http", true, "anywhere")) {
-		t.Fatal("with no ceiling, every call must be within")
+func TestWithinCages_NoneIsVacuouslyTrue(t *testing.T) {
+	if !capability.WithinCages(context.Background(), call("http", true, "anywhere")) {
+		t.Fatal("with no cage, every call must be within")
 	}
 }
 
-// The chain intersects: a call must satisfy EVERY ceiling. Appending a tighter
-// inner ceiling can only subtract.
-func TestCeilingChain_Intersects(t *testing.T) {
-	outer := capability.NewCeiling(
+// The chain intersects: a call must satisfy EVERY cage. Appending a tighter
+// inner cage can only subtract.
+func TestCageChain_Intersects(t *testing.T) {
+	outer := capability.NewCage(
 		capability.Pair{Family: "http", TargetGlob: "*.example.com", Writes: capability.MatchAny},
 	)
-	inner := capability.NewCeiling(
+	inner := capability.NewCage(
 		capability.Pair{Family: "http", TargetGlob: "api.example.com", Writes: capability.MatchRead}, // read only, one host
 	)
-	ctx := capability.WithCeiling(capability.WithCeiling(context.Background(), outer), inner)
+	ctx := capability.WithCage(capability.WithCage(context.Background(), outer), inner)
 
-	if !capability.WithinCeilings(ctx, call("http", false, "api.example.com")) {
-		t.Fatal("read to api.example.com is allowed by both ceilings")
+	if !capability.WithinCages(ctx, call("http", false, "api.example.com")) {
+		t.Fatal("read to api.example.com is allowed by both cages")
 	}
-	if capability.WithinCeilings(ctx, call("http", true, "api.example.com")) {
+	if capability.WithinCages(ctx, call("http", true, "api.example.com")) {
 		t.Fatal("write is allowed by outer but NOT inner → intersection denies")
 	}
-	if capability.WithinCeilings(ctx, call("http", false, "other.example.com")) {
+	if capability.WithinCages(ctx, call("http", false, "other.example.com")) {
 		t.Fatal("read to other host allowed by outer but NOT inner → denied")
 	}
 }

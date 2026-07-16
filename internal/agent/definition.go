@@ -36,9 +36,9 @@ type Definition struct {
 	// Loosening (Allow over a base Ask) is the deferred autonomy dial. This is author
 	// config — NEVER a grant (grants are runtime HITL consent, see KONZEPT §9).
 	Policy capability.Policy
-	// Ceiling is an optional per-agent reachability upper bound, intersected with any
-	// outer ceiling — e.g. confine a raw-http agent to one host regardless of its tools.
-	Ceiling []capability.Pair
+	// Cage is an optional per-agent reachability upper bound, intersected with any
+	// outer cage — e.g. confine a raw-http agent to one host regardless of its tools.
+	Cage []capability.Pair
 }
 
 // Matches reports whether a registry tool name is one this agent may use. A list
@@ -62,7 +62,7 @@ type frontmatter struct {
 	When        string           `yaml:"when"`
 	Budget      string           `yaml:"budget"` // Go duration, e.g. "5m"; "" = default
 	Policy      []policyRuleFM   `yaml:"policy"`
-	Ceiling     []ceilingEntryFM `yaml:"ceiling"`
+	Cage     []cageEntryFM `yaml:"cage"`
 }
 
 // policyRuleFM is one author-declared policy rule. Access ∈ read|write|any (default
@@ -74,9 +74,9 @@ type policyRuleFM struct {
 	Access string `yaml:"access"`
 }
 
-// ceilingEntryFM is one reachability upper-bound entry (like a plugin Require:
+// cageEntryFM is one reachability upper-bound entry (like a plugin Require:
 // mutates=true grants read+write, write⊇read; false is read-only).
-type ceilingEntryFM struct {
+type cageEntryFM struct {
 	Family  string `yaml:"family"`
 	Target  string `yaml:"target"`
 	Mutates bool   `yaml:"mutates"`
@@ -125,12 +125,12 @@ func buildPolicy(rules []policyRuleFM) (capability.Policy, error) {
 	return capability.Policy{Rules: out}, nil
 }
 
-// buildCeiling turns author ceiling entries into capability.Pairs.
-func buildCeiling(entries []ceilingEntryFM) ([]capability.Pair, error) {
+// buildCage turns author cage entries into capability.Pairs.
+func buildCage(entries []cageEntryFM) ([]capability.Pair, error) {
 	pairs := make([]capability.Pair, 0, len(entries))
 	for _, e := range entries {
 		if e.Family == "" || e.Target == "" {
-			return nil, fmt.Errorf("ceiling entry needs family and target")
+			return nil, fmt.Errorf("cage entry needs family and target")
 		}
 		writes := capability.MatchRead
 		if e.Mutates {
@@ -240,14 +240,14 @@ func loadAgent(path, defaultName string) (Definition, error) {
 	if err != nil {
 		return Definition{}, fmt.Errorf("agent %s: %w", path, err)
 	}
-	ceiling, err := buildCeiling(f.Ceiling)
+	cage, err := buildCage(f.Cage)
 	if err != nil {
 		return Definition{}, fmt.Errorf("agent %s: %w", path, err)
 	}
 	return Definition{
 		Name: name, Description: strings.TrimSpace(f.Description), Instructions: instructions,
 		Model: f.Model, Tools: f.Tools, When: when, Budget: budget,
-		Policy: policy, Ceiling: ceiling,
+		Policy: policy, Cage: cage,
 	}, nil
 }
 

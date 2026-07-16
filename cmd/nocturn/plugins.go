@@ -20,12 +20,12 @@ import (
 )
 
 // loadPlugins installs every plugin under <ws>/plugins/<name>/ into the shared
-// registry + injector, reviewing each one's ceiling before it runs, then running
+// registry + injector, reviewing each one's cage before it runs, then running
 // any OAuth flows it declares. It is a no-op if the plugins dir is absent. Run
 // BEFORE bubbletea grabs the terminal — the review prompt AND the OAuth consent
 // URL both use stdin/stdout.
 //
-// A plugin declaring a scary ceiling is shown verbatim and installed only on an
+// A plugin declaring a scary cage is shown verbatim and installed only on an
 // explicit "y" — but an UNCHANGED plugin (same manifest + artifact as last
 // approved) installs silently via the approved-record; a changed one re-prompts
 // with a diff, so a manifest change is the signal instead of noise.
@@ -95,7 +95,7 @@ func approvePlugin(approvals *approval.Store, content []byte) func(plugin.Manife
 }
 
 // printApprovalDiff shows a crude line diff of two canonical JSON declarations —
-// enough to surface WHAT changed (a repointed host, a widened ceiling, a bumped
+// enough to surface WHAT changed (a repointed host, a widened cage, a bumped
 // version) without a full diff library.
 func printApprovalDiff(prior, current []byte) {
 	oldL, newL := indentLines(prior), indentLines(current)
@@ -164,7 +164,7 @@ func wirePluginOAuth(ctx context.Context, inj *secret.Injector, vault *secret.Va
 	return nil
 }
 
-// reviewPlugin shows the plugin's ceiling (what it may attempt) + the credentials
+// reviewPlugin shows the plugin's cage (what it may attempt) + the credentials
 // it uses, and asks the operator to confirm the install. This is the ONE trust
 // decision; per-effect asks still happen at runtime.
 func reviewPlugin(m plugin.Manifest) (bool, error) {

@@ -2,7 +2,7 @@
 // over a single workspace root. It is the second capability family after netcap
 // and the proof that the broker's (capability, target) model is not HTTP-shaped:
 // here the target is a PATH, glob-matched exactly like a host is (path.Match's
-// "*" does not cross "/", so a ceiling like file.write @ notes/* is depth-bounded
+// "*" does not cross "/", so a cage like file.write @ notes/* is depth-bounded
 // for free). Every call is confined to Root — a path that would escape is a hard
 // error before the broker is even consulted — and then gated by the Guard, so an
 // effect passes broker + HITL + the user's grants just like an HTTP call.
@@ -127,7 +127,7 @@ func (f *Files) resolve(args string) (abs, target string, err error) {
 // workspace-relative, forward-slashed target the broker gates on. A path that
 // escapes the workspace (via .. or an absolute path outside Root) is a hard error
 // — enforced HERE, before the broker, so confinement never depends on a rule
-// being present (defense in depth: the ceiling scopes WITHIN the workspace; this
+// being present (defense in depth: the cage scopes WITHIN the workspace; this
 // guarantees there IS no outside).
 func (f *Files) resolvePath(userPath string) (abs, target string, err error) {
 	if strings.TrimSpace(userPath) == "" {

@@ -72,7 +72,7 @@ func TestFiles_ConfinesToWorkspace(t *testing.T) {
 }
 
 // The proof that (capability, target=PATH) works with path-glob semantics: a
-// ceiling-style policy file.write @ notes/* allows notes/todo.md but denies a
+// cage-style policy file.write @ notes/* allows notes/todo.md but denies a
 // different directory AND a deeper nesting (path.Match's "*" does not cross "/").
 // This is exactly what would have been impossible when target was hard-coded to a
 // host.

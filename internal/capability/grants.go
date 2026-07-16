@@ -32,13 +32,13 @@ type GrantStore interface {
 // Grants is a permission set: the user's standing "allow" decisions for a session
 // (today) or a workspace (later). It holds session-scoped grants (bound to its
 // epoch — closing the epoch revokes them) and, via an injected store, always-
-// scoped grants that persist. It may also carry a workspace-level Ceiling. The
+// scoped grants that persist. It may also carry a workspace-level Cage. The
 // Guard consults the active Grants (carried in ctx) to see whether an Ask is
 // already answered by a standing grant. Each owner (session / one agent) has its OWN
 // Grants over its OWN store — strict isolation, no cross-owner sharing.
 type Grants struct {
 	Epoch   EpochID    // session grants bind here; closing it revokes them
-	Ceiling *Ceiling   // optional workspace-level upper bound (nil = none)
+	Cage *Cage   // optional workspace-level upper bound (nil = none)
 	always  GrantStore // durable always-grants for this owner; nil = none
 
 	mu      sync.Mutex

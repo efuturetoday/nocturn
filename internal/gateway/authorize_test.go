@@ -169,25 +169,25 @@ func TestAuthorize_StandingGrantRespectsRateCap(t *testing.T) {
 	}
 }
 
-// An effect outside the ceiling chain is hard-denied — the human is NEVER asked
+// An effect outside the cage chain is hard-denied — the human is NEVER asked
 // (the anti-prompt-injection rail).
-func TestAuthorize_OutsideCeiling_HardDeniesWithoutAsking(t *testing.T) {
+func TestAuthorize_OutsideCage_HardDeniesWithoutAsking(t *testing.T) {
 	g, n := askGuard(t, hitl.Approved)
-	ceiling := capability.NewCeiling(capability.Pair{Family: "http", TargetGlob: "good.com", Writes: capability.MatchRead})
-	ctx := capability.WithCeiling(context.Background(), ceiling)
+	cage := capability.NewCage(capability.Pair{Family: "http", TargetGlob: "good.com", Writes: capability.MatchRead})
+	ctx := capability.WithCage(context.Background(), cage)
 
 	if err := g.Authorize(ctx, read("evil.com"), "GET evil"); !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
 	}
 	if n.calls != 0 {
-		t.Fatalf("human asked %d times for an out-of-ceiling call, want 0", n.calls)
+		t.Fatalf("human asked %d times for an out-of-cage call, want 0", n.calls)
 	}
-	// A call inside the ceiling still reaches HITL and is allowed once.
+	// A call inside the cage still reaches HITL and is allowed once.
 	if err := g.Authorize(ctx, read("good.com"), "GET good"); err != nil {
-		t.Fatalf("in-ceiling call: %v", err)
+		t.Fatalf("in-cage call: %v", err)
 	}
 	if n.calls != 1 {
-		t.Fatalf("in-ceiling call asked %d times, want 1", n.calls)
+		t.Fatalf("in-cage call asked %d times, want 1", n.calls)
 	}
 }
 

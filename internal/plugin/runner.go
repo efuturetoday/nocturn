@@ -23,14 +23,14 @@ const defaultTimeout = 60 * time.Second
 // are namespaced <name>.<tool>. Execution is STATELESS — a fresh sandbox instance
 // per tool-call; cross-call state is host-mediated via the workspace filesystem
 // (WorkDir, mounted at /work). Every effect reaches the broker through the one
-// gate, with the plugin's ceiling stamped onto ctx so out-of-ceiling attempts are
+// gate, with the plugin's cage stamped onto ctx so out-of-cage attempts are
 // hard-denied.
 type Plugin struct {
 	Manifest Manifest
 	artifact []byte
 	kind     Kind
 	reg      *tool.Registry
-	ceiling  capability.Ceiling
+	cage  capability.Cage
 
 	Timeout  time.Duration
 	MaxPages uint32
@@ -44,7 +44,7 @@ func New(l Loaded, reg *tool.Registry) *Plugin {
 		artifact: l.Artifact,
 		kind:     l.Kind,
 		reg:      reg,
-		ceiling:  l.Manifest.Ceiling(),
+		cage:  l.Manifest.Cage(),
 		Timeout:  defaultTimeout,
 	}
 }
@@ -65,7 +65,7 @@ func (p *Plugin) Tools() []tool.Tool {
 				// Stamp the tool's semantic intent (from the install-reviewed
 				// manifest template) so a gated effect underneath prompts at the
 				// human level ("Send email to x@a"), not the transport level. Only
-				// the wording changes; the ceiling still bounds the real target.
+				// the wording changes; the cage still bounds the real target.
 				if intent := renderIntent(td.Intent, args); intent != "" {
 					ctx = gateway.WithIntent(ctx, intent)
 				}
@@ -148,20 +148,20 @@ func rawArgs(args string) json.RawMessage {
 	return b
 }
 
-// runGuest is the shared sandbox launch: it stamps the plugin ceiling onto ctx
-// (so the broker hard-denies out-of-ceiling effects), registers the one gate, and
+// runGuest is the shared sandbox launch: it stamps the plugin cage onto ctx
+// (so the broker hard-denies out-of-cage effects), registers the one gate, and
 // runs the guest to completion, returning its stdout.
 //
-// SECURITY: this WithCeiling call is the SOLE place a plugin's ceiling enters the
-// request context, and it gates EVERY plugin effect. capability.WithinCeilings is
-// deliberately fail-OPEN on an empty chain (no ceiling → vacuously allowed), so a
+// SECURITY: this WithCage call is the SOLE place a plugin's cage enters the
+// request context, and it gates EVERY plugin effect. capability.WithinCages is
+// deliberately fail-OPEN on an empty chain (no cage → vacuously allowed), so a
 // plugin effect that reached the broker WITHOUT this stamp would be bounded only by
 // the base policy — i.e. unbounded by the manifest. Both runJS and runWASM route
 // through here precisely so that can never happen; do not add a plugin execution
-// path that calls sandbox.Run without first stamping p.ceiling. The regression
-// test TestPlugin_CeilingBoundsEffects_E2E locks the out-of-ceiling hard-deny.
+// path that calls sandbox.Run without first stamping p.cage. The regression
+// test TestPlugin_CageBoundsEffects_E2E locks the out-of-cage hard-deny.
 func (p *Plugin) runGuest(ctx context.Context, guest, stdin []byte) (string, error) {
-	ctx = capability.WithCeiling(ctx, p.ceiling)
+	ctx = capability.WithCage(ctx, p.cage)
 	// Scope credential injection to THIS plugin: an effect from its guest only
 	// picks up its own credential bindings (+ app defaults), never another
 	// plugin's token, even at a shared host.
@@ -184,11 +184,11 @@ func (p *Plugin) runGuest(ctx context.Context, guest, stdin []byte) (string, err
 }
 
 // dispatch is the one gate a plugin reaches effects through. It routes to the
-// SAME shared registry the model uses — ctx still carries the plugin ceiling, so
+// SAME shared registry the model uses — ctx still carries the plugin cage, so
 // every effect is bounded by it. It refuses re-entry of the interpreter (code.run)
 // and of the plugin's OWN tools (no self-recursion). A call to a DIFFERENT
 // plugin's tool is not blocked here but is harmless: that tool's effects run under
-// the intersection of both ceilings, so this plugin cannot reach a host it did not
+// the intersection of both cages, so this plugin cannot reach a host it did not
 // itself declare.
 func (p *Plugin) dispatch(ctx context.Context, req []byte) ([]byte, error) {
 	var c struct {

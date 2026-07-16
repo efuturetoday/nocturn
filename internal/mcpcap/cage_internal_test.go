@@ -7,12 +7,12 @@ import (
 	"github.com/efuturetoday/nocturn/internal/gateway"
 )
 
-// New fixes the connection's ceiling to exactly the server's host: one http reach
+// New fixes the connection's cage to exactly the server's host: one http reach
 // there (read+write), nothing anywhere else — a connection can never be talked into
 // reaching a different host or family, regardless of base policy. (The transport
-// stamps this ceiling onto every call's ctx; that path is exercised end-to-end by
+// stamps this cage onto every call's ctx; that path is exercised end-to-end by
 // the external tests.)
-func TestNew_CeilingBoundsToServerHost(t *testing.T) {
+func TestNew_CageBoundsToServerHost(t *testing.T) {
 	conn, err := New(Server{Name: "test", URL: "https://mcp.example.com/mcp"}, &gateway.Guard{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -27,13 +27,13 @@ func TestNew_CeilingBoundsToServerHost(t *testing.T) {
 		{Family: "file", Mutates: true, Target: "/work/x"},
 	}
 	for _, c := range allowed {
-		if !conn.ceiling.Allows(c) {
-			t.Errorf("ceiling denies %+v, want allowed", c)
+		if !conn.cage.Allows(c) {
+			t.Errorf("cage denies %+v, want allowed", c)
 		}
 	}
 	for _, c := range denied {
-		if conn.ceiling.Allows(c) {
-			t.Errorf("ceiling allows %+v, want denied", c)
+		if conn.cage.Allows(c) {
+			t.Errorf("cage allows %+v, want denied", c)
 		}
 	}
 }

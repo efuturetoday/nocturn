@@ -6,7 +6,7 @@
 // gateway.Guard (broker + out-of-band HITL), with host-owned credential
 // injection (owner "mcp:<server>") and the bidirectional leak scan — mirroring
 // netcap. A remote MCP tool is therefore unreachable without passing the
-// broker, and the connection's ceiling bounds it to its own declared host.
+// broker, and the connection's cage bounds it to its own declared host.
 package mcpcap
 
 import (
@@ -75,7 +75,7 @@ func IsServerRejection(err error) bool {
 }
 
 // Conn is a gated connection to one remote MCP server. Its transport is the
-// ONE path any byte takes to the server; the ceiling fixed at construction
+// ONE path any byte takes to the server; the cage fixed at construction
 // bounds every call to the server's own host.
 type Conn struct {
 	server  Server
@@ -85,12 +85,12 @@ type Conn struct {
 	http    *http.Client
 
 	host    string
-	ceiling capability.Ceiling
+	cage capability.Cage
 	client  *mcp.Client
 }
 
 // New builds a gated connection to srv. It parses the server host, fixes the
-// connection's ceiling to exactly that host (http.read + http.write — the
+// connection's cage to exactly that host (http.read + http.write — the
 // connection can never reach anywhere else, regardless of policy), and — if
 // the server declares a credential (OAuth, or a static token) — binds its
 // host-owned Bearer under owner "mcp:<name>". The binding only names the
@@ -105,7 +105,7 @@ func New(srv Server, guard *gateway.Guard, creds *secret.Injector, scanner *secr
 	c := &Conn{
 		server: srv, guard: guard, creds: creds, scanner: scanner, http: httpClient,
 		host: u.Hostname(),
-		ceiling: capability.NewCeiling(
+		cage: capability.NewCage(
 			// One reach: the server host over http, read + write (JSON-RPC POSTs are
 			// writes; the connection can never reach anywhere else).
 			capability.Pair{Family: "http", TargetGlob: u.Hostname(), Writes: capability.MatchAny},
@@ -142,20 +142,20 @@ func (c *Conn) Host() string { return c.host }
 func (c *Conn) Name() string { return c.server.Name }
 
 // transport is the gated HTTP leg under the protocol client, and the SOLE
-// place the connection's ceiling and credential owner enter the request
+// place the connection's cage and credential owner enter the request
 // context — every protocol message (initialize, tools/list, tools/call)
 // crosses the gateway here as an http.write to the server's host:
-// ceiling-bounded, broker-gated (Ask → out-of-band HITL), leak-scanned on
+// cage-bounded, broker-gated (Ask → out-of-band HITL), leak-scanned on
 // egress, credential-injected host-side, and redacted on ingress. Everything
 // past the gate runs only if Do authorizes — a denied call never leaves the
 // process.
 func (c *Conn) transport(ctx context.Context, body []byte, header http.Header) (*mcp.Response, error) {
-	ctx = capability.WithCeiling(ctx, c.ceiling)
+	ctx = capability.WithCage(ctx, c.cage)
 	ctx = secret.WithOwner(ctx, Owner(c.server.Name))
 	// The JSON-RPC POST is transport-wise always a write to the host, but the broker
 	// gates on the SEMANTIC mutation: a tool the server marked read-only (readOnlyHint)
 	// is a read and runs still; everything else (writes, and setup calls with no hint)
-	// asks. The ceiling is read+write either way, so a read is always within it.
+	// asks. The cage is read+write either way, so a read is always within it.
 	call := capability.Call{Family: "http", Mutates: !readOnlyFrom(ctx), Target: c.host}
 	intent := "MCP " + c.server.Name + ": POST " + c.server.URL // overridden by the semantic WithIntent upstream
 	return gateway.Do(ctx, c.guard, call, intent, func() (*mcp.Response, error) {

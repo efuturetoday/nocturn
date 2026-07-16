@@ -27,7 +27,7 @@ var ErrDenied = errors.New("gateway: capability denied")
 // Guard authorizes capability calls. It is host-trusted and shared by every
 // capability group. It is a pure COMPOSER: the standing-grant state lives on the
 // active capability.Grants (not on the Guard), and upper bounds live in the
-// ceiling chain carried by ctx — so the Guard holds no per-session mutable state.
+// cage chain carried by ctx — so the Guard holds no per-session mutable state.
 type Guard struct {
 	Policy    capability.Policy
 	Approvals *hitl.Engine
@@ -100,7 +100,7 @@ func opWord(mutates bool) string {
 }
 
 // Authorize composes the decision:
-//  1. Ceiling chain (ctx): outside the intersection of all in-scope upper bounds
+//  1. Cage chain (ctx): outside the intersection of all in-scope upper bounds
 //     → hard deny, never even asking — so a prompt-injected caller can't get you
 //     to approve something it was never allowed to attempt.
 //  2. Base policy: Allow → proceed; Deny → deny (deny-wins hard rail).
@@ -108,7 +108,7 @@ func opWord(mutates bool) string {
 //     circuits; otherwise out-of-band human approval, and the chosen scope
 //     (once/session/always) is recorded as a grant on the grant set.
 func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent string) error {
-	if !capability.WithinCeilings(ctx, call) {
+	if !capability.WithinCages(ctx, call) {
 		return ErrDenied
 	}
 	env := capability.Env{Now: g.now(), Epochs: g.Epochs}
@@ -213,7 +213,7 @@ type intentKey struct{}
 // effect tool's own (transport-level) intent when prompting. It is set by a
 // TRUSTED layer only — the plugin Host, rendering a template that was reviewed at
 // install time — never by guest code, so a plugin cannot forge a misleading
-// prompt for an effect it isn't allowed to attempt (the ceiling still bounds the
+// prompt for an effect it isn't allowed to attempt (the cage still bounds the
 // real target, and that is what is gated).
 func WithIntent(ctx context.Context, intent string) context.Context {
 	return context.WithValue(ctx, intentKey{}, intent)

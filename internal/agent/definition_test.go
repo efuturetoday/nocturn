@@ -99,8 +99,8 @@ func TestLoadAgents_DuplicateName(t *testing.T) {
 	}
 }
 
-// An agent author can declare its own policy (deny/ask, tightening) and ceiling.
-func TestLoadAgents_PolicyAndCeiling(t *testing.T) {
+// An agent author can declare its own policy (deny/ask, tightening) and cage.
+func TestLoadAgents_PolicyAndCage(t *testing.T) {
 	dir := t.TempDir()
 	writeAgent(t, dir, "triage", `---
 name: triage
@@ -108,7 +108,7 @@ tools: [http.read, http.write]
 policy:
   - { effect: deny, family: http, target: "*.internal.corp", access: write }
   - { effect: ask,  family: file, target: "*",              access: read }
-ceiling:
+cage:
   - { family: http, target: "api.github.com", mutates: true }
 ---
 Triage the inbox.
@@ -124,8 +124,8 @@ Triage the inbox.
 	if d.Policy.Rules[0].Effect != capability.Deny || d.Policy.Rules[0].Writes != capability.MatchWrite {
 		t.Fatalf("rule[0] = %+v, want deny/write", d.Policy.Rules[0])
 	}
-	if len(d.Ceiling) != 1 || d.Ceiling[0].Writes != capability.MatchAny {
-		t.Fatalf("ceiling = %+v, want one read+write pair", d.Ceiling)
+	if len(d.Cage) != 1 || d.Cage[0].Writes != capability.MatchAny {
+		t.Fatalf("cage = %+v, want one read+write pair", d.Cage)
 	}
 }
 

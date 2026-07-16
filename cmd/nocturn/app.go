@@ -98,7 +98,7 @@ func tuiCmd(_ []string) error {
 	netCap := &netcap.Net{
 		Guard: &gateway.Guard{
 			// Base policy on the WIRKUNG axis: reads run still, writes ask — for every
-			// family at once (§3). Reach is bounded per caller by ceilings + grants.
+			// family at once (§3). Reach is bounded per caller by cages + grants.
 			Policy: capability.Policy{Rules: []capability.Rule{
 				{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
 				{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchWrite, Effect: capability.Ask, Epoch: capability.Permanent},
@@ -114,7 +114,7 @@ func tuiCmd(_ []string) error {
 	// The filesystem capability group (file.read/file.write), confined to the
 	// workspace mount — the second capability family, gated by the same Guard as
 	// netcap. The target the broker sees is the mount-relative path, so a
-	// grant/ceiling scopes by path exactly as http scopes by host.
+	// grant/cage scopes by path exactly as http scopes by host.
 	fileCap := filecap.New(netCap.Guard, filepath.Join(wsDir, "mnt"))
 
 	// One shared Registry dispatches every tool call — the model's AND the
@@ -146,9 +146,9 @@ func tuiCmd(_ []string) error {
 	// one re-surfaces with a diff. It gates only the review, never effect authority.
 	approvals := approval.Load(filepath.Join(wsDir, "approved.json"))
 
-	// Install sandboxed plugins from <ws>/plugins/ (reviews each ceiling on stdin,
+	// Install sandboxed plugins from <ws>/plugins/ (reviews each cage on stdin,
 	// before the TUI). Their tools join the shared registry; effects stay bounded
-	// by each plugin's ceiling + the broker + HITL.
+	// by each plugin's cage + the broker + HITL.
 	if err := loadPlugins(ctx, reg, inj, vault, approvals, wsDir); err != nil {
 		return err
 	}
@@ -156,7 +156,7 @@ func tuiCmd(_ []string) error {
 	// Connect remote MCP servers declared in the workspace control-plane
 	// (<ws>/mcp.json), reviewing each on stdin before the TUI. Their
 	// tools join the shared registry namespaced <server>.<tool>; every call is
-	// a gated http.write to the server's own host (ceiling-bounded, leak-
+	// a gated http.write to the server's own host (cage-bounded, leak-
 	// scanned, credential-injected under owner mcp:<server>).
 	if err := loadMCP(ctx, reg, netCap.Guard, inj, scanner, vault, approvals, wsDir); err != nil {
 		return err

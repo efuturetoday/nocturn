@@ -32,13 +32,13 @@ func RunTask(ctx context.Context, b *brain.Brain, epochs *capability.EpochRegist
 	grants := capability.NewGrants(epoch, store)
 	ctx = capability.WithGrants(ctx, grants)
 	// The agent author's own scope: its policy (tightening: deny blacklist / force-ask)
-	// composes with the workspace base, and its optional ceiling intersects any outer
+	// composes with the workspace base, and its optional cage intersects any outer
 	// bound — author config, never grants (KONZEPT §9).
 	if len(def.Policy.Rules) > 0 {
 		ctx = capability.WithPolicy(ctx, def.Policy)
 	}
-	if len(def.Ceiling) > 0 {
-		ctx = capability.WithCeiling(ctx, capability.NewCeiling(def.Ceiling...))
+	if len(def.Cage) > 0 {
+		ctx = capability.WithCage(ctx, capability.NewCage(def.Cage...))
 	}
 	ctx = skill.WithActive(ctx, skill.NewActive()) // fresh skill.load dedup for this run
 	if def.Budget > 0 {

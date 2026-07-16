@@ -73,7 +73,7 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) ([]byte, error) {
 	method = strings.ToUpper(method)
 
 	// The mutation axis — read for safe methods, write for mutating ones — is what
-	// the policy gates on; the family + host is the reach the ceiling and credential
+	// the policy gates on; the family + host is the reach the cage and credential
 	// bindings key on. The raw HTTP method never reaches the security layer.
 	mutates := mutatesForMethod(method)
 	call := capability.Call{Family: "http", Mutates: mutates, Target: host}

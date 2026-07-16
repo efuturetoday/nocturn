@@ -117,9 +117,9 @@ func (n *countNotifier) Notify(intent string, options []hitl.Option) error {
 }
 
 // End to end through the real QuickJS interpreter: a plugin's effect inside its
-// ceiling asks once then goes silent after a session grant; an effect OUTSIDE the
-// ceiling is hard-denied without ever asking; uninstall removes the tools.
-func TestPlugin_CeilingBoundsEffects_E2E(t *testing.T) {
+// cage asks once then goes silent after a session grant; an effect OUTSIDE the
+// cage is hard-denied without ever asking; uninstall removes the tools.
+func TestPlugin_CageBoundsEffects_E2E(t *testing.T) {
 	stub := &http.Client{Transport: rtFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok")), Header: make(http.Header)}, nil
 	})}
@@ -151,7 +151,7 @@ func TestPlugin_CeilingBoundsEffects_E2E(t *testing.T) {
 	// Session context owns the standing grants.
 	ctx := capability.WithGrants(context.Background(), capability.NewGrants(capability.Permanent, nil))
 
-	// 1. in-ceiling fetch → asks once → session grant → 2nd is silent.
+	// 1. in-cage fetch → asks once → session grant → 2nd is silent.
 	if out, err := reg.Invoke(ctx, "example.fetch", "{}"); err != nil || strings.TrimSpace(out) != "ok" {
 		t.Fatalf("fetch 1: out=%q err=%v", out, err)
 	}
@@ -165,13 +165,13 @@ func TestPlugin_CeilingBoundsEffects_E2E(t *testing.T) {
 		t.Fatalf("fetch 2 asked again (calls=%d) — the session grant should silence it", notifier.calls)
 	}
 
-	// 2. out-of-ceiling evil → hard denied, human NEVER asked; tool surfaces the error.
+	// 2. out-of-cage evil → hard denied, human NEVER asked; tool surfaces the error.
 	before := notifier.calls
 	if _, err := reg.Invoke(ctx, "example.evil", "{}"); err == nil {
-		t.Fatal("evil (host outside the ceiling) must fail")
+		t.Fatal("evil (host outside the cage) must fail")
 	}
 	if notifier.calls != before {
-		t.Fatalf("out-of-ceiling call asked the human (%d→%d), want 0 extra asks", before, notifier.calls)
+		t.Fatalf("out-of-cage call asked the human (%d→%d), want 0 extra asks", before, notifier.calls)
 	}
 
 	// 3. uninstall removes the tools.

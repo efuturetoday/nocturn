@@ -1,10 +1,10 @@
 // Package plugin runs installed, sandboxed plugins. A plugin is an artifact
 // (plugin.js on the shared embedded QuickJS, or plugin.wasm) plus a sidecar
-// plugin.json manifest that declares its ceiling (the capabilities × hosts it may
+// plugin.json manifest that declares its cage (the capabilities × hosts it may
 // attempt), the tools it exposes, and the credentials it uses. The manifest is
-// read and reviewed WITHOUT running the artifact; the broker enforces the ceiling
+// read and reviewed WITHOUT running the artifact; the broker enforces the cage
 // regardless of what the artifact tries. The plugin's code runs in the wazero
-// sandbox and reaches effects only through the one gate — bounded by its ceiling,
+// sandbox and reaches effects only through the one gate — bounded by its cage,
 // gated by the broker + HITL, and by the user's context-scoped grants.
 package plugin
 
@@ -26,7 +26,7 @@ type Manifest struct {
 	Name        string           `json:"name"`
 	Version     string           `json:"version"`
 	Tools       []ToolDecl       `json:"tools"`
-	Requires    []Require        `json:"requires"`    // the ceiling: reach (family + target) × mutation
+	Requires    []Require        `json:"requires"`    // the cage: reach (family + target) × mutation
 	Credentials []CredentialDecl `json:"credentials"` // host-injected credentials it uses
 	OAuth       []OAuthDecl      `json:"oauth"`       // OAuth providers the host runs on its behalf
 }
@@ -69,7 +69,7 @@ type ToolDecl struct {
 	Consequential bool `json:"consequential"`
 }
 
-// Require is one reach entry of a plugin's ceiling: a Family (the host primitive —
+// Require is one reach entry of a plugin's cage: a Family (the host primitive —
 // "http", "file", "dns") + Target (a host for http, a path glob for file) and the
 // access level. Mutates=true grants read AND write (write is the higher privilege —
 // if you may write a target you may certainly read it); Mutates=false is read-only.
@@ -95,7 +95,7 @@ var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // Validate rejects a malformed manifest fail-closed: an empty/odd name, no tools,
 // duplicate tool names, a non-object schema, or a requires/credential entry with
 // an empty capability or host (which would fail-closed later anyway, but is
-// rejected early so the operator never reviews a nonsensical ceiling).
+// rejected early so the operator never reviews a nonsensical cage).
 func (m Manifest) Validate() error {
 	if !nameRe.MatchString(m.Name) {
 		return fmt.Errorf("plugin: invalid name %q (want ^[a-z0-9][a-z0-9._-]*$)", m.Name)
@@ -125,20 +125,20 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("plugin: requires entry needs a family and target (got %q, %q)", r.Family, r.Target)
 		}
 	}
-	ceil := m.Ceiling()
+	ceil := m.Cage()
 	creds := map[string]bool{}
 	for _, c := range m.Credentials {
 		if c.Name == "" || c.Family == "" || c.Host == "" || c.Header == "" {
 			return fmt.Errorf("plugin: credential %q needs name, family, host and header", c.Name)
 		}
-		// A credential is only ever injected on an effect the ceiling permits; one
-		// whose (family, host) is unreachable in the ceiling could never be used, and
+		// A credential is only ever injected on an effect the cage permits; one
+		// whose (family, host) is unreachable in the cage could never be used, and
 		// a mismatch is a red flag (a credential quietly pointed at another host than
-		// the ceiling allows). A bearer injects on both reads and writes, so it is
+		// the cage allows). A bearer injects on both reads and writes, so it is
 		// coherent as long as the host is reachable in EITHER class.
 		if !ceil.Allows(capability.Call{Family: c.Family, Mutates: false, Target: c.Host}) &&
 			!ceil.Allows(capability.Call{Family: c.Family, Mutates: true, Target: c.Host}) {
-			return fmt.Errorf("plugin: credential %q (%s %s) is outside the requires ceiling", c.Name, c.Family, c.Host)
+			return fmt.Errorf("plugin: credential %q (%s %s) is outside the requires cage", c.Name, c.Family, c.Host)
 		}
 		creds[c.Name] = true
 	}
@@ -164,10 +164,10 @@ func isHTTPSURL(s string) bool {
 	return err == nil && u.Scheme == "https" && u.Host != ""
 }
 
-// Ceiling builds the plugin's upper bound from its Requires: each entry becomes an
+// Cage builds the plugin's upper bound from its Requires: each entry becomes an
 // Allow reach on (family, target). A write entry grants read+write (MatchAny — write
 // implies read); a read entry is read-only (MatchRead).
-func (m Manifest) Ceiling() capability.Ceiling {
+func (m Manifest) Cage() capability.Cage {
 	pairs := make([]capability.Pair, 0, len(m.Requires))
 	for _, r := range m.Requires {
 		writes := capability.MatchRead
@@ -176,7 +176,7 @@ func (m Manifest) Ceiling() capability.Ceiling {
 		}
 		pairs = append(pairs, capability.Pair{Family: r.Family, TargetGlob: r.Target, Writes: writes})
 	}
-	return capability.NewCeiling(pairs...)
+	return capability.NewCage(pairs...)
 }
 
 // Kind is a plugin artifact form.
@@ -196,7 +196,7 @@ type Loaded struct {
 
 // Load reads dir/plugin.json (validated) and the artifact (plugin.wasm XOR
 // plugin.js) WITHOUT executing anything — so the operator reviews the declared
-// ceiling before any plugin code runs.
+// cage before any plugin code runs.
 func Load(dir string) (Loaded, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "plugin.json"))
 	if err != nil {

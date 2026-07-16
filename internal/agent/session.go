@@ -16,7 +16,7 @@
 // session grants at once) and Reset opens a fresh Grants set — but the persistent
 // "always" grants (keyed by the grant-set id) survive, since they are the user's
 // standing decision for this workspace. A later workspace layer supplies a
-// different grant-set id + ceiling here; nothing else changes.
+// different grant-set id + cage here; nothing else changes.
 package agent
 
 import (
@@ -57,12 +57,12 @@ func New(b *brain.Brain, g *gateway.Guard, r *capability.EpochRegistry, store ca
 }
 
 // Ask runs one turn under the session's grant set: it stamps the grants (and their
-// workspace ceiling, if any) onto ctx so the Guard binds standing grants to them
-// and enforces the ceiling, then drives the conversation to a final answer.
+// workspace cage, if any) onto ctx so the Guard binds standing grants to them
+// and enforces the cage, then drives the conversation to a final answer.
 func (s *Session) Ask(ctx context.Context, input string) (string, error) {
 	ctx = capability.WithGrants(ctx, s.grants)
-	if s.grants.Ceiling != nil {
-		ctx = capability.WithCeiling(ctx, *s.grants.Ceiling)
+	if s.grants.Cage != nil {
+		ctx = capability.WithCage(ctx, *s.grants.Cage)
 	}
 	ctx = skill.WithActive(ctx, s.skills) // so skill.load deduplicates within this conversation
 	return s.conv.Send(ctx, input)
