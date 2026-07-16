@@ -270,3 +270,29 @@ Das „Envelope" ist dann nur der **abgeleitete Default-Preset von `guarded`** (
 Writes→ask; nativ/Plugin-Manifest/MCP-`readOnlyHint`), **kein Käfig**. UX-Bild: „Accounts verbinden, Tools
 ankreuzen, Autonomie wählen" — wie eine App einrichten, nicht eine Capability-Matrix ausfüllen. Braucht: cron-
 Scheduler + out-of-band-Pending (ntfy steht) + die Envelope-Ableitung. **Erst wenn autonome Agents dran sind.**
+
+**Status-Update (gebaut):** Der `autonomy`-Regler existiert jetzt — `capability.Autonomy`
+(Attended/Guarded/Strict/Full), im Guard verdrahtet (unbeaufsichtigter `Ask` → strict=deny · guarded=out-of-band ·
+full=auto-allow; consequential-Floor + Cage/Deny unantastbar), Frontmatter `autonomy: guarded|strict|full`, plus
+**cron-Scheduler** (`internal/agent/scheduler.go`, Overlap-Skip, injizierbare Uhr) im Binary. Offen bleibt die
+**Envelope-Ableitung als UX-Preset** (aus `tools:`) und webhook/REST als zweiter Trigger.
+
+---
+
+### 11. Modell-Wahl pro Agent — `Definition.Model` ist geparst, aber NICHT verdrahtet
+
+**Beobachtung (Notiz):** `Definition.Model` + Frontmatter `model:` existieren und werden geparst, aber `RunTask`
+**ignoriert** das Feld — ein `model:` im Agent hat heute **keine Wirkung** (dieselbe „geparst-aber-ignoriert"-Falle
+wie damals `allowed-tools` bei Skills). Der Brain hält *einen* `llm.Client` mit fixem `modelName`; es gibt auch
+keinen TUI-Model-Selector.
+
+**Warum sinnvoll:** verschiedene Agents wollen verschiedene Modelle — ein billiges/schnelles für `pulse`/Triage,
+ein starkes für Recherche; und interaktiv evtl. ein Selector.
+
+**Wie (sauber, weil `brain.Model` ein Port/Interface ist):** eine Model-**Factory** im `cmd` (hält `baseURL`/`apiKey`,
+Modell variabel) an `RunTask` durchreichen; pro Lauf `sub := *b; sub.Model = factory(def.Model)` (Fallback Default,
+`""` = Default). freellm nutzt `auto` → ein Override wäre schlicht ein anderer Model-String. Klein — kein
+Broker/HITL berührt (Modellwahl ist keine Autorität).
+
+**YAGNI:** erst wenn mehrere Modelle real gebraucht werden. Bis dahin: Feld dokumentiert lassen ODER die
+Ignorier-Falle mit einem Kommentar an `Definition.Model` markieren, damit niemand `model:` setzt und sich wundert.

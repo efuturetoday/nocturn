@@ -26,7 +26,7 @@ type Definition struct {
 	Name         string
 	Description  string        // one-line summary (shown when listing/selecting agents)
 	Instructions string        // the markdown body — the agent's task framing
-	Model        string        // optional model override; "" = default
+	Model        string        // optional per-agent model override; PARSED BUT NOT YET APPLIED (FRAGEN #11) — has no runtime effect today
 	Tools        []string      // group ("gmail") or exact ("github.search") tool names
 	When         string        // "manual" | a cron expr | "webhook" (v1: manual is what runs)
 	Budget       time.Duration // wall-clock budget per run; 0 = caller default
