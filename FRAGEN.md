@@ -296,3 +296,56 @@ Broker/HITL berührt (Modellwahl ist keine Autorität).
 
 **YAGNI:** erst wenn mehrere Modelle real gebraucht werden. Bis dahin: Feld dokumentiert lassen ODER die
 Ignorier-Falle mit einem Kommentar an `Definition.Model` markieren, damit niemand `model:` setzt und sich wundert.
+
+---
+
+### 12. Multi-Workspace: N-Stack pro Workspace + HKDF-Master-Vault
+
+**Heute:** EIN Workspace, `wsDir` hart `"workspaces/default"` in app.go. Alles (Vault, Grants, Agents, Plugins,
+Skills, filecap-Root) liest schon **aus `wsDir`** → die Mechanik ist per-Workspace **drop-in-ready**, es fehlt nur
+Auswahl/Komposition. Ein Workspace = die **Isolations- und Portabilitäts-Einheit** (ADR-10): getrennte
+Kontexte/Accounts (work/privat), je eigener Vault + Grants + Cage + Plugins.
+
+**Zwei Geschmacksrichtungen (verschieden teuer):**
+- **Einer zur Zeit (billig):** `wsDir` parametrisieren (`nocturn <name>`, Default `default`, oder ein Picker vor
+  der TUI). Wechsel = Neustart. Kein neuer Sicherheits-Code — nur die Auswahl. **Erster Schritt.**
+- **Gleichzeitig / multi-tenant (teuer, dieser Eintrag):** N volle Stacks parallel — je eigener
+  `Guard`/`Registry`/`Injector`/`Grants`/`Scheduler`/`EpochRegistry`. Nötig, sobald Agents aus *mehreren*
+  Workspaces unbeaufsichtigt laufen sollen.
+
+**Wo die Isolation herkommt (Kern-Erkenntnis):** NICHT aus getrennten Vault-Keys, sondern aus dem
+**per-Workspace `Injector`/`Guard`/`Cage`** — der Injector gibt A-Effekten nur A's Credentials (host+plugin-scoped),
+ein A-Agent kann B's Token strukturell nicht ziehen, egal wie die Vaults verschlüsselt sind. Diese Laufzeit-Trennung
+**steht schon** (per-WS-Ownership + ctx-Scoping). Ein Masterkey berührt sie nicht.
+
+**Der Vault-Teil — ein Master, RICHTIG gemacht:** nicht „ein Key verschlüsselt alle Blobs", sondern
+**ein Master → per-Workspace-Keys via HKDF, domain-separiert mit dem WS-Namen:**
+`key_ws = HKDF(master, info="workspace:"+name)`.
+- **Eine Entsperrung → alle Vaults auf** (löst multi-WS-unattended: kein N-Passphrasen-Problem).
+- **Auf der Platte trotzdem kryptografisch verschiedene Keys** pro Vault, keine Wiederverwendung, Domain-Separation
+  → ein geklonter einzelner Vault verrät nichts über die anderen.
+- Das ist **IronClaws Vault-Muster** (per-secret HKDF-SHA256 + domain-separated AAD) — von CLAUDE.md als
+  Table-Stakes markiert. Der Master kommt aus **einmal-Passphrase** (Daemon-Start) oder **OS-Keychain**
+  (login-entsperrt, kein Prompt → echt-unattended). ⇒ koppelt an das offene **Keychain-Backend** (M4).
+
+**Die ehrliche Einschränkung — Prozess vs. Speicher:**
+- **Ein Prozess (logische Trennung, Default-Empfehlung):** alle Workspaces im selben Binary → nach dem Entsperren
+  liegen alle Klartext-Secrets im selben Adressraum. Trennung ist **logisch** (Injector-Scoping), nicht
+  speicher-hart. Plugins sind WASM-gesandboxt (kommen nicht dran); ein **Host-Bug** könnte theoretisch quer-lecken.
+  Für unser Threat-Model (Plugins isoliert, Host = kleine auditierte TCB) vertretbar.
+- **Prozess-pro-Workspace (speicher-hart):** N Binaries + IPC. Viel schwerer, selten nötig. Der HKDF-Master
+  funktioniert in beiden Fällen.
+- **Master = ein at-rest-Kompromiss-Punkt:** leakt er, öffnen alle Vaults. Nicht schlimmer als jedes
+  Single-Unlock-System; die Laufzeit-Isolation hält weiter.
+
+**Baureihenfolge:**
+1. **Auswahl „einer zur Zeit"** — `wsDir` parametrisieren. Klein, sofort nützlich.
+2. **HKDF-Master-Vault** — `secret`-Vault: aus einem Master per-WS-age-Identität ableiten (statt Passphrase pro
+   Vault). Einzeln testbar, noch ohne Multi-Stack.
+3. **N-Stack-Komposition** — app.go: pro entsperrtem Workspace einen Stack spawnen (eigener Guard/Registry/…),
+   ein Scheduler je WS (oder ein Scheduler, der WS-getaggte Jobs feuert). Setzt Daemon-Modus voraus (die TUI
+   bewohnt EINEN WS; multi-tenant ist ein Daemon-Bild).
+4. **Keychain-Backend** für den Master → echt-unattended (M4).
+
+**Kopplung:** multi-WS-unattended = Daemon-Modus **+** Keychain **+** HKDF-Master. Einzel-WS-unattended geht schon
+(eine Entsperrung beim Start). Reload-Atomizität je WS s. #9.5.
