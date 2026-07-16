@@ -242,3 +242,31 @@ Heute: **Boot-only, EIN Workspace** (`workspaces/default` hart in app.go). `load
      Reload in A berührt B nie. Setzt die **Workspace-Schicht** voraus (eigene id + Persistenz + Ceiling, CLAUDE §11).
 - **Synergie:** Approved-Record + Host-Binding (#8) sind bereits die Enabler — ein geänderter Plugin re-promptet
   mit Diff, ein repointeter Credential erzwingt Re-Auth: genau die Sicherheits-Checks, die ein Live-Reload braucht.
+
+### 10. Agent-Autonomie: Regler statt starres Envelope (festgehalten, NICHT jetzt)
+
+**Kern-Einsicht:** Ein **attended** Agent-Run im `guarded`-Modus (Reads still, Writes fragen) **ist praktisch
+eine Session** — der Mensch sitzt davor und beantwortet die Asks. Schale 1 liefert das schon. Ein „abgeleitetes
+Envelope" ist dafür **überflüssig** → erst nötig, wenn's **autonom** läuft (cron/Trigger, KEIN Mensch da):
+dann müssen **Reads still** sein (sonst pingt das Handy für einen Wetter-Lookup) und **Writes out-of-band
+pending** (Budget pausiert beim Warten).
+
+**Wie andere es machen (Recherche, Anhang):** Zapier/n8n = Account einmal verbinden, dann frei (Trust aus
+Autorschaft, deterministische Schritte). Handy-Apps/iOS-Shortcuts = Rechte bei Setup, dann frei. Coding-Agents
+(Claude Code/Cline/Goose) = **Modi/Allowlist**, eskalierbar bis Voll-Auto. Custom-GPT = per-Domain „allow
+once/always/decline". **Gemeinsam:** Account-Connect + **Autonomie-Regler** (default sicher, hochdrehbar).
+**Fast niemand** erzwingt Per-Effekt-Fragen im Autonomie-Modus.
+
+**Nocturns Grund härter zu sein:** LLM-Agent ≠ deterministisch → **Prompt-Injection** (in gelesener Mail/Web)
+kann ihn *innerhalb* verbundener Accounts kapern. Deshalb Writes gaten. **Aber** „jeder Write fragt, nicht
+abschaltbar" ist zu grob.
+
+**Geplant (wenn Autonomie gebaut wird):** ein **`autonomy`-Regler pro Agent** statt Zwang:
+- `full` → wie Zapier, fragt nie (vertrauenswürdiger Agent / nur trusted Input).
+- `guarded` (Default) → Reads still, Writes out-of-band (für Agents, die untrusted Input verarbeiten — dort ist
+  Injection real).
+- `strict` → fragt alles.
+Das „Envelope" ist dann nur der **abgeleitete Default-Preset von `guarded`** (aus der `tools:`-Liste: Reads→auto,
+Writes→ask; nativ/Plugin-Manifest/MCP-`readOnlyHint`), **kein Käfig**. UX-Bild: „Accounts verbinden, Tools
+ankreuzen, Autonomie wählen" — wie eine App einrichten, nicht eine Capability-Matrix ausfüllen. Braucht: cron-
+Scheduler + out-of-band-Pending (ntfy steht) + die Envelope-Ableitung. **Erst wenn autonome Agents dran sind.**
