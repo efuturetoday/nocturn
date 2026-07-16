@@ -137,3 +137,48 @@ func TestEngine_PausesBudgetDuringWait(t *testing.T) {
 		t.Fatalf("got %v, want Approved — the budget must be paused during the wait", out)
 	}
 }
+
+// routeNotifier records how often it was picked and self-approves so Request returns.
+type routeNotifier struct {
+	calls   int
+	resolve func(string) error
+}
+
+func (n *routeNotifier) Notify(_ string, options []hitl.Option) error {
+	n.calls++
+	return n.resolve(tokenFor(options, hitl.Approved))
+}
+
+// A single engine routes each request to a channel chosen from its context — the
+// seam that sends an attended run to the console and an unattended one to the phone.
+// The engine owns the channel; the router is decoupled (a plain ctx value here, not
+// the capability autonomy type). A nil router result falls back to the default.
+func TestEngine_RouterPicksChannelFromContext(t *testing.T) {
+	type oobKey struct{}
+	inter := &routeNotifier{}
+	oob := &routeNotifier{}
+	e := hitl.NewEngine([]byte("k"), inter, hitl.WithRouter(func(ctx context.Context) hitl.Notifier {
+		if ctx.Value(oobKey{}) != nil {
+			return oob
+		}
+		return nil // default → interactive
+	}))
+	inter.resolve, oob.resolve = e.Resolve, e.Resolve
+
+	// No flag → default (interactive) channel.
+	if _, err := e.Request(context.Background(), "x", choices, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if inter.calls != 1 || oob.calls != 0 {
+		t.Fatalf("attended: inter=%d oob=%d, want 1/0", inter.calls, oob.calls)
+	}
+
+	// Flag set → out-of-band channel; the same engine resolves it.
+	ctx := context.WithValue(context.Background(), oobKey{}, true)
+	if _, err := e.Request(ctx, "x", choices, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if oob.calls != 1 || inter.calls != 1 {
+		t.Fatalf("unattended: inter=%d oob=%d, want inter unchanged, oob 1", inter.calls, oob.calls)
+	}
+}

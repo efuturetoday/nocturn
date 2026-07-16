@@ -81,15 +81,35 @@ type pending struct {
 type Engine struct {
 	key      []byte
 	notifier Notifier
+	route    func(ctx context.Context) Notifier
 	now      func() time.Time
 
 	mu      sync.Mutex
 	pending map[string]*pending
 }
 
-// NewEngine returns an engine that signs tokens with key and notifies via n.
-func NewEngine(key []byte, n Notifier) *Engine {
-	return &Engine{key: key, notifier: n, now: time.Now, pending: make(map[string]*pending)}
+// EngineOption configures an Engine.
+type EngineOption func(*Engine)
+
+// WithRouter picks the Notifier for each request from its context — e.g. an
+// interactive channel for an attended run and an out-of-band channel (phone) for an
+// unattended one. Returning nil uses the engine's default notifier. This is where
+// "which human, which device" lives: the engine owns the channel — and, being the
+// one component that holds every channel AND the wait loop, it is also where a future
+// escalation (interactive times out → try out-of-band) would live. A single engine
+// means one token space, so any channel can resolve the same pending request.
+func WithRouter(route func(ctx context.Context) Notifier) EngineOption {
+	return func(e *Engine) { e.route = route }
+}
+
+// NewEngine returns an engine that signs tokens with key and notifies via n (the
+// default channel; WithRouter can override it per request).
+func NewEngine(key []byte, n Notifier, opts ...EngineOption) *Engine {
+	e := &Engine{key: key, notifier: n, now: time.Now, pending: make(map[string]*pending)}
+	for _, o := range opts {
+		o(e)
+	}
+	return e
 }
 
 // Request escalates an intent to a human out of band, offering the given
@@ -122,7 +142,15 @@ func (e *Engine) Request(ctx context.Context, intent string, choices []Choice, t
 		defer p.Resume()
 	}
 
-	if err := e.notifier.Notify(intent, options); err != nil {
+	// Pick the channel for this request: the router (if set) decides from ctx —
+	// attended → interactive, unattended → out-of-band — falling back to the default.
+	notifier := e.notifier
+	if e.route != nil {
+		if r := e.route(ctx); r != nil {
+			notifier = r
+		}
+	}
+	if err := notifier.Notify(intent, options); err != nil {
 		e.discard(id)
 		return Denied, err
 	}

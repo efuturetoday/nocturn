@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
@@ -47,53 +46,6 @@ func TestAuthorize_AutonomyDial(t *testing.T) {
 			}
 		})
 	}
-}
-
-// An unattended run's Ask goes to the OUT-OF-BAND channel (phone); an attended run
-// stays on the interactive channel. A missing OOB channel falls back to interactive.
-func TestAuthorize_OOBRoutesUnattended(t *testing.T) {
-	askPol := capability.Policy{Rules: []capability.Rule{
-		{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Ask, Epoch: capability.Permanent},
-	}}
-	newEng := func() (*hitl.Engine, *countNotifier) {
-		n := &countNotifier{want: hitl.Approved}
-		e := hitl.NewEngine([]byte("k"), n)
-		n.resolve = e.Resolve
-		return e, n
-	}
-
-	t.Run("attended → interactive, guarded → OOB", func(t *testing.T) {
-		tuiEng, tui := newEng()
-		oobEng, oob := newEng()
-		g := &gateway.Guard{Policy: askPol, Approvals: tuiEng, ApprovalsOOB: oobEng, TTL: time.Second}
-
-		if err := g.Authorize(context.Background(), read("x.com"), "r"); err != nil {
-			t.Fatalf("attended: %v", err)
-		}
-		if tui.calls != 1 || oob.calls != 0 {
-			t.Fatalf("attended routed wrong: tui=%d oob=%d, want 1/0", tui.calls, oob.calls)
-		}
-
-		ctx := capability.WithAutonomy(context.Background(), capability.AutonomyGuarded)
-		if err := g.Authorize(ctx, read("x.com"), "r"); err != nil {
-			t.Fatalf("guarded: %v", err)
-		}
-		if oob.calls != 1 || tui.calls != 1 {
-			t.Fatalf("guarded routed wrong: tui=%d oob=%d, want tui unchanged, oob 1", tui.calls, oob.calls)
-		}
-	})
-
-	t.Run("no OOB channel → guarded falls back to interactive", func(t *testing.T) {
-		tuiEng, tui := newEng()
-		g := &gateway.Guard{Policy: askPol, Approvals: tuiEng, TTL: time.Second} // ApprovalsOOB nil
-		ctx := capability.WithAutonomy(context.Background(), capability.AutonomyGuarded)
-		if err := g.Authorize(ctx, read("x.com"), "r"); err != nil {
-			t.Fatalf("fallback: %v", err)
-		}
-		if tui.calls != 1 {
-			t.Fatalf("fallback: interactive asked %d times, want 1", tui.calls)
-		}
-	})
 }
 
 // The dial never overrides the cage: an unattended full run still hard-denies an
