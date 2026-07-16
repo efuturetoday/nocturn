@@ -39,10 +39,8 @@ const (
 // model dispatches through, so script effects are gated and observed identically.
 // Build it with New; the zero value is not usable.
 type Runner struct {
-	Guest    []byte         // the QuickJS interpreter wasm
 	Registry *tool.Registry // shared dispatch registry (also the model's)
 	Timeout  time.Duration  // per-run wall-clock bound (0 = sandbox default)
-	MaxPages uint32         // memory cap in 64 KiB pages (0 = sandbox default)
 }
 
 // Run evaluates source on the interpreter and returns what the script printed to
@@ -52,12 +50,15 @@ type Runner struct {
 // not truncated here — the brain bounds what the model sees; a script's own effect
 // results stay whole.
 func (r *Runner) Run(ctx context.Context, source string) (string, error) {
+	eng, err := InterpreterEngine()
+	if err != nil {
+		return "", err
+	}
 	gate := sandbox.HostFunc{Name: gateName, Fn: r.dispatch}
-	res, err := sandbox.Run(ctx, r.Guest, sandbox.Config{
-		Stdin:    []byte(withPrelude(source)),
-		Hosts:    []sandbox.HostFunc{gate},
-		Timeout:  r.Timeout,
-		MaxPages: r.MaxPages,
+	res, err := eng.Run(ctx, sandbox.Config{
+		Stdin:   []byte(withPrelude(source)),
+		Hosts:   []sandbox.HostFunc{gate},
+		Timeout: r.Timeout,
 	})
 	if err != nil {
 		if len(res.Stderr) > 0 {

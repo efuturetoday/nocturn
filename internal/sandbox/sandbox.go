@@ -7,6 +7,10 @@
 // and hardening (a memory cap and a wall-clock deadline that traps runaway
 // guests). The sandbox performs NO effect itself — every effect is a HostFunc
 // supplied by the caller, which is where the broker/gateway sits.
+//
+// Guests are compiled once into an Engine (compilation dominates per-call cost)
+// and instantiated per Run, concurrently. Run is a one-shot convenience over a
+// throwaway Engine for callers that run a guest a single time.
 package sandbox
 
 import (
@@ -18,10 +22,7 @@ import (
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"github.com/tetratelabs/wazero/sys"
-
-	"github.com/efuturetoday/nocturn/internal/deadline"
 )
 
 // hostModule is the single import module a guest sees; its members are the
@@ -43,13 +44,13 @@ type HostFunc struct {
 }
 
 // Config is a single run's grants and limits. The zero value grants nothing,
-// preserving zero ambient authority.
+// preserving zero ambient authority. The memory cap is not here: it is
+// compile-scoped and therefore an EngineConfig knob (see engine.go).
 type Config struct {
 	Stdin     []byte        // fed to the guest as WASI fd 0
 	Workspace string        // host dir mounted read/write at /work; "" = no filesystem
 	Hosts     []HostFunc    // brokered host-function imports (module "nocturn")
 	Timeout   time.Duration // wall-clock CPU bound (0 = default 5s)
-	MaxPages  uint32        // memory cap in 64 KiB pages (0 = default 1024)
 }
 
 // Result is the guest's captured output.
@@ -58,43 +59,21 @@ type Result struct {
 	Stderr []byte
 }
 
-// Run instantiates guest under cfg and runs it to completion (its WASI command
-// entry point), returning the captured output. A guest that traps, exits
-// non-zero, exhausts memory, or exceeds the time limit returns an error
-// alongside whatever output it produced.
+// Run compiles guest, instantiates it under cfg, and runs it to completion (its
+// WASI command entry point), returning the captured output. It is a one-shot
+// convenience over an Engine: it compiles, runs once, and closes everything.
+// Callers that run the same guest repeatedly should build an Engine once and
+// reuse it — compilation is ~97% of a cold call for a large interpreter guest.
+//
+// A guest that traps, exits non-zero, exhausts memory, or exceeds the time limit
+// returns an error alongside whatever output it produced.
 func Run(ctx context.Context, guest []byte, cfg Config) (Result, error) {
-	r := wazero.NewRuntimeWithConfig(ctx, hardened(cfg))
-	defer r.Close(ctx)
-	wasi_snapshot_preview1.MustInstantiate(ctx, r)
-
-	if err := registerHosts(ctx, r, cfg.Hosts); err != nil {
+	eng, err := NewEngine(ctx, guest, EngineConfig{HostNames: hostNamesOf(cfg.Hosts)})
+	if err != nil {
 		return Result{}, err
 	}
-
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
-	// A pausable budget, not a plain timeout: while a host call is parked waiting
-	// for an out-of-band human approval, hitl pauses this deadline so the wait
-	// doesn't trap the (suspended) guest. It still bounds real execution time.
-	runCtx, cancel := deadline.WithBudget(ctx, timeout)
-	defer cancel()
-
-	var stdout, stderr bytes.Buffer
-	_, err := r.InstantiateWithConfig(runCtx, guest, moduleConfig(cfg, &stdout, &stderr))
-	return finish(stdout.Bytes(), stderr.Bytes(), err, runCtx)
-}
-
-func hardened(cfg Config) wazero.RuntimeConfig {
-	pages := cfg.MaxPages
-	if pages == 0 {
-		pages = defaultMaxPages
-	}
-	return wazero.NewRuntimeConfig().
-		WithCloseOnContextDone(true). // a cancelled/expired context traps the guest
-		WithMemoryLimitPages(pages).
-		WithMemoryCapacityFromMax(false)
+	defer eng.Close(ctx)
+	return eng.Run(ctx, cfg)
 }
 
 func moduleConfig(cfg Config, stdout, stderr *bytes.Buffer) wazero.ModuleConfig {
@@ -106,42 +85,6 @@ func moduleConfig(cfg Config, stdout, stderr *bytes.Buffer) wazero.ModuleConfig 
 		mc = mc.WithFSConfig(wazero.NewFSConfig().WithDirMount(cfg.Workspace, "/work"))
 	}
 	return mc
-}
-
-func registerHosts(ctx context.Context, r wazero.Runtime, hosts []HostFunc) error {
-	if len(hosts) == 0 {
-		return nil
-	}
-	b := r.NewHostModuleBuilder(hostModule)
-	for _, h := range hosts {
-		b = b.NewFunctionBuilder().WithFunc(hostFn(h)).Export(h.Name)
-	}
-	if _, err := b.Instantiate(ctx); err != nil {
-		return fmt.Errorf("sandbox: host module: %w", err)
-	}
-	return nil
-}
-
-// hostFn adapts a HostFunc to the standard host↔wasm ABI used by QuickJS,
-// Extism, wasm-bindgen and friends — the guest calls
-//
-//	nocturn.<name>(reqPtr, reqLen uint32) -> uint64   // packed (addr<<32 | size)
-//
-// The host reads the request, runs Fn, allocates the response INSIDE the guest
-// via its exported malloc, writes it there, and returns a packed pointer the
-// guest reads and then frees. A zero return means an empty response.
-func hostFn(h HostFunc) func(context.Context, api.Module, uint32, uint32) uint64 {
-	return func(ctx context.Context, mod api.Module, reqPtr, reqLen uint32) uint64 {
-		view, ok := mod.Memory().Read(reqPtr, reqLen)
-		if !ok {
-			return 0
-		}
-		resp, err := h.Fn(ctx, append([]byte(nil), view...)) // copy the transient view out at once
-		if err != nil {
-			resp = []byte("error: " + err.Error())
-		}
-		return writeToGuest(ctx, mod, resp)
-	}
 }
 
 // writeToGuest allocates len(b) bytes in the guest's linear memory via its

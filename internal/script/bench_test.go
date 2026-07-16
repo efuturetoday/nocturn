@@ -11,6 +11,7 @@ import (
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"github.com/tetratelabs/wazero/sys"
 
+	"github.com/efuturetoday/nocturn/internal/sandbox"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
@@ -50,15 +51,38 @@ func benchRuntime(b *testing.B) (wazero.Runtime, wazero.CompiledModule) {
 	return rt, cm
 }
 
-// Current per-call cost: recompile the ~1.2MB wasm + instantiate + QuickJS boot +
-// prelude eval + trivial eval + close. This is what every code.run / plugin.js
-// call pays today.
-func BenchmarkInterpreter_Run_Current(b *testing.B) {
+// The production path after compile-once: script.New().Run() over the shared
+// interpreter engine. The engine is warmed before the timer so the one-time
+// compile isn't billed to the loop — this measures instantiate + QuickJS boot +
+// prelude eval + trivial eval + close, the true per-call cost (~2.5 ms).
+func BenchmarkInterpreter_Run_Engine(b *testing.B) {
 	r := script.New(tool.NewRegistry(nil))
 	ctx := context.Background()
+	if _, err := r.Run(ctx, "1+1"); err != nil { // warm the shared engine (one-time compile)
+		b.Fatal(err)
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := r.Run(ctx, "1+1"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// The old per-call cost, preserved as the before-baseline: the one-shot sandbox.Run
+// recompiles the ~1.2 MB wasm every call (throwaway engine). The delta vs Run_Engine
+// is the compile cost that compile-once eliminates (~328 ms → ~2.5 ms).
+func BenchmarkInterpreter_Run_Recompile(b *testing.B) {
+	ctx := context.Background()
+	gate := sandbox.HostFunc{Name: "call", Fn: func(context.Context, []byte) ([]byte, error) { return nil, nil }}
+	src := []byte(script.Prelude() + "\n1+1")
+	guest := script.InterpreterGuest()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := sandbox.Run(ctx, guest, sandbox.Config{
+			Stdin: src,
+			Hosts: []sandbox.HostFunc{gate},
+		}); err != nil {
 			b.Fatal(err)
 		}
 	}

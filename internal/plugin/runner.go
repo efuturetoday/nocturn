@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
@@ -16,7 +17,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
-// defaultTimeout bounds one plugin tool-call (a single sandbox.Run).
+// defaultTimeout bounds one plugin tool-call (a single guest run).
 const defaultTimeout = 60 * time.Second
 
 // Plugin is an installed, sandboxed plugin wired to the shared registry. Its tools
@@ -32,9 +33,15 @@ type Plugin struct {
 	reg      *tool.Registry
 	cage     capability.Cage
 
-	Timeout  time.Duration
-	MaxPages uint32
-	WorkDir  string // /work mount for cross-call state (may be "")
+	Timeout time.Duration
+	WorkDir string // /work mount for cross-call state (may be "")
+
+	// engine resolution. A KindJS plugin runs on the process-wide shared QuickJS
+	// engine (script.InterpreterEngine); a KindWASM plugin owns its own engine,
+	// compiled lazily on first call (so install-but-never-call pays no compile) and
+	// closed on Uninstall. mu guards built for both the lazy build and Close.
+	mu    sync.Mutex
+	built *sandbox.Engine // owned KindWASM engine once built; nil = not built / shared
 }
 
 // New builds a Plugin from a Loaded package over the shared dispatch registry.
@@ -47,6 +54,40 @@ func New(l Loaded, reg *tool.Registry) *Plugin {
 		cage:     cageOf(l.Manifest.Cage),
 		Timeout:  defaultTimeout,
 	}
+}
+
+// engine resolves the sandbox engine this plugin runs on. KindJS shares the
+// process-wide QuickJS engine; KindWASM lazily compiles and caches its own guest.
+func (p *Plugin) engine() (*sandbox.Engine, error) {
+	if p.kind != KindWASM {
+		return script.InterpreterEngine() // shared, compiled once for the whole process
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.built == nil {
+		eng, err := sandbox.NewEngine(context.Background(), p.artifact, sandbox.EngineConfig{
+			HostNames: []string{"call"},
+		})
+		if err != nil {
+			return nil, err
+		}
+		p.built = eng
+	}
+	return p.built, nil
+}
+
+// Close releases a KindWASM plugin's own engine if it was built. It is a no-op for
+// a KindJS plugin (the shared engine is process-lived) and for a KindWASM plugin
+// that was never called. Safe to call once at Uninstall.
+func (p *Plugin) Close(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.built == nil {
+		return nil
+	}
+	err := p.built.Close(ctx)
+	p.built = nil
+	return err
 }
 
 // Tools returns the plugin's model-facing tools, namespaced <plugin>.<tool>. Each
@@ -94,7 +135,7 @@ func (p *Plugin) runWASM(ctx context.Context, toolName, args string) (string, er
 		Tool string          `json:"tool"`
 		Args json.RawMessage `json:"args"`
 	}{Tool: toolName, Args: rawArgs(args)})
-	return p.runGuest(ctx, p.artifact, stdin)
+	return p.runGuest(ctx, stdin)
 }
 
 // runJS runs the plugin's JS on the shared embedded QuickJS interpreter: stdin is
@@ -104,7 +145,7 @@ func (p *Plugin) runJS(ctx context.Context, toolName, args string) (string, erro
 	// Prelude first (defines fetch/fs/btoa/…), then the plugin (which sets
 	// globalThis.plugin), then the bootstrap that invokes the named tool.
 	src := script.Prelude() + "\n" + string(p.artifact) + jsBootstrap(toolName, args)
-	return p.runGuest(ctx, script.InterpreterGuest(), []byte(src))
+	return p.runGuest(ctx, []byte(src))
 }
 
 func jsBootstrap(toolName, args string) string {
@@ -152,7 +193,7 @@ func rawArgs(args string) json.RawMessage {
 
 // runGuest is the shared sandbox launch: it stamps the plugin cage onto ctx
 // (so the broker hard-denies out-of-cage effects), registers the one gate, and
-// runs the guest to completion, returning its stdout.
+// runs the guest to completion on the plugin's engine, returning its stdout.
 //
 // SECURITY: this WithCage call is the SOLE place a plugin's cage enters the
 // request context, and it gates EVERY plugin effect. capability.WithinCages is
@@ -160,20 +201,23 @@ func rawArgs(args string) json.RawMessage {
 // plugin effect that reached the broker WITHOUT this stamp would be bounded only by
 // the base policy — i.e. unbounded by the manifest. Both runJS and runWASM route
 // through here precisely so that can never happen; do not add a plugin execution
-// path that calls sandbox.Run without first stamping p.cage. The regression
-// test TestPlugin_CageBoundsEffects_E2E locks the out-of-cage hard-deny.
-func (p *Plugin) runGuest(ctx context.Context, guest, stdin []byte) (string, error) {
+// path that runs the guest without first stamping p.cage. The regression test
+// TestPlugin_CageBoundsEffects_E2E locks the out-of-cage hard-deny.
+func (p *Plugin) runGuest(ctx context.Context, stdin []byte) (string, error) {
 	ctx = capability.WithCage(ctx, p.cage)
 	// Scope credential injection to THIS plugin: an effect from its guest only
 	// picks up its own credential bindings (+ app defaults), never another
 	// plugin's token, even at a shared host.
 	ctx = secret.WithOwner(ctx, Owner(p.Manifest.Name))
+	eng, err := p.engine()
+	if err != nil {
+		return "", err
+	}
 	gate := sandbox.HostFunc{Name: "call", Fn: p.dispatch}
-	res, err := sandbox.Run(ctx, guest, sandbox.Config{
+	res, err := eng.Run(ctx, sandbox.Config{
 		Stdin:     stdin,
 		Hosts:     []sandbox.HostFunc{gate},
 		Timeout:   p.Timeout,
-		MaxPages:  p.MaxPages,
 		Workspace: p.WorkDir,
 	})
 	if err != nil {

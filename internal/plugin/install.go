@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -25,7 +26,8 @@ type Host struct {
 }
 
 type installed struct {
-	tools []string // namespaced tool names, for uninstall
+	tools  []string // namespaced tool names, for uninstall
+	plugin *Plugin  // for uninstall: closes a KindWASM plugin's own engine
 }
 
 // NewHost builds a plugin host over the shared registry and injector.
@@ -97,7 +99,7 @@ func (h *Host) Install(l Loaded, approve func(Manifest) (bool, error)) error {
 			})
 		}
 	}
-	h.active[name] = &installed{tools: toolNames}
+	h.active[name] = &installed{tools: toolNames, plugin: p}
 	return nil
 }
 
@@ -118,6 +120,9 @@ func (h *Host) Uninstall(name string) error {
 	if h.Injector != nil {
 		h.Injector.RemoveBindingsFor(Owner(name))
 	}
+	// Release the plugin's own engine (KindWASM); a no-op for KindJS (shared) or an
+	// unused KindWASM plugin. Frees the compiled module held for the process's life.
+	_ = inst.plugin.Close(context.Background())
 	delete(h.active, name)
 	return nil
 }
