@@ -1,0 +1,80 @@
+---
+title: MCP servers
+description: Connect your assistant to hosted MCP servers over the internet, with the same safety as everything else.
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+MCP (Model Context Protocol) is a common way for a service to expose its tools to an AI
+assistant. Many services now offer a hosted MCP server. Nocturn can connect to one, so you
+gain its tools without writing any code.
+
+:::danger[Remote servers only. This is deliberate.]
+Nocturn connects to remote MCP servers over HTTPS and nothing else. It does **not** run
+local (stdio) servers, it does **not** spawn processes, and it does **not** launch or manage
+a server for you. A local server would mean foreign code running on your machine, outside
+the sandbox, with your privileges. That is exactly what Nocturn refuses to do. There is no
+runtime and no execution outside the sandbox. A remote server runs on someone else's
+infrastructure, so from your side it is only an API call, and it fits the same safety model
+as everything else.
+:::
+
+## Add a server
+
+List the servers in a file named `mcp.json` in your workspace:
+
+```json
+{
+  "servers": [
+    { "name": "github", "url": "https://api.example.com/mcp/", "auth": "token" }
+  ]
+}
+```
+
+Each server needs a `name` and an `https` `url`. Its tools then appear to the assistant as
+`github.*`, alongside the built-in ones.
+
+## Signing in
+
+How the server authenticates you:
+
+- **None** <Badge text="Available now" variant="success" /> Leave `auth` out for a public
+  server.
+- **Token** <Badge text="Available now" variant="success" /> Set `"auth": "token"`. Nocturn
+  asks you for the token once at startup and keeps it in the encrypted vault.
+- **OAuth, with automatic discovery and registration** <Badge text="Coming soon" variant="caution" />
+  Sign in with the provider, with no token to copy and endpoints found for you. Until this
+  lands, use token auth.
+
+Either way the token stays with Nocturn. The assistant never sees it, and Nocturn only sends
+it to the server it belongs to. See [Secrets and accounts](/guides/connecting-accounts/).
+
+## You have to trust the server
+
+This is the important caveat. For each of its tools, the MCP server tells Nocturn whether
+that tool only reads or also changes things. Nocturn uses that to decide what to ask you
+about: a read-only tool runs quietly, a tool that changes things asks first.
+
+So a server could label a changing tool as read-only, and Nocturn would run it without
+prompting you. Only connect MCP servers you trust, the same way you would only install a
+plugin you trust. The startup review is where you make that call.
+
+What the tool can *reach* is still bounded, whatever the server claims. It can only talk to
+that one server, and results are scanned for leaks. But whether you are asked before it acts
+depends on the server telling the truth about its own tools.
+
+## The startup review
+
+The first time you connect a server, Nocturn shows you what it is and asks you to confirm. It
+remembers your answer, so an unchanged server connects quietly next time. If the declaration
+changes, it asks again and shows what changed.
+
+If you decline a server, or it is unreachable, Nocturn skips it and keeps running with
+everything else. One flaky server never blocks your assistant.
+
+## What Nocturn refuses
+
+Nocturn declines the parts of MCP that would let a remote server drive your assistant instead
+of the other way around. It does not let a server send prompts for your model to run, and it
+does not accept server-pushed content on its own. You get the useful part, the tools, without
+handing a stranger the wheel.

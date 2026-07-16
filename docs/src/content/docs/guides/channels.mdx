@@ -1,0 +1,32 @@
+---
+title: Channels and remote access
+description: Reaching your agents from outside the terminal, through messaging apps and a programmatic API.
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+Today you talk to your agents from the [playground](/guides/the-tui/) in your terminal. The
+features on this page open that up, so you can start and steer a workspace's agents from
+elsewhere. They are planned, described here so the direction is clear, but not available
+yet.
+
+## Messaging channels <Badge text="Planned" variant="caution" />
+
+Start and talk to a workspace's agents through the messaging apps you already use, like
+WhatsApp and Telegram. Kick off a task from your phone while you are out, and approve its
+actions from the same conversation. The assistant becomes something you reach from anywhere,
+not just the machine it runs on.
+
+This pairs naturally with [approvals](/guides/approvals/). The channel that lets you start a
+task is also where you would confirm the actions that matter.
+
+## REST API <Badge text="Planned" variant="caution" />
+
+A programmatic interface to a workspace. Start sessions, run agents, and drive Nocturn from
+your own tools and scripts. This is the foundation the messaging channels build on, and what
+a future web interface will use.
+
+:::note
+Until these land, remote use goes through [phone approvals](/guides/approvals/) over ntfy,
+which is available now, while the agent itself runs on your machine.
+:::

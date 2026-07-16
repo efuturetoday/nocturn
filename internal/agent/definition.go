@@ -18,8 +18,8 @@ import (
 // Definition is a workspace agent: WHAT it does (Instructions = the markdown
 // body), WHICH tools it may use (Tools, by group name "gmail" or exact name
 // "github.search"), and WHEN it runs (When). It is loaded from
-// <ws>/.agents/<name>.md — control-plane (outside the model's mount, ADR-10), so
-// the model cannot author its own agents. Tools are the ONLY authority surface;
+// <ws>/agents/<name>/agent.md — control-plane (outside the model's mount, ADR-10),
+// so the model cannot author its own agents. Tools are the ONLY authority surface;
 // skills (context, zero authority) are opt-in via the tools list (add "skill") —
 // off by default so a focused agent carries no skill-catalog context.
 type Definition struct {

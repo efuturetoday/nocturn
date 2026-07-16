@@ -1,0 +1,54 @@
+---
+title: Triggers and schedules
+description: How an agent gets started, whether manually, on a schedule, or by an external event.
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+A trigger is what starts an agent. Some triggers work today, and one is on the roadmap. This
+page is honest about which is which.
+
+## Manually <Badge text="Available now" variant="success" />
+
+From the [playground](/guides/the-tui/), type `/agent-name` to run an agent right now,
+optionally with a one-off task:
+
+```text
+/morning-briefing
+/morning-briefing only check the inbox
+```
+
+`/agents` lists everything available. This is the quickest way to test an agent before you
+let it run on its own.
+
+## On a schedule <Badge text="Available now" variant="success" />
+
+Add a `when: cron("…")` line to an agent and it runs itself on that schedule while Nocturn
+is open:
+
+```markdown
+---
+name: morning-briefing
+when: cron("0 7 * * *")   # every day at 07:00
+---
+```
+
+The schedule uses standard five-field cron syntax: minute, hour, day of month, month, day of
+week. If an agent is still running when its next time comes around, that run is skipped
+rather than stacking up. See [Agents](/guides/agents/) for how a scheduled agent handles
+approvals while you are away.
+
+## By webhook <Badge text="Planned" variant="caution" />
+
+Let an external system start an agent by calling a URL, so an incoming event, such as a new
+order, a form submission, or a CI failure, triggers the right agent. This will sit alongside
+cron as a second kind of trigger. A webhook fires one agent from an inbound event. For full
+programmatic control, starting sessions and driving agents yourself, see the
+[REST API](/guides/channels/). Neither is available yet, so do not build a workflow around
+them today.
+
+:::note[Why the badges]
+Nocturn's whole promise is that you can trust what it tells you, and that includes these
+docs. A feature is marked <Badge text="Available now" variant="success" /> only when you can
+actually use it.
+:::

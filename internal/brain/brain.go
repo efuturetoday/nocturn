@@ -51,9 +51,9 @@ type ToolCall struct {
 
 // Step is the Model's decision: a final Answer, or one or more ToolCalls to run.
 // An empty ToolCalls means Answer is final. A model may request several calls in
-// one turn; they are run SEQUENTIALLY (each through the Registry, each its own
-// approval), never concurrently — so every effect stays a deliberate, single
-// human decision.
+// one turn; run executes them CONCURRENTLY (see run), but gated effects still
+// serialize at the human (the notifier is serialized), so every approval stays a
+// deliberate, single decision.
 type Step struct {
 	Answer    string
 	ToolCalls []ToolCall
