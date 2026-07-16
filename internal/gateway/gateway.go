@@ -29,12 +29,18 @@ var ErrDenied = errors.New("gateway: capability denied")
 // active capability.Grants (not on the Guard), and upper bounds live in the
 // cage chain carried by ctx — so the Guard holds no per-session mutable state.
 type Guard struct {
-	Policy    capability.Policy
-	Approvals *hitl.Engine
-	Epochs    *capability.EpochRegistry
-	Rate      *capability.RateLimiter
-	TTL       time.Duration
-	Now       func() time.Time
+	Policy capability.Policy
+	// Approvals is the interactive (attended) approval channel — the human at the
+	// console. ApprovalsOOB, if set, is the OUT-OF-BAND channel (e.g. ntfy → phone)
+	// used for an UNATTENDED run: a scheduled agent has no one at the console, so its
+	// Ask goes to the phone instead. Nil ApprovalsOOB falls back to Approvals (still
+	// gated — just inline), so out-of-band is an enhancement, never a requirement.
+	Approvals    *hitl.Engine
+	ApprovalsOOB *hitl.Engine
+	Epochs       *capability.EpochRegistry
+	Rate         *capability.RateLimiter
+	TTL          time.Duration
+	Now          func() time.Time
 }
 
 func (g *Guard) now() time.Time {
@@ -186,7 +192,14 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 		if consequential {
 			choices = consequentialChoices
 		}
-		out, err := g.Approvals.Request(ctx, prompt, choices, g.TTL)
+		// Route the approval: an UNATTENDED run (anything but Attended reaching here —
+		// Guarded, or a consequential Full) goes out of band to the phone if that channel
+		// is wired; an attended run, or no OOB channel, asks the human at the console.
+		approvals := g.Approvals
+		if capability.AutonomyFrom(ctx) != capability.AutonomyAttended && g.ApprovalsOOB != nil {
+			approvals = g.ApprovalsOOB
+		}
+		out, err := approvals.Request(ctx, prompt, choices, g.TTL)
 		if err != nil {
 			return err
 		}
