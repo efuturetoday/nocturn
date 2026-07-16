@@ -7,10 +7,12 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -243,6 +245,29 @@ func tuiCmd(_ []string) error {
 	dark := lipgloss.HasDarkBackground()
 	p = tea.NewProgram(newChatModel(startTurn, startAgent, agentDefs, session.Reset, skills, session.MarkSkill, modelName, dark), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	notifier.p = p
+
+	// Background scheduler: fire cron-triggered agents unattended while the TUI runs.
+	// Each firing runs HEADLESS (a quiet brain copy, so a background run never hijacks
+	// the interactive token stream) with the agent's declared autonomy level — the
+	// broker + HITL still gate every effect. Firing/skip/result lines surface as dim
+	// system notices. One run per agent at a time (overlap-skip) is enforced inside.
+	schedCtx, cancelSched := context.WithCancel(ctx)
+	defer cancelSched()
+	sched, err := agent.NewScheduler(agentDefs, func(runCtx context.Context, def agent.Definition) error {
+		qb := *b
+		qb.OnToken = nil // a scheduled run must not dump its prose into the live chat
+		store := agent.LoadGrantsStore(agent.GrantsPath(agentsDir, def.Name))
+		_, err := agent.RunTask(runCtx, &qb, epochs, store, def, "Run your scheduled task now.")
+		return err
+	}, agent.WithLog(func(line string) { p.Send(schedulerMsg(line)) }))
+	if err != nil {
+		return err
+	}
+	if s := sched.Scheduled(); len(s) > 0 {
+		fmt.Printf("Scheduled: %s\n", strings.Join(s, ", "))
+	}
+	sched.Start(schedCtx)
+
 	_, err = p.Run()
 	return err
 }
