@@ -8,7 +8,7 @@ touching the workspace, resolving a name. Everything the model, a script, a plug
 MCP server can *actually do* passes through one of them. There is no other way out — a WASM
 guest has zero ambient authority, so a capability it was not handed is simply absent.
 
-This section is the catalogue. Each family (HTTP, DNS, Files) has its own page listing every
+This section is the catalogue. Each family (HTTP, DNS, Ping, Files) has its own page listing every
 tool, its inputs, and what it returns. This page is the map over all of them.
 
 ## The two axes
@@ -34,20 +34,26 @@ There is one `target` field, but its **shape is defined by the family** — it i
 resource string that capability reaches. So the same slot means a hostname for the network
 families and a path for the file family:
 
-| Family        | `target` is…                     | Example                 |
-|---------------|----------------------------------|-------------------------|
-| `http`, `dns` | a **hostname**                   | `gmail.googleapis.com`  |
-| `file`        | a **workspace-relative path** (glob) | `notes/*`           |
+| Family              | `target` is…                                   | Example                 |
+|---------------------|------------------------------------------------|-------------------------|
+| `http`, `dns`, `ping` | a **hostname**, an **IP**, or a **CIDR range** | `gmail.googleapis.com`, `10.0.0.0/8`  |
+| `file`              | a **workspace-relative path** (glob)           | `notes/*`           |
 
 That single `(family, target, access)` triple is exactly how a limit is written down. In a
 [plugin's cage](/guides/writing-plugins/#declare-it) (`plugin.json`) it looks like this:
 
 ```json
 { "family": "http", "target": "gmail.googleapis.com", "access": ["read", "write"] }
+{ "family": "http", "target": "10.0.0.0/8",           "access": ["read"] }
 ```
 
 - **`family` + `target`** = the *reach* axis (which capability, which host/path). A glob is
   allowed (`*.github.com`, `notes/*`); a path glob does not cross `/`, so it is depth-bounded.
+  For the network families the target may also be an **IP** or a **CIDR range**
+  (`10.0.0.0/8`, `192.168.0.0/16`, `2001:db8::/32`) — the reach limiter matches an IP target
+  numerically, so you can confine a caller to a subnet. A CIDR bounds calls made **to an IP in
+  that range**; a call made to a *hostname* is matched by a hostname glob, because the broker
+  never resolves names (that would be a DNS effect inside the decision layer).
 - **`access`** = the *effect* axis, spelled out as `["read"]`, `["write"]`, or `["read","write"]`.
   It must be explicit — a missing `access` is a fail-closed error, never a silent "both".
 
@@ -57,16 +63,19 @@ and your remembered [grants](/guides/approvals/#how-the-decision-is-made). Only 
 
 ## Every tool at a glance
 
-| Tool          | Family | Axis      | Target              | Inputs                                   | Returns |
-|---------------|--------|-----------|---------------------|------------------------------------------|---------|
-| `http.read`   | `http` | **read**  | hostname            | `url`, `method` (`GET`/`HEAD`)           | JSON `{status, statusText, headers, body}` |
-| `http.write`  | `http` | **write** | hostname            | `url`, `method` (`POST`/`PUT`/`PATCH`/`DELETE`), `body`, `content_type` | JSON `{status, statusText, headers, body}` |
-| `dns.resolve` | `dns`  | **read**  | hostname            | `host`                                   | comma-separated IP addresses |
-| `file.read`   | `file` | **read**  | path (in workspace) | `path`                                   | file contents (UTF-8, ≤ 1 MiB) |
-| `file.write`  | `file` | **write** | path (in workspace) | `path`, `content`                        | `wrote N bytes to <path>` |
-| `file.list`   | `file` | **read**  | path (in workspace) | `path` (directory)                       | JSON array `[{name, isDir, size}]` |
-| `file.stat`   | `file` | **read**  | path (in workspace) | `path`                                   | JSON `{exists, isDir, size}` |
-| `file.remove` | `file` | **write** | path (in workspace) | `path`                                   | `removed <path>` |
+| Tool          | Family | Axis | Target              | Inputs                                   | Returns |
+|---------------|--------|------|---------------------|------------------------------------------|---------|
+| `http.read`   | `http` | <span class="axis axis--read">read</span> | hostname | `url`, `method` (`GET`/`HEAD`) | JSON `{status, statusText, headers, body}` |
+| `http.write`  | `http` | <span class="axis axis--write">write</span> | hostname | `url`, `method` (`POST`/`PUT`/`PATCH`/`DELETE`), `body`, `content_type` | JSON `{status, statusText, headers, body}` |
+| `dns.resolve` | `dns`  | <span class="axis axis--read">read</span> | hostname | `host`, `type` (`A`/`AAAA`/`IP`/`MX`/`TXT`/`CNAME`/`NS`/`PTR`/`SRV`) | JSON `{host, type, records}` |
+| `ping`        | `ping` | <span class="axis axis--read">read</span> | hostname / IP | `host` | JSON `{host, ip, ok, rtt_ms}` |
+| `file.read`   | `file` | <span class="axis axis--read">read</span> | path (in workspace) | `path` | file contents (UTF-8, ≤ 1 MiB) |
+| `file.write`  | `file` | <span class="axis axis--write">write</span> | path (in workspace) | `path`, `content` | JSON `{path, bytesWritten}` |
+| `file.list`   | `file` | <span class="axis axis--read">read</span> | path (in workspace) | `path` (directory) | JSON array `[{name, isDir, size}]` |
+| `file.stat`   | `file` | <span class="axis axis--read">read</span> | path (in workspace) | `path` | JSON `{exists, isDir, size}` |
+| `file.search` | `file` | <span class="axis axis--read">read</span> | path (in workspace) | `pattern`, `path` (base dir) | JSON array of matching paths |
+| `file.remove` | `file` | <span class="axis axis--write">write</span> | path (in workspace) | `path` | JSON `{path, removed}` |
+| `file.move`   | `file` | <span class="axis axis--write">write</span> | path (in workspace) | `from`, `to` | JSON `{from, to}` |
 
 The tool name **is** the authority. `http.read` and `http.write` are split so the tool the
 model picks already decides the effect axis — the security layer never has to trust an HTTP
@@ -82,6 +91,10 @@ Some tools the model can call reach **no** capability, so they are never gated:
   [WASM data format](/reference/wasm-abi/).
 - **`skill.load` / `skill.read`** — pull in context (instructions, references). Context is
   not authority: a skill can only *suggest* how to use gated tools, never grant new reach.
+- **`time.now`** — returns the current date and time (`{unix, iso, utc, timezone, offset_seconds}`).
+  A clock read leaks nothing and changes nothing, so it carries zero authority. It exists as a host
+  tool only because the sandbox guest has no wall clock of its own — without it a skill could not
+  answer *"what is due today?"*.
 
 ## MCP tools
 

@@ -25,6 +25,30 @@ func recordingTool(name, out string, gotArgs *string) tool.Tool {
 	}
 }
 
+// A code.run script has NO ambient filesystem: the runner passes no Workspace to
+// the sandbox (proven at the sandbox layer by TestRun_NoWorkspace_HasNoFilesystem),
+// so the guest has no WASI preopen and the ONLY route to a file is a brokered
+// file.* tool through the gate. With no file tool registered, a script's fs access
+// therefore FAILS — there is no un-brokered WASI fallback. If a mount ever leaked
+// in, the fs shim would have a bypass and this would stop erroring.
+func TestRun_NoAmbientFilesystem(t *testing.T) {
+	// Registry deliberately has NO file.read — so the gate has nothing to dispatch.
+	r := script.New(tool.NewRegistry(nil))
+
+	_, err := r.Run(context.Background(), `
+		const fs = require("fs");
+		fs.readFileSync("/etc/hostname"); // no gated tool → must throw, no WASI fallback
+		console.log("REACHED");
+	`)
+	if err == nil {
+		t.Fatal("script reached the filesystem with no gated file tool — an un-brokered FS path exists")
+	}
+	// And it fails because the tool is absent, not because the file is missing.
+	if !strings.Contains(err.Error(), "file.read") && !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("err = %v, want an unknown-tool (no file.read) failure", err)
+	}
+}
+
 // The one gate end to end, through the REAL interpreter: a script's
 // nocturn.call(tool, args) reaches the named tool's Invoke with its args (as the
 // interpreter JSON-stringifies them), and the result flows back to the script.

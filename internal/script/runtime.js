@@ -314,6 +314,14 @@
     list: function (path) { return JSON.parse(g.nocturn.call("file.list", { path: path == null ? "" : String(path) })); },
     stat: function (path) { return JSON.parse(g.nocturn.call("file.stat", { path: String(path) })); },
     remove: function (path) { g.nocturn.call("file.remove", { path: String(path) }); },
+    // file.search returns a JSON array, but a truncated sweep appends a
+    // "(truncated ...)" note after the JSON — split it off before parsing.
+    search: function (pattern, path) {
+      var raw = g.nocturn.call("file.search", { pattern: String(pattern), path: path == null ? "" : String(path) });
+      var nl = raw.indexOf("\n");
+      return JSON.parse(nl === -1 ? raw : raw.slice(0, nl));
+    },
+    move: function (from, to) { g.nocturn.call("file.move", { from: String(from), to: String(to) }); },
   };
   g.nocturn.fs = {
     readFile: promisify(nfs.readFile),
@@ -321,6 +329,19 @@
     list: promisify(nfs.list),
     stat: promisify(nfs.stat),
     remove: promisify(nfs.remove),
+    search: promisify(nfs.search),
+    move: promisify(nfs.move),
+  };
+
+  // --- ping / clock: thin sync wrappers over the host tools (ping is gated like
+  // dns; time.now carries no authority). Both return the parsed JSON object. ---
+  g.nocturn.ping = function (host) { return JSON.parse(g.nocturn.call("ping", { host: String(host) })); };
+  g.nocturn.now = function () { return JSON.parse(g.nocturn.call("time.now", {})); };
+  // resolve(host[, type]) — type ∈ A|AAAA|IP|MX|TXT|CNAME|NS|PTR|SRV (default A).
+  g.nocturn.resolve = function (host, type) {
+    var args = { host: String(host) };
+    if (type != null) args.type = String(type);
+    return JSON.parse(g.nocturn.call("dns.resolve", args));
   };
 
   var fs = {
@@ -346,14 +367,16 @@
       if (opts && opts.recursive) throw new Error("nocturn: recursive rm is not supported");
       nfs.remove(path);
     },
+    renameSync: function (from, to) { nfs.move(from, to); },
   };
-  ["mkdirSync", "renameSync", "copyFileSync", "appendFileSync", "createReadStream", "createWriteStream", "openSync", "watch", "watchFile"].forEach(function (m) {
+  ["mkdirSync", "copyFileSync", "appendFileSync", "createReadStream", "createWriteStream", "openSync", "watch", "watchFile"].forEach(function (m) {
     fs[m] = function () { throw new Error("nocturn: fs." + m + " is not supported (use nocturn.fs or file.* tools)"); };
   });
   fs.promises = {
     readFile: promisify(fs.readFileSync), writeFile: promisify(fs.writeFileSync),
     readdir: promisify(fs.readdirSync), stat: promisify(fs.statSync),
     unlink: promisify(fs.unlinkSync), rm: promisify(fs.rmSync),
+    rename: promisify(fs.renameSync),
   };
 
   function requireShim(m) {

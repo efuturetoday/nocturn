@@ -41,8 +41,15 @@ func TestFiles_ReadWriteRoundtrip(t *testing.T) {
 	tools := filecap.New(allowAll(), root).Tools()
 	write, read := toolByName(tools, "file.write"), toolByName(tools, "file.read")
 
-	if _, err := write.Invoke(context.Background(), `{"path":"notes/todo.md","content":"buy milk"}`); err != nil {
-		t.Fatalf("write: %v", err)
+	var w struct {
+		Path         string `json:"path"`
+		BytesWritten int    `json:"bytesWritten"`
+	}
+	if err := json.Unmarshal([]byte(mustInvoke(t, write, `{"path":"notes/todo.md","content":"buy milk"}`)), &w); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	if w.Path != "notes/todo.md" || w.BytesWritten != 8 {
+		t.Fatalf("write = %+v, want {notes/todo.md 8}", w)
 	}
 	// The file really landed under the workspace at the requested relative path.
 	if b, err := os.ReadFile(filepath.Join(root, "notes", "todo.md")); err != nil || string(b) != "buy milk" {
@@ -141,8 +148,15 @@ func TestFiles_Remove(t *testing.T) {
 	write, remove := toolByName(tools, "file.write"), toolByName(tools, "file.remove")
 	mustInvoke(t, write, `{"path":"gone.txt","content":"x"}`)
 
-	if out := mustInvoke(t, remove, `{"path":"gone.txt"}`); !strings.Contains(out, "removed gone.txt") {
-		t.Fatalf("remove = %q", out)
+	var rm struct {
+		Path    string `json:"path"`
+		Removed bool   `json:"removed"`
+	}
+	if err := json.Unmarshal([]byte(mustInvoke(t, remove, `{"path":"gone.txt"}`)), &rm); err != nil {
+		t.Fatalf("remove output: %v", err)
+	}
+	if rm.Path != "gone.txt" || !rm.Removed {
+		t.Fatalf("remove = %+v, want {gone.txt true}", rm)
 	}
 	if _, err := os.Stat(filepath.Join(root, "gone.txt")); !os.IsNotExist(err) {
 		t.Fatalf("file still present: %v", err)
@@ -176,6 +190,94 @@ func TestFiles_ListStatAreReads_RemoveIsWrite(t *testing.T) {
 	}
 	if _, err := toolByName(tools, "file.remove").Invoke(context.Background(), `{"path":"f.txt"}`); err != gateway.ErrDenied {
 		t.Errorf("remove under read-only: err = %v, want ErrDenied", err)
+	}
+}
+
+func TestFiles_Search(t *testing.T) {
+	root := t.TempDir()
+	tools := filecap.New(allowAll(), root).Tools()
+	write, search := toolByName(tools, "file.write"), toolByName(tools, "file.search")
+	for _, p := range []string{"a.md", "sub/b.md", "sub/c.txt", "deep/nest/d.md"} {
+		mustInvoke(t, write, `{"path":"`+p+`","content":"x"}`)
+	}
+
+	// A slashless pattern matches file names at ANY depth.
+	var got []string
+	if err := json.Unmarshal([]byte(mustInvoke(t, search, `{"pattern":"*.md"}`)), &got); err != nil {
+		t.Fatalf("search *.md: %v", err)
+	}
+	want := map[string]bool{"a.md": true, "sub/b.md": true, "deep/nest/d.md": true}
+	if len(got) != len(want) {
+		t.Fatalf("*.md matched %v, want the 3 .md files", got)
+	}
+	for _, p := range got {
+		if !want[p] {
+			t.Errorf("unexpected match %q", p)
+		}
+	}
+
+	// A pattern with a slash matches the path relative to the search base.
+	got = nil
+	if err := json.Unmarshal([]byte(mustInvoke(t, search, `{"pattern":"sub/*.md","path":"."}`)), &got); err != nil {
+		t.Fatalf("search sub/*.md: %v", err)
+	}
+	if len(got) != 1 || got[0] != "sub/b.md" {
+		t.Errorf("sub/*.md matched %v, want [sub/b.md]", got)
+	}
+
+	// Searching under a base directory scopes the walk.
+	got = nil
+	json.Unmarshal([]byte(mustInvoke(t, search, `{"pattern":"*.md","path":"sub"}`)), &got)
+	if len(got) != 1 || got[0] != "sub/b.md" {
+		t.Errorf("search in sub matched %v, want [sub/b.md]", got)
+	}
+}
+
+// search is a read; move is a write. A read-only guard runs search but denies move.
+func TestFiles_SearchIsRead_MoveIsWrite(t *testing.T) {
+	root := t.TempDir()
+	readOnly := allowGuard(capability.Rule{
+		Family: "file", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent,
+	})
+	tools := filecap.New(readOnly, root).Tools()
+	os.WriteFile(filepath.Join(root, "f.txt"), []byte("x"), 0o600)
+
+	if _, err := toolByName(tools, "file.search").Invoke(context.Background(), `{"pattern":"*.txt"}`); err != nil {
+		t.Errorf("search under read-only: %v", err)
+	}
+	if _, err := toolByName(tools, "file.move").Invoke(context.Background(), `{"from":"f.txt","to":"g.txt"}`); err != gateway.ErrDenied {
+		t.Errorf("move under read-only: err = %v, want ErrDenied", err)
+	}
+}
+
+func TestFiles_Move(t *testing.T) {
+	root := t.TempDir()
+	tools := filecap.New(allowAll(), root).Tools()
+	write, move := toolByName(tools, "file.write"), toolByName(tools, "file.move")
+	mustInvoke(t, write, `{"path":"a/from.txt","content":"payload"}`)
+
+	var mv struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.Unmarshal([]byte(mustInvoke(t, move, `{"from":"a/from.txt","to":"b/to.txt"}`)), &mv); err != nil {
+		t.Fatalf("move output: %v", err)
+	}
+	if mv.From != "a/from.txt" || mv.To != "b/to.txt" {
+		t.Fatalf("move = %+v", mv)
+	}
+	if _, err := os.Stat(filepath.Join(root, "a", "from.txt")); !os.IsNotExist(err) {
+		t.Errorf("source still present: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "b", "to.txt")); err != nil || string(b) != "payload" {
+		t.Errorf("destination = %q, %v", b, err)
+	}
+
+	// Neither endpoint may escape the workspace.
+	for _, args := range []string{`{"from":"../x","to":"ok.txt"}`, `{"from":"b/to.txt","to":"../x"}`} {
+		if _, err := move.Invoke(context.Background(), args); err == nil || !strings.Contains(err.Error(), "escapes the workspace") {
+			t.Errorf("escape move %s: err = %v, want workspace-escape error", args, err)
+		}
 	}
 }
 

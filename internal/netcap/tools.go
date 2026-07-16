@@ -16,7 +16,7 @@ import (
 // tool contract (schema + argument parsing) lives WITH the capability, not in
 // the caller; the caller just collects Tools().
 func (n *Net) Tools() []tool.Tool {
-	return []tool.Tool{n.readTool(), n.writeTool(), n.resolveTool()}
+	return []tool.Tool{n.readTool(), n.writeTool(), n.resolveTool(), n.pingTool()}
 }
 
 // http.read and http.write are split so the tool the model picks IS the
@@ -130,12 +130,12 @@ func methodOrDefault(m, def string) string {
 func isRead(m string) bool  { return m == "GET" || m == "HEAD" }
 func isWrite(m string) bool { return m == "POST" || m == "PUT" || m == "PATCH" || m == "DELETE" }
 
-func (n *Net) resolveTool() tool.Tool {
+func (n *Net) pingTool() tool.Tool {
 	return tool.Tool{
 		Spec: tool.Spec{
-			Name:        "dns.resolve",
-			Description: "Resolve a hostname to its IP addresses.",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"host":{"type":"string","description":"The hostname to resolve"}},"required":["host"]}`),
+			Name:        "ping",
+			Description: "Send an ICMP echo to a host to check reachability and latency. Returns a JSON object {host, ip, ok, rtt_ms}.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"host":{"type":"string","description":"The hostname or IP to ping"}},"required":["host"]}`),
 		},
 		Invoke: func(ctx context.Context, args string) (string, error) {
 			var a struct {
@@ -147,11 +147,51 @@ func (n *Net) resolveTool() tool.Tool {
 			if a.Host == "" {
 				return "", errors.New("missing required field: host")
 			}
-			addrs, err := n.Resolve(ctx, a.Host)
+			res, err := n.Ping(ctx, a.Host)
 			if err != nil {
 				return "", err
 			}
-			return strings.Join(addrs, ", "), nil
+			return pingResultJSON(res)
+		},
+	}
+}
+
+func (n *Net) resolveTool() tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{
+			Name: "dns.resolve",
+			Description: "Resolve a DNS record for a hostname. `type` selects the record: " +
+				"A (IPv4, default), AAAA (IPv6), IP (both), MX, TXT, CNAME, NS, PTR (reverse — host is an IP), SRV. " +
+				"Returns a JSON object {host, type, records}.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"host":{"type":"string","description":"The hostname to resolve (an IP for PTR)"},` +
+				`"type":{"type":"string","enum":["A","AAAA","IP","MX","TXT","CNAME","NS","PTR","SRV"],"description":"DNS record type (default A)"}` +
+				`},"required":["host"]}`),
+		},
+		Invoke: func(ctx context.Context, args string) (string, error) {
+			var a struct {
+				Host string `json:"host"`
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal([]byte(args), &a); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+			if a.Host == "" {
+				return "", errors.New("missing required field: host")
+			}
+			records, err := n.Lookup(ctx, a.Host, a.Type)
+			if err != nil {
+				return "", err
+			}
+			out, err := json.Marshal(struct {
+				Host    string   `json:"host"`
+				Type    string   `json:"type"`
+				Records []string `json:"records"`
+			}{a.Host, normalizeRecordType(a.Type), records})
+			if err != nil {
+				return "", err
+			}
+			return string(out), nil
 		},
 	}
 }

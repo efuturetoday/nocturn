@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -43,12 +44,19 @@ func New(guard *gateway.Guard, root string) *Files {
 	return &Files{Guard: guard, Root: root}
 }
 
+// maxSearchResults bounds file.search so a broad glob over a large tree can't
+// flood the model context or memory; the tail is dropped and flagged in the result.
+const maxSearchResults = 500
+
 // Tools exposes the filesystem capability as model/script/plugin tools. read,
-// list and stat are observations (Write:false → run silently under base policy);
-// write and remove are mutations (Write:true → ask). Every tool confines its path
-// to Root before the broker and then passes through the Guard.
+// list, stat and search are observations (Write:false → run silently under base
+// policy); write, remove and move are mutations (Write:true → ask). Every tool
+// confines its path to Root before the broker and then passes through the Guard.
 func (f *Files) Tools() []tool.Tool {
-	return []tool.Tool{f.readTool(), f.writeTool(), f.listTool(), f.statTool(), f.removeTool()}
+	return []tool.Tool{
+		f.readTool(), f.writeTool(), f.listTool(), f.statTool(),
+		f.removeTool(), f.searchTool(), f.moveTool(),
+	}
 }
 
 func (f *Files) readTool() tool.Tool {
@@ -110,7 +118,10 @@ func (f *Files) writeTool() tool.Tool {
 				if err := os.WriteFile(abs, []byte(a.Content), 0o600); err != nil {
 					return "", err
 				}
-				return fmt.Sprintf("wrote %d bytes to %s", len(a.Content), target), nil
+				return jsonResult(struct {
+					Path         string `json:"path"`
+					BytesWritten int    `json:"bytesWritten"`
+				}{target, len(a.Content)})
 			})
 		},
 	}
@@ -217,10 +228,176 @@ func (f *Files) removeTool() tool.Tool {
 				if err := os.Remove(abs); err != nil {
 					return "", err
 				}
-				return "removed " + target, nil
+				return jsonResult(struct {
+					Path    string `json:"path"`
+					Removed bool   `json:"removed"`
+				}{target, true})
 			})
 		},
 	}
+}
+
+func (f *Files) searchTool() tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{
+			Name: "file.search",
+			Description: "Find files in the workspace by glob pattern, walking subdirectories. " +
+				"A pattern with no '/' matches file names anywhere (e.g. \"*.md\"); a pattern " +
+				"with a '/' matches the path relative to the search root. Returns a JSON array of paths.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"pattern":{"type":"string","description":"Glob pattern, e.g. *.md or src/*.go"},` +
+				`"path":{"type":"string","description":"Workspace-relative directory to search under (default the workspace root)"}` +
+				`},"required":["pattern"]}`),
+		},
+		Invoke: func(ctx context.Context, args string) (string, error) {
+			var a struct {
+				Pattern string `json:"pattern"`
+				Path    string `json:"path"`
+			}
+			if err := json.Unmarshal([]byte(args), &a); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+			if strings.TrimSpace(a.Pattern) == "" {
+				return "", errors.New("missing required field: pattern")
+			}
+			// Validate the pattern up front so a bad glob is a clear error, not a
+			// silent empty result deep in the walk.
+			if _, err := path.Match(a.Pattern, ""); err != nil {
+				return "", fmt.Errorf("invalid pattern %q: %w", a.Pattern, err)
+			}
+			base := strings.TrimSpace(a.Path)
+			if base == "" {
+				base = "." // searching from the workspace root
+			}
+			absBase, target, err := f.resolvePath(base)
+			if err != nil {
+				return "", err
+			}
+			recursive := !strings.Contains(a.Pattern, "/")
+			// Gated on the search root as a read: the reach a cage/grant scopes is the
+			// directory being walked, exactly as list gates on the directory.
+			call := capability.Call{Family: "file", Write: false, Target: target}
+			return gateway.Do(ctx, f.Guard, call, "search "+a.Pattern+" in "+target, func() (string, error) {
+				rootAbs, err := filepath.Abs(f.Root)
+				if err != nil {
+					return "", err
+				}
+				matches := make([]string, 0, 16)
+				truncated := false
+				walkErr := filepath.WalkDir(absBase, func(p string, d fs.DirEntry, err error) error {
+					if err != nil {
+						return err
+					}
+					if d.IsDir() {
+						return nil
+					}
+					// name-vs-path: a slashless pattern matches the base name at any depth;
+					// a pattern with a slash matches the path relative to the search base.
+					var candidate string
+					if recursive {
+						candidate = d.Name()
+					} else {
+						rel, rerr := filepath.Rel(absBase, p)
+						if rerr != nil {
+							return nil
+						}
+						candidate = filepath.ToSlash(rel)
+					}
+					ok, merr := path.Match(a.Pattern, candidate)
+					if merr != nil {
+						return merr
+					}
+					if !ok {
+						return nil
+					}
+					// Report the workspace-relative path (from Root) so the result is a
+					// path the other file.* tools accept directly.
+					rel, rerr := filepath.Rel(rootAbs, p)
+					if rerr != nil {
+						return nil
+					}
+					matches = append(matches, filepath.ToSlash(rel))
+					if len(matches) >= maxSearchResults {
+						truncated = true
+						return fs.SkipAll
+					}
+					return nil
+				})
+				if walkErr != nil {
+					return "", walkErr
+				}
+				b, _ := json.Marshal(matches)
+				out := string(b)
+				if truncated {
+					// Never let a capped sweep read as "found everything" (project rule:
+					// no silent truncation).
+					out = fmt.Sprintf("%s\n(truncated at %d results)", out, maxSearchResults)
+				}
+				return out, nil
+			})
+		},
+	}
+}
+
+func (f *Files) moveTool() tool.Tool {
+	return tool.Tool{
+		Spec: tool.Spec{
+			Name:        "file.move",
+			Description: "Move or rename a file within the workspace. This is a write and may require approval.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{` +
+				`"from":{"type":"string","description":"Workspace-relative source path"},` +
+				`"to":{"type":"string","description":"Workspace-relative destination path"}` +
+				`},"required":["from","to"]}`),
+		},
+		Invoke: func(ctx context.Context, args string) (string, error) {
+			var a struct {
+				From string `json:"from"`
+				To   string `json:"to"`
+			}
+			if err := json.Unmarshal([]byte(args), &a); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+			// BOTH endpoints are confined to Root before the broker — a move can neither
+			// read from nor write outside the workspace.
+			fromAbs, fromTarget, err := f.resolvePath(a.From)
+			if err != nil {
+				return "", err
+			}
+			toAbs, toTarget, err := f.resolvePath(a.To)
+			if err != nil {
+				return "", err
+			}
+			// Gated on the destination (the write) as the target a grant/cage scopes;
+			// the intent names both endpoints so a human sees the whole move.
+			call := capability.Call{Family: "file", Write: true, Target: toTarget}
+			intent := fmt.Sprintf("move %s → %s", fromTarget, toTarget)
+			return gateway.Do(ctx, f.Guard, call, intent, func() (string, error) {
+				if err := os.MkdirAll(filepath.Dir(toAbs), 0o700); err != nil {
+					return "", err
+				}
+				if err := os.Rename(fromAbs, toAbs); err != nil {
+					return "", err
+				}
+				return jsonResult(struct {
+					From string `json:"from"`
+					To   string `json:"to"`
+				}{fromTarget, toTarget})
+			})
+		},
+	}
+}
+
+// jsonResult marshals a tool's structured result to the JSON-as-string every
+// tool returns over the bus. Reads (list/stat/search) already return JSON; the
+// mutations use this so their result is structured too (a script can read a field
+// instead of parsing a sentence). Failure still rides the error channel, so the
+// returned string is always a success payload.
+func jsonResult(v any) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // resolve parses the read tool's {path} argument and confines it.

@@ -209,22 +209,6 @@ func rejectManualCredentials(req secret.Request) error {
 	return nil
 }
 
-// Resolve looks up the addresses for a hostname. Like Fetch it is gated on the
-// host — DNS is an exfiltration channel (a lookup to an attacker's nameserver
-// leaks whatever is encoded in the query), so an unknown host escalates to
-// approval. This is a sibling capability sharing the same Guard: adding it grew
-// no god-object, just a small method with its own dependency (a resolver).
-func (n *Net) Resolve(ctx context.Context, host string) ([]string, error) {
-	call := capability.Call{Family: "dns", Write: false, Target: host}
-	return gateway.Do(ctx, n.Guard, call, "resolve "+host, func() ([]string, error) {
-		resolver := n.Resolver
-		if resolver == nil {
-			resolver = net.DefaultResolver
-		}
-		return resolver.LookupHost(ctx, host)
-	})
-}
-
 func hostOf(rawURL string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {

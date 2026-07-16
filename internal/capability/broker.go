@@ -9,6 +9,7 @@ package capability
 
 import (
 	"context"
+	"net"
 	"path"
 	"time"
 )
@@ -158,7 +159,7 @@ func (r Rule) matches(call Call, env Env) bool {
 		// (path.Match's "*" would not cross "/", but Wildcard is our any-token, not
 		// a glob). A target must still be present (handled above).
 	default:
-		if ok, err := path.Match(r.TargetGlob, call.Target); err != nil || !ok {
+		if !targetMatches(r.TargetGlob, call.Target) {
 			return false
 		}
 	}
@@ -181,6 +182,36 @@ func (r Rule) matches(call Call, env Env) bool {
 		return false
 	}
 	return true
+}
+
+// targetMatches reports whether call target satisfies the rule's TargetGlob. It
+// understands three forms, tried in order — so the reach limiter can bound a
+// host-family call (http/dns/ping) by subnet exactly as it bounds it by host glob:
+//
+//   - a CIDR range ("10.0.0.0/8", "192.168.0.0/16", "2001:db8::/32"): the target
+//     must be an IP literal INSIDE the range (numeric containment).
+//   - a bare IP ("10.0.0.5", "2001:db8::1"): matched NUMERICALLY against an IP
+//     target, so IPv6's many textual spellings of one address still match (a plain
+//     string glob would miss "2001:db8::1" vs "2001:0db8:0:0:0:0:0:1").
+//   - anything else: a shell glob via path.Match ("*.example.com", "notes/*"),
+//     whose "*" does not cross "/", so a path glob stays depth-bounded.
+//
+// A CIDR or IP glob only ever matches an IP-literal target; a hostname target is
+// left to hostname globs. The broker deliberately does NOT resolve names here —
+// that would be a DNS effect inside the pure decision layer, and racy besides. So
+// "cage http to 10.0.0.0/8" bounds calls made TO an IP in that range; a call made
+// to a name that happens to resolve there is matched (or not) by name.
+func targetMatches(glob, target string) bool {
+	if _, ipnet, err := net.ParseCIDR(glob); err == nil {
+		ip := net.ParseIP(target)
+		return ip != nil && ipnet.Contains(ip)
+	}
+	if gip := net.ParseIP(glob); gip != nil {
+		tip := net.ParseIP(target)
+		return tip != nil && gip.Equal(tip)
+	}
+	ok, err := path.Match(glob, target)
+	return err == nil && ok
 }
 
 // Policy is a set of rules evaluated with deny-by-default.

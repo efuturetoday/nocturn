@@ -256,3 +256,45 @@ func TestEvaluate_TargetGlobAndWildcard(t *testing.T) {
 		}
 	}
 }
+
+// The reach limiter understands IP ranges (CIDR) and numeric IP equality for
+// host-family targets, so a cage/policy can bound http/dns/ping to a subnet — not
+// only to a host glob. A CIDR/IP glob matches only an IP-literal target; a hostname
+// is never resolved in the decision layer.
+func TestEvaluate_TargetIPRange(t *testing.T) {
+	rule := func(glob string) capability.Policy {
+		return capability.Policy{Rules: []capability.Rule{
+			{Family: "http", TargetGlob: glob, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
+		}}
+	}
+	cases := []struct {
+		glob, target string
+		want         capability.Decision
+	}{
+		// CIDR containment (v4)
+		{"10.0.0.0/8", "10.1.2.3", capability.Allow},
+		{"10.0.0.0/8", "11.0.0.1", capability.Deny},
+		{"192.168.0.0/16", "192.168.1.20", capability.Allow},
+		{"192.168.0.0/16", "192.169.1.20", capability.Deny},
+		// CIDR containment (v6)
+		{"2001:db8::/32", "2001:db8::1", capability.Allow},
+		{"2001:db8::/32", "2001:dead::1", capability.Deny},
+		// a CIDR never matches a hostname target (no resolution in the broker)
+		{"10.0.0.0/8", "example.com", capability.Deny},
+		// bare-IP glob is numeric: an alternate IPv6 spelling of the same address matches
+		{"2001:db8::1", "2001:0db8:0000:0000:0000:0000:0000:0001", capability.Allow},
+		{"10.0.0.5", "10.0.0.5", capability.Allow},
+		{"10.0.0.5", "10.0.0.6", capability.Deny},
+		// a glob is still a glob for hostnames — unchanged
+		{"*.example.com", "api.example.com", capability.Allow},
+		{"*.example.com", "example.org", capability.Deny},
+		// a prefix glob over an IP still works (single-segment "*")
+		{"192.168.1.*", "192.168.1.55", capability.Allow},
+	}
+	for _, tc := range cases {
+		got := rule(tc.glob).Evaluate(capability.Call{Family: "http", Write: false, Target: tc.target}, capability.Env{})
+		if got != tc.want {
+			t.Errorf("glob %q target %q: got %v, want %v", tc.glob, tc.target, got, tc.want)
+		}
+	}
+}

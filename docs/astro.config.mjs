@@ -90,8 +90,15 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'reference/capabilities' },
 						{ label: 'HTTP', slug: 'reference/http' },
 						{ label: 'DNS', slug: 'reference/dns' },
+						{ label: 'Ping', slug: 'reference/ping' },
 						{ label: 'Files', slug: 'reference/files' },
+					],
+				},
+				{
+					label: 'Sandbox',
+					items: [
 						{ label: 'WASM data format', slug: 'reference/wasm-abi' },
+						{ label: 'JavaScript runtime', slug: 'reference/javascript-runtime' },
 					],
 				},
 				{

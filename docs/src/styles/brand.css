@@ -83,3 +83,31 @@
 		transform: none;
 	}
 }
+
+/* Effect-axis tags (read / write) — ONE uniform badge used in every capabilities
+   list and every tool heading, so the read/write axis always reads the same way.
+   Green = a safe read; amber = a mutating write (the thing that asks). */
+.axis {
+	display: inline-block;
+	font-family: var(--sl-font-mono, ui-monospace, monospace);
+	font-size: 0.66em;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	line-height: 1.5;
+	padding: 0.05em 0.5em;
+	border-radius: 0.5em;
+	vertical-align: middle;
+	border: 1px solid transparent;
+	white-space: nowrap;
+}
+.axis--read {
+	color: hsl(150 65% 82%);
+	background: hsl(150 55% 30% / 0.28);
+	border-color: hsl(150 55% 45% / 0.4);
+}
+.axis--write {
+	color: hsl(35 90% 82%);
+	background: hsl(35 80% 42% / 0.26);
+	border-color: hsl(35 85% 55% / 0.42);
+}

@@ -123,3 +123,21 @@ func TestRun_Workspace_ConfinedReadWrite(t *testing.T) {
 		t.Fatalf("workspace file not created on host: %v", err)
 	}
 }
+
+// No Workspace = NO filesystem at all. This is the invariant code.run and plugins
+// rely on: they run with Config.Workspace == "", so the guest has no preopen dir
+// and cannot open a single path via WASI. Its only route to the filesystem is a
+// brokered file.* tool through the host gate (see TestRun_NoAmbientFilesystem in
+// the script package). Here the same fsGuest that succeeds WITH a mount fails
+// EVERY path_open — result byte 0x00 (create-in-/work = 0, escape = 0) — because
+// preopen fd 3 does not exist. If this ever returns non-zero, a mount leaked in
+// and the guest gained un-brokered FS authority.
+func TestRun_NoWorkspace_HasNoFilesystem(t *testing.T) {
+	res, err := sandbox.Run(context.Background(), fsGuest, sandbox.Config{}) // no Workspace
+	if err != nil {
+		t.Fatalf("run: %v (stderr=%s)", err, res.Stderr)
+	}
+	if len(res.Stdout) != 1 || res.Stdout[0] != 0x00 {
+		t.Fatalf("result = %v, want [0] (no mount → every path_open fails)", res.Stdout)
+	}
+}
