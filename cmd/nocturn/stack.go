@@ -10,18 +10,21 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/approval"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/filecap"
 	"github.com/efuturetoday/nocturn/internal/gateway"
+	"github.com/efuturetoday/nocturn/internal/grantstore"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
 	"github.com/efuturetoday/nocturn/internal/remindcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/timecap"
 	"github.com/efuturetoday/nocturn/internal/tool"
@@ -35,7 +38,7 @@ import (
 type shared struct {
 	ctx       context.Context
 	master    *secret.Master
-	engine    *hitl.Engine
+	approvals *hitl.Engine
 	llmModel  brain.Model // stateless client, safe to share across stacks
 	timeCap   *timecap.Clock
 	notify    notifycap.Pusher // out-of-band push (ntfy) or the attended TUI fallback
@@ -51,13 +54,13 @@ type shared struct {
 // TUI binds to the ACTIVE stack via the six closures/values below; switching rebinds.
 type stack struct {
 	name      string
-	session   *agent.Session // held for Close() at shutdown
+	session   *session.Session // held for Close() at shutdown
 	scheduler *agent.Scheduler
 
 	// The chatModel binding surface (rebound on /ws switch):
 	startTurn  func(string) context.CancelFunc
 	startAgent func(name, task string) context.CancelFunc
-	agentDefs  []agent.Definition
+	agentDefs  []agent.Agent
 	reset      func()
 	skills     *skill.Index
 	markSkill  func(string)
@@ -106,10 +109,6 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 		return nil, err
 	}
 
-	// Its OWN epoch registry — shared with THIS guard + session so "Allow this
-	// session" grants are revocable, but never across workspaces (each stack's Reset
-	// must not touch another's grants).
-	epochs := capability.NewEpochRegistry()
 	store := vault.Store()
 	inj := secret.NewInjector(store, secret.Binding{
 		Secret: googleCredentialName, Capability: "http", Host: "gmail.googleapis.com",
@@ -119,8 +118,7 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 	netCap := &netcap.Net{
 		Guard: &gateway.Guard{
 			Policy:    basePolicy(),
-			Approvals: sh.engine,
-			Epochs:    epochs,
+			Approvals: sh.approvals,
 			TTL:       2 * time.Minute,
 		},
 		Credentials: inj,
@@ -136,7 +134,20 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 
 	reg := tool.NewRegistry(append(append(append(
 		netCap.Tools(), fileCap.Tools()...), sh.timeCap.Tools()...), notifyCap.Tools()...))
-	reg.OnCall = func(ev tool.Event) { sh.send(toolEventMsg(ev)) }
+
+	// uiSink is THE activity sink for an attended turn: streamed answer tokens and
+	// tool-call start/end events become TUI messages. It is stamped onto a turn's ctx
+	// (startTurn/startAgent below), so the shared Brain and Registry hold no per-run
+	// hook. A background/scheduled run stamps NO sink → it is silent by construction
+	// (this replaces the former muted quietReg + qb.OnToken=nil clones).
+	uiSink := func(e activity.Event) {
+		switch ev := e.(type) {
+		case activity.Token:
+			sh.send(tokenMsg(ev.Text))
+		case activity.ToolEvent:
+			sh.send(toolEventMsg(ev))
+		}
+	}
 
 	runner := script.New(reg)
 	runner.Timeout = 60 * time.Second
@@ -174,13 +185,21 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 		Model:       sh.llmModel,
 		Registry:    reg,
 		ToolTimeout: 20 * time.Second,
-		OnToken:     func(tok string) { sh.send(tokenMsg(tok)) },
 	}
-	sessionGrants := agent.LoadGrantsStore(filepath.Join(wsDir, "grants.json"))
-	session := agent.New(b, netCap.Guard, epochs, sessionGrants)
+	sessionGrants := grantstore.Load(filepath.Join(wsDir, "grants.json"))
+	session := session.New(b, netCap.Guard, sessionGrants)
+
+	// Shared deps for every child-agent run in this workspace. Store resolves each
+	// agent's OWN durable "always" backing by name; Run opens/revokes its scope itself.
+	agentDeps := agent.Deps{
+		Brain: b,
+		Guard: netCap.Guard,
+		Store: func(name string) capability.GrantStore { return grantstore.Load(grantstore.Path(agentsDir, name)) },
+	}
 
 	startTurn := func(input string) context.CancelFunc {
 		turnCtx, cancel := context.WithCancel(ctx)
+		turnCtx = activity.WithSink(turnCtx, uiSink) // attended turn: tokens + tool events surface in the chat
 		go func() {
 			_, err := session.Ask(turnCtx, input)
 			sh.send(doneMsg{err: err})
@@ -188,17 +207,19 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 		return cancel
 	}
 	startAgent := func(name, task string) context.CancelFunc {
-		var def agent.Definition
+		var def agent.Agent
 		for _, d := range agentDefs {
 			if d.Name == name {
 				def = d
 				break
 			}
 		}
-		agentStore := agent.LoadGrantsStore(agent.GrantsPath(agentsDir, name))
 		turnCtx, cancel := context.WithCancel(ctx)
+		// An interactively-spawned agent inherits the chat's sink, so its tokens and
+		// tool calls nest into the conversation (a detached/scheduled run below does not).
+		turnCtx = activity.WithSink(turnCtx, uiSink)
 		go func() {
-			_, err := agent.RunTask(turnCtx, b, epochs, agentStore, def, task)
+			_, err := agent.Run(turnCtx, agentDeps, def, task)
 			sh.send(doneMsg{err: err})
 		}()
 		return cancel
@@ -213,20 +234,16 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 	waker := wakecap.New(func(note string) { sh.send(selfWakeMsg{note: note, start: startTurn}) })
 	reg.Add(waker.Tool())
 
-	// A QUIET registry view for scheduled (background) runs: same tools, but no OnCall
-	// observer — so a background firing in one workspace never spills tool events into
-	// the interactive chat (its token stream is muted too). Built once per stack.
-	quietReg := reg.Select(func(string) bool { return true })
-	quietReg.OnCall = nil
-	sched, err := agent.NewScheduler(agentDefs, func(runCtx context.Context, def agent.Definition) error {
+	sched, err := agent.NewScheduler(agentDefs, func(runCtx context.Context, def agent.Agent) error {
+		// A background (unattended) run stamps NO stream sink onto runCtx, so its tokens
+		// and tool events are silent by construction — a firing in one workspace never
+		// spills activity into the interactive chat. No muted-registry / brain clone
+		// needed: the shared Brain + Registry are used as-is; absence of a sink is the mute.
+		//
 		// Label this background run with its workspace, so an out-of-band ask on the
 		// phone reads "[work] …" instead of a context-free prompt.
 		runCtx = gateway.WithLabel(runCtx, wsName)
-		qb := *b
-		qb.OnToken = nil
-		qb.Registry = quietReg
-		gstore := agent.LoadGrantsStore(agent.GrantsPath(agentsDir, def.Name))
-		_, err := agent.RunTask(runCtx, &qb, epochs, gstore, def, "Run your scheduled task now.")
+		_, err := agent.Run(runCtx, agentDeps, def, "Run your scheduled task now.")
 		return err
 	}, agent.WithLog(func(line string) { sh.send(schedulerMsg("[" + wsName + "] " + line)) }))
 	if err != nil {

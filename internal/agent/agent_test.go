@@ -174,7 +174,7 @@ func TestLoadAgents_Autonomy(t *testing.T) {
 
 func TestDefinition_Matches(t *testing.T) {
 	// Mix bare group, exact tool, and both wildcard spellings (VS Code "/*" and ".*").
-	d := agent.Definition{Tools: []string{"gmail", "github.search", "linear.*", "notion/*"}}
+	d := agent.Agent{Tools: []string{"gmail", "github.search", "linear.*", "notion/*"}}
 	for name, want := range map[string]bool{
 		"gmail.search":  true,  // bare-group prefix
 		"gmail.send":    true,  // bare-group prefix

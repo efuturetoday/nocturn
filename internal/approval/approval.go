@@ -7,7 +7,7 @@
 // grants (grants.json), which are the standing effect-authority.
 //
 // File-backed (0600), concurrency-safe, stdlib-only, mirroring
-// agent.GrantsStore. A missing or unparsable file yields an EMPTY store —
+// grantstore.Store. A missing or unparsable file yields an EMPTY store —
 // fail-safe: nothing counts as approved, so everything re-prompts rather than
 // silently auto-approving on a corrupt record. The file lives in the workspace
 // control-plane (outside the model's mount, ADR-10), so the model cannot

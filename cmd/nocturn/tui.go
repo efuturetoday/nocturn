@@ -21,18 +21,18 @@ import (
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/skill"
-	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // Messages sent to the program from the turn goroutine / notifier.
 type (
 	tokenMsg     string
-	toolEventMsg tool.Event // one tool call's start/end, from the shared Registry
-	schedulerMsg string     // a scheduler firing/skip/result line (background cron runs)
-	notifyMsg    string     // a notify() fallback line when no out-of-band channel is configured
+	toolEventMsg activity.ToolEvent // one tool call's start/end, from the shared Registry
+	schedulerMsg string             // a scheduler firing/skip/result line (background cron runs)
+	notifyMsg    string             // a notify() fallback line when no out-of-band channel is configured
 	doneMsg      struct{ err error }
 	pulseMsg     struct{}
 	approvalMsg  struct {
@@ -217,7 +217,7 @@ func (m *chatModel) runQueued(qi queuedInput) tea.Cmd {
 type chatModel struct {
 	startTurn  func(string) context.CancelFunc
 	startAgent func(name, task string) context.CancelFunc // run a workspace agent (/<name> <task>)
-	agents     []agent.Definition                         // workspace agents, for /agents + /<name> dispatch
+	agents     []agent.Agent                              // workspace agents, for /agents + /<name> dispatch
 	reset      func()                                     // starts a new session: revokes session grants, clears history
 	skills     *skill.Index                               // discovered skills, for /name + /skills (never nil)
 	markSkill  func(string)                               // mark a /name-activated skill loaded, so skill.load dedups
@@ -454,9 +454,9 @@ func stableSplit(s string) int {
 
 // --- tool-call forest --------------------------------------------------------
 
-func (m *chatModel) handleToolEvent(ev tool.Event) {
+func (m *chatModel) handleToolEvent(ev activity.ToolEvent) {
 	switch ev.Phase {
-	case tool.Start:
+	case activity.Start:
 		if m.active == nil {
 			m.active = map[uint64]*toolFrame{}
 		}
@@ -468,7 +468,7 @@ func (m *chatModel) handleToolEvent(ev tool.Event) {
 		if ev.Parent == 0 {
 			m.roots = append(m.roots, ev.ID)
 		}
-	case tool.End:
+	case activity.End:
 		f := m.active[ev.ID]
 		if f == nil {
 			return
@@ -920,7 +920,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case toolEventMsg:
-		m.handleToolEvent(tool.Event(msg))
+		m.handleToolEvent(activity.ToolEvent(msg))
 		m.syncViewport()
 		return m, nil
 

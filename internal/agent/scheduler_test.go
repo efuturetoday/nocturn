@@ -27,7 +27,7 @@ func waitForLog(t *testing.T, logs <-chan string, substr string) {
 }
 
 func TestScheduler_TickFiresMatchWithAutonomy(t *testing.T) {
-	defs := []Definition{
+	defs := []Agent{
 		{Name: "a", When: `cron("0 7 * * *")`, Autonomy: capability.AutonomyGuarded, Tools: []string{"file"}},
 		{Name: "b", When: `cron("0 8 * * *")`, Autonomy: capability.AutonomyStrict, Tools: []string{"file"}},
 	}
@@ -36,7 +36,7 @@ func TestScheduler_TickFiresMatchWithAutonomy(t *testing.T) {
 		auto capability.Autonomy
 	}
 	fired := make(chan firing, 4)
-	run := func(ctx context.Context, def Definition) error {
+	run := func(ctx context.Context, def Agent) error {
 		fired <- firing{def.Name, capability.AutonomyFrom(ctx)}
 		return nil
 	}
@@ -60,18 +60,18 @@ func TestScheduler_TickFiresMatchWithAutonomy(t *testing.T) {
 // Overlap prevention: a firing while the agent is still running is skipped, not
 // queued or parallelized; once it completes, the next firing runs again.
 func TestScheduler_SkipsOverlap(t *testing.T) {
-	def := Definition{Name: "x", When: `cron("* * * * *")`, Autonomy: capability.AutonomyGuarded, Tools: []string{"file"}}
+	def := Agent{Name: "x", When: `cron("* * * * *")`, Autonomy: capability.AutonomyGuarded, Tools: []string{"file"}}
 	started := make(chan struct{}, 4)
 	release := make(chan struct{})
 	var runs int32
-	run := func(ctx context.Context, _ Definition) error {
+	run := func(ctx context.Context, _ Agent) error {
 		atomic.AddInt32(&runs, 1)
 		started <- struct{}{}
 		<-release
 		return nil
 	}
 	logs := make(chan string, 32)
-	s, err := NewScheduler([]Definition{def}, run, WithLog(func(m string) { logs <- m }))
+	s, err := NewScheduler([]Agent{def}, run, WithLog(func(m string) { logs <- m }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,16 +100,16 @@ func TestScheduler_SkipsOverlap(t *testing.T) {
 }
 
 func TestNewScheduler_BadCronFailsClosed(t *testing.T) {
-	run := func(context.Context, Definition) error { return nil }
-	_, err := NewScheduler([]Definition{{Name: "bad", When: `cron("not a cron")`}}, run)
+	run := func(context.Context, Agent) error { return nil }
+	_, err := NewScheduler([]Agent{{Name: "bad", When: `cron("not a cron")`}}, run)
 	if err == nil {
 		t.Fatal("a malformed cron trigger must fail at NewScheduler")
 	}
 }
 
 func TestNewScheduler_IgnoresNonCron(t *testing.T) {
-	run := func(context.Context, Definition) error { return nil }
-	s, err := NewScheduler([]Definition{
+	run := func(context.Context, Agent) error { return nil }
+	s, err := NewScheduler([]Agent{
 		{Name: "m", When: "manual"},
 		{Name: "w", When: "webhook"},
 		{Name: "c", When: `cron("0 7 * * *")`, Autonomy: capability.AutonomyGuarded},

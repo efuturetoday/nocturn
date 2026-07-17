@@ -51,12 +51,13 @@ type Waker struct {
 	MaxPending int
 
 	mu     sync.Mutex
-	timers map[*time.Timer]struct{}
+	seq    uint64                 // next pending-timer id
+	timers map[uint64]*time.Timer // keyed by id, so a firing closure never self-references its own timer
 }
 
 // New builds a Waker that calls resume when a wake fires.
 func New(resume Resume) *Waker {
-	return &Waker{resume: resume, timers: map[*time.Timer]struct{}{}}
+	return &Waker{resume: resume, timers: map[uint64]*time.Timer{}}
 }
 
 func (w *Waker) min() time.Duration {
@@ -136,17 +137,17 @@ func (w *Waker) schedule(delay time.Duration, note string) error {
 		w.mu.Unlock()
 		return ErrTooManyPending
 	}
-	var t *time.Timer
-	t = time.AfterFunc(delay, func() { w.fired(t, note) })
-	w.timers[t] = struct{}{}
+	w.seq++
+	id := w.seq // captured by the closure BEFORE AfterFunc — no self-reference to the timer var
+	w.timers[id] = time.AfterFunc(delay, func() { w.fired(id, note) })
 	w.mu.Unlock()
 	return nil
 }
 
 // fired removes the timer from the pending set and resumes.
-func (w *Waker) fired(t *time.Timer, note string) {
+func (w *Waker) fired(id uint64, note string) {
 	w.mu.Lock()
-	delete(w.timers, t)
+	delete(w.timers, id)
 	w.mu.Unlock()
 	w.resume(note)
 }
@@ -163,8 +164,8 @@ func (w *Waker) Pending() int {
 func (w *Waker) Cancel() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for t := range w.timers {
+	for id, t := range w.timers {
 		t.Stop()
-		delete(w.timers, t)
+		delete(w.timers, id)
 	}
 }

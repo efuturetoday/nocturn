@@ -10,7 +10,7 @@ import (
 // reportAgents prints a one-line startup summary of the workspace agents, before
 // the TUI. No prompt — defining an agent grants nothing; running one is an
 // explicit user action (/<name> <task>), gated per effect like any turn.
-func reportAgents(defs []agent.Definition) {
+func reportAgents(defs []agent.Agent) {
 	if len(defs) == 0 {
 		return
 	}

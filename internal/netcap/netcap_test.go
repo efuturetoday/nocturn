@@ -169,13 +169,14 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 	engine := hitl.NewEngine([]byte("test-key"), n)
 	n.resolve = engine.Resolve
 
-	epochs := capability.NewEpochRegistry()
-	epoch := epochs.Open()
-	g := &netcap.Net{Guard: &gateway.Guard{Policy: askRead(), Approvals: engine, Epochs: epochs, TTL: time.Second}}
-	// The permission context owns the session grant, bound to the epoch.
-	ctx := capability.WithGrants(context.Background(), capability.NewGrants(epoch, nil))
+	guard := &gateway.Guard{Policy: askRead(), Approvals: engine, TTL: time.Second}
+	g := &netcap.Net{Guard: guard}
+	// A revocable scope owns the session grant; the Guard owns its epoch, so the test
+	// never touches the registry — it binds the scope and later revokes it.
+	scope := guard.NewScope(nil)
+	ctx := scope.Bind(context.Background())
 
-	// first call: asked, ApprovedSession granted for this host, bound to epoch
+	// first call: asked, ApprovedSession recorded on the scope's grants for this host
 	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}); err != nil {
 		t.Fatalf("first fetch: %v", err)
 	}
@@ -187,13 +188,13 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 		t.Fatalf("human asked %d times, want 1 (the session grant should skip the 2nd ask)", asked)
 	}
 
-	// close the epoch: the grant is revoked, so the same host is asked again.
-	epochs.Close(epoch)
+	// revoke the scope: the grant is revoked, so the same host is asked again.
+	scope.Revoke()
 	if _, err := g.Fetch(ctx, secret.Request{URL: srv.URL}); err != nil {
 		t.Fatalf("third fetch: %v", err)
 	}
 	if asked != 2 {
-		t.Fatalf("human asked %d times, want 2 (closing the epoch must revoke the session grant)", asked)
+		t.Fatalf("human asked %d times, want 2 (revoking the scope must revoke the session grant)", asked)
 	}
 }
 

@@ -18,23 +18,22 @@ import (
 
 // readWriteGuard is the workspace base policy the app ships: a file READ runs
 // silently (Allow), a file WRITE asks out of band (Ask). engine drives the HITL.
-func readWriteGuard(engine *hitl.Engine, epochs *capability.EpochRegistry) *gateway.Guard {
+func readWriteGuard(engine *hitl.Engine) *gateway.Guard {
 	return &gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
 			{Family: "file", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
 			{Family: "file", TargetGlob: capability.Wildcard, Writes: capability.MatchWrite, Effect: capability.Ask, Epoch: capability.Permanent},
 		}},
 		Approvals: engine,
-		Epochs:    epochs,
 		TTL:       time.Second,
 	}
 }
 
-// The whole agent path, headless and end to end: agent.RunTask drives a filtered
+// The whole agent path, headless and end to end: agent.Run drives a filtered
 // brain over the real filecap tools through the real Guard. It proves the security
 // model on an agent run — a READ runs silently (the human is never asked, and its
 // content is fed back to the model), while a WRITE asks out of band exactly once.
-func TestRunTask_ReadsSilent_WritesAsk_E2E(t *testing.T) {
+func TestRun_ReadsSilent_WritesAsk_E2E(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "notes"), 0o700); err != nil {
 		t.Fatal(err)
@@ -46,8 +45,7 @@ func TestRunTask_ReadsSilent_WritesAsk_E2E(t *testing.T) {
 	notifier := &autoNotifier{want: hitl.Approved} // approve the one write, "just this once"
 	engine := hitl.NewEngine([]byte("test-key"), notifier)
 	notifier.resolve = engine.Resolve
-	epochs := capability.NewEpochRegistry()
-	guard := readWriteGuard(engine, epochs)
+	guard := readWriteGuard(engine)
 
 	files := filecap.New(guard, root)
 	reg := tool.NewRegistry(files.Tools())
@@ -60,14 +58,14 @@ func TestRunTask_ReadsSilent_WritesAsk_E2E(t *testing.T) {
 	}}
 	b := &brain.Brain{Model: model, Registry: reg}
 
-	def := agent.Definition{Name: "triage", Tools: []string{"file"}, Instructions: "Summarize.", When: "manual"}
-	ans, err := agent.RunTask(context.Background(), b, epochs, nil, def, "do it")
+	def := agent.Agent{Name: "triage", Tools: []string{"file"}, Instructions: "Summarize.", When: "manual"}
+	res, err := agent.Run(context.Background(), agent.Deps{Brain: b, Guard: guard}, def, "do it")
 	if err != nil {
-		t.Fatalf("RunTask: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 
-	if ans != "done" {
-		t.Fatalf("answer = %q, want \"done\"", ans)
+	if res.Answer != "done" {
+		t.Fatalf("answer = %q, want \"done\"", res.Answer)
 	}
 	// The read was silent AND succeeded: the human was asked only for the write,
 	// and the read's content was fed back to the model on the next turn.
@@ -87,13 +85,12 @@ func TestRunTask_ReadsSilent_WritesAsk_E2E(t *testing.T) {
 // The agent's tools list is an Action-Cage, not a hint: a tool the agent did not
 // declare is structurally UNREACHABLE, even if the model names it. The effect is
 // never attempted and the human is never asked — it fails as an unknown tool.
-func TestRunTask_UndeclaredToolIsUnreachable_E2E(t *testing.T) {
+func TestRun_UndeclaredToolIsUnreachable_E2E(t *testing.T) {
 	root := t.TempDir()
 	notifier := &autoNotifier{want: hitl.Approved}
 	engine := hitl.NewEngine([]byte("test-key"), notifier)
 	notifier.resolve = engine.Resolve
-	epochs := capability.NewEpochRegistry()
-	guard := readWriteGuard(engine, epochs)
+	guard := readWriteGuard(engine)
 
 	// The registry HAS file tools plus a would-be dangerous one; the agent declares
 	// only "file", so the dangerous tool is filtered out of its brain.
@@ -110,10 +107,10 @@ func TestRunTask_UndeclaredToolIsUnreachable_E2E(t *testing.T) {
 	}}
 	b := &brain.Brain{Model: model, Registry: reg}
 
-	def := agent.Definition{Name: "reader", Tools: []string{"file"}, Instructions: "Read only.", When: "manual"}
-	ans, err := agent.RunTask(context.Background(), b, epochs, nil, def, "try to escape")
+	def := agent.Agent{Name: "reader", Tools: []string{"file"}, Instructions: "Read only.", When: "manual"}
+	res, err := agent.Run(context.Background(), agent.Deps{Brain: b, Guard: guard}, def, "try to escape")
 	if err != nil {
-		t.Fatalf("RunTask: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 
 	if dangerCalled {
@@ -122,7 +119,7 @@ func TestRunTask_UndeclaredToolIsUnreachable_E2E(t *testing.T) {
 	if notifier.calls != 0 {
 		t.Fatalf("human asked %d times for an undeclared tool, want 0", notifier.calls)
 	}
-	if ans != "blocked" {
-		t.Fatalf("answer = %q, want \"blocked\"", ans)
+	if res.Answer != "blocked" {
+		t.Fatalf("answer = %q, want \"blocked\"", res.Answer)
 	}
 }

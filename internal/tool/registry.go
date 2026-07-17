@@ -6,47 +6,26 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	"github.com/efuturetoday/nocturn/internal/activity"
 )
-
-// Phase marks whether an Event is the start or the end of an invocation.
-type Phase int
-
-const (
-	Start Phase = iota
-	End
-)
-
-// Event is emitted by a Registry around every tool invocation — model- or
-// script-issued. ID is unique per invocation and pairs a Start with its
-// End; Parent is the enclosing invocation's ID (0 = root), so an observer can
-// reconstruct both concurrency (independent roots run at once) and nesting (a
-// script's nocturn.call carries its code.run's ID as Parent). Because calls may
-// run concurrently, events from different invocations interleave — match them by
-// ID, never by arrival order.
-type Event struct {
-	ID     uint64 // unique per invocation
-	Parent uint64 // enclosing invocation's ID; 0 = root
-	Tool   string
-	Args   string // JSON, as the caller supplied it (model args or script args)
-	Phase  Phase
-	Result string // End only
-	Err    error  // End only (e.g. gateway.ErrDenied for a denied effect)
-}
 
 // Registry is the one place tool calls are dispatched: it maps names to Tools,
 // hands their specs to the Model, and runs a named tool's Invoke. It is shared
 // by the Brain (model-issued calls) and the script interpreter (script-issued
-// calls), so its OnCall observer sees every tool call from both. The tools map is
-// mutated at runtime (plugins install/uninstall tools), so it is guarded by mu.
+// calls), and it is IMMUTABLE with respect to observation: every invocation emits
+// an activity.ToolEvent to the activity sink carried by the call's ctx (activity.Emit),
+// so the same shared Registry serves an attended turn (a sink is present) and a
+// detached run (none — silent) with no per-run field and no cloning. The tools map
+// is mutated at runtime (plugins install/uninstall tools), so it is guarded by mu.
 // Call ids come from an atomic counter SHARED (a *pointer) with any Select'd view,
 // so ids stay globally unique — otherwise a nested call through the shared
 // registry could reuse the id its parent got from a filtered view, making a frame
-// its own ancestor and cycling the observer forest. OnCall is set once at wiring.
+// its own ancestor and cycling the observer forest.
 type Registry struct {
 	mu     sync.RWMutex
 	tools  map[string]Tool
 	nextID *atomic.Uint64
-	OnCall func(Event) // observability sink; nil = off
 }
 
 // callIDKey carries the enclosing invocation's id so a nested Invoke (a script's
@@ -110,7 +89,7 @@ func (r *Registry) Select(keep func(name string) bool) *Registry {
 		}
 	}
 	r.mu.RUnlock()
-	return &Registry{tools: sub, nextID: r.nextID, OnCall: r.OnCall}
+	return &Registry{tools: sub, nextID: r.nextID}
 }
 
 // Add registers a tool after construction — code.run, or a plugin's tools.
@@ -163,7 +142,7 @@ func (r *Registry) Invoke(ctx context.Context, name, args string) (out string, e
 	parent := callIDFrom(ctx)
 	ctx = withCallID(ctx, id)     // so a nested Invoke records this call as its parent
 	ctx = withToolName(ctx, name) // outermost-wins: the tool the model picked is what a grant remembers
-	r.emit(Event{ID: id, Parent: parent, Tool: name, Args: args, Phase: Start})
+	activity.Emit(ctx, activity.ToolEvent{ID: id, Parent: parent, Tool: name, Args: args, Phase: activity.Start})
 	r.mu.RLock()
 	t, ok := r.tools[name]
 	r.mu.RUnlock() // release before Invoke: it may run long and re-enter the registry
@@ -172,12 +151,6 @@ func (r *Registry) Invoke(ctx context.Context, name, args string) (out string, e
 	} else {
 		out, err = t.Invoke(ctx, args)
 	}
-	r.emit(Event{ID: id, Parent: parent, Tool: name, Args: args, Phase: End, Result: out, Err: err})
+	activity.Emit(ctx, activity.ToolEvent{ID: id, Parent: parent, Tool: name, Args: args, Phase: activity.End, Result: out, Err: err})
 	return out, err
-}
-
-func (r *Registry) emit(ev Event) {
-	if r.OnCall != nil {
-		r.OnCall(ev)
-	}
 }

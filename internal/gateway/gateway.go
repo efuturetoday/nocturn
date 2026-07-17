@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
@@ -47,10 +48,21 @@ type Guard struct {
 	// the engine's concern (see hitl.WithRouter), not the Guard's: the Guard decides
 	// the verdict ("ask a human"), the engine decides how and where to reach them.
 	Approvals *hitl.Engine
-	Epochs    *capability.EpochRegistry
 	Rate      *capability.RateLimiter
 	TTL       time.Duration
 	Now       func() time.Time
+
+	// epochs is the guard's OWN revocation registry — the single source of truth for
+	// which permission scopes are alive. It is unexported so no caller can hand the
+	// Guard a different registry than the one its Scopes are minted on: the old
+	// "must be the guard's registry so grants and revocation line up" comment-invariant
+	// is now a type-invariant (a Scope can only come from Guard.NewScope). It is
+	// lazily created (once) so a struct-literal Guard with no Scope stays as before
+	// (an empty registry behaves identically to nil for the base policy's Permanent
+	// rules — only epoch-bound session grants consult it, and those only exist once a
+	// Scope has been opened).
+	epochsOnce sync.Once
+	epochs     *capability.EpochRegistry
 }
 
 func (g *Guard) now() time.Time {
@@ -58,6 +70,15 @@ func (g *Guard) now() time.Time {
 		return g.Now()
 	}
 	return time.Now()
+}
+
+// epochRegistry returns the guard's revocation registry, creating it once on first
+// use. Both NewScope (mint) and Authorize (liveness check) go through it, so the
+// write is published under the same sync.Once that every reader observes — no data
+// race between opening a scope and authorizing a concurrent call.
+func (g *Guard) epochRegistry() *capability.EpochRegistry {
+	g.epochsOnce.Do(func() { g.epochs = capability.NewEpochRegistry() })
+	return g.epochs
 }
 
 // approvalChoicesFor builds the options a human is offered on Ask, labelling the
@@ -130,7 +151,7 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 	if !capability.WithinCages(ctx, call) {
 		return ErrDenied
 	}
-	env := capability.Env{Now: g.now(), Epochs: g.Epochs}
+	env := capability.Env{Now: g.now(), Epochs: g.epochRegistry()}
 	if g.Rate != nil {
 		env.RateAllow = func(c capability.Call) bool { return g.Rate.Allow(c.Family) }
 	}

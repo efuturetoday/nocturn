@@ -22,7 +22,7 @@ import (
 //   - Autonomy: each firing stamps the agent's declared level (capability.WithAutonomy)
 //     so an Ask with no human present resolves per the dial (guarded/strict/full).
 type Scheduler struct {
-	run   func(ctx context.Context, def Definition) error // runs one firing (caller wires RunTask)
+	run   func(ctx context.Context, def Agent) error // runs one firing (caller wires Run)
 	clock func() time.Time
 	log   func(string)
 
@@ -33,7 +33,7 @@ type Scheduler struct {
 }
 
 type job struct {
-	def      Definition
+	def      Agent
 	schedule Schedule
 	expr     string
 }
@@ -55,9 +55,9 @@ func WithLog(log func(string)) SchedulerOption {
 // builds a scheduler that fires them via run. Agents with a non-cron trigger
 // (manual/webhook) are ignored. A malformed cron expression is a hard error surfaced
 // HERE, at startup — the operator never gets a job that silently never fires (or
-// fires wrong). run is how one firing executes (the caller wires RunTask + the
+// fires wrong). run is how one firing executes (the caller wires Run + the
 // agent's own grant store + the scheduled task).
-func NewScheduler(defs []Definition, run func(ctx context.Context, def Definition) error, opts ...SchedulerOption) (*Scheduler, error) {
+func NewScheduler(defs []Agent, run func(ctx context.Context, def Agent) error, opts ...SchedulerOption) (*Scheduler, error) {
 	s := &Scheduler{run: run, clock: time.Now, log: func(string) {}, inFlight: map[string]bool{}}
 	for _, o := range opts {
 		o(s)
@@ -134,7 +134,7 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) {
 // scheduled minute can fire again. Autonomy is stamped here — this is the sole
 // unattended entry point. The in-flight mark is cleared BEFORE the result is logged,
 // so once "done"/"failed" is observed the agent is free to fire again (no race).
-func (s *Scheduler) fire(ctx context.Context, def Definition) {
+func (s *Scheduler) fire(ctx context.Context, def Agent) {
 	runCtx := capability.WithAutonomy(ctx, def.Autonomy)
 	s.log(fmt.Sprintf("scheduler: firing %s (autonomy=%s)", def.Name, autonomyName(def.Autonomy)))
 	err := s.run(runCtx, def)

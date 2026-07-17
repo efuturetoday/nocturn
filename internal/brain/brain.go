@@ -60,23 +60,25 @@ type Step struct {
 }
 
 // Model produces the next Step given the conversation and the available tools.
-// If onToken is non-nil, the Model streams answer text through it as it arrives
-// (tool-call decisions do not stream). onToken may be nil for no streaming.
+// The Model streams its output — answer text and reasoning — to the activity sink
+// carried by ctx (activity.Emit); a run with no sink on ctx is simply silent. The
+// Model therefore needs no output parameter: streaming is a ctx-carried
+// cross-cutting concern, not part of its result.
 type Model interface {
-	Next(ctx context.Context, conv []Message, tools []tool.Spec, onToken func(string)) (Step, error)
+	Next(ctx context.Context, conv []Message, tools []tool.Spec) (Step, error)
 }
 
-// Brain runs the loop with a Model and a shared Registry of tools. OnToken, if
-// set, receives answer text as it streams from the Model. Tool-call observation
-// lives on the Registry — which both the Brain and the script interpreter
-// dispatch through — so every tool call, model- or script-issued, is seen in one
-// place; the Brain itself carries no per-tool UI hook.
+// Brain runs the loop with a Model and a shared Registry of tools. It is IMMUTABLE
+// and shared: it holds no per-run output hook (streaming and tool observation both
+// travel on ctx via internal/activity), so one Brain serves every conversation and
+// every agent run without being copied to vary a sink. Tool-call observation lives
+// on the Registry — which both the Brain and the script interpreter dispatch
+// through — so every tool call, model- or script-issued, is emitted in one place.
 type Brain struct {
 	Model       Model
 	Registry    *tool.Registry
 	MaxSteps    int
 	ToolTimeout time.Duration // per-tool-call deadline; 0 = no limit
-	OnToken     func(string)  // answer-token stream; nil = no streaming
 }
 
 const defaultMaxSteps = 8
@@ -104,7 +106,7 @@ func (b *Brain) run(ctx context.Context, conv []Message) (string, []Message, err
 	}
 
 	for i := 0; i < steps; i++ {
-		step, err := b.Model.Next(ctx, conv, b.Registry.Specs(), b.OnToken)
+		step, err := b.Model.Next(ctx, conv, b.Registry.Specs())
 		if err != nil {
 			return "", conv, err
 		}

@@ -1,3 +1,8 @@
+// Package agent is the child-agent subsystem: a workspace Agent's declaration (its
+// config, loaded from <ws>/agents/<name>/agent.md), running one to completion with
+// its own permission scope and tool subset (Run → Result over Deps), and firing them
+// on a schedule (Scheduler). An Agent is spawned as a child of an interactive session
+// (see internal/session) or by the Scheduler; it is NOT the interactive chat itself.
 package agent
 
 import (
@@ -15,14 +20,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Definition is a workspace agent: WHAT it does (Instructions = the markdown
-// body), WHICH tools it may use (Tools, by group name "gmail" or exact name
-// "github.search"), and WHEN it runs (When). It is loaded from
+// Agent is a workspace agent's DECLARATION — its config, not a running instance:
+// WHAT it does (Instructions = the markdown body), WHICH tools it may use (Tools,
+// by group name "gmail" or exact name "github.search"), and WHEN it runs (When).
+// Running one is a separate call (see Run); this type is only the declaration.
+// It is loaded from
 // <ws>/agents/<name>/agent.md — control-plane (outside the model's mount, ADR-10),
 // so the model cannot author its own agents. Tools are the ONLY authority surface;
 // skills (context, zero authority) are opt-in via the tools list (add "skill") —
 // off by default so a focused agent carries no skill-catalog context.
-type Definition struct {
+type Agent struct {
 	Name         string
 	Description  string        // one-line summary (shown when listing/selecting agents)
 	Instructions string        // the markdown body — the agent's task framing
@@ -49,7 +56,7 @@ type Definition struct {
 // Matches reports whether a registry tool name is one this agent may use. A list
 // entry is an exact tool name ("github.search") or a GROUP: "gmail", "gmail.*",
 // or "gmail/*" (the VS Code style) all match every "gmail.*" tool.
-func (d Definition) Matches(toolName string) bool {
+func (d Agent) Matches(toolName string) bool {
 	for _, t := range d.Tools {
 		group := strings.TrimSuffix(strings.TrimSuffix(t, "/*"), ".*")
 		if toolName == t || toolName == group || strings.HasPrefix(toolName, group+".") {
@@ -166,21 +173,13 @@ var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // once granted, <dir>/<name>/grants.json (this agent's own "always" grants). The
 // folder is the portable/purgeable unit (ADR-10, KONZEPT §9): deleting it removes
 // the agent AND its grants; its grants can never cross-match another owner's.
-const (
-	agentFile  = "agent.md"
-	grantsFile = "grants.json"
-)
-
-// GrantsPath returns the per-agent grants file inside its folder.
-func GrantsPath(agentsDir, name string) string {
-	return filepath.Join(agentsDir, name, grantsFile)
-}
+const agentFile = "agent.md"
 
 // LoadAgents reads every <dir>/<name>/agent.md agent definition. A missing dir
 // yields no agents (nil, nil). A subfolder without agent.md is skipped (it may hold
 // only grants). A malformed definition is an error naming the file, fail-closed —
 // the operator never gets a half-understood agent. Returned sorted by name.
-func LoadAgents(dir string) ([]Definition, error) {
+func LoadAgents(dir string) ([]Agent, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -188,7 +187,7 @@ func LoadAgents(dir string) ([]Definition, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent: read %s: %w", dir, err)
 	}
-	var defs []Definition
+	var defs []Agent
 	seen := map[string]bool{}
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -212,21 +211,21 @@ func LoadAgents(dir string) ([]Definition, error) {
 	return defs, nil
 }
 
-func loadAgent(path, defaultName string) (Definition, error) {
+func loadAgent(path, defaultName string) (Agent, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Definition{}, fmt.Errorf("agent: read %s: %w", path, err)
+		return Agent{}, fmt.Errorf("agent: read %s: %w", path, err)
 	}
 	if len(data) > maxAgentBytes {
-		return Definition{}, fmt.Errorf("agent %s: file exceeds %d bytes", path, maxAgentBytes)
+		return Agent{}, fmt.Errorf("agent %s: file exceeds %d bytes", path, maxAgentBytes)
 	}
 	fm, body, err := splitFrontmatter(data)
 	if err != nil {
-		return Definition{}, fmt.Errorf("agent %s: %w", path, err)
+		return Agent{}, fmt.Errorf("agent %s: %w", path, err)
 	}
 	var f frontmatter
 	if err := yaml.Unmarshal(fm, &f); err != nil {
-		return Definition{}, fmt.Errorf("agent %s: invalid frontmatter: %w", path, err)
+		return Agent{}, fmt.Errorf("agent %s: invalid frontmatter: %w", path, err)
 	}
 
 	name := f.Name
@@ -234,19 +233,19 @@ func loadAgent(path, defaultName string) (Definition, error) {
 		name = defaultName // the agent's folder name
 	}
 	if !nameRe.MatchString(name) {
-		return Definition{}, fmt.Errorf("agent %s: invalid name %q (want %s)", path, name, nameRe)
+		return Agent{}, fmt.Errorf("agent %s: invalid name %q (want %s)", path, name, nameRe)
 	}
 	instructions := strings.TrimSpace(string(body))
 	if instructions == "" {
-		return Definition{}, fmt.Errorf("agent %s: empty instructions (the markdown body)", path)
+		return Agent{}, fmt.Errorf("agent %s: empty instructions (the markdown body)", path)
 	}
 	if len(f.Tools) == 0 {
-		return Definition{}, fmt.Errorf("agent %s: declare at least one tool", path)
+		return Agent{}, fmt.Errorf("agent %s: declare at least one tool", path)
 	}
 	var budget time.Duration
 	if f.Budget != "" {
 		if budget, err = time.ParseDuration(f.Budget); err != nil {
-			return Definition{}, fmt.Errorf("agent %s: bad budget %q: %w", path, f.Budget, err)
+			return Agent{}, fmt.Errorf("agent %s: bad budget %q: %w", path, f.Budget, err)
 		}
 	}
 	when := strings.TrimSpace(f.When)
@@ -255,17 +254,17 @@ func loadAgent(path, defaultName string) (Definition, error) {
 	}
 	policy, err := buildPolicy(f.Policy)
 	if err != nil {
-		return Definition{}, fmt.Errorf("agent %s: %w", path, err)
+		return Agent{}, fmt.Errorf("agent %s: %w", path, err)
 	}
 	cage, err := buildCage(f.Cage)
 	if err != nil {
-		return Definition{}, fmt.Errorf("agent %s: %w", path, err)
+		return Agent{}, fmt.Errorf("agent %s: %w", path, err)
 	}
 	autonomy, err := parseAutonomy(f.Autonomy)
 	if err != nil {
-		return Definition{}, fmt.Errorf("agent %s: %w", path, err)
+		return Agent{}, fmt.Errorf("agent %s: %w", path, err)
 	}
-	return Definition{
+	return Agent{
 		Name: name, Description: strings.TrimSpace(f.Description), Instructions: instructions,
 		Model: f.Model, Tools: f.Tools, When: when, Budget: budget,
 		Policy: policy, Cage: cage, Autonomy: autonomy,

@@ -1,9 +1,6 @@
 package capability
 
-import (
-	"context"
-	"sync"
-)
+import "sync"
 
 // EpochID identifies a task/subgoal an authority is bound to. The zero value
 // is "unset" and matches nothing (fail closed) — permanence is never implicit.
@@ -56,25 +53,4 @@ func (r *EpochRegistry) IsAlive(id EpochID) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.alive[id]
-}
-
-// The epoch also travels through a request context, so the epoch a call is bound
-// to reaches the Guard without widening every signature down the tool chain
-// (Session.Ask → Conversation.Send → brain.run → tool.Invoke → Guard.Authorize).
-// Epoch scoping is request-scoped metadata; context is its idiomatic home.
-
-type epochKey struct{}
-
-// WithEpoch returns a context carrying id as the active epoch. The Guard reads
-// it (via EpochFrom) to bind "Allow this session" grants to that epoch, so
-// closing the epoch revokes them.
-func WithEpoch(ctx context.Context, id EpochID) context.Context {
-	return context.WithValue(ctx, epochKey{}, id)
-}
-
-// EpochFrom returns the active epoch carried by ctx, or the zero EpochID (which
-// is "unset" and matches nothing — fail closed) if none is present.
-func EpochFrom(ctx context.Context) EpochID {
-	id, _ := ctx.Value(epochKey{}).(EpochID)
-	return id
 }

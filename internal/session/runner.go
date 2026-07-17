@@ -1,11 +1,12 @@
-package agent
+package session
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
+	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/brain"
-	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // Runner is the interactive session core: COMMANDS in (Submit/Cancel/Reset),
@@ -14,12 +15,12 @@ import (
 // way — no orchestration lives in any client. A daemon can hold one Runner per
 // session (fan-out Subscribe + Snapshot make reconnect/multi-client work).
 //
-// How a turn actually runs is injected (run) so the queue/loop can be tested without
-// a model; the composition passes Session.Ask wired to this Runner's token/tool sinks.
+// It drives a Session (the turns it runs, the reset, the history for a Snapshot) via
+// the small turns interface — so the queue/loop is testable with a fake, and in
+// production a *Session is passed directly (no closure-injection to dodge an import,
+// now that both live in this package).
 type Runner struct {
-	run     func(ctx context.Context, input string) (string, error)
-	reset   func()
-	history func() []brain.Message // conversation snapshot; may be nil
+	sess turns
 
 	parent context.Context
 	cmds   chan command
@@ -31,6 +32,8 @@ type Runner struct {
 	running    bool
 	queue      []queuedInput
 	cancelTurn context.CancelFunc
+	approval   *pendingApproval
+	nextAppr   int
 }
 
 type queuedInput struct {
@@ -49,25 +52,44 @@ const (
 	cmdSubmit cmdKind = iota
 	cmdCancel
 	cmdReset
+	cmdResolve
 )
 
 type command struct {
 	kind   cmdKind
 	source Source
 	input  string
+	id     string // cmdResolve: the approval id
+	choice int    // cmdResolve: the chosen option index
 }
 
-// NewRunner builds a Runner. run executes one turn (streaming via the token/tool
-// sinks); reset starts a fresh session; history returns the conversation for a
-// Snapshot (any may be nil in tests). Call Start to spin the loop.
-func NewRunner(run func(ctx context.Context, input string) (string, error), reset func(), history func() []brain.Message) *Runner {
+// pendingApproval is the at-most-one approval a turn is parked on (turns are serial).
+// apply(choice) applies the chosen option — an opaque callback the caller supplies, so
+// the engine stays free of any approval-mechanism types (the hitl token stays behind it).
+type pendingApproval struct {
+	event ApprovalEvent
+	apply func(choice int)
+}
+
+// turns is what a Runner drives: one interactive session's turn execution, reset,
+// and history snapshot. *Session satisfies it; a test passes a fake to exercise the
+// queue/loop without a model.
+type turns interface {
+	// Ask runs one turn to a final answer, streaming activity to the sink on ctx.
+	Ask(ctx context.Context, input string) (string, error)
+	// Reset ends the session and starts fresh (revokes session grants, clears history).
+	Reset()
+	// History returns the conversation so far, for a Snapshot / reconnecting client.
+	History() []brain.Message
+}
+
+// NewRunner builds a Runner over sess. Call Start to spin the command/turn loop.
+func NewRunner(sess turns) *Runner {
 	return &Runner{
-		run:     run,
-		reset:   reset,
-		history: history,
-		cmds:    make(chan command, 8),
-		done:    make(chan turnResult, 1),
-		subs:    map[int]chan Event{},
+		sess: sess,
+		cmds: make(chan command, 8),
+		done: make(chan turnResult, 1),
+		subs: map[int]chan Event{},
 	}
 }
 
@@ -83,7 +105,9 @@ func (r *Runner) Start(ctx context.Context) {
 // Submit enqueues an input to run as a turn — from the user, or from a wake/remind
 // resumption. If a turn is running it is buffered (a QueuedEvent) and runs when the
 // current turn ends; otherwise it starts immediately.
-func (r *Runner) Submit(source Source, input string) { r.cmds <- command{cmdSubmit, source, input} }
+func (r *Runner) Submit(source Source, input string) {
+	r.cmds <- command{kind: cmdSubmit, source: source, input: input}
+}
 
 // Cancel stops the running turn (if any). Buffered inputs remain.
 func (r *Runner) Cancel() { r.cmds <- command{kind: cmdCancel} }
@@ -92,11 +116,39 @@ func (r *Runner) Cancel() { r.cmds <- command{kind: cmdCancel} }
 // resets the underlying session.
 func (r *Runner) Reset() { r.cmds <- command{kind: cmdReset} }
 
-// TokenSink / ToolSink are wired into the per-session brain (OnToken) and registry
-// view (OnCall) so streamed tokens and tool events fan out as Runner events.
-func (r *Runner) TokenSink() func(string) { return func(t string) { r.emit(TokenEvent{Text: t}) } }
-func (r *Runner) ToolSink() func(tool.Event) {
-	return func(ev tool.Event) { r.emit(ToolEvent{Event: ev}) }
+// Resolve answers the pending approval `id` with option index `choice`. A no-op if
+// no such approval is pending (already answered, or answered out of band).
+func (r *Runner) Resolve(id string, choice int) {
+	r.cmds <- command{kind: cmdResolve, id: id, choice: choice}
+}
+
+// PresentApproval surfaces an approval request on the event stream and remembers how
+// to apply it. intent + labels are client-facing; apply(choice) is the caller's
+// opaque callback that enacts the chosen option (e.g. resolving a hitl token — that
+// specificity lives in the caller, not here). It returns immediately: the wait for an
+// answer, its ttl and cancellation, belong to whoever issued the request.
+func (r *Runner) PresentApproval(intent string, labels []string, apply func(choice int)) {
+	r.mu.Lock()
+	r.nextAppr++
+	ev := ApprovalEvent{ID: fmt.Sprintf("appr-%d", r.nextAppr), Intent: intent, Options: labels}
+	r.approval = &pendingApproval{event: ev, apply: apply}
+	r.mu.Unlock()
+	r.emit(ev)
+}
+
+// onStreamEvent is the single activity sink installed on each turn's ctx (see
+// begin): the model adapter's tokens/thinking and the Registry's tool events all
+// arrive here and fan out as Runner events. One seam replaces the former separate
+// TokenSink (brain.OnToken) and ToolSink (registry.OnCall) wiring.
+func (r *Runner) onStreamEvent(e activity.Event) {
+	switch ev := e.(type) {
+	case activity.Token:
+		r.emit(TokenEvent{Text: ev.Text})
+	case activity.Thinking:
+		r.emit(ThinkingEvent{Text: ev.Text})
+	case activity.ToolEvent:
+		r.emit(ToolEvent{Event: ev})
+	}
 }
 
 // Notice emits a system line (e.g. a background scheduler message routed to this session).
@@ -130,6 +182,7 @@ type Snapshot struct {
 	Running  bool
 	Queue    []QueuedItem
 	Messages []brain.Message
+	Pending  *ApprovalEvent // an approval awaiting an answer, or nil
 }
 
 // QueuedItem is one buffered input in a Snapshot.
@@ -146,10 +199,12 @@ func (r *Runner) Snapshot() Snapshot {
 	for i, q := range r.queue {
 		s.Queue[i] = QueuedItem{Input: q.input, Source: q.source}
 	}
-	r.mu.Unlock()
-	if r.history != nil {
-		s.Messages = r.history()
+	if r.approval != nil {
+		ev := r.approval.event
+		s.Pending = &ev
 	}
+	r.mu.Unlock()
+	s.Messages = r.sess.History()
 	return s
 }
 
@@ -166,6 +221,8 @@ func (r *Runner) loop(ctx context.Context) {
 				r.onCancel()
 			case cmdReset:
 				r.onReset()
+			case cmdResolve:
+				r.onResolve(c.id, c.choice)
 			}
 		case res := <-r.done:
 			r.onTurnDone(res)
@@ -191,13 +248,15 @@ func (r *Runner) onSubmit(src Source, input string) {
 
 func (r *Runner) begin(qi queuedInput) {
 	turnCtx, cancel := context.WithCancel(r.parent)
+	turnCtx = WithApprovalSink(turnCtx, r)                // attended approvals surface on THIS session's stream
+	turnCtx = activity.WithSink(turnCtx, r.onStreamEvent) // tokens/thinking/tool events fan out to subscribers
 	r.mu.Lock()
 	r.running = true
 	r.cancelTurn = cancel
 	r.mu.Unlock()
 	r.emit(TurnStartEvent{Input: qi.input, Source: qi.source})
 	go func() {
-		ans, err := r.run(turnCtx, qi.input)
+		ans, err := r.sess.Ask(turnCtx, qi.input)
 		r.done <- turnResult{ans, err}
 	}()
 }
@@ -219,6 +278,23 @@ func (r *Runner) onTurnDone(res turnResult) {
 	}
 }
 
+func (r *Runner) onResolve(id string, choice int) {
+	r.mu.Lock()
+	pa := r.approval
+	ok := pa != nil && pa.event.ID == id
+	if ok {
+		r.approval = nil
+	}
+	r.mu.Unlock()
+	if !ok {
+		return // no such pending approval (already answered, or out of band)
+	}
+	if pa.apply != nil {
+		pa.apply(choice) // enacts the decision; the parked turn unblocks wherever it waits
+	}
+	r.emit(ApprovalResolvedEvent{ID: id})
+}
+
 func (r *Runner) onCancel() {
 	r.mu.Lock()
 	c := r.cancelTurn
@@ -232,13 +308,12 @@ func (r *Runner) onReset() {
 	r.mu.Lock()
 	c := r.cancelTurn
 	r.queue = nil
+	r.approval = nil // a parked approval is abandoned; the cancelled turn denies in the engine
 	r.mu.Unlock()
 	if c != nil {
 		c()
 	}
-	if r.reset != nil {
-		r.reset()
-	}
+	r.sess.Reset()
 	r.emit(NoticeEvent{Text: "new session"})
 }
 

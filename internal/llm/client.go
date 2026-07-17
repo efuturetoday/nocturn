@@ -16,6 +16,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
@@ -44,9 +45,10 @@ const systemPrompt = "You are Nocturn, a careful assistant. " +
 
 // Next sends the conversation and tool schemas to the endpoint and returns the
 // model's structured decision: a tool call or a final answer. The completion is
-// streamed: answer text is forwarded to onToken (if non-nil) as it arrives, and
-// tool-call deltas are accumulated into a single structured call.
-func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []tool.Spec, onToken func(string)) (brain.Step, error) {
+// streamed: answer text is emitted as activity.Token to the activity sink on ctx as
+// it arrives (a run with no sink is silent), and tool-call deltas are accumulated
+// into a single structured call.
+func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []tool.Spec) (brain.Step, error) {
 	req := openai.ChatCompletionRequest{
 		Model:    c.Model,
 		Messages: buildMessages(conv),
@@ -63,16 +65,16 @@ func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []tool.Sp
 		})
 	}
 
-	stream, err := c.api.CreateChatCompletionStream(ctx, req)
+	respStream, err := c.api.CreateChatCompletionStream(ctx, req)
 	if err != nil {
 		return brain.Step{}, fmt.Errorf("model: %w", err)
 	}
-	defer stream.Close()
+	defer respStream.Close()
 
 	var content strings.Builder
 	acc := newToolAcc()
 	for {
-		chunk, err := stream.Recv()
+		chunk, err := respStream.Recv()
 		if errors.Is(err, io.EOF) {
 			break
 		}
@@ -85,9 +87,7 @@ func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []tool.Sp
 		delta := chunk.Choices[0].Delta
 		if delta.Content != "" {
 			content.WriteString(delta.Content)
-			if onToken != nil {
-				onToken(delta.Content)
-			}
+			activity.Emit(ctx, activity.Token{Text: delta.Content})
 		}
 		// Tool calls stream in fragments keyed by index: the name arrives once, the
 		// arguments in pieces, and several calls interleave. Accumulate PER INDEX,

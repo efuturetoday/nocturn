@@ -24,6 +24,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl/ntfy"
 	"github.com/efuturetoday/nocturn/internal/llm"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
+	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/timecap"
 )
 
@@ -41,7 +42,8 @@ func (c consolePusher) Push(_ context.Context, title, message string) error {
 	return nil
 }
 
-// tuiNotifier bridges HITL approval into the TUI.
+// tuiNotifier bridges HITL approval into the TUI. It is the default (global) inline
+// channel: one prompt on the single bubbletea program, blocking until answered.
 type tuiNotifier struct {
 	p       *tea.Program
 	resolve func(token string) error
@@ -51,6 +53,34 @@ func (n *tuiNotifier) Notify(intent string, options []hitl.Option) error {
 	reply := make(chan string)
 	n.p.Send(approvalMsg{intent: intent, options: options, reply: reply})
 	return n.resolve(<-reply)
+}
+
+// attendedNotifier is the ATTENDED pipe: it surfaces an approval on the specific
+// session's own event stream (the session.ApprovalSink the turn carried on its ctx),
+// instead of the single global inline prompt. This is what lets a multi-session
+// daemon ask on the right client, and lets an attached child agent's approval appear
+// in the parent chat where its activity already streams.
+//
+// PresentApproval returns immediately (it only surfaces the request + records how to
+// enact it); the hitl.Engine then blocks on its own pending channel until the human's
+// choice comes back through apply → resolve(token). The signed tokens stay host-side —
+// the sink only ever sees labels.
+type attendedNotifier struct {
+	sink    session.ApprovalSink
+	resolve func(token string) error
+}
+
+func (n attendedNotifier) Notify(intent string, options []hitl.Option) error {
+	labels := make([]string, len(options))
+	for i, o := range options {
+		labels[i] = o.Label
+	}
+	n.sink.PresentApproval(intent, labels, func(choice int) {
+		if choice >= 0 && choice < len(options) {
+			_ = n.resolve(options[choice].Token) // enacts the chosen option; unblocks the parked Request
+		}
+	})
+	return nil
 }
 
 var wsNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -129,15 +159,27 @@ func tuiCmd(args []string) error {
 
 	// One HITL engine for ALL workspaces (it is workspace-agnostic — routes by
 	// autonomy, not workspace). Serialized so the human sees one prompt at a time.
-	engine := hitl.NewEngine(key, hitl.Serialize(notifier), hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
+	// The router picks the channel per request:
+	//   1. attended pipe — if the turn carries a session.ApprovalSink (an interactive
+	//      session, or an attached child that inherited it), surface the request on
+	//      THAT session's own event stream, so a multi-session daemon asks on the
+	//      right client instead of a single global inline prompt;
+	//   2. out-of-band — an unattended (scheduled) run with an ntfy channel goes to
+	//      the phone;
+	//   3. default — the inline TUI prompt (notifier), used when neither applies.
+	var approvals *hitl.Engine
+	approvals = hitl.NewEngine(key, hitl.Serialize(notifier), hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
+		if sink := session.ApprovalSinkFrom(rctx); sink != nil {
+			return attendedNotifier{sink: sink, resolve: approvals.Resolve}
+		}
 		if oob != nil && capability.AutonomyFrom(rctx) != capability.AutonomyAttended {
 			return oob
 		}
 		return nil
 	}))
-	notifier.resolve = engine.Resolve
+	notifier.resolve = approvals.Resolve
 	if oob != nil {
-		go func() { _ = ntfy.NewListener(ntfyBase, respTopic, engine.Resolve, lisOpts...).Run(ctx) }()
+		go func() { _ = ntfy.NewListener(ntfyBase, respTopic, approvals.Resolve, lisOpts...).Run(ctx) }()
 		fmt.Printf("Out-of-band approvals via ntfy %s (req=%s, resp=%s)\n", ntfyBase, reqTopic, respTopic)
 	}
 
@@ -147,7 +189,7 @@ func tuiCmd(args []string) error {
 	sh := shared{
 		ctx:       ctx,
 		master:    master,
-		engine:    engine,
+		approvals: approvals,
 		llmModel:  llm.New(baseURL, apiKey, modelName),
 		timeCap:   timecap.New(),
 		notify:    notifyPush,

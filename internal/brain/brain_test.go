@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
@@ -27,12 +28,12 @@ type scriptedModel struct {
 	convs [][]brain.Message
 }
 
-func (m *scriptedModel) Next(_ context.Context, conv []brain.Message, _ []tool.Spec, onToken func(string)) (brain.Step, error) {
+func (m *scriptedModel) Next(ctx context.Context, conv []brain.Message, _ []tool.Spec) (brain.Step, error) {
 	m.convs = append(m.convs, append([]brain.Message(nil), conv...))
 	s := m.steps[m.calls]
 	m.calls++
-	if onToken != nil && len(s.ToolCalls) == 0 {
-		onToken(s.Answer) // simulate streaming the final answer
+	if len(s.ToolCalls) == 0 {
+		activity.Emit(ctx, activity.Token{Text: s.Answer}) // simulate streaming the final answer
 	}
 	return s, nil
 }
@@ -82,12 +83,13 @@ func TestBrain_ToolCallResultFedBackThenFinal(t *testing.T) {
 func TestBrain_StreamsAnswerTokens(t *testing.T) {
 	model := &scriptedModel{steps: []brain.Step{{Answer: "streamed answer"}}}
 	var streamed string
-	b := &brain.Brain{
-		Model:    model,
-		Registry: tool.NewRegistry(nil),
-		OnToken:  func(tok string) { streamed += tok },
-	}
-	ans, err := b.Run(context.Background(), "hi")
+	b := &brain.Brain{Model: model, Registry: tool.NewRegistry(nil)}
+	ctx := activity.WithSink(context.Background(), func(e activity.Event) {
+		if tok, ok := e.(activity.Token); ok {
+			streamed += tok.Text
+		}
+	})
+	ans, err := b.Run(ctx, "hi")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -177,15 +179,19 @@ func TestBrain_ParallelToolCallsRunConcurrently(t *testing.T) {
 // call as its Parent — the basis for the observer to render concurrency + nesting.
 func TestRegistry_NestedCallsCarryIDAndParent(t *testing.T) {
 	var reg *tool.Registry
-	var events []tool.Event
+	var events []activity.ToolEvent
 	inner := mkTool("inner", func(context.Context, string) (string, error) { return "in", nil })
 	outer := mkTool("outer", func(ctx context.Context, _ string) (string, error) {
-		return reg.Invoke(ctx, "inner", "{}") // nested: same ctx carries the parent id
+		return reg.Invoke(ctx, "inner", "{}") // nested: same ctx carries the parent id + sink
 	})
 	reg = tool.NewRegistry([]tool.Tool{outer, inner})
-	reg.OnCall = func(ev tool.Event) { events = append(events, ev) }
+	ctx := activity.WithSink(context.Background(), func(e activity.Event) {
+		if ev, ok := e.(activity.ToolEvent); ok {
+			events = append(events, ev)
+		}
+	})
 
-	if _, err := reg.Invoke(context.Background(), "outer", "{}"); err != nil {
+	if _, err := reg.Invoke(ctx, "outer", "{}"); err != nil {
 		t.Fatalf("invoke: %v", err)
 	}
 	// Sequential nesting → outer start, inner start, inner end, outer end.

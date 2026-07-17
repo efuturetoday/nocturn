@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
@@ -15,9 +16,9 @@ import (
 // forever. A shared counter keeps every id unique.
 func TestRegistry_Select_NestedCall_NoIDCollision(t *testing.T) {
 	var mu sync.Mutex
-	var starts []tool.Event
-	rec := func(ev tool.Event) {
-		if ev.Phase == tool.Start {
+	var starts []activity.ToolEvent
+	rec := func(e activity.Event) {
+		if ev, ok := e.(activity.ToolEvent); ok && ev.Phase == activity.Start {
 			mu.Lock()
 			starts = append(starts, ev)
 			mu.Unlock()
@@ -31,11 +32,12 @@ func TestRegistry_Select_NestedCall_NoIDCollision(t *testing.T) {
 			return shared.Invoke(ctx, "inner", "{}") // the "plugin" re-enters the shared registry
 		}},
 	})
-	shared.OnCall = rec
 
-	// The model calls "outer" through a FILTERED view; "outer" nests "inner".
+	// The model calls "outer" through a FILTERED view; "outer" nests "inner". The
+	// sink rides ctx, so the nested call inherits it automatically.
+	ctx := activity.WithSink(context.Background(), rec)
 	filtered := shared.Select(func(name string) bool { return name == "outer" })
-	if _, err := filtered.Invoke(context.Background(), "outer", "{}"); err != nil {
+	if _, err := filtered.Invoke(ctx, "outer", "{}"); err != nil {
 		t.Fatalf("invoke: %v", err)
 	}
 

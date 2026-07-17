@@ -1,4 +1,4 @@
-package agent_test
+package session_test
 
 import (
 	"context"
@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
@@ -29,7 +29,7 @@ type scriptedModel struct {
 	convs [][]brain.Message
 }
 
-func (m *scriptedModel) Next(_ context.Context, conv []brain.Message, _ []tool.Spec, _ func(string)) (brain.Step, error) {
+func (m *scriptedModel) Next(_ context.Context, conv []brain.Message, _ []tool.Spec) (brain.Step, error) {
 	m.convs = append(m.convs, append([]brain.Message(nil), conv...))
 	s := m.steps[m.calls]
 	m.calls++
@@ -66,8 +66,7 @@ func TestSession_ThreadsContext_ResetRotatesEpoch(t *testing.T) {
 	}}
 
 	b := &brain.Brain{Model: model, Registry: tool.NewRegistry(tools)}
-	epochs := capability.NewEpochRegistry()
-	s := agent.New(b, &gateway.Guard{Epochs: epochs}, epochs, nil)
+	s := session.New(b, &gateway.Guard{}, nil)
 
 	if _, err := s.Ask(context.Background(), "first"); err != nil {
 		t.Fatalf("first ask: %v", err)
@@ -86,9 +85,9 @@ func TestSession_ThreadsContext_ResetRotatesEpoch(t *testing.T) {
 	if seen[0] == seen[1] {
 		t.Fatalf("epoch did not rotate on Reset: both turns saw %d", seen[0])
 	}
-	if !epochs.IsAlive(seen[1]) || epochs.IsAlive(seen[0]) {
-		t.Fatal("after Reset the old epoch must be closed and the new one alive")
-	}
+	// Revocation of the old epoch is behavioural and covered by
+	// TestSession_Reset_RevokesGrantsAndClearsHistory (a session grant no longer
+	// applies after Reset) — the registry is the Guard's private detail now.
 }
 
 // autoNotifier resolves the pending request immediately, picking the option that
@@ -122,13 +121,11 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 	engine := hitl.NewEngine([]byte("test-key"), notifier)
 	notifier.resolve = engine.Resolve
 
-	epochs := capability.NewEpochRegistry()
 	guard := &gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
 			{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Ask, Epoch: capability.Permanent},
 		}},
 		Approvals: engine,
-		Epochs:    epochs,
 		TTL:       time.Second,
 	}
 	netCap := &netcap.Net{Guard: guard}
@@ -149,7 +146,7 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 	}}
 
 	b := &brain.Brain{Model: model, Registry: tool.NewRegistry(tools)}
-	s := agent.New(b, guard, epochs, nil)
+	s := session.New(b, guard, nil)
 
 	if _, err := s.Ask(context.Background(), "fetch it once"); err != nil {
 		t.Fatalf("first ask: %v", err)
@@ -198,9 +195,8 @@ func TestSession_SkillActiveSet_ResetClears(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "2"},
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "3"},
 	}}
-	epochs := capability.NewEpochRegistry()
-	s := agent.New(&brain.Brain{Model: model, Registry: tool.NewRegistry(tools)},
-		&gateway.Guard{Epochs: epochs}, epochs, nil)
+	s := session.New(&brain.Brain{Model: model, Registry: tool.NewRegistry(tools)},
+		&gateway.Guard{}, nil)
 
 	s.Ask(context.Background(), "a") // marks x
 	s.Ask(context.Background(), "b") // x still active within the session

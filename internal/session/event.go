@@ -1,6 +1,6 @@
-package agent
+package session
 
-import "github.com/efuturetoday/nocturn/internal/tool"
+import "github.com/efuturetoday/nocturn/internal/activity"
 
 // Source is who originated a turn's input — so a client can render a user message,
 // a self-wake resumption, and a reminder differently.
@@ -21,8 +21,11 @@ type Event interface{ isEvent() }
 // TokenEvent is one streamed chunk of the assistant's answer.
 type TokenEvent struct{ Text string }
 
+// ThinkingEvent is one streamed chunk of the model's reasoning.
+type ThinkingEvent struct{ Text string }
+
 // ToolEvent is a tool call's start or end (the observable forest).
-type ToolEvent struct{ Event tool.Event }
+type ToolEvent struct{ Event activity.ToolEvent }
 
 // TurnStartEvent marks a turn beginning with its input and where it came from.
 type TurnStartEvent struct {
@@ -49,9 +52,27 @@ type NoticeEvent struct {
 	Err  bool
 }
 
-func (TokenEvent) isEvent()     {}
-func (ToolEvent) isEvent()      {}
-func (TurnStartEvent) isEvent() {}
-func (TurnEndEvent) isEvent()   {}
-func (QueuedEvent) isEvent()    {}
-func (NoticeEvent) isEvent()    {}
+// ApprovalEvent asks the user to approve an effect out of band: the human-readable
+// intent plus the choice labels (the fact line is already folded into intent by the
+// gateway). A client renders it and answers with Resolve(ID, choiceIndex). The same
+// pending request can also be answered out of band (phone) — same decision, other
+// transport. Options are LABELS only; the signed tokens stay host-side.
+type ApprovalEvent struct {
+	ID      string
+	Intent  string
+	Options []string
+}
+
+// ApprovalResolvedEvent tells other subscribers (a second device) that a pending
+// approval was answered, so they can clear the prompt.
+type ApprovalResolvedEvent struct{ ID string }
+
+func (TokenEvent) isEvent()            {}
+func (ThinkingEvent) isEvent()         {}
+func (ToolEvent) isEvent()             {}
+func (TurnStartEvent) isEvent()        {}
+func (TurnEndEvent) isEvent()          {}
+func (QueuedEvent) isEvent()           {}
+func (NoticeEvent) isEvent()           {}
+func (ApprovalEvent) isEvent()         {}
+func (ApprovalResolvedEvent) isEvent() {}

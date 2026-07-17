@@ -6,8 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/hitl"
-	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // The observer tracks a forest of calls by id: concurrent roots run at once, a
@@ -15,19 +15,19 @@ import (
 // to the transcript (carrying its children) only when it itself ends.
 func TestHandleToolEvent_ConcurrentRootsAndNesting(t *testing.T) {
 	m := chatModel{width: 80}
-	ev := func(id, parent uint64, phase tool.Phase, name string) tool.Event {
-		return tool.Event{ID: id, Parent: parent, Tool: name, Phase: phase}
+	ev := func(id, parent uint64, phase activity.Phase, name string) activity.ToolEvent {
+		return activity.ToolEvent{ID: id, Parent: parent, Tool: name, Phase: phase}
 	}
 
-	m.handleToolEvent(ev(1, 0, tool.Start, "http.read"))
-	m.handleToolEvent(ev(2, 0, tool.Start, "code.run"))
-	m.handleToolEvent(ev(3, 2, tool.Start, "dns.resolve"))
+	m.handleToolEvent(ev(1, 0, activity.Start, "http.read"))
+	m.handleToolEvent(ev(2, 0, activity.Start, "code.run"))
+	m.handleToolEvent(ev(3, 2, activity.Start, "dns.resolve"))
 	if len(m.active) != 3 || len(m.roots) != 2 {
 		t.Fatalf("active=%d roots=%d, want 3 active / 2 roots", len(m.active), len(m.roots))
 	}
 
 	// The nested effect ends first: it folds into its parent's subtree, uncommitted.
-	m.handleToolEvent(ev(3, 2, tool.End, "dns.resolve"))
+	m.handleToolEvent(ev(3, 2, activity.End, "dns.resolve"))
 	if len(m.entries) != 0 {
 		t.Fatalf("nested effect committed before its parent ended: %d entries", len(m.entries))
 	}
@@ -36,8 +36,8 @@ func TestHandleToolEvent_ConcurrentRootsAndNesting(t *testing.T) {
 	}
 
 	// Roots end → each commits as a toolEntry (http.read first, then code.run).
-	m.handleToolEvent(ev(1, 0, tool.End, "http.read"))
-	m.handleToolEvent(ev(2, 0, tool.End, "code.run"))
+	m.handleToolEvent(ev(1, 0, activity.End, "http.read"))
+	m.handleToolEvent(ev(2, 0, activity.End, "code.run"))
 	if len(m.entries) != 2 || len(m.active) != 0 || len(m.roots) != 0 {
 		t.Fatalf("entries=%d active=%d roots=%d, want 2/0/0", len(m.entries), len(m.active), len(m.roots))
 	}

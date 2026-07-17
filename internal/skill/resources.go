@@ -29,8 +29,8 @@ const maxResourceListing = 40
 // pre-installed instruction/asset text is context ingestion, not an external
 // effect, and carries zero authority. It is confined to the skill's own
 // directory (escape is a hard error) and read-only, so it can never become a
-// generic filesystem probe. It is still observable: every call flows through the
-// Registry's OnCall.
+// generic filesystem probe. It is still observable: every call is emitted as a
+// activity.ToolEvent through the Registry's activity sink.
 func (ix *Index) ReadTool() tool.Tool {
 	return tool.Tool{
 		Spec: tool.Spec{

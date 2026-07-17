@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/llm"
 	"github.com/efuturetoday/nocturn/internal/tool"
@@ -40,8 +41,12 @@ func TestNext_StreamsAnswer(t *testing.T) {
 
 	c := llm.New(srv.URL, "k", "auto")
 	var streamed string
-	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "q"}}, nil,
-		func(tok string) { streamed += tok })
+	ctx := activity.WithSink(context.Background(), func(e activity.Event) {
+		if tok, ok := e.(activity.Token); ok {
+			streamed += tok.Text
+		}
+	})
+	step, err := c.Next(ctx, []brain.Message{{Role: "user", Content: "q"}}, nil)
 	if err != nil {
 		t.Fatalf("next: %v", err)
 	}
@@ -61,7 +66,7 @@ func TestNext_AccumulatesStreamedToolCall(t *testing.T) {
 	defer srv.Close()
 
 	c := llm.New(srv.URL, "k", "auto")
-	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "fetch"}}, nil, nil)
+	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "fetch"}}, nil)
 	if err != nil {
 		t.Fatalf("next: %v", err)
 	}
@@ -85,7 +90,7 @@ func TestNext_SynthesizesMissingToolCallID(t *testing.T) {
 	defer srv.Close()
 
 	c := llm.New(srv.URL, "k", "auto")
-	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "go"}}, nil, nil)
+	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "go"}}, nil)
 	if err != nil {
 		t.Fatalf("next: %v", err)
 	}
@@ -112,7 +117,7 @@ func TestNext_BuildsNativeToolHistory(t *testing.T) {
 		{Role: "tool", ToolCallID: "call_9", Content: "93.184.216.34"},
 	}
 	c := llm.New(srv.URL, "test-key", "auto")
-	if _, err := c.Next(context.Background(), conv, nil, nil); err != nil {
+	if _, err := c.Next(context.Background(), conv, nil); err != nil {
 		t.Fatalf("next: %v", err)
 	}
 
@@ -173,7 +178,7 @@ func TestNext_MultipleToolCallsKeptSeparate(t *testing.T) {
 	defer srv.Close()
 
 	c := llm.New(srv.URL, "k", "auto")
-	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "do both"}}, nil, nil)
+	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "do both"}}, nil)
 	if err != nil {
 		t.Fatalf("next: %v", err)
 	}
@@ -207,7 +212,7 @@ func TestNext_SendsToolSchemasAndAuth(t *testing.T) {
 		Description: "Fetch a URL",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
 	}}
-	if _, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "hello"}}, tools, nil); err != nil {
+	if _, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "hello"}}, tools); err != nil {
 		t.Fatalf("next: %v", err)
 	}
 
