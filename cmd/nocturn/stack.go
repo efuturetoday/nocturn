@@ -98,10 +98,9 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 	reportSkills(w.Skills())
 	reportAgents(w.Agents())
 
-	// Interactive extensions + credentials wire against the workspace's own parts.
-	if err := wireGoogleCredential(ctx, w.Credentials(), w.Vault()); err != nil {
-		return nil, err
-	}
+	// Interactive extensions wire against the workspace's own parts. ALL credentials —
+	// including OAuth — come from plugin manifests (loadPlugins → wirePluginOAuth); there
+	// is no built-in integration wired here.
 	approvals := approval.Load(filepath.Join(wsDir, "approved.json"))
 	if err := loadPlugins(ctx, w.Tools(), w.Credentials(), w.Vault(), approvals, wsDir); err != nil {
 		return nil, err

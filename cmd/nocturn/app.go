@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,6 +32,8 @@ import (
 // (ntfy) is configured: it surfaces the notification as a dim inline TUI line
 // instead of a phone push. It satisfies notifycap.Pusher.
 type consolePusher struct{ send func(tea.Msg) }
+
+var _ notifycap.Pusher = consolePusher{}
 
 func (c consolePusher) Push(_ context.Context, title, message string) error {
 	line := message
@@ -204,7 +207,7 @@ func tuiCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	if !contains(names, activeName) {
+	if !slices.Contains(names, activeName) {
 		names = append(names, activeName)
 	}
 	workspaces := make(map[string]*bound, len(names))
@@ -227,24 +230,17 @@ func tuiCmd(args []string) error {
 
 	// Start EVERY workspace's scheduler — one instance fires all workspaces' cron
 	// agents (each through its own isolated stack; log lines are workspace-tagged).
+	// Iterate the sorted names (not the map) so startup logs are deterministic.
 	schedCtx, cancelSched := context.WithCancel(ctx)
 	defer cancelSched()
-	for _, b := range workspaces {
-		if s := b.scheduler.Scheduled(); len(s) > 0 {
-			fmt.Printf("Scheduled [%s]: %s\n", b.ws.Name(), strings.Join(s, ", "))
+	for _, name := range names {
+		bw := workspaces[name]
+		if s := bw.scheduler.Scheduled(); len(s) > 0 {
+			fmt.Printf("Scheduled [%s]: %s\n", bw.ws.Name(), strings.Join(s, ", "))
 		}
-		b.scheduler.Start(schedCtx)
+		bw.scheduler.Start(schedCtx)
 	}
 
 	_, err = p.Run()
 	return err
-}
-
-func contains(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }

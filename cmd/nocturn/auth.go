@@ -1,11 +1,7 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
-	"os"
-	"strings"
 
 	"golang.org/x/oauth2"
 
@@ -14,58 +10,15 @@ import (
 )
 
 // An oauth.Credential satisfies the credential seam (proven at compile time), so the
-// injector can resolve the Gmail binding through a refreshing OAuth token.
+// injector can resolve a plugin's OAuth binding through a refreshing token.
 var _ secret.Resolver = (*oauth.Credential)(nil)
 
-// googleCredentialName is the secret name the Gmail binding resolves through —
-// and the vault key its serialized oauth2.Token (refresh token included) lives
-// under.
-const googleCredentialName = "google"
-
-// wireGoogleCredential runs the interactive OAuth ceremony (once — the token
-// lives in the encrypted vault and is reused, refreshing thereafter) and
-// registers a Bearer source for gmail.googleapis.com on inj. It is a no-op when
-// GOOGLE_OAUTH_CLIENT_ID is unset, so the assistant runs fine without Gmail
-// configured. Run it BEFORE bubbletea takes over the terminal (the consent URL
-// is printed to stdout).
-func wireGoogleCredential(ctx context.Context, inj *secret.Injector, vault *secret.Vault) error {
-	clientID := os.Getenv("GOOGLE_OAUTH_CLIENT_ID")
-	if clientID == "" {
-		return nil
-	}
-	cfg := oauth.Google(clientID, os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET"), googleScopes()...)
-
-	tok, ok := vaultToken(vault, googleCredentialName)
-	if !ok {
-		var err error
-		if tok, err = oauth.Authorize(ctx, cfg, nil); err != nil { // nil prompt = print the URL
-			return fmt.Errorf("google authorization: %w", err)
-		}
-		if err := saveVaultToken(vault, googleCredentialName, tok); err != nil {
-			return fmt.Errorf("persist token: %w", err)
-		}
-	}
-	// The Gmail binding lives HERE, with the Gmail integration — not in the workspace
-	// core. It says: an http effect to gmail.googleapis.com gets the "google" bearer,
-	// host-injected at the boundary. Added only when Gmail is actually configured.
-	inj.AddBinding("google", secret.Binding{
-		Secret: googleCredentialName, Capability: "http", Host: "gmail.googleapis.com",
-		Header: "Authorization", Prefix: "Bearer ",
-	})
-	inj.SetResolver(googleCredentialName, oauth.NewCredential(cfg, tok, persistToken(vault, googleCredentialName)))
-	return nil
-}
-
-// googleScopes reads GOOGLE_OAUTH_SCOPES (space-separated); empty -> oauth.Google's
-// default (Gmail read-only).
-func googleScopes() []string {
-	if s := strings.TrimSpace(os.Getenv("GOOGLE_OAUTH_SCOPES")); s != "" {
-		return strings.Fields(s)
-	}
-	return nil
-}
-
 // --- OAuth tokens in the vault -------------------------------------------
+//
+// These helpers back plugin OAuth (wirePluginOAuth): every credential — including
+// OAuth — comes from a plugin manifest; there is no built-in integration. A refresh
+// token IS a secret, so the whole serialized oauth2.Token lives in the encrypted vault
+// under the credential's secret name — the same name the injector's Resolver uses.
 //
 // A refresh token IS a secret, so the whole serialized oauth2.Token lives in
 // the encrypted vault under the credential's secret name — the same name the

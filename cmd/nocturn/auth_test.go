@@ -48,7 +48,7 @@ func TestVaultToken_RefreshWritesBack(t *testing.T) {
 		t.Fatalf("saveVaultToken: %v", err)
 	}
 
-	// Seed the credential from the vault, exactly like wireGoogleCredential.
+	// Seed the credential from the vault, exactly like wirePluginOAuth.
 	tok, ok := vaultToken(vault, "google")
 	if !ok || tok.AccessToken != "old" || tok.RefreshToken != "r-1" {
 		t.Fatalf("vaultToken = %+v, %v", tok, ok)
