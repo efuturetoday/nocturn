@@ -36,6 +36,16 @@ indicator shows what is happening:
 You always see what it touched, such as which site it fetched or which file it read, so
 nothing happens invisibly.
 
+## Typing ahead
+
+You do not have to wait for the assistant to finish. Type your next message while it is
+still working and press **Enter** — it is **queued** (shown dimmed with a ⏳) and sent
+automatically as soon as the current turn ends. Queue several and they are sent in order.
+
+The same thing happens when the assistant schedules itself to carry on later (a short
+"pick this back up in a few minutes"): that resumption joins the queue and runs once the
+current turn is done, so two turns never overlap.
+
 ## Slash commands
 
 Type these at the start of a message:
