@@ -155,7 +155,7 @@ func TestAuthorize_StandingGrantRespectsRateCap(t *testing.T) {
 	n := &optsNotifier{pick: hitl.Denied} // must not be needed: the grant answers
 	g := writeAskGuard(t, n)
 	n.resolve = g.Approvals.Resolve
-	g.Rate = capability.NewRateLimiter(1, time.Minute)
+	g.Rate = capability.NewRateLimiter(capability.WithLimit("http", 1, time.Minute))
 
 	grants := capability.NewGrants(capability.Permanent, &memGrants{recs: map[string]bool{}})
 	_ = grants.Record("", write("api.example.com"), capability.ScopeAlways)
@@ -166,6 +166,34 @@ func TestAuthorize_StandingGrantRespectsRateCap(t *testing.T) {
 	}
 	if err := g.Authorize(ctx, write("api.example.com"), "post"); !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("second (over budget) = %v, want ErrDenied — a grant must still respect the rate cap", err)
+	}
+}
+
+// A base-policy Allow (a silent, always-allowed effect like notify) still respects the
+// rate cap, and the refusal is a *RateLimitedError carrying RetryAfter — so the model can
+// be told when to try again (or schedule a wake). It still unwraps to ErrDenied.
+func TestAuthorize_AllowPathRateLimited_ReportsRetryAfter(t *testing.T) {
+	g := &gateway.Guard{
+		Policy: capability.Policy{Rules: []capability.Rule{
+			{Family: capability.Wildcard, TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
+		}},
+		Rate: capability.NewRateLimiter(capability.WithLimit("http", 1, time.Minute)),
+	}
+	ctx := context.Background()
+
+	if err := g.Authorize(ctx, read("api.example.com"), "get"); err != nil {
+		t.Fatalf("first call (within budget): %v", err)
+	}
+	err := g.Authorize(ctx, read("api.example.com"), "get")
+	if !errors.Is(err, gateway.ErrDenied) {
+		t.Fatalf("second call = %v, want a denial (must unwrap to ErrDenied)", err)
+	}
+	var rl *gateway.RateLimitedError
+	if !errors.As(err, &rl) {
+		t.Fatalf("second call = %T, want *gateway.RateLimitedError with retry info", err)
+	}
+	if rl.Family != "http" || rl.RetryAfter <= 0 {
+		t.Fatalf("rate error = %+v, want family=http and a positive RetryAfter", rl)
 	}
 }
 

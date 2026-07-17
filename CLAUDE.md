@@ -205,7 +205,7 @@ umkehrst. Kurzform des resultierenden Sicherheitsmodells: siehe §8.
   Methode / kleiner Typ, **kein** wachsendes Feld-Monster.
 - **Rollen-Namen für Felder** (`Secrets`, `Approvals`, `Policy`, `Rate`) statt
   generisch/typ-benannt (`Vault`, `Engine`). Paketnamen unzweideutig (`llm`, nicht `model`).
-- **Funktionale Options** für Konfiguration (`ntfy.WithAuth`, `RateLimiter.WithClock`).
+- **Funktionale Options** für Konfiguration (`ntfy.WithAuth`, `RateLimiter.WithLimit`).
 - **Zwiebel-/Mauer-Bau:** einen Aspekt klären → in Code gießen → als stabil beweisen
   → erst dann die nächste Schicht. „Untere Schale nicht anfassen" = *stabil halten*,
   nicht *toten Code behalten*. Kein quer-schneidender Wildwuchs.
@@ -270,7 +270,10 @@ umkehrst. Kurzform des resultierenden Sicherheitsmodells: siehe §8.
 - **Fakes über Interfaces**: `Notifier`/`Model` mocken; ntfy/HTTP via `httptest`.
 - **Blockierende Funktionen** (HITL, Streaming) mit Goroutine + Kanälen koordinieren
   (kein `sleep`); `-race` läuft grün.
-- **Injizierbare Uhr** (`WithClock`) für deterministische Zeit-Tests.
+- **Zeit-abhängige Tests via `testing/synctest`** (Go 1.25+, `synctest.Test` + echtes
+  `time`, Fake-Clock im Bubble) — **keine** Clock-Injektion (`go.dev/blog/testing-time`);
+  so testen `wakecap` + `capability` (RateLimiter). Produktions-Uhr-Injektion (`timecap.Clock`,
+  `agent.Scheduler`) ist davon getrennt und legitim.
 - Compile-Zeit-Asserts: `var _ brain.Model = (*llm.Client)(nil)`.
 
 ---

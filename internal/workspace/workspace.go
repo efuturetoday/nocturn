@@ -102,6 +102,14 @@ const httpTimeout = 15 * time.Second
 // approvalTTL is how long an out-of-band approval stays answerable.
 const approvalTTL = 2 * time.Minute
 
+// notifyRatePerMin / remindRatePerMin bound how often the assistant may reach the user's
+// device per minute — anti-spam for the silent, base-Allow families (a runaway loop can't
+// buzz the phone endlessly). Other families are left unconfigured (unlimited).
+const (
+	notifyRatePerMin = 10
+	remindRatePerMin = 20
+)
+
 // Open assembles one workspace over the shared Host: it unlocks the vault, builds the
 // guard, the built-in tool providers (net/file/time/notify/remind + the code.run
 // interpreter), discovers the skill catalog, loads the child agents, and wires the
@@ -118,7 +126,14 @@ func Open(h Host, base func() capability.Policy, unlock Vault, name, dir string)
 	credentials := secret.NewInjector(store)
 	leakScanner := secret.NewScanner(store)
 
-	guard := &gateway.Guard{Policy: base(), Approvals: h.Approvals, TTL: approvalTTL}
+	// Rate cap: only the user-facing, silently-allowed families are limited (anti-spam) —
+	// reads stay unconfigured hence unlimited, so a script doing 100 file.reads is fine.
+	// This also makes the grant/autonomy rate cap in Authorize real for these families.
+	rate := capability.NewRateLimiter(
+		capability.WithLimit("notify", notifyRatePerMin, time.Minute),
+		capability.WithLimit("remind", remindRatePerMin, time.Minute),
+	)
+	guard := &gateway.Guard{Policy: base(), Approvals: h.Approvals, TTL: approvalTTL, Rate: rate}
 
 	net := netcap.New(guard, netcap.WithCredentials(credentials), netcap.WithScanner(leakScanner), netcap.WithTimeout(httpTimeout))
 	files := filecap.New(guard, filepath.Join(dir, "mnt"))

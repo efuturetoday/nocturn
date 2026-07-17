@@ -226,12 +226,13 @@ type Policy struct {
 //	          window, so windowed rules fail closed without a real clock).
 //	Epochs    the epoch registry, for revocation (nil = epoch-scoped grants
 //	          fail closed).
-//	RateAllow a predicate that reports (and records) whether a call is within
-//	          its rate budget (nil = no rate limiting).
+//
+// Rate limiting is deliberately NOT here: it is stateful (it records calls), so it lives
+// in the gateway (which owns I/O and builds the caller-facing error), not in this pure
+// decision layer. See gateway.Guard.Rate.
 type Env struct {
-	Now       time.Time
-	Epochs    *EpochRegistry
-	RateAllow func(Call) bool
+	Now    time.Time
+	Epochs *EpochRegistry
 }
 
 // A scope (an agent run) may layer its OWN policy rules onto the workspace base —
@@ -266,15 +267,10 @@ func PolicyRulesFrom(ctx context.Context) []Rule {
 
 // Evaluate returns the decision for a call in env: deny > ask > allow precedence
 // over rules whose match conditions (capability, target, live epoch, time window)
-// all hold, then a rate-limit post-check that turns a would-be Allow into Deny
-// when the call is over budget. Pass a zero Env{} for a context-free evaluation
-// — epoch-scoped and windowed grants then fail closed.
+// all hold. Pass a zero Env{} for a context-free evaluation — epoch-scoped and
+// windowed grants then fail closed. (Rate limiting is applied by the gateway, not here.)
 func (p Policy) Evaluate(call Call, env Env) Decision {
-	d := p.decide(call, env)
-	if d == Allow && env.RateAllow != nil && !env.RateAllow(call) {
-		return Deny // over the rate budget: hard cap
-	}
-	return d
+	return p.decide(call, env)
 }
 
 // decide applies deny > ask > allow precedence with deny-by-default: if any

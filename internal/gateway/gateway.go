@@ -13,6 +13,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,37 @@ import (
 // ErrDenied is returned when a capability call is not permitted (broker Deny, or
 // a human denied / did not approve in time).
 var ErrDenied = errors.New("gateway: capability denied")
+
+// RateLimitedError is returned when a call is refused because its family is over its
+// rate budget. It carries RetryAfter — how long until a slot frees — so the caller
+// (ultimately the model, via the tool result) can wait, schedule a wake, or tell the
+// user it cannot act right now. It unwraps to ErrDenied, so existing errors.Is(err,
+// ErrDenied) checks still hold; the effect did not happen.
+type RateLimitedError struct {
+	Family     string
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitedError) Error() string {
+	return fmt.Sprintf("rate limit reached for %q: retry in ~%s (wait that long, or schedule a wake, or tell the user it can't be done right now)", e.Family, e.RetryAfter.Round(time.Second))
+}
+
+// Unwrap makes errors.Is(err, ErrDenied) hold — a rate refusal IS a denial, just an
+// informative one.
+func (e *RateLimitedError) Unwrap() error { return ErrDenied }
+
+// rateCheck consults the guard's rate limiter for call's family, recording the call when
+// allowed. It returns a *RateLimitedError (with the retry-after) when over budget, or nil
+// when allowed or when no limiter is configured / the family is unlimited.
+func (g *Guard) rateCheck(call capability.Call) error {
+	if g.Rate == nil {
+		return nil
+	}
+	if ok, retry := g.Rate.Allow(call.Family); !ok {
+		return &RateLimitedError{Family: call.Family, RetryAfter: retry}
+	}
+	return nil
+}
 
 // ErrScanUnspecified is returned when Do is called with a zero-value EgressScan —
 // i.e. neither ScanEgress(...) nor WithoutScan() was chosen. Every effect MUST
@@ -152,9 +184,6 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 		return ErrDenied
 	}
 	env := capability.Env{Now: g.now(), Epochs: g.epochRegistry()}
-	if g.Rate != nil {
-		env.RateAllow = func(c capability.Call) bool { return g.Rate.Allow(c.Family) }
-	}
 
 	// The never-auto floor: a consequential (irreversible/high-stakes) effect ALWAYS
 	// asks out of band — it can never be auto-allowed by policy, covered by a standing
@@ -177,7 +206,10 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 
 	switch decision {
 	case capability.Allow:
-		return nil
+		// The rate cap applies even to a base-policy Allow, so a silent, always-allowed
+		// effect (notify) still has anti-spam. Reads are unconfigured in the limiter →
+		// unlimited (see capability.RateLimiter), so bursty file/http reads pass freely.
+		return g.rateCheck(call)
 	case capability.Ask:
 		grants := capability.GrantsFrom(ctx)
 		toolName := tool.ToolName(ctx) // the model-facing tool a grant is remembered against
@@ -185,8 +217,8 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 			// A standing grant answers the Ask — but still respects the rate cap, so a
 			// remembered "always" cannot be replayed without bound (the grant path used
 			// to bypass the limiter).
-			if env.RateAllow != nil && !env.RateAllow(call) {
-				return ErrDenied
+			if err := g.rateCheck(call); err != nil {
+				return err
 			}
 			return nil // standing grant (session or always), scoped to this tool
 		}
@@ -202,8 +234,8 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 			return ErrDenied // unattended + strict: never act without a human
 		case capability.AutonomyFull:
 			if !consequential {
-				if env.RateAllow != nil && !env.RateAllow(call) {
-					return ErrDenied
+				if err := g.rateCheck(call); err != nil {
+					return err
 				}
 				return nil // unattended + full: auto-allow within the cage + policy
 			}

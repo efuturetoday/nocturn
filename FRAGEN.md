@@ -567,7 +567,17 @@ Dinge**, plus der schon existierende Cron-Agent. **Drei Feuer-Verhalten:**
 
 ---
 
-### 18. Turn-Orchestrierung (Buffer/Run-Loop) gehört in einen App-Kern, nicht ins TUI (RICHTUNG festgelegt)
+### 18. Turn-Orchestrierung (Buffer/Run-Loop) gehört in einen App-Kern, nicht ins TUI (GELÖST)
+
+**Gelöst:** Genau so gebaut — `session.Runner` (im Paket `session`) ist der headless Kern:
+Commands rein (`Submit`/`SubmitInput`/`SubmitAgent`/`Cancel`/`Reset`/`Resolve`), Event-Stream
+raus (`Subscribe`/`Snapshot`), besitzt Run-Loop + Queue + Sink-Stempelung + Approval-Routing.
+`wake` ruft direkt `runner.Submit(SourceWake, note)` in **dieselbe** Queue → `selfWakeMsg` weg.
+Die TUI ist ein **dünner Adapter** (`bindWorkspace` abonniert, `handleRunnerEvent` rendert);
+Rendering/Textarea/Drafts bleiben client-lokal. Bereit für einen 2. Client (REST/WS, #9) ohne
+weitere Orchestrierung. Race-clean getestet + echter TUI-Lauf verifiziert.
+
+<details><summary>Ursprüngliche Richtungsentscheidung (Archiv)</summary>
 
 **Kontext:** Der Input-Buffer (Type-ahead während eines Turns + `wake`-Note queuen → bei Turn-Ende
 füttern) sitzt aktuell im bubbletea-`chatModel` (`cmd/nocturn/tui.go`: `m.queue`, `runQueued`, drain in
@@ -600,3 +610,46 @@ dünne Adapter. **Nicht** in bubbletea verankern.
 
 **Status:** Richtung festgelegt, **nicht jetzt bauen**. Extraktion fällig mit dem 2. Client — koppelt an #9
 (REST/WebGUI-Zukunft). Bis dahin: keine *weitere* Orchestrierung ins TUI stapeln.
+
+</details>
+
+---
+
+### 19. Rate-Limit ist nirgends verdrahtet — `Guard.Rate == nil` überall (GELÖST)
+
+**Gelöst:** (1) `capability.RateLimiter` ist jetzt **per-Family** (`WithLimit(family, n, window)`;
+unkonfigurierte Family = unlimitiert → reads bursten frei). (2) Rate zog **aus `Policy.Evaluate`
+in den Gateway** (`Guard.rateCheck`) — der Broker bleibt pur (kein stateful I/O), der Gateway rate-
+checkt **alle** autorisierten Pfade inkl. Base-`Allow`. (3) `workspace.Open` hängt einen Limiter an
+den Guard (`notify` 10/min, `remind` 20/min). (4) **Bonus:** eine Rate-Ablehnung ist ein
+`gateway.RateLimitedError{Family, RetryAfter}` (unwrapt zu `ErrDenied`) → das Modell erfährt **wann
+es wieder geht** und kann `wake` nutzen oder dem Nutzer Bescheid geben. `WithClock` fiel weg
+(synctest, go.dev/blog/testing-time). Race-clean getestet.
+
+<details><summary>Ursprünglicher Fund (Archiv)</summary>
+
+**Fund:** Das Sliding-Window-Primitive `capability.RateLimiter` (`Allow(family)`) existiert, aber
+**`Guard.Rate` ist in JEDEM Workspace-Guard `nil`** (stack.go setzt es nicht). Folge: **heute wird
+nichts rate-limitiert.** Der „Rate-Cap", den `gateway.Authorize` in den Auto-Pfaden konsultiert
+(stehender Grant / autonomy-full), ist damit ein **No-op**.
+
+**Regression diese Session:** `notify` hatte einen hand-gerollten `WithRate` — der wurde entfernt
+(korrekt: hand-verdrahtet im Callback = Anti-Pattern, wie beim Leak-Scan), aber **ohne Ersatz** →
+`notify` hat aktuell **null** Anti-Spam-Kontrolle. Gleiches gälte für ein künftiges `remind`-Spam.
+
+**Design (wie besprochen):** Rate gehört in die gegatete Pipeline des `Guard`, konsultiert auf
+**allen** autorisierten Pfaden — **inkl. Base-`Allow`** (heute prüft `Authorize` Rate NUR auf dem
+Grant- und autonomy-full-Pfad, nicht auf `Allow` → deshalb musste notify es im Callback machen).
+Per-Family.
+
+**Haken:** `capability.RateLimiter` ist *ein* Limit/Window über alle Families (Buckets pro Family,
+gleiche Config). „10/min für notify, unlimitiert für reads" braucht **per-Family-Limits** (kleine
+Erweiterung: Map `family → limiter`, oder ein „nur diese Families raten"-Set) — sonst raten wir auch
+`http.read`/`file.read` mit, was bursty Workloads (ein Skript mit 100 file.reads) bricht.
+
+**Schließen =** (1) `Authorize` raten auf dem `Allow`-Pfad (per-Family), (2) einen Limiter in den
+Workspace-`Guard` hängen (stack.go), (3) notify/remind eine sinnvolle Rate geben. Bringt notifys
+Spam-Schutz **uniform** zurück und macht den bestehenden Grant/Autonomy-Rate-Cap überhaupt erst scharf.
+**Priorität:** eher hoch — es ist ein **fehlender Control**, kein Nice-to-have.
+
+</details>

@@ -181,49 +181,17 @@ func TestEvaluate_WindowWrapsMidnight(t *testing.T) {
 	}
 }
 
-func TestEvaluate_RateLimit(t *testing.T) {
-	now := time.Unix(1000, 0)
-	rl := capability.NewRateLimiter(2, time.Minute, capability.WithClock(func() time.Time { return now }))
-	env := capability.Env{RateAllow: func(c capability.Call) bool { return rl.Allow(c.Family) }}
-
-	policy := capability.Policy{Rules: []capability.Rule{
-		{Family: "email", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
-	}}
-	call := capability.Call{Family: "email"}
-
-	if policy.Evaluate(call, env) != capability.Allow {
-		t.Fatal("1st call within budget must be Allow")
-	}
-	if policy.Evaluate(call, env) != capability.Allow {
-		t.Fatal("2nd call within budget must be Allow")
-	}
-	if policy.Evaluate(call, env) != capability.Deny {
-		t.Fatal("3rd call over budget must be Deny")
-	}
-}
-
-// Match conditions and the rate check compose: outside the window the rule does
-// not even match (Deny) and no rate budget is consumed.
-func TestEvaluate_WindowAndRateCompose(t *testing.T) {
-	now := time.Unix(1000, 0)
-	rl := capability.NewRateLimiter(1, time.Minute, capability.WithClock(func() time.Time { return now }))
-	rateCalls := 0
-	env := capability.Env{
-		Now: time.Date(2026, 1, 1, 23, 0, 0, 0, time.UTC), // outside window
-		RateAllow: func(c capability.Call) bool {
-			rateCalls++
-			return rl.Allow(c.Family)
-		},
-	}
+// A windowed rule does not match outside its window, so the call falls through to
+// deny-by-default. (Rate limiting is the gateway's concern now, not Evaluate's — see
+// gateway.Guard.rateCheck and the gateway authorize tests.)
+func TestEvaluate_OutsideWindowDenies(t *testing.T) {
+	env := capability.Env{Now: time.Date(2026, 1, 1, 23, 0, 0, 0, time.UTC)} // outside window
 	policy := capability.Policy{Rules: []capability.Rule{
 		{Family: "email", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent, Window: capability.Daily(8, 0, 22, 0)},
 	}}
 
 	if got := policy.Evaluate(capability.Call{Family: "email"}, env); got != capability.Deny {
 		t.Fatalf("outside window: got %v, want Deny", got)
-	}
-	if rateCalls != 0 {
-		t.Fatal("rate budget must not be consumed when the rule does not match")
 	}
 }
 

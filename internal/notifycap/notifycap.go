@@ -36,7 +36,6 @@ import (
 // would fail the "*" rule and be denied).
 const channel = "user"
 
-// ErrRateLimited is returned when notifications exceed the configured rate.
 // Pusher delivers a notification to the user's channel. It is a PORT: ntfy (phone)
 // is one adapter, a TUI line (attended) another — so notifycap stays transport-
 // agnostic exactly like hitl.Notifier.
@@ -45,9 +44,10 @@ type Pusher interface {
 }
 
 // Notifier is the notification capability group: the shared Guard, the transport,
-// and the egress leak scanner. Anti-spam rate limiting is intentionally NOT here —
-// it belongs in the Guard's gated pipeline (per-family, on every authorized path),
-// not hand-rolled in this callback (see FRAGEN: centralized rate).
+// and the egress leak scanner. Anti-spam rate limiting is NOT here — it lives in the
+// Guard's gated pipeline (per-family, on every authorized path, including the base
+// Allow that notify takes), so a rate refusal comes back as a gateway.RateLimitedError
+// with a retry-after the model can act on.
 type Notifier struct {
 	Guard   *gateway.Guard
 	Push    Pusher
