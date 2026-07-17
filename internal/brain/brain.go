@@ -145,6 +145,11 @@ type Conversation struct {
 // NewConversation starts an empty conversation on this Brain.
 func (b *Brain) NewConversation() *Conversation { return &Conversation{brain: b} }
 
+// Messages returns a copy of the conversation history so far — for a client snapshot
+// (a reconnecting/late-joining UI). It is a snapshot: call it between turns; the live
+// turn's tokens arrive via streaming, not here.
+func (c *Conversation) Messages() []Message { return append([]Message(nil), c.conv...) }
+
 // Send adds the user's input, runs the loop to a final answer, and keeps the
 // whole exchange in the conversation's history.
 func (c *Conversation) Send(ctx context.Context, input string) (string, error) {

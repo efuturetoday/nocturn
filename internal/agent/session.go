@@ -68,6 +68,10 @@ func (s *Session) Ask(ctx context.Context, input string) (string, error) {
 	return s.conv.Send(ctx, input)
 }
 
+// History returns a copy of this session's conversation so far (for a client
+// snapshot / reconnect). A snapshot between turns; live tokens stream separately.
+func (s *Session) History() []brain.Message { return s.conv.Messages() }
+
 // MarkSkill records a skill as already loaded in this conversation — used by the
 // explicit /name path, which injects the body itself, so a later model-issued
 // skill.load for the same skill is deduplicated instead of re-injecting it.
