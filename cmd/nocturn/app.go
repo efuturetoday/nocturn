@@ -20,7 +20,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joho/godotenv"
 
-	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/hitl/ntfy"
 	"github.com/efuturetoday/nocturn/internal/llm"
@@ -103,45 +102,46 @@ func resolveWorkspace(args []string) (name string, err error) {
 	return name, nil
 }
 
-func tuiCmd(args []string) error {
+// spine bundles the process-wide services and every built workspace stack — the shared
+// core the interactive TUI and the serve daemon both run on. They differ only in `send`
+// (where notify/scheduler lines go) and the approval `fallback` (used when neither an
+// attended client nor an out-of-band channel applies): the TUI passes its inline prompt,
+// serve a fail-closed deny.
+type spine struct {
+	sh         shared
+	approvals  *hitl.Engine
+	workspaces map[string]*bound
+	names      []string
+}
+
+// buildSpine unlocks the master, wires the shared HITL engine (attended → out-of-band →
+// fallback), the LLM client and notify channel, and builds every workspace under
+// workspaces/ (plus `ensure`, e.g. the active/default one, created on first run). It is
+// front-end-agnostic: the caller supplies how lines are surfaced and how an unroutable
+// approval is answered.
+func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier, ensure string) (*spine, error) {
 	_ = godotenv.Load()
 	baseURL, apiKey := os.Getenv("FREELLM_BASE_URL"), os.Getenv("FREELLM_API_KEY")
 	modelName := os.Getenv("FREELLM_MODEL")
 	if apiKey == "" {
-		return errors.New("FREELLM_API_KEY not set (see .env / .env.example)")
+		return nil, errors.New("FREELLM_API_KEY not set (see .env / .env.example)")
 	}
 	if modelName == "" {
 		modelName = "auto"
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	// The ACTIVE workspace (what the TUI opens on); every discovered workspace is also
-	// built (below) so its scheduler runs. `nocturn <name>` picks the active one.
-	activeName, err := resolveWorkspace(args)
-	if err != nil {
-		return err
-	}
-
 	// ONE master passphrase (asked once) derives every workspace's vault key (HKDF).
-	// Shared across all workspaces; the descriptor (salt/verifier) is non-secret.
 	master, err := unlockMaster(filepath.Join("workspaces", "master.json"))
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
-		return err
+		return nil, err
 	}
-	notifier := &tuiNotifier{}
 
-	// Out-of-band channel (optional): if an ntfy topic pair is configured, an
-	// UNATTENDED run's approval is pushed to the phone instead of the console. The
-	// engine routes per request (attended → TUI, unattended → phone); with no config
-	// the router returns nil and everything asks inline. Topics are public — the HMAC
-	// single-use token is the real integrity control.
+	// Out-of-band channel (optional): an ntfy topic pair pushes an unattended run's
+	// approval to the phone. Topics are public — the HMAC single-use token is the integrity.
 	ntfyBase := os.Getenv("NTFY_BASE_URL")
 	if ntfyBase == "" {
 		ntfyBase = "https://ntfy.sh"
@@ -149,7 +149,7 @@ func tuiCmd(args []string) error {
 	reqTopic, respTopic := os.Getenv("NTFY_REQ_TOPIC"), os.Getenv("NTFY_RESP_TOPIC")
 	var pubOpts []ntfy.Option
 	var lisOpts []ntfy.ListenerOption
-	if tok := os.Getenv("NTFY_TOKEN"); tok != "" { // self-hosted, access-controlled ntfy
+	if tok := os.Getenv("NTFY_TOKEN"); tok != "" {
 		pubOpts = append(pubOpts, ntfy.WithAuth(tok))
 		lisOpts = append(lisOpts, ntfy.ListenerWithAuth(tok))
 	}
@@ -158,90 +158,111 @@ func tuiCmd(args []string) error {
 	if reqTopic != "" && respTopic != "" {
 		pub := ntfy.New(ntfyBase, reqTopic, ntfyBase+"/"+respTopic, pubOpts...)
 		oob = hitl.Serialize(pub)
-		notifyPush = pub // fire-and-forget notify() goes to the same user channel
+		notifyPush = pub
 	}
 
-	// One HITL engine for ALL workspaces (it is workspace-agnostic — routes by
-	// autonomy, not workspace). Serialized so the human sees one prompt at a time.
-	// The router picks the channel per request:
-	//   1. attended pipe — if the turn carries a session.ApprovalSink (an interactive
-	//      session, or an attached child that inherited it), surface the request on
-	//      THAT session's own event stream, so a multi-session daemon asks on the
-	//      right client instead of a single global inline prompt;
-	//   2. out-of-band — an unattended (scheduled) run with an ntfy channel goes to
-	//      the phone;
-	//   3. default — the inline TUI prompt (notifier), used when neither applies.
+	// One HITL engine for ALL workspaces. Router per request: an attended client's own
+	// stream (session.ApprovalSink) first; else out-of-band (unless the run is attended);
+	// else the front-end's fallback (TUI prompt, or serve's deny).
 	var approvals *hitl.Engine
-	approvals = hitl.NewEngine(key, hitl.Serialize(notifier), hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
+	approvals = hitl.NewEngine(key, fallback, hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
 		if sink := session.ApprovalSinkFrom(rctx); sink != nil {
 			return attendedNotifier{sink: sink, resolve: approvals.Resolve}
 		}
-		if oob != nil && capability.AutonomyFrom(rctx) != capability.AutonomyAttended {
+		// No attended client is watching (the app/TUI is not connected, or this is a
+		// background run): reach the human OUT-OF-BAND — ntfy today, native push (Phase 3)
+		// plugs in here as the same `oob`. This is exactly why an approval still lands on
+		// the phone when the app is not connected. Only with NO out-of-band channel at all
+		// does it fall through to the front-end fallback (TUI prompt, or serve's deny).
+		if oob != nil {
 			return oob
 		}
 		return nil
 	}))
-	notifier.resolve = approvals.Resolve
 	if oob != nil {
 		go func() { _ = ntfy.NewListener(ntfyBase, respTopic, approvals.Resolve, lisOpts...).Run(ctx) }()
 		fmt.Printf("Out-of-band approvals via ntfy %s (req=%s, resp=%s)\n", ntfyBase, reqTopic, respTopic)
 	}
 
-	// The shared spine handed to every stack. `p` is bound after the stacks exist, so
-	// send captures it late.
-	var p *tea.Program
 	sh := shared{
 		master:    master,
 		approvals: approvals,
 		llmModel:  llm.New(baseURL, apiKey, modelName),
 		notify:    notifyPush,
-		send:      func(m tea.Msg) { p.Send(m) },
+		send:      send,
 		modelName: modelName,
 	}
 	if sh.notify == nil {
-		// No out-of-band channel configured: notify() falls back to a dim inline TUI line.
-		sh.notify = consolePusher{send: sh.send}
+		sh.notify = consolePusher{send: send} // no ntfy: notify() falls back to the send sink
 	}
 
-	// Build ALL workspaces (the active one ∪ every directory under workspaces/). Each
-	// gets its OWN isolated stack; a fresh active name is created on first build.
 	names, err := discoverWorkspaces("workspaces")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !slices.Contains(names, activeName) {
-		names = append(names, activeName)
+	if ensure != "" && !slices.Contains(names, ensure) {
+		names = append(names, ensure)
 	}
 	workspaces := make(map[string]*bound, len(names))
 	for _, name := range names {
 		fmt.Printf("Workspace: %s\n", name)
 		bw, err := buildStack(ctx, sh, name, filepath.Join("workspaces", name))
 		if err != nil {
-			return fmt.Errorf("workspace %s: %w", name, err)
+			return nil, fmt.Errorf("workspace %s: %w", name, err)
 		}
 		workspaces[name] = bw
-		defer bw.session.Close()
 	}
-	active := workspaces[activeName]
+	return &spine{sh: sh, approvals: approvals, workspaces: workspaces, names: names}, nil
+}
 
-	// Detect the terminal background ONCE, before bubbletea takes over stdin. The TUI
-	// opens on the active workspace; /ws switches among all built workspaces.
-	dark := lipgloss.HasDarkBackground()
-	p = tea.NewProgram(newChatModel(active, workspaces, names, modelName, dark, sh.send), tea.WithAltScreen(), tea.WithMouseCellMotion())
-	notifier.p = p
+// closeSessions closes every workspace's interactive session (revoking its session grants).
+func (sp *spine) closeSessions() {
+	for _, bw := range sp.workspaces {
+		bw.session.Close()
+	}
+}
 
-	// Start EVERY workspace's scheduler — one instance fires all workspaces' cron
-	// agents (each through its own isolated stack; log lines are workspace-tagged).
-	// Iterate the sorted names (not the map) so startup logs are deterministic.
-	schedCtx, cancelSched := context.WithCancel(ctx)
-	defer cancelSched()
-	for _, name := range names {
-		bw := workspaces[name]
+// startSchedulers starts every workspace's cron scheduler under ctx (deterministic order).
+func startSchedulers(ctx context.Context, sp *spine) {
+	for _, name := range sp.names {
+		bw := sp.workspaces[name]
 		if s := bw.scheduler.Scheduled(); len(s) > 0 {
 			fmt.Printf("Scheduled [%s]: %s\n", bw.ws.Name(), strings.Join(s, ", "))
 		}
-		bw.scheduler.Start(schedCtx)
+		bw.scheduler.Start(ctx)
 	}
+}
+
+func tuiCmd(args []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	// The ACTIVE workspace (what the TUI opens on); every discovered workspace is also
+	// built so its scheduler runs. `nocturn <name>` picks the active one.
+	activeName, err := resolveWorkspace(args)
+	if err != nil {
+		return err
+	}
+
+	// The TUI's inline prompt is the approval fallback; `p` is bound after the spine, so
+	// send captures it late.
+	var p *tea.Program
+	notifier := &tuiNotifier{}
+	sp, err := buildSpine(ctx, func(m tea.Msg) { p.Send(m) }, hitl.Serialize(notifier), activeName)
+	if err != nil {
+		return err
+	}
+	notifier.resolve = sp.approvals.Resolve
+	defer sp.closeSessions()
+
+	// Detect the terminal background ONCE, before bubbletea takes over stdin.
+	dark := lipgloss.HasDarkBackground()
+	p = tea.NewProgram(newChatModel(sp.workspaces[activeName], sp.workspaces, sp.names, sp.sh.modelName, dark, sp.sh.send), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	notifier.p = p
+
+	schedCtx, cancelSched := context.WithCancel(ctx)
+	defer cancelSched()
+	startSchedulers(schedCtx, sp)
 
 	_, err = p.Run()
 	return err

@@ -11,7 +11,12 @@ import (
 )
 
 func main() {
-	if err := tuiCmd(os.Args[1:]); err != nil {
+	args := os.Args[1:]
+	run := tuiCmd
+	if len(args) > 0 && args[0] == "serve" {
+		run, args = serveCmd, args[1:] // `nocturn serve` = the companion-app daemon (one binary, a mode)
+	}
+	if err := run(args); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
