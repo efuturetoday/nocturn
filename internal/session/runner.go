@@ -209,6 +209,15 @@ func (r *Runner) Subscribe() (<-chan Event, func()) {
 	}
 }
 
+// hasSubscribers reports whether any client is currently watching this runner's event
+// stream — used to decide whether an approval can be surfaced attended (on the stream)
+// or must fall back to out-of-band. Checked at turn start (see begin).
+func (r *Runner) hasSubscribers() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.subs) > 0
+}
+
 // Snapshot is the state a late-joining or reconnecting client needs: the conversation
 // so far, whether a turn is running, and the buffered queue.
 type Snapshot struct {
@@ -282,8 +291,14 @@ func (r *Runner) onSubmit(qi queuedInput) {
 
 func (r *Runner) begin(qi queuedInput) {
 	turnCtx, cancel := context.WithCancel(r.parent)
-	turnCtx = WithApprovalSink(turnCtx, r)                // attended approvals surface on THIS session's stream
 	turnCtx = activity.WithSink(turnCtx, r.onStreamEvent) // tokens/thinking/tool events fan out to subscribers
+	// Route approvals to THIS stream only if someone is watching it. An UNWATCHED turn — a
+	// wake that fired on a workspace the user has switched away from — must not park its
+	// approval on a stream no one sees (it would just time out and deny). Leaving the sink
+	// off makes the gateway fall back to out-of-band (the phone), or the inline notifier.
+	if r.hasSubscribers() {
+		turnCtx = WithApprovalSink(turnCtx, r)
+	}
 	r.mu.Lock()
 	r.running = true
 	r.cancelTurn = cancel

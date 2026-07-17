@@ -295,6 +295,42 @@ func TestRunner_SubmitAgent_NoRunner_ErrorsTurn(t *testing.T) {
 	}
 }
 
+// A turn on an UNWATCHED runner (no subscribers) carries NO approval sink, so the
+// gateway falls back to out-of-band instead of parking the approval on a stream no one
+// sees. A watched turn carries the sink so approvals surface attended.
+func TestRunner_ApprovalSink_OnlyWhenWatched(t *testing.T) {
+	sinkPresence := func(subscribe bool) bool {
+		got := make(chan bool, 1)
+		run := func(ctx context.Context, _ string) (string, error) {
+			got <- session.ApprovalSinkFrom(ctx) != nil
+			return "", nil
+		}
+		r := session.NewRunner(&fakeTurns{ask: run})
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		if subscribe {
+			_, unsub := r.Subscribe()
+			t.Cleanup(unsub)
+		}
+		r.Start(ctx)
+		r.Submit(session.SourceUser, "go")
+		select {
+		case has := <-got:
+			return has
+		case <-time.After(2 * time.Second):
+			t.Fatal("turn did not run")
+			return false
+		}
+	}
+
+	if sinkPresence(false) {
+		t.Error("unwatched turn carried an approval sink; want none (falls back to out-of-band)")
+	}
+	if !sinkPresence(true) {
+		t.Error("watched turn missing its approval sink; approvals could not surface attended")
+	}
+}
+
 func mustTurnStart(t *testing.T, sub <-chan session.Event, input string, src session.Source) {
 	t.Helper()
 	e, ok := recv(t, sub).(session.TurnStartEvent)
