@@ -21,11 +21,7 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/endpoints"
 )
-
-// GmailReadonlyScope grants read-only access to the user's Gmail.
-const GmailReadonlyScope = "https://www.googleapis.com/auth/gmail.readonly"
 
 // authTimeout bounds the interactive ceremony (the human has to click through).
 const authTimeout = 3 * time.Minute
@@ -42,16 +38,6 @@ func Provider(authURL, tokenURL, clientID, clientSecret string, scopes ...string
 		Endpoint:     oauth2.Endpoint{AuthURL: authURL, TokenURL: tokenURL},
 		Scopes:       scopes,
 	}
-}
-
-// Google builds a Provider config for Google's endpoints. With no scopes it
-// defaults to Gmail read-only. A convenience over Provider for the built-in Google
-// wiring; plugins use Provider directly with their manifest endpoints.
-func Google(clientID, clientSecret string, scopes ...string) *oauth2.Config {
-	if len(scopes) == 0 {
-		scopes = []string{GmailReadonlyScope}
-	}
-	return Provider(endpoints.Google.AuthURL, endpoints.Google.TokenURL, clientID, clientSecret, scopes...)
 }
 
 // Authorize runs the interactive authorization-code flow with PKCE and returns
