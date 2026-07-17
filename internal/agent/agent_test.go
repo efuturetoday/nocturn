@@ -33,7 +33,7 @@ budget: 5m
 ---
 Read my unread mail and summarize it.
 `)
-	defs, err := agent.LoadAgents(dir)
+	defs, err := agent.Discover(dir)
 	if err != nil || len(defs) != 1 {
 		t.Fatalf("defs=%+v err=%v", defs, err)
 	}
@@ -53,7 +53,7 @@ Read my unread mail and summarize it.
 func TestLoadAgents_Defaults(t *testing.T) {
 	dir := t.TempDir()
 	writeAgent(t, dir, "helper", "---\ntools: [file]\n---\nDo a thing.\n")
-	defs, err := agent.LoadAgents(dir)
+	defs, err := agent.Discover(dir)
 	if err != nil || len(defs) != 1 {
 		t.Fatalf("defs=%+v err=%v", defs, err)
 	}
@@ -63,7 +63,7 @@ func TestLoadAgents_Defaults(t *testing.T) {
 }
 
 func TestLoadAgents_MissingDir(t *testing.T) {
-	defs, err := agent.LoadAgents(filepath.Join(t.TempDir(), "absent"))
+	defs, err := agent.Discover(filepath.Join(t.TempDir(), "absent"))
 	if err != nil || defs != nil {
 		t.Fatalf("defs=%v err=%v, want nil,nil", defs, err)
 	}
@@ -83,8 +83,8 @@ func TestLoadAgents_FailClosed(t *testing.T) {
 		t.Run(label, func(t *testing.T) {
 			dir := t.TempDir()
 			writeAgent(t, dir, "x", content)
-			if _, err := agent.LoadAgents(dir); err == nil {
-				t.Fatalf("LoadAgents accepted %s", label)
+			if _, err := agent.Discover(dir); err == nil {
+				t.Fatalf("Discover accepted %s", label)
 			}
 		})
 	}
@@ -94,7 +94,7 @@ func TestLoadAgents_DuplicateName(t *testing.T) {
 	dir := t.TempDir()
 	writeAgent(t, dir, "a", "---\nname: dup\ntools: [file]\n---\nbody\n")
 	writeAgent(t, dir, "b", "---\nname: dup\ntools: [file]\n---\nbody\n")
-	if _, err := agent.LoadAgents(dir); err == nil {
+	if _, err := agent.Discover(dir); err == nil {
 		t.Fatal("duplicate agent name accepted")
 	}
 }
@@ -113,7 +113,7 @@ cage:
 ---
 Triage the inbox.
 `)
-	defs, err := agent.LoadAgents(dir)
+	defs, err := agent.Discover(dir)
 	if err != nil || len(defs) != 1 {
 		t.Fatalf("defs=%+v err=%v", defs, err)
 	}
@@ -134,7 +134,7 @@ Triage the inbox.
 func TestLoadAgents_PolicyAllowRejected(t *testing.T) {
 	dir := t.TempDir()
 	writeAgent(t, dir, "loose", "---\nname: loose\ntools: [http.write]\npolicy:\n  - { effect: allow, family: http, target: \"*\" }\n---\nbody\n")
-	if _, err := agent.LoadAgents(dir); err == nil {
+	if _, err := agent.Discover(dir); err == nil {
 		t.Fatal("policy effect \"allow\" (loosening) must be rejected")
 	}
 }
@@ -148,7 +148,7 @@ func TestLoadAgents_Autonomy(t *testing.T) {
 	// Bad value → error.
 	writeAgent(t, dir, "b", "---\nname: b\ntools: [file]\nautonomy: yolo\n---\nbody\n")
 
-	if _, err := agent.LoadAgents(dir); err == nil {
+	if _, err := agent.Discover(dir); err == nil {
 		t.Fatal("autonomy: yolo must be rejected")
 	}
 
@@ -156,7 +156,7 @@ func TestLoadAgents_Autonomy(t *testing.T) {
 	good := t.TempDir()
 	writeAgent(t, good, "d", "---\nname: d\ntools: [file]\n---\nbody\n")
 	writeAgent(t, good, "s", "---\nname: s\ntools: [file]\nautonomy: strict\n---\nbody\n")
-	defs, err := agent.LoadAgents(good)
+	defs, err := agent.Discover(good)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

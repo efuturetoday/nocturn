@@ -80,6 +80,25 @@ type Brain struct {
 	ToolTimeout time.Duration // per-tool-call deadline; 0 = no limit
 }
 
+// Option configures a Brain built with New.
+type Option func(*Brain)
+
+// WithMaxSteps caps how many loop iterations a run may take before ErrMaxSteps.
+func WithMaxSteps(n int) Option { return func(b *Brain) { b.MaxSteps = n } }
+
+// WithToolTimeout sets the per-tool-call deadline (0 = no limit).
+func WithToolTimeout(d time.Duration) Option { return func(b *Brain) { b.ToolTimeout = d } }
+
+// New builds a Brain over model with the given options — the idiomatic constructor
+// (the struct stays usable directly in tests). model is the LLM port.
+func New(model Model, opts ...Option) *Brain {
+	b := &Brain{Model: model}
+	for _, o := range opts {
+		o(b)
+	}
+	return b
+}
+
 const defaultMaxSteps = 8
 
 // maxToolOutput bounds how much of a tool's result is fed back to the Model, to

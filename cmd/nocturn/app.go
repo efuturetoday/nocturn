@@ -25,7 +25,6 @@ import (
 	"github.com/efuturetoday/nocturn/internal/llm"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
 	"github.com/efuturetoday/nocturn/internal/session"
-	"github.com/efuturetoday/nocturn/internal/timecap"
 )
 
 // consolePusher is the attended fallback for notify() when no out-of-band channel
@@ -191,7 +190,6 @@ func tuiCmd(args []string) error {
 		master:    master,
 		approvals: approvals,
 		llmModel:  llm.New(baseURL, apiKey, modelName),
-		timeCap:   timecap.New(),
 		notify:    notifyPush,
 		send:      func(m tea.Msg) { p.Send(m) },
 		modelName: modelName,

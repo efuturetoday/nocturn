@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -15,20 +13,14 @@ import (
 	"github.com/efuturetoday/nocturn/internal/approval"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
-	"github.com/efuturetoday/nocturn/internal/filecap"
 	"github.com/efuturetoday/nocturn/internal/gateway"
-	"github.com/efuturetoday/nocturn/internal/grantstore"
 	"github.com/efuturetoday/nocturn/internal/hitl"
-	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
-	"github.com/efuturetoday/nocturn/internal/remindcap"
-	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/skill"
-	"github.com/efuturetoday/nocturn/internal/timecap"
-	"github.com/efuturetoday/nocturn/internal/tool"
 	"github.com/efuturetoday/nocturn/internal/wakecap"
+	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
 // shared is what EVERY workspace stack shares — the process-wide spine. Nothing here
@@ -39,8 +31,7 @@ type shared struct {
 	ctx       context.Context
 	master    *secret.Master
 	approvals *hitl.Engine
-	llmModel  brain.Model // stateless client, safe to share across stacks
-	timeCap   *timecap.Clock
+	llmModel  brain.Model      // stateless client, safe to share across stacks
 	notify    notifycap.Pusher // out-of-band push (ntfy) or the attended TUI fallback
 	send      func(tea.Msg)    // p.Send, late-bound (p is created after the stacks)
 	modelName string
@@ -104,42 +95,38 @@ func discoverWorkspaces(root string) ([]string, error) {
 func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 	ctx := sh.ctx
 
-	vault, err := unlockVault(sh.master, filepath.Join(wsDir, "secrets.vault"), wsName, filepath.Join(wsDir, "secrets.age"))
+	// The workspace OWNS the composition (broker, tools, skills, agents, loop, grants).
+	// This function keeps only the two things a domain package must not hold: interactive
+	// provisioning (plugins/MCP/OAuth prompts) and the TUI transport (the activity sink,
+	// self-wake, scheduler log) — both wired below over the workspace's exposed parts.
+	host := workspace.Host{Master: sh.master, Approvals: sh.approvals, Model: sh.llmModel, Notify: sh.notify}
+	unlock := func(dir, name string) (*secret.Vault, error) {
+		return unlockVault(sh.master, filepath.Join(dir, "secrets.vault"), name, filepath.Join(dir, "secrets.age"))
+	}
+	w, err := workspace.Open(host, basePolicy, unlock, wsName, wsDir)
 	if err != nil {
 		return nil, err
 	}
+	reportSkills(w.Skills())
+	reportAgents(w.Agents())
 
-	store := vault.Store()
-	inj := secret.NewInjector(store, secret.Binding{
-		Secret: googleCredentialName, Capability: "http", Host: "gmail.googleapis.com",
-		Header: "Authorization", Prefix: "Bearer ",
-	})
-	scanner := secret.NewScanner(store)
-	netCap := &netcap.Net{
-		Guard: &gateway.Guard{
-			Policy:    basePolicy(),
-			Approvals: sh.approvals,
-			TTL:       2 * time.Minute,
-		},
-		Credentials: inj,
-		Scanner:     scanner,
-		HTTP:        &http.Client{Timeout: 15 * time.Second},
+	// Interactive extensions + credentials wire against the workspace's own parts.
+	if err := wireGoogleCredential(ctx, w.Credential(), w.Vault()); err != nil {
+		return nil, err
 	}
-	fileCap := filecap.New(netCap.Guard, filepath.Join(wsDir, "mnt"))
+	approvals := approval.Load(filepath.Join(wsDir, "approved.json"))
+	if err := loadPlugins(ctx, w.Tools(), w.Credential(), w.Vault(), approvals, wsDir); err != nil {
+		return nil, err
+	}
+	if err := loadMCP(ctx, w.Tools(), w.Guard(), w.Credential(), w.LeakScan(), w.Vault(), approvals, wsDir); err != nil {
+		return nil, err
+	}
 
-	// notify: proactively reach the user (fire-and-forget), the other half of HITL.
-	// Same Guard + leak scanner as the network family (it IS an external egress).
-	// (Anti-spam rate limiting belongs in the Guard's pipeline — see FRAGEN — not here.)
-	notifyCap := notifycap.New(netCap.Guard, sh.notify, scanner)
-
-	reg := tool.NewRegistry(append(append(append(
-		netCap.Tools(), fileCap.Tools()...), sh.timeCap.Tools()...), notifyCap.Tools()...))
+	sess := w.OpenSession()
 
 	// uiSink is THE activity sink for an attended turn: streamed answer tokens and
-	// tool-call start/end events become TUI messages. It is stamped onto a turn's ctx
-	// (startTurn/startAgent below), so the shared Brain and Registry hold no per-run
-	// hook. A background/scheduled run stamps NO sink → it is silent by construction
-	// (this replaces the former muted quietReg + qb.OnToken=nil clones).
+	// tool-call start/end events become TUI messages. Stamped onto a turn's ctx below;
+	// a background/scheduled run stamps NO sink → silent by construction.
 	uiSink := func(e activity.Event) {
 		switch ev := e.(type) {
 		case activity.Token:
@@ -147,55 +134,6 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 		case activity.ToolEvent:
 			sh.send(toolEventMsg(ev))
 		}
-	}
-
-	runner := script.New(reg)
-	runner.Timeout = 60 * time.Second
-	reg.Add(runner.Tool())
-
-	if err := wireGoogleCredential(ctx, inj, vault); err != nil {
-		return nil, err
-	}
-
-	approvals := approval.Load(filepath.Join(wsDir, "approved.json"))
-	if err := loadPlugins(ctx, reg, inj, vault, approvals, wsDir); err != nil {
-		return nil, err
-	}
-	if err := loadMCP(ctx, reg, netCap.Guard, inj, scanner, vault, approvals, wsDir); err != nil {
-		return nil, err
-	}
-
-	skills := skill.Discover([]skill.Scope{{Dir: filepath.Join(wsDir, "skills"), Location: "workspace"}})
-	reportSkills(skills)
-	if lt, ok := skills.LoadTool(); ok {
-		reg.Add(lt)
-	}
-	if skills.Len() > 0 {
-		reg.Add(skills.ReadTool())
-	}
-
-	agentsDir := filepath.Join(wsDir, "agents")
-	agentDefs, err := agent.LoadAgents(agentsDir)
-	if err != nil {
-		return nil, err
-	}
-	reportAgents(agentDefs)
-
-	b := &brain.Brain{
-		Model:       sh.llmModel,
-		ToolTimeout: 20 * time.Second,
-	}
-	sessionGrants := grantstore.Load(filepath.Join(wsDir, "grants.json"))
-	sess := session.New(b, reg, netCap.Guard, sessionGrants)
-
-	// Shared deps for every child-agent run in this workspace. Tools is the full
-	// registry (Run filters per agent); Store resolves each agent's OWN durable
-	// "always" backing by name; Run opens/revokes its scope itself.
-	agentDeps := agent.Deps{
-		Brain: b,
-		Tools: reg,
-		Guard: netCap.Guard,
-		Store: func(name string) capability.GrantStore { return grantstore.Load(grantstore.Path(agentsDir, name)) },
 	}
 
 	startTurn := func(input string) context.CancelFunc {
@@ -208,67 +146,39 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 		return cancel
 	}
 	startAgent := func(name, task string) context.CancelFunc {
-		var def agent.Agent
-		for _, d := range agentDefs {
-			if d.Name == name {
-				def = d
-				break
-			}
-		}
 		turnCtx, cancel := context.WithCancel(ctx)
 		// An interactively-spawned agent inherits the chat's sink, so its tokens and
 		// tool calls nest into the conversation (a detached/scheduled run below does not).
 		turnCtx = activity.WithSink(turnCtx, uiSink)
 		go func() {
-			_, err := agent.Run(turnCtx, agentDeps, def, task)
+			_, err := w.RunAgent(turnCtx, name, task)
 			sh.send(doneMsg{err: err})
 		}()
 		return cancel
 	}
 
-	// wake: the running agent schedules its OWN resume after a delay (self-paced
-	// loops / polling). Reaching nothing external, it is ungated — bounded instead
-	// (delay clamp + pending cap in wakecap). The resume routes through the TUI event
-	// loop (selfWakeMsg) so it serializes with normal turns, never re-entrantly.
-	// Session-scoped: cancelled on Reset (below) so a new session's wakes don't resume
-	// a dead conversation.
+	// wake: the running agent schedules its OWN resume after a delay (self-paced loops /
+	// polling); ungated, bounded (delay clamp + pending cap). The resume routes through
+	// the TUI event loop (selfWakeMsg) so it serializes with normal turns — that transport
+	// is why the wake tool is wired here, not inside the workspace. Cancelled on Reset.
 	waker := wakecap.New(func(note string) { sh.send(selfWakeMsg{note: note, start: startTurn}) })
-	reg.Add(waker.Tool())
+	w.Tools().Add(waker.Tool())
 
-	sched, err := agent.NewScheduler(agentDefs, func(runCtx context.Context, def agent.Agent) error {
-		// A background (unattended) run stamps NO stream sink onto runCtx, so its tokens
-		// and tool events are silent by construction — a firing in one workspace never
-		// spills activity into the interactive chat. No muted-registry / brain clone
-		// needed: the shared Brain + Registry are used as-is; absence of a sink is the mute.
-		//
-		// Label this background run with its workspace, so an out-of-band ask on the
-		// phone reads "[work] …" instead of a context-free prompt.
+	sched, err := agent.NewScheduler(w.Agents(), func(runCtx context.Context, def agent.Agent) error {
+		// A background (unattended) run stamps NO activity sink → silent by construction.
+		// Label it with its workspace so an out-of-band ask reads "[work] …".
 		runCtx = gateway.WithLabel(runCtx, wsName)
-		_, err := agent.Run(runCtx, agentDeps, def, "Run your scheduled task now.")
+		_, err := w.RunAgent(runCtx, def.Name, "Run your scheduled task now.")
 		return err
 	}, agent.WithLog(func(line string) { sh.send(schedulerMsg("[" + wsName + "] " + line)) }))
 	if err != nil {
 		return nil, err
 	}
 
-	// Reminders: persistent (control-plane reminders.json, outside mnt/), gated, and
-	// fire a plain notify at their time via their OWN timers (not the agent scheduler).
-	// Restore re-enrolls any that survived a restart. Tools join the shared registry, so
-	// the model/scripts can set them like any other gated tool.
-	reminders := remindcap.New(
-		netCap.Guard,
-		remindcap.LoadStore(filepath.Join(wsDir, "reminders.json")),
-		sh.notify, scanner,
-	)
-	reminders.Restore()
-	for _, rt := range reminders.Tools() {
-		reg.Add(rt)
-	}
-
 	return &stack{
-		name: wsName, session: sess, scheduler: sched, agentDefs: agentDefs,
+		name: wsName, session: sess, scheduler: sched, agentDefs: w.Agents(),
 		startTurn: startTurn, startAgent: startAgent,
 		reset:  func() { waker.Cancel(); sess.Reset() }, // new session → drop pending self-wakes
-		skills: skills, markSkill: sess.MarkSkill,
+		skills: w.Skills(), markSkill: sess.MarkSkill,
 	}, nil
 }

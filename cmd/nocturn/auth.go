@@ -45,6 +45,13 @@ func wireGoogleCredential(ctx context.Context, inj *secret.Injector, vault *secr
 			return fmt.Errorf("persist token: %w", err)
 		}
 	}
+	// The Gmail binding lives HERE, with the Gmail integration — not in the workspace
+	// core. It says: an http effect to gmail.googleapis.com gets the "google" bearer,
+	// host-injected at the boundary. Added only when Gmail is actually configured.
+	inj.AddBinding("google", secret.Binding{
+		Secret: googleCredentialName, Capability: "http", Host: "gmail.googleapis.com",
+		Header: "Authorization", Prefix: "Bearer ",
+	})
 	inj.SetResolver(googleCredentialName, oauth.NewCredential(cfg, tok, persistToken(vault, googleCredentialName)))
 	return nil
 }

@@ -99,6 +99,16 @@ func (r *Registry) Add(t Tool) {
 	r.tools[t.Name] = t
 }
 
+// AddMany registers a group of tools at once — a capability group's Tools(). One lock
+// for the whole group.
+func (r *Registry) AddMany(ts ...Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, t := range ts {
+		r.tools[t.Name] = t
+	}
+}
+
 // Remove unregisters a tool (plugin uninstall). A missing name is a no-op.
 func (r *Registry) Remove(name string) {
 	r.mu.Lock()

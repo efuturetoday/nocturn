@@ -175,11 +175,11 @@ var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // the agent AND its grants; its grants can never cross-match another owner's.
 const agentFile = "agent.md"
 
-// LoadAgents reads every <dir>/<name>/agent.md agent definition. A missing dir
+// Discover reads every <dir>/<name>/agent.md agent definition. A missing dir
 // yields no agents (nil, nil). A subfolder without agent.md is skipped (it may hold
 // only grants). A malformed definition is an error naming the file, fail-closed —
 // the operator never gets a half-understood agent. Returned sorted by name.
-func LoadAgents(dir string) ([]Agent, error) {
+func Discover(dir string) ([]Agent, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil

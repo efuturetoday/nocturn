@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
@@ -61,6 +62,19 @@ type Net struct {
 	Scanner     *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
 	HTTP        *http.Client
 	Resolver    *net.Resolver
+}
+
+// New builds a Net over guard, injecting credentials and scanning with scanner, and
+// owns its own HTTP client (built from timeout) — the idiomatic constructor, matching
+// filecap.New / notifycap.New. The struct stays usable directly (tests set only what
+// they need).
+func New(guard *gateway.Guard, credentials *secret.Injector, scanner *secret.Scanner, timeout time.Duration) *Net {
+	return &Net{
+		Guard:       guard,
+		Credentials: credentials,
+		Scanner:     scanner,
+		HTTP:        &http.Client{Timeout: timeout},
+	}
 }
 
 // Response is the result of a gated outbound request, after ingress redaction.
