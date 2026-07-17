@@ -47,9 +47,10 @@ cage:
 
 limits:
   - >-
-    **Rate limit** — _TBD_. Enforced **per capability family, not per tool** once wired; an anti-spam
-    rate limiter is planned for `remind` but is not yet attached to the Guard, so no cap is enforced
-    today.
+    **Rate limit** — enforced. The Guard caps `remind` at **20 per minute** (anti-spam), applied
+    **per capability family, not per tool**; only user-facing families are capped, so bursty reads are
+    never rate-limited. Over the cap, the call is refused with a **retry-after** telling the assistant
+    when it can try again.
 
 leakScanning:
   intro: >-

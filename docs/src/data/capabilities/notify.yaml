@@ -35,9 +35,11 @@ cage:
 
 limits:
   - >-
-    **Rate limit** — _TBD_. Enforced **per capability family, not per tool** once wired; an anti-spam
-    rate limiter is planned for `notify` but is not yet attached to the Guard, so no cap is enforced
-    today.
+    **Rate limit** — enforced. The Guard caps `notify` at **10 per minute** (anti-spam, so a runaway
+    loop cannot buzz your device endlessly). It is applied **per capability family, not per tool**, and
+    only user-facing families are capped — bursty reads (a script doing many `http.read`/`file.read`)
+    are never rate-limited. Over the cap, the call is refused with a **retry-after**, so the assistant
+    learns when it can try again (it may wait, schedule a wake, or tell you it can't right now).
 
 leakScanning:
   intro: >-
