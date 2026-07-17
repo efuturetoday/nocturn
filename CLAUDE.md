@@ -280,6 +280,14 @@ umkehrst. Kurzform des resultierenden Sicherheitsmodells: siehe §8.
 
 ## 10. Dev-Workflow
 
+> **Go-Skills nutzen, wann immer möglich.** Bei Go-Arbeit die installierten
+> `cc-skills-golang`-Skills einsetzen — allen voran **`go-review`** vor jedem Commit von
+> nicht-trivialem Go (prüft gegen Effective Go + Google Style Guide, zitiert die Regel),
+> plus die themenspezifischen (`golang-concurrency`, `golang-error-handling`,
+> `golang-testing`, `golang-naming`, …), wenn der Task sie berührt. `golang-how-to` ist der
+> Orchestrator, der die passenden lädt. Nicht aus dem Gedächtnis stylen, wenn eine Skill die
+> Regel kennt.
+
 ```bash
 go build ./...            # alles bauen
 go test ./internal/...    # alle Tests (race-clean)
