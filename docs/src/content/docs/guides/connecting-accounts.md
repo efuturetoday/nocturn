@@ -20,12 +20,6 @@ the clear.
 Because the vault is encrypted, copying your [workspace](/guides/the-workspace/) to another
 machine copies the locked vault. Your tokens cannot be read without you there to unlock it.
 
-:::note[Upgrading an older workspace]
-A vault from an earlier version (`secrets.age`) is migrated automatically the first time you
-open it: you enter its old passphrase once, and it is re-sealed under the new master. The old
-file is kept as `secrets.age.bak` until you delete it.
-:::
-
 ## The agent never sees the secret
 
 This is the key point. When an agent needs to call a service that requires a key, it does

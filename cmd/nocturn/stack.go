@@ -90,7 +90,7 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 	// in the chatModel, stamped per turn there.)
 	host := workspace.Host{Master: sh.master, Approvals: sh.approvals, Model: sh.llmModel, Notify: sh.notify}
 	unlock := func(dir, name string) (*secret.Vault, error) {
-		return unlockVault(sh.master, filepath.Join(dir, "secrets.vault"), name, filepath.Join(dir, "secrets.age"))
+		return unlockVault(sh.master, filepath.Join(dir, "secrets.vault"), name)
 	}
 	w, err := workspace.Open(host, basePolicy, unlock, wsName, wsDir)
 	if err != nil {

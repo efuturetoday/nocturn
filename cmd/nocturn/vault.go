@@ -75,29 +75,9 @@ func unlockMaster(saltPath string) (*secret.Master, error) {
 }
 
 // unlockVault opens the workspace vault at vaultPath using the master-derived key for
-// wsName. If the new-format file is absent but a legacy age vault (agePath) exists, it
-// migrates once: the OLD age passphrase is asked separately, the secrets are re-sealed
-// under the new key, and the age file is kept as ".bak". A missing file (no legacy
-// either) is a fresh, empty vault.
-func unlockVault(m *secret.Master, vaultPath, wsName, agePath string) (*secret.Vault, error) {
-	key := m.WorkspaceKey(wsName)
-
-	if _, err := os.Stat(vaultPath); errors.Is(err, os.ErrNotExist) && secret.IsAgeVault(agePath) {
-		fmt.Printf("Migrating legacy vault %s → %s (age → AES-256-GCM)…\n", agePath, vaultPath)
-		oldPass, err := readPassphrase("OLD (age) vault passphrase: ")
-		if err != nil {
-			return nil, err
-		}
-		if err := secret.MigrateAgeVault(agePath, vaultPath, oldPass, key); err != nil {
-			return nil, fmt.Errorf("vault: migrate %s: %w", agePath, err)
-		}
-		if err := os.Rename(agePath, agePath+".bak"); err != nil {
-			return nil, fmt.Errorf("vault: back up %s: %w", agePath, err)
-		}
-		fmt.Printf("Migrated. Old file kept as %s.bak — delete it once satisfied.\n", agePath)
-	}
-
-	return secret.OpenVault(vaultPath, key)
+// wsName. A missing file is a fresh, empty vault.
+func unlockVault(m *secret.Master, vaultPath, wsName string) (*secret.Vault, error) {
+	return secret.OpenVault(vaultPath, m.WorkspaceKey(wsName))
 }
 
 // chooseNewPassphrase asks for a fresh passphrase twice (typos are invisible without
