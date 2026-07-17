@@ -1,0 +1,36 @@
+title: remind
+description: Schedule a persistent notification at a future time.
+
+capability:
+  family: remind
+  href: /reference/reminders/
+axis: read
+
+intro: >-
+  Schedule a notification for a future time. At that time you are notified with `message` — no model
+  run, the text is fixed when you create it. Persistence and safety live on the
+  [`remind` capability](/reference/reminders/).
+
+input:
+  - field: when
+    type: string
+    required: true
+    notes: "An absolute **RFC3339** timestamp, or `\"in <duration>\"` (e.g. `\"in 2h\"`). For a wall-clock time, compute it with [`time.now`](/reference/tools/time-now/) and pass the RFC3339 result."
+  - field: message
+    type: string
+    required: true
+    notes: What to remind you about. Leak-scanned — a vault secret is blocked.
+  - field: title
+    type: string
+    required: false
+    notes: Optional short title.
+
+output:
+  code: |
+    { "id": "rem-…", "fireAt": "2026-07-18T09:00:00+02:00" }
+  lang: json
+
+js:
+  wrapper: null
+  gate: |
+    nocturn.call("remind", { when: "in 2h", message: "stretch" });

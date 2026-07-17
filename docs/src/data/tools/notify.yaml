@@ -1,0 +1,34 @@
+title: notify
+description: Send a fire-and-forget notification to the user's device.
+
+capability:
+  family: notify
+  href: /reference/notify/
+axis: read
+
+intro: >-
+  Send a notification to your device. It does **not** ask a question or wait for a reply — for that,
+  an effect goes through an [approval](/guides/approvals/) instead. Why it runs silently and how it
+  stays safe (host-owned destination, leak-scan, rate limit) live on the
+  [`notify` capability](/reference/notify/).
+
+input:
+  - field: message
+    type: string
+    required: true
+    notes: The notification text.
+  - field: title
+    type: string
+    required: false
+    notes: Optional short title.
+
+output:
+  code: |
+    { "sent": true }
+  lang: json
+
+js:
+  wrapper: |
+    nocturn.notify("Backup finished", "Nocturn");
+  gate: |
+    nocturn.call("notify", { message: "Backup finished", title: "Nocturn" });

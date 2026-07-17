@@ -1,0 +1,77 @@
+title: Files capability
+description: file.read, file.write, file.list, file.stat, file.search, file.remove, file.move — the workspace filesystem, confined by construction.
+
+family: file
+
+intro: >-
+  The `file` family gives the assistant a filesystem — but only **inside the workspace**. It is
+  the proof that the broker's `(family, target)` model is not HTTP-shaped: here the target is a
+  **path**, glob-matched exactly like a hostname is.
+
+glance:
+  target: "a **workspace-relative path** — e.g. `notes/todo.md`"
+  defaultPolicy: "reads run silently; writes ask for approval"
+
+tools:
+  - name: file.read
+    href: /reference/tools/file-read/
+    axis: read
+    desc: read a text file
+  - name: file.list
+    href: /reference/tools/file-list/
+    axis: read
+    desc: list a directory
+  - name: file.stat
+    href: /reference/tools/file-stat/
+    axis: read
+    desc: stat a path
+  - name: file.search
+    href: /reference/tools/file-search/
+    axis: read
+    desc: find files by glob
+  - name: file.write
+    href: /reference/tools/file-write/
+    axis: write
+    desc: write a text file
+  - name: file.remove
+    href: /reference/tools/file-remove/
+    axis: write
+    desc: remove a file
+  - name: file.move
+    href: /reference/tools/file-move/
+    axis: write
+    desc: move / rename a file
+
+cage:
+  intro: >-
+    A cage bounds where this capability may reach. For `file` the `target` is a workspace-relative
+    path (a glob is allowed); `access` is the read/write axis. See the
+    [capabilities overview](/reference/capabilities/#what-a-target-looks-like-it-is-per-family)
+    for the shared `(family, target, access)` rules.
+  lang: json
+  examples: |
+    { "family": "file", "target": "notes/*", "access": ["read", "write"] }
+    { "family": "file", "target": "inbox/*", "access": ["read"] }
+    { "family": "file", "target": "*",       "access": ["read"] }
+  notes:
+    - >-
+      A path glob (`notes/*`) does **not** cross `/`, so it is depth-bounded for free — it covers
+      `notes/todo.md` but not `notes/2026/todo.md`. Use `*` on its own to mean **any path** in the
+      workspace.
+    - '`access` must be explicit — a missing `access` is a fail-closed error, never a silent "both".'
+
+limits:
+  - >-
+    **Rate limit** — _TBD_. Enforced **per capability family, not per tool** once wired; the
+    sliding-window rate limiter exists as a primitive but is not yet attached to the Guard, so no
+    per-family call cap is enforced today.
+  - "**Read size** — a single `file.read` returns at most **1 MiB**."
+
+sections:
+  - title: Confinement
+    body: >-
+      Every path is resolved against the workspace root **before the gateway is even consulted**. A
+      path that would escape it — via `..` or an absolute path outside the root — is a hard error, not
+      a denied call. The cage scopes *within* the workspace; this guarantees there is no outside. So a
+      `file` capability can never touch a byte the workspace does not contain, no matter what path the
+      model asks for.

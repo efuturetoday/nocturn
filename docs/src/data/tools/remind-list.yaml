@@ -1,0 +1,20 @@
+title: remind.list
+description: List the pending reminders.
+
+capability:
+  family: remind
+  href: /reference/reminders/
+axis: read
+
+intro: >-
+  List the pending reminders. See the [`remind` capability](/reference/reminders/) for how reminders
+  are stored and kept safe.
+
+input: none
+
+output: A JSON array of `{ id, fireAt, message, title }`.
+
+js:
+  wrapper: null
+  gate: |
+    const reminders = JSON.parse(nocturn.call("remind.list", {}));

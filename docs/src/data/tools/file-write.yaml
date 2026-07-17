@@ -1,0 +1,33 @@
+title: file.write
+description: Write a UTF-8 text file to the workspace.
+
+capability:
+  family: file
+  href: /reference/files/
+axis: write
+
+intro: >-
+  Write a UTF-8 text file (creating parent directories). **Asks for approval** unless a standing
+  grant covers it. Confinement and cage syntax live on the [`file` capability](/reference/files/).
+
+input:
+  - field: path
+    type: string
+    required: true
+    notes: Workspace-relative path to write. Parent directories are created.
+  - field: content
+    type: string
+    required: true
+    notes: File contents (UTF-8).
+
+output:
+  code: |
+    { "path": "notes/todo.md", "bytesWritten": 8 }
+  lang: json
+
+js:
+  wrapper: |
+    const fs = require("fs");
+    fs.writeFileSync("notes/todo.md", "buy milk");
+  gate: |
+    const res = JSON.parse(nocturn.call("file.write", { path: "notes/todo.md", content: "buy milk" }));

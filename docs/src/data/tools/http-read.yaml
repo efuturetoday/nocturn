@@ -1,0 +1,34 @@
+title: http.read
+description: Read a URL over HTTP(S) with a safe method (GET/HEAD).
+
+capability:
+  family: http
+  href: /reference/http/
+axis: read
+
+intro: >-
+  Read a URL with a safe method. Runs silently under the default policy. All the reach, cage, and
+  credential behaviour lives on the [`http` capability](/reference/http/).
+
+input:
+  - field: url
+    type: string
+    required: true
+    notes: The URL to read.
+  - field: method
+    type: string
+    required: false
+    notes: "`GET` or `HEAD`. Default `GET`. A mutating method is rejected."
+
+output:
+  text: "A JSON envelope — the real outcome, not just the body:"
+  code: |
+    { "status": 200, "statusText": "OK", "headers": { "Content-Type": "application/json" }, "body": "…" }
+  lang: json
+
+js:
+  wrapper: |
+    const r = await fetch("https://api.example.com/items");
+    const items = await r.json();
+  gate: |
+    const res = JSON.parse(nocturn.call("http.read", { url: "https://api.example.com/items" }));

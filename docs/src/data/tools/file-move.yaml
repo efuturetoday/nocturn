@@ -1,0 +1,34 @@
+title: file.move
+description: Move or rename a file within the workspace.
+
+capability:
+  family: file
+  href: /reference/files/
+axis: write
+
+intro: >-
+  Move or rename a file within the workspace. **Asks for approval** unless a standing grant covers
+  it. **Both** endpoints are confined to the workspace; it is gated on the **destination** path. See
+  the [`file` capability](/reference/files/) for confinement and cage syntax.
+
+input:
+  - field: from
+    type: string
+    required: true
+    notes: Workspace-relative source path.
+  - field: to
+    type: string
+    required: true
+    notes: Workspace-relative destination path. Parent directories are created.
+
+output:
+  code: |
+    { "from": "a.txt", "to": "b.txt" }
+  lang: json
+
+js:
+  wrapper: |
+    const fs = require("fs");
+    fs.renameSync("a.txt", "b.txt");
+  gate: |
+    const res = JSON.parse(nocturn.call("file.move", { from: "a.txt", to: "b.txt" }));

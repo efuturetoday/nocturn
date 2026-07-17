@@ -1,0 +1,128 @@
+---
+// POC Tier-2 tool page renderer. Consumes one entry of the `tools` data
+// collection and renders the fixed CONVENTIONS.md §4 layout. Used by the demo
+// route src/pages/tools-demo/[...slug].astro — the real Markdown tool pages are
+// untouched.
+import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
+import { marked } from 'marked';
+
+interface InputRow {
+	field: string;
+	type: string;
+	required: boolean;
+	notes: string;
+}
+
+interface Props {
+	capability: { family: string; href: string } | null;
+	axis: 'read' | 'write' | 'none';
+	intro: string;
+	input: InputRow[] | 'none';
+	output: string | { text?: string; code?: string; lang?: string; after?: string };
+	js: { wrapper: string | null; gate: string };
+	notes?: string;
+}
+
+const { capability, axis, intro, input, output, js, notes } = Astro.props;
+
+// The axis badge reuses the shared .axis / .axis--read / .axis--write classes
+// from src/styles/brand.css. `none` renders no badge (ungated / still tools).
+const axisLabel = axis === 'none' ? null : axis;
+
+// Inline-Markdown for author-friendly prose fields: authors write `code`,
+// [text](href), **bold** in the YAML instead of raw HTML.
+const md = (s: string | undefined) => (s ? (marked.parseInline(s) as string) : '');
+---
+
+<p>
+	{
+		capability ? (
+			<Fragment>
+				<strong>Capability:</strong>{' '}
+				<a href={capability.href}>
+					<code>{capability.family}</code>
+				</a>
+			</Fragment>
+		) : (
+			<Fragment>
+				<strong>Capability:</strong> — (ungated)
+			</Fragment>
+		)
+	}
+	{axisLabel && (
+		<Fragment>
+			{' '}·{' '}
+			<span class={`axis axis--${axisLabel}`}>{axisLabel}</span>
+		</Fragment>
+	)}
+</p>
+
+<p set:html={md(intro)} />
+
+<h2 id="input">Input</h2>
+{
+	input === 'none' ? (
+		<p>None.</p>
+	) : (
+		<table>
+			<thead>
+				<tr>
+					<th>Field</th>
+					<th>Type</th>
+					<th>Required</th>
+					<th>Notes</th>
+				</tr>
+			</thead>
+			<tbody>
+				{input.map((row) => (
+					<tr>
+						<td>
+							<code>{row.field}</code>
+						</td>
+						<td>{row.type}</td>
+						<td>{row.required ? 'yes' : 'no'}</td>
+						<td set:html={md(row.notes)} />
+					</tr>
+				))}
+			</tbody>
+		</table>
+	)
+}
+
+<h2 id="output">Output</h2>
+{
+	typeof output === 'string' ? (
+		<p set:html={md(output)} />
+	) : (
+		<Fragment>
+			{output.text && <p set:html={md(output.text)} />}
+			{output.code && <Code code={output.code} lang={output.lang ?? 'json'} />}
+			{output.after && <p set:html={md(output.after)} />}
+		</Fragment>
+	)
+}
+
+<h2 id="from-javascript">From JavaScript</h2>
+{
+	js.wrapper ? (
+		<Tabs>
+			<TabItem label="wrapper (idiomatic)">
+				<Code code={js.wrapper} lang="js" />
+			</TabItem>
+			<TabItem label="generic gate">
+				<Code code={js.gate} lang="js" />
+			</TabItem>
+		</Tabs>
+	) : (
+		<Code code={js.gate} lang="js" title="generic gate" />
+	)
+}
+
+{
+	notes && (
+		<Fragment>
+			<h2 id="notes">Notes</h2>
+			<p set:html={md(notes)} />
+		</Fragment>
+	)
+}

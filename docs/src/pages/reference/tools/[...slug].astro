@@ -1,0 +1,40 @@
+---
+// Tier-2 data-driven tool pages. Each entry of the `tools` data collection is
+// rendered at /reference/tools/<name>/ inside a full Starlight page (sidebar /
+// ToC / search / theme). These slugs are byte-identical to the old Markdown
+// tool pages, so the sidebar links in astro.config.mjs keep resolving.
+import { getCollection } from 'astro:content';
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import ToolPage from '../../../components/ToolPage.astro';
+
+export async function getStaticPaths() {
+	const entries = (await getCollection('tools')).sort((a, b) => a.id.localeCompare(b.id));
+	return entries.map((entry, i) => ({
+		params: { slug: entry.id },
+		props: {
+			entry,
+			prev: entries[i - 1]
+				? { link: `/reference/tools/${entries[i - 1].id}/`, label: entries[i - 1].data.title }
+				: undefined,
+			next: entries[i + 1]
+				? { link: `/reference/tools/${entries[i + 1].id}/`, label: entries[i + 1].data.title }
+				: undefined,
+		},
+	}));
+}
+
+const { entry, prev, next } = Astro.props;
+const t = entry.data;
+---
+
+<StarlightPage frontmatter={{ title: t.title, description: t.description, prev, next }}>
+	<ToolPage
+		capability={t.capability}
+		axis={t.axis}
+		intro={t.intro}
+		input={t.input}
+		output={t.output}
+		js={t.js}
+		notes={t.notes}
+	/>
+</StarlightPage>

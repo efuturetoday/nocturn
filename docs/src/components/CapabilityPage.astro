@@ -1,0 +1,155 @@
+---
+// POC Tier-2 capability page renderer. Consumes one entry of the `capabilities`
+// data collection and renders the fixed CONVENTIONS.md §3 section order. Used by
+// the demo route src/pages/caps-demo/[...slug].astro — the real Markdown
+// capability pages under reference/*.md are untouched.
+import { Code } from '@astrojs/starlight/components';
+import { marked } from 'marked';
+import { slug as ghSlug } from 'github-slugger';
+
+interface ToolRef {
+	name: string;
+	href: string;
+	axis: 'read' | 'write';
+	desc?: string;
+}
+
+interface Section {
+	title: string;
+	body: string;
+}
+
+interface Props {
+	family: string;
+	intro: string;
+	glance: { target: string; defaultPolicy: string };
+	tools: ToolRef[];
+	cage: { intro: string; examples: string; lang?: string; notes: string[] };
+	limits: string[];
+	credentials?: string[];
+	leakScanning?: { intro?: string; points: string[] };
+	sections?: Section[];
+}
+
+const { family, intro, glance, tools, cage, limits, credentials, leakScanning, sections } =
+	Astro.props;
+
+// Inline-Markdown for author-friendly prose fields (`code`, [text](href), **bold**).
+const md = (s: string | undefined) => (s ? (marked.parseInline(s) as string) : '');
+// Block-Markdown for freeform section bodies + cage.intro (paragraphs + lists render).
+const mdBlock = (s: string | undefined) => (s ? (marked.parse(s) as string) : '');
+
+// Stable slugified ids for the freeform section headings. Use the SAME slugger
+// Starlight uses for Markdown headings (github-slugger) so anchors emitted here
+// are byte-identical to the ids the old .md pages produced — deep-links stay
+// valid. Note this keeps GitHub's behaviour of NOT collapsing the double space
+// left by a dropped em-dash (e.g. "Why it runs silently — and why that is safe"
+// → "why-it-runs-silently--and-why-that-is-safe").
+const slug = (s: string) => ghSlug(s);
+---
+
+<div set:html={mdBlock(intro)} />
+
+<h2 id="at-a-glance">At a glance</h2>
+<table>
+	<tbody>
+		<tr>
+			<td><strong>Family</strong></td>
+			<td><code>{family}</code></td>
+		</tr>
+		<tr>
+			<td><strong>Target</strong></td>
+			<td set:html={md(glance.target)} />
+		</tr>
+		<tr>
+			<td><strong>Tools</strong></td>
+			<td>
+				{
+					tools.map((t, i) => (
+						<Fragment>
+							{i > 0 && ' · '}
+							<a href={t.href}>
+								<code>{t.name}</code>
+							</a>{' '}
+							<span class={`axis axis--${t.axis}`}>{t.axis}</span>
+						</Fragment>
+					))
+				}
+			</td>
+		</tr>
+		<tr>
+			<td><strong>Default policy</strong></td>
+			<td set:html={md(glance.defaultPolicy)} />
+		</tr>
+	</tbody>
+</table>
+
+<h2 id="tools">Tools</h2>
+<ul>
+	{
+		tools.map((t) => (
+			<li>
+				<a href={t.href}>
+					<code>{t.name}</code>
+				</a>{' '}
+				<span class={`axis axis--${t.axis}`}>{t.axis}</span>
+				{t.desc && <Fragment> — <span set:html={md(t.desc)} /></Fragment>}
+			</li>
+		))
+	}
+</ul>
+
+<h2 id="cage-syntax">Cage syntax</h2>
+<div set:html={mdBlock(cage.intro)} />
+<Code code={cage.examples} lang={cage.lang ?? 'json'} />
+{
+	cage.notes.length > 0 && (
+		<ul>
+			{cage.notes.map((n) => (
+				<li set:html={md(n)} />
+			))}
+		</ul>
+	)
+}
+
+<h2 id="limits">Limits</h2>
+<ul>
+	{limits.map((l) => <li set:html={md(l)} />)}
+</ul>
+
+{
+	credentials && (
+		<Fragment>
+			<h2 id="credentials">Credentials</h2>
+			<ul>
+				{credentials.map((c) => (
+					<li set:html={md(c)} />
+				))}
+			</ul>
+		</Fragment>
+	)
+}
+
+{
+	leakScanning && (
+		<Fragment>
+			<h2 id="leak-scanning">Leak scanning</h2>
+			{leakScanning.intro && <p set:html={md(leakScanning.intro)} />}
+			<ul>
+				{leakScanning.points.map((p) => (
+					<li set:html={md(p)} />
+				))}
+			</ul>
+		</Fragment>
+	)
+}
+
+{
+	sections &&
+		sections.map((s) => (
+			<Fragment>
+				<h2 id={slug(s.title)}>{s.title}</h2>
+				<div set:html={mdBlock(s.body)} />
+			</Fragment>
+		))
+}

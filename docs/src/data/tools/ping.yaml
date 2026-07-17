@@ -1,0 +1,29 @@
+title: ping
+description: Probe a host with a single ICMP echo to check reachability.
+
+capability:
+  family: icmp
+  href: /reference/icmp/
+axis: read
+
+intro: >-
+  Probe a host with one ICMP echo. Runs silently under the default policy. Why it is gated and how to
+  cage it (per host / CIDR) lives on the [`icmp` capability](/reference/icmp/).
+
+input:
+  - field: host
+    type: string
+    required: true
+    notes: The hostname or IP to ping.
+
+output:
+  code: |
+    { "host": "example.com", "ip": "93.184.216.34", "ok": true, "rtt_ms": 12 }
+  lang: json
+
+js:
+  wrapper: |
+    const r = nocturn.ping("example.com");
+    console.log(r.ok, r.rtt_ms);
+  gate: |
+    const res = JSON.parse(nocturn.call("ping", { host: "example.com" }));
