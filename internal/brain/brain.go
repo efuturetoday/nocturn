@@ -29,10 +29,13 @@ import (
 // producing a final answer.
 var ErrMaxSteps = errors.New("brain: max steps exceeded without a final answer")
 
-// Message is one turn in the conversation. Role is "user", "assistant", or
-// "tool". An assistant turn that calls tools carries them in ToolCalls (native
-// tool_calls, not text); a tool result carries the id of the call it answers in
-// ToolCallID, so results match their calls by id — not by position.
+// Message is one turn in the conversation. Role is "system", "user", "assistant",
+// or "tool". The optional leading "system" turn carries the standing instructions
+// (an interactive session's persona, or a child agent's own Instructions) — seeded
+// once by NewConversation, never appended to a user turn. An assistant turn that
+// calls tools carries them in ToolCalls (native tool_calls, not text); a tool result
+// carries the id of the call it answers in ToolCallID, so results match their calls
+// by id — not by position.
 type Message struct {
 	Role       string
 	Content    string
@@ -159,10 +162,30 @@ type Conversation struct {
 	conv  []Message
 }
 
-// NewConversation starts an empty conversation on this Brain over tools — the toolset
-// every turn in it may use (an interactive session's shared Registry).
-func (b *Brain) NewConversation(tools *tool.Registry) *Conversation {
-	return &Conversation{brain: b, tools: tools}
+// ConvOption configures a Conversation built with NewConversation.
+type ConvOption func(*Conversation)
+
+// WithSystem seeds the leading role=system message — the standing instruction (a
+// session's persona, or a child agent's Instructions). Optional: an empty string (or
+// omitting the option) starts a conversation with no system turn. This is the ONE place
+// the system role is set — the model adapter transports it, never invents it.
+func WithSystem(system string) ConvOption {
+	return func(c *Conversation) {
+		if system != "" {
+			c.conv = append(c.conv, Message{Role: "system", Content: system})
+		}
+	}
+}
+
+// NewConversation starts a conversation on this Brain over tools — the toolset every
+// turn in it may use (an interactive session's shared Registry). Options seed the
+// system turn (WithSystem); with none it starts empty.
+func (b *Brain) NewConversation(tools *tool.Registry, opts ...ConvOption) *Conversation {
+	c := &Conversation{brain: b, tools: tools}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
 // Messages returns a copy of the conversation history so far — for a client snapshot

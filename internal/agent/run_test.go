@@ -123,3 +123,44 @@ func TestRun_UndeclaredToolIsUnreachable_E2E(t *testing.T) {
 		t.Fatalf("answer = %q, want \"blocked\"", res.Answer)
 	}
 }
+
+// A child agent's Instructions ARE its system prompt: they seed the conversation's
+// leading role=system message, and the task rides in as a SEPARATE, raw role=user
+// message — not glued onto the instructions. This is the subagent's standing identity
+// vs. its transient task, kept in distinct roles.
+func TestRun_InstructionsSeedSystem_TaskIsRawUser(t *testing.T) {
+	model := &scriptedModel{steps: []brain.Step{{Answer: "ok"}}}
+	reg := tool.NewRegistry()
+	def := agent.Agent{Name: "worker", Instructions: "You are a focused worker.", When: "manual"}
+
+	if _, err := agent.Run(context.Background(), agent.Deps{Brain: brain.New(model), Tools: reg, Guard: &gateway.Guard{}}, def, "do the thing"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	conv := model.convs[0]
+	if len(conv) != 2 {
+		t.Fatalf("conversation = %d messages, want 2 (system + user): %+v", len(conv), conv)
+	}
+	if conv[0].Role != "system" || conv[0].Content != "You are a focused worker." {
+		t.Fatalf("first message = %+v, want role=system with the Instructions verbatim", conv[0])
+	}
+	if conv[1].Role != "user" || conv[1].Content != "do the thing" {
+		t.Fatalf("second message = %+v, want role=user with the RAW task (no Instructions glued on)", conv[1])
+	}
+}
+
+// With empty Instructions (the interactive root agent), no system turn is seeded — the
+// conversation starts straight at the user's task. WithSystem("") is a no-op.
+func TestRun_NoInstructions_NoSystemTurn(t *testing.T) {
+	model := &scriptedModel{steps: []brain.Step{{Answer: "ok"}}}
+	def := agent.Agent{Name: "bare", When: "manual"}
+
+	if _, err := agent.Run(context.Background(), agent.Deps{Brain: brain.New(model), Tools: tool.NewRegistry(), Guard: &gateway.Guard{}}, def, "hi"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	conv := model.convs[0]
+	if len(conv) != 1 || conv[0].Role != "user" {
+		t.Fatalf("conversation = %+v, want a single role=user turn (no system seed)", conv)
+	}
+}

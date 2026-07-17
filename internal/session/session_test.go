@@ -195,8 +195,7 @@ func TestSession_SkillActiveSet_ResetClears(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "2"},
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "3"},
 	}}
-	s := session.New(brain.New(model), tool.NewRegistry().AddMany(tools...),
-		&gateway.Guard{}, nil)
+	s := session.New(brain.New(model), tool.NewRegistry().AddMany(tools...), &gateway.Guard{}, nil)
 
 	s.Ask(context.Background(), "a") // marks x
 	s.Ask(context.Background(), "b") // x still active within the session

@@ -40,9 +40,6 @@ func New(baseURL, apiKey, modelName string) *Client {
 // compile-time proof the adapter is a brain.Model.
 var _ brain.Model = (*Client)(nil)
 
-const systemPrompt = "You are Nocturn, a careful assistant. " +
-	"Use a tool when it helps; otherwise answer directly."
-
 // Next sends the conversation and tool schemas to the endpoint and returns the
 // model's structured decision: a tool call or a final answer. The completion is
 // streamed: answer text is emitted as activity.Token to the activity sink on ctx as
@@ -150,11 +147,14 @@ func (a *toolAcc) calls() []brain.ToolCall {
 }
 
 func buildMessages(conv []brain.Message) []openai.ChatCompletionMessage {
-	msgs := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
-	}
+	msgs := make([]openai.ChatCompletionMessage, 0, len(conv))
 	for _, m := range conv {
 		switch m.Role {
+		case "system":
+			// The standing instruction, seeded by NewConversation (a session's persona
+			// or a child agent's Instructions). Transported as-is — the adapter no longer
+			// invents one.
+			msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: m.Content})
 		case "assistant":
 			// An assistant turn carries its tool calls natively (tool_calls), so
 			// the model sees exactly what it requested — matched to results by id.

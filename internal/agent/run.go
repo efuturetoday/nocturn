@@ -77,7 +77,11 @@ func Run(ctx context.Context, d Deps, a Agent, task string) (Result, error) {
 	scope := d.Guard.NewScope(store)
 	defer scope.Revoke()
 
-	conv := d.Brain.NewConversation(d.Tools.Select(a.Matches))
-	answer, err := Turn(ctx, scope, skill.NewActive(), a, conv, a.Instructions+"\n\n---\nTask:\n"+task)
+	// The agent's Instructions ARE its system prompt — its standing identity, seeded on
+	// the conversation's system turn, NOT glued onto the task. The task is a raw user
+	// turn. A subagent does not inherit the session's persona; its definition is its whole
+	// identity (security is structural — broker + HITL — not a shared prompt preamble).
+	conv := d.Brain.NewConversation(d.Tools.Select(a.Matches), brain.WithSystem(a.Instructions))
+	answer, err := Turn(ctx, scope, skill.NewActive(), a, conv, task)
 	return Result{Answer: answer}, err
 }

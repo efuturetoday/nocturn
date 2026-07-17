@@ -43,30 +43,45 @@ var _ turns = (*Session)(nil)
 // stamped for each turn) alongside the conversation and permission scope. The Brain
 // is the stateless executor it drives — it owns none of this.
 type Session struct {
-	brain *brain.Brain
-	guard *gateway.Guard
-	tools *tool.Registry        // the toolset this session may use (passed to the brain per turn)
-	store capability.GrantStore // durable "always" backing; nil = none
+	brain   *brain.Brain
+	guard   *gateway.Guard
+	tools   *tool.Registry        // the toolset this session may use (passed to the brain per turn)
+	store   capability.GrantStore // durable "always" backing; nil = none
+	persona string                // the session's system prompt, re-seeded on every fresh conversation
 
 	conv   *brain.Conversation
 	scope  *gateway.Scope
 	skills *skill.Active // skills loaded into THIS conversation (dedup); reset with it
 }
 
+// Option configures a Session built with New.
+type Option func(*Session)
+
+// WithPersona sets the session's system prompt — its standing identity, seeded on every
+// conversation (including after Reset). Optional: omit it (or pass "") for a session with
+// no persona. The workspace supplies the resolved PERSONA.md here.
+func WithPersona(persona string) Option {
+	return func(s *Session) { s.persona = persona }
+}
+
 // New opens a session on the given brain over tools (the session's toolset), with a
-// durable grant store (may be nil — "always" then does not persist). It opens the
-// first Scope (a fresh epoch + grant set on the guard's registry) and a fresh
-// conversation over tools.
-func New(b *brain.Brain, tools *tool.Registry, g *gateway.Guard, store capability.GrantStore) *Session {
-	return &Session{
+// durable grant store (may be nil — "always" then does not persist). Options set the
+// persona (WithPersona). It opens the first Scope (a fresh epoch + grant set on the
+// guard's registry) and a fresh conversation over tools.
+func New(b *brain.Brain, tools *tool.Registry, g *gateway.Guard, store capability.GrantStore, opts ...Option) *Session {
+	s := &Session{
 		brain:  b,
 		guard:  g,
 		tools:  tools,
 		store:  store,
-		conv:   b.NewConversation(tools),
 		scope:  g.NewScope(store),
 		skills: skill.NewActive(),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	s.conv = b.NewConversation(tools, brain.WithSystem(s.persona))
+	return s
 }
 
 // Ask runs one turn as the workspace's ROOT agent — the empty agent.Agent{} (no
@@ -94,7 +109,7 @@ func (s *Session) MarkSkill(name string) { s.skills.Mark(name) }
 func (s *Session) Reset() {
 	s.scope.Revoke()
 	s.scope = s.guard.NewScope(s.store)
-	s.conv = s.brain.NewConversation(s.tools)
+	s.conv = s.brain.NewConversation(s.tools, brain.WithSystem(s.persona))
 	s.skills = skill.NewActive() // a fresh conversation has no skills loaded
 }
 
