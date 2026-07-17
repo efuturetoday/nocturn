@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/coder/websocket"
+	"github.com/libp2p/zeroconf/v2"
 
 	"github.com/efuturetoday/nocturn/internal/appserver"
 	"github.com/efuturetoday/nocturn/internal/hitl"
@@ -41,6 +43,14 @@ func serveCmd(_ []string) error {
 	if !isLoopbackAddr(addr) {
 		fmt.Printf("\n⚠️  WARNING: serving on %s with NO authentication — any device on your\n"+
 			"    network can control this assistant and approve effects. Dev use only.\n\n", addr)
+		// Advertise on the LAN so the app finds the daemon without a typed IP. Only meaningful
+		// on a real network interface — loopback has nothing to discover.
+		if shutdown, err := advertiseMDNS(addr); err != nil {
+			fmt.Printf("mDNS advertise failed (the app must connect by IP): %v\n", err)
+		} else {
+			defer shutdown()
+			fmt.Println("Discoverable on the LAN as _nocturn._tcp (Bonjour).")
+		}
 	}
 
 	// No TUI: notify()/scheduler lines go to stdout, and an approval that can reach neither
@@ -89,6 +99,30 @@ type denyNotifier struct{}
 
 func (denyNotifier) Notify(string, []hitl.Option) error {
 	return errors.New("no approval channel available (connect the app or configure out-of-band push)")
+}
+
+// advertiseMDNS announces the daemon on the LAN as `_nocturn._tcp` (Bonjour/DNS-SD) on the
+// listen port, so the app can discover it natively without a typed IP. It returns a shutdown
+// func to stop advertising; a TXT record carries the WebSocket path. Register-only — the app
+// browses with its own native mDNS.
+func advertiseMDNS(addr string) (func(), error) {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, fmt.Errorf("mdns: bad port in %q: %w", addr, err)
+	}
+	instance := "nocturn"
+	if h, err := os.Hostname(); err == nil && h != "" {
+		instance = "nocturn @ " + h
+	}
+	server, err := zeroconf.Register(instance, "_nocturn._tcp", "local.", port, []string{"path=/ws"}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return server.Shutdown, nil
 }
 
 // isLoopbackAddr reports whether a listen address is loopback-only (safe without auth). An
