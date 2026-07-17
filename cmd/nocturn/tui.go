@@ -24,6 +24,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/agent"
+	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/skill"
@@ -226,6 +227,7 @@ type chatModel struct {
 
 	entries   []entry
 	stream    string // raw assistant text for the current turn
+	thinking  string // live reasoning for the current turn (shown dim, cleared when it ends)
 	streamMD  string // markdown-rendered, already-committed blocks of the live stream
 	streamOff int    // byte offset into stream up to which streamMD has been rendered
 	active    map[uint64]*toolFrame
@@ -264,11 +266,12 @@ func newChatModel(active *bound, workspaces map[string]*bound, names []string, m
 	return m
 }
 
-// bindWorkspace points the model at bw and caches its skill catalog + agent list. The
-// single rebind that makes /ws switching cheap — no rebuild. It also swaps the event
-// subscription: it stops pumping the previous workspace's runner and starts a goroutine
-// pumping the new one's events into the program as runnerEventMsg. The runner keeps
-// running when unsubscribed (a background wake still executes); switching back re-attaches.
+// bindWorkspace points the model at bw and caches its skill catalog + agent list, swaps
+// the event subscription (stop pumping the previous runner, start pumping bw's), and
+// REBUILDS the visible transcript from bw's runner snapshot — so switching back to a
+// workspace shows its prior conversation again (and whether a background turn is still
+// running), not a blank screen. The runner keeps running while unsubscribed (a background
+// wake still executes); reattaching here re-syncs to it.
 func (m *chatModel) bindWorkspace(bw *bound) {
 	if m.unsub != nil {
 		m.unsub() // stop pumping the previous workspace's runner
@@ -286,6 +289,39 @@ func (m *chatModel) bindWorkspace(bw *bound) {
 			send(runnerEventMsg{e})
 		}
 	}()
+
+	// Re-sync the view to this workspace's runner: its history becomes the transcript, its
+	// running flag the "thinking" state. Live stream/tools/pending are dropped — a mid-turn
+	// switch reattaches to the stream and picks up subsequent events.
+	snap := bw.runner.Snapshot()
+	m.entries = entriesFromMessages(snap.Messages)
+	m.pending = nil
+	m.approval = nil
+	m.resetStream()
+	m.active, m.roots = nil, nil
+	m.running = snap.Running
+}
+
+// entriesFromMessages rebuilds a readable transcript from a runner snapshot's history.
+// User turns render as input lines, assistant answers as assistant blocks; system (the
+// persona) and tool-plumbing messages are omitted — they are not user-facing. A skill's
+// user turn shows its expanded body (that is what the model saw), which is the one
+// fidelity trade of reconstructing from history rather than the typed line.
+func entriesFromMessages(msgs []brain.Message) []entry {
+	var es []entry
+	for _, msg := range msgs {
+		switch msg.Role {
+		case "user":
+			if strings.TrimSpace(msg.Content) != "" {
+				es = append(es, &userEntry{text: msg.Content})
+			}
+		case "assistant":
+			if strings.TrimSpace(msg.Content) != "" {
+				es = append(es, &assistantEntry{md: msg.Content})
+			}
+		}
+	}
+	return es
 }
 
 // markSkill records a /name-activated skill as loaded so a later model skill.load dedups.
@@ -436,7 +472,7 @@ func (m chatModel) agentsListing() string {
 // --- streaming (progressive markdown, kept for live rendering) ---------------
 
 func (m *chatModel) resetStream() {
-	m.stream, m.streamMD, m.streamOff = "", "", 0
+	m.stream, m.thinking, m.streamMD, m.streamOff = "", "", "", 0
 }
 
 func (m *chatModel) advanceStream() {
@@ -608,6 +644,12 @@ func (m *chatModel) syncViewport() {
 		b.WriteString(e.render(m, m.width))
 		b.WriteString("\n\n")
 	}
+	// Live reasoning (dim, above the tool forest and the answer): shown while the turn
+	// thinks, cleared when it ends (resetStream). Wrapped at width so long chains fold.
+	if think := strings.TrimSpace(m.thinking); think != "" {
+		b.WriteString(styleWidth(hintStyle, m.width).Render("… " + think))
+		b.WriteString("\n\n")
+	}
 	b.WriteString(m.renderActive(m.width))
 	live := strings.TrimRight(m.streamMD, "\n")
 	if tail := m.stream[m.streamOff:]; strings.TrimSpace(tail) != "" {
@@ -724,8 +766,6 @@ func (m chatModel) renderMarkdown(s string) string {
 
 // --- update ------------------------------------------------------------------
 
-// scrollKeys let the user read back during a turn without the view snapping to
-// the bottom (syncViewport only auto-scrolls when already at the bottom).
 // handleSlash dispatches a /command: immediate UI listings (/skills, /agents, /ws),
 // a workspace switch, or a skill/agent activation that is SUBMITTED to the runner (so it
 // streams + gates like a chat turn). Skill/agent submits carry the typed line as the
@@ -747,16 +787,12 @@ func (m chatModel) handleSlash(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ws":
 		// /ws lists workspaces; /ws <name> switches the active one — rebinds this model to
-		// that workspace's isolated stack (its runner/agents/skills) and clears the visible
-		// transcript (its own history lives in its session).
+		// that workspace's isolated stack (its runner/agents/skills) and rebuilds the visible
+		// transcript from that runner's snapshot (bindWorkspace).
 		if target := strings.TrimSpace(rest); target == "" {
 			m.entries = append(m.entries, &noticeEntry{text: m.workspaceListing()})
 		} else if st, ok := m.workspaces[target]; ok {
-			m.bindWorkspace(st)
-			m.entries = nil
-			m.pending = nil
-			m.resetStream()
-			m.active, m.roots = nil, nil
+			m.bindWorkspace(st) // rebuilds entries/running from st's snapshot
 			m.notice = "workspace: " + target
 		} else {
 			m.entries = append(m.entries, &noticeEntry{text: "unknown workspace: /ws " + target + " (try /ws)", err: true})
@@ -800,6 +836,8 @@ func (m chatModel) handleSlash(input string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// scrollKeys let the user read back during a turn without the view snapping to
+// the bottom (syncViewport only auto-scrolls when already at the bottom).
 var scrollKeys = map[string]bool{
 	"pgup": true, "pgdown": true, "ctrl+u": true, "ctrl+d": true, "home": true, "end": true,
 }
@@ -996,6 +1034,11 @@ func (m chatModel) handleRunnerEvent(e session.Event) (tea.Model, tea.Cmd) {
 	case session.TokenEvent:
 		m.stream += ev.Text
 		m.advanceStream()
+		m.syncViewport()
+		return m, nil
+
+	case session.ThinkingEvent:
+		m.thinking += ev.Text
 		m.syncViewport()
 		return m, nil
 
