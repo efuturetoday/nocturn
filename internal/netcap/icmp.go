@@ -43,8 +43,8 @@ func (n *Net) Ping(ctx context.Context, host string) (*PingResult, error) {
 	call := capability.Call{Family: "icmp", Write: false, Target: host}
 	intent := "ping " + host
 	// Egress: the ping target is the exfiltration surface, same channel as a DNS name.
-	return gateway.Do(ctx, n.Guard, call, intent,
-		gateway.ScanEgress(n.Scanner, func() []string { return []string{host} }),
+	return gateway.Do(ctx, n.guard, call, intent,
+		gateway.ScanEgress(n.scanner, func() []string { return []string{host} }),
 		func() (*PingResult, error) {
 			// A raw IP (v4 or v6) is pinged directly — no DNS at all, so `ping 127.0.0.1`
 			// or `ping ::1` never depends on the resolver. Only a hostname is resolved.
@@ -52,7 +52,7 @@ func (n *Net) Ping(ctx context.Context, host string) (*PingResult, error) {
 			if ip := net.ParseIP(host); ip != nil {
 				ips = []net.IP{ip}
 			} else {
-				resolver := n.Resolver
+				resolver := n.resolver
 				if resolver == nil {
 					resolver = net.DefaultResolver
 				}

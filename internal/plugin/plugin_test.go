@@ -135,7 +135,7 @@ func TestPlugin_CageBoundsEffects_E2E(t *testing.T) {
 		Approvals: engine,
 		TTL:       time.Second,
 	}
-	netCap := &netcap.Net{Guard: guard, HTTP: stub, Scanner: secret.NewScanner(secret.NewStore())}
+	netCap := netcap.New(guard, netcap.WithHTTPClient(stub), netcap.WithScanner(secret.NewScanner(secret.NewStore())))
 	reg := tool.NewRegistry().AddMany(netCap.Tools()...)
 
 	host := plugin.NewHost(reg, nil)
@@ -202,7 +202,7 @@ func TestPlugin_ManifestIntentReachesHITL(t *testing.T) {
 		Approvals: engine,
 		TTL:       time.Second,
 	}
-	netCap := &netcap.Net{Guard: guard, HTTP: stub, Scanner: secret.NewScanner(secret.NewStore())}
+	netCap := netcap.New(guard, netcap.WithHTTPClient(stub), netcap.WithScanner(secret.NewScanner(secret.NewStore())))
 	reg := tool.NewRegistry().AddMany(netCap.Tools()...)
 
 	host := plugin.NewHost(reg, nil)

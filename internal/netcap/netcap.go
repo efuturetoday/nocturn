@@ -57,24 +57,45 @@ var strippedResponseHeaders = map[string]bool{
 // interface-adapter: it maps a tool invocation to a capability + host and runs it
 // through the guard, then performs the real I/O.
 type Net struct {
-	Guard       *gateway.Guard
-	Credentials *secret.Injector // host-owned, domain-bound credential jar; nil = no injection
-	Scanner     *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
-	HTTP        *http.Client
-	Resolver    *net.Resolver
+	guard       *gateway.Guard
+	credentials *secret.Injector // host-owned, domain-bound credential jar; nil = no injection
+	scanner     *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
+	httpClient  *http.Client
+	resolver    *net.Resolver
 }
 
-// New builds a Net over guard, injecting credentials and scanning with scanner, and
-// owns its own HTTP client (built from timeout) — the idiomatic constructor, matching
-// filecap.New / notifycap.New. The struct stays usable directly (tests set only what
-// they need).
-func New(guard *gateway.Guard, credentials *secret.Injector, scanner *secret.Scanner, timeout time.Duration) *Net {
-	return &Net{
-		Guard:       guard,
-		Credentials: credentials,
-		Scanner:     scanner,
-		HTTP:        &http.Client{Timeout: timeout},
+// defaultHTTPTimeout bounds an outbound request when no timeout is configured.
+const defaultHTTPTimeout = 15 * time.Second
+
+// Option configures a Net built with New.
+type Option func(*Net)
+
+// WithCredentials wires the host-owned credential injector (nil = no injection).
+func WithCredentials(c *secret.Injector) Option { return func(n *Net) { n.credentials = c } }
+
+// WithScanner wires the bidirectional leak scanner (nil = no scanning).
+func WithScanner(s *secret.Scanner) Option { return func(n *Net) { n.scanner = s } }
+
+// WithHTTPClient overrides the HTTP client (a test stub, or a server's own client).
+func WithHTTPClient(c *http.Client) Option { return func(n *Net) { n.httpClient = c } }
+
+// WithTimeout builds the HTTP client with a per-request timeout.
+func WithTimeout(d time.Duration) Option {
+	return func(n *Net) { n.httpClient = &http.Client{Timeout: d} }
+}
+
+// WithResolver overrides the DNS resolver.
+func WithResolver(r *net.Resolver) Option { return func(n *Net) { n.resolver = r } }
+
+// New builds a Net over guard — the ONLY constructor (fields are private). Its HTTP
+// client, credential injector, scanner and resolver are set via options; defaults are a
+// 15s-timeout client, no credentials, no scanning, the system resolver.
+func New(guard *gateway.Guard, opts ...Option) *Net {
+	n := &Net{guard: guard, httpClient: &http.Client{Timeout: defaultHTTPTimeout}}
+	for _, o := range opts {
+		o(n)
 	}
+	return n
 }
 
 // Response is the result of a gated outbound request, after ingress redaction.
@@ -124,14 +145,14 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) (*Response, error) 
 	// denied or leaking call. The scan is declared via ScanEgress over the guest-
 	// built request (URL + headers + body) and runs BEFORE the effect — hence before
 	// the credential is injected below, so the host's own bearer is never flagged.
-	return gateway.Do(ctx, n.Guard, call, intent,
-		gateway.ScanEgress(n.Scanner, func() []string { return egressParts(req) }),
+	return gateway.Do(ctx, n.guard, call, intent,
+		gateway.ScanEgress(n.scanner, func() []string { return egressParts(req) }),
 		func() (*Response, error) {
 			// Host-owned, family- and host-scoped credential injection: only a
 			// credential whose binding matches the "http" family AND destination host
 			// rides along (a bearer is action-agnostic — same for read and write; nil
 			// Injector = none).
-			if _, err := n.Credentials.InjectMatching(ctx, &req, "http", host); err != nil {
+			if _, err := n.credentials.InjectMatching(ctx, &req, "http", host); err != nil {
 				return nil, err
 			}
 
@@ -147,11 +168,7 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) (*Response, error) 
 				httpReq.Header.Set(k, v)
 			}
 
-			client := n.HTTP
-			if client == nil {
-				client = http.DefaultClient
-			}
-			resp, err := client.Do(httpReq)
+			resp, err := n.httpClient.Do(httpReq)
 			if err != nil {
 				return nil, err
 			}
@@ -169,13 +186,13 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) (*Response, error) 
 				if strippedResponseHeaders[strings.ToLower(k)] {
 					continue
 				}
-				hdr[k] = string(n.Scanner.RedactIngress([]byte(strings.Join(vs, ", "))))
+				hdr[k] = string(n.scanner.RedactIngress([]byte(strings.Join(vs, ", "))))
 			}
 			return &Response{
 				Status:     resp.StatusCode,
 				StatusText: http.StatusText(resp.StatusCode),
 				Headers:    hdr,
-				Body:       n.Scanner.RedactIngress(respBody),
+				Body:       n.scanner.RedactIngress(respBody),
 			}, nil
 		})
 }

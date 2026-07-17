@@ -51,11 +51,13 @@ func TestE2E_DeniedRequestNeverLeaves(t *testing.T) {
 	defer srv.Close()
 
 	// A Net with an empty policy → deny-by-default.
-	netCap := &netcap.Net{
-		Guard:   &gateway.Guard{Policy: capability.Policy{}},
-		Scanner: secret.NewScanner(secret.NewStore()),
-		HTTP:    srv.Client(),
-	}
+	netCap := netcap.New(
+		&gateway.Guard{Policy: capability.Policy{}}, netcap.WithScanner(
+
+			secret.NewScanner(secret.NewStore())), netcap.WithHTTPClient(
+
+			srv.Client()))
+
 	r := script.New(tool.NewRegistry().AddMany(netCap.Tools()...))
 
 	src := `
@@ -81,15 +83,17 @@ func TestE2E_DeniedRequestNeverLeaves(t *testing.T) {
 // autoAllowNet builds a Net that auto-allows http.read for any host — enough to
 // prove the wiring without an approval loop.
 func autoAllowNet(client *http.Client) *netcap.Net {
-	return &netcap.Net{
-		Guard: &gateway.Guard{
+	return netcap.New(
+		&gateway.Guard{
 			Policy: capability.Policy{Rules: []capability.Rule{
 				{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
 			}},
-		},
-		Scanner: secret.NewScanner(secret.NewStore()),
-		HTTP:    client,
-	}
+		}, netcap.WithScanner(
+
+			secret.NewScanner(secret.NewStore())), netcap.WithHTTPClient(
+
+			client))
+
 }
 
 // jsString renders s as a JS string literal (quotes + escapes) for embedding in

@@ -81,7 +81,7 @@ func TestFetch_Allow_ReturnsBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
+	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)})
 	resp, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
@@ -101,7 +101,7 @@ func TestFetch_Deny_DoesNotHitNetwork(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: capability.Policy{}}} // empty = deny-by-default
+	n := netcap.New(&gateway.Guard{Policy: capability.Policy{}}) // empty = deny-by-default
 	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
@@ -116,7 +116,7 @@ func TestFetch_HostAllowlist_DeniesOtherHost(t *testing.T) {
 	defer srv.Close()
 
 	// Only example.com is allowed; the test server's host is 127.0.0.1.
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead("example.com")}}
+	n := netcap.New(&gateway.Guard{Policy: allowRead("example.com")})
 	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("fetch to non-allowlisted host: err = %v, want ErrDenied", err)
@@ -129,7 +129,7 @@ func TestFetch_Ask_ApprovePerformsRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: askRead(), Approvals: askEngine(true), TTL: time.Second}}
+	n := netcap.New(&gateway.Guard{Policy: askRead(), Approvals: askEngine(true), TTL: time.Second})
 	resp, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
 		t.Fatalf("approved fetch: %v", err)
@@ -146,7 +146,7 @@ func TestFetch_Ask_DenyBlocksRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: askRead(), Approvals: askEngine(false), TTL: time.Second}}
+	n := netcap.New(&gateway.Guard{Policy: askRead(), Approvals: askEngine(false), TTL: time.Second})
 	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
@@ -170,7 +170,7 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 	n.resolve = engine.Resolve
 
 	guard := &gateway.Guard{Policy: askRead(), Approvals: engine, TTL: time.Second}
-	g := &netcap.Net{Guard: guard}
+	g := netcap.New(guard)
 	// A revocable scope owns the session grant; the Guard owns its epoch, so the test
 	// never touches the registry — it binds the scope and later revokes it.
 	scope := guard.NewScope(nil)
@@ -223,7 +223,7 @@ func TestFetch_InjectsCredentialForBoundHost(t *testing.T) {
 		Secret: "ms_graph", Capability: "http", Host: hostFromURL(t, srv.URL), Header: "Authorization", Prefix: "Bearer ",
 	})
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Credentials: in}
+	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)}, netcap.WithCredentials(in))
 	if _, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestFetch_NoInjectForOtherHost(t *testing.T) {
 		Secret: "ms_graph", Capability: "http", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
 	})
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Credentials: in}
+	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)}, netcap.WithCredentials(in))
 	if _, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL}); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestFetch_ManualCredential_Rejected(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
 	defer srv.Close()
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
+	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)})
 
 	u, _ := url.Parse(srv.URL)
 	if _, err := n.Fetch(context.Background(), secret.Request{URL: "http://user:pass@" + u.Host + "/"}); !errors.Is(err, netcap.ErrManualCredential) {
@@ -290,7 +290,7 @@ func TestFetch_PostSendsBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowReadWrite()}}
+	n := netcap.New(&gateway.Guard{Policy: allowReadWrite()})
 	_, err := n.Fetch(context.Background(), secret.Request{
 		Method: "POST", URL: srv.URL, Body: []byte(`{"x":1}`),
 		Headers: map[string]string{"Content-Type": "application/json"},
@@ -310,7 +310,7 @@ func TestFetch_Write_DeniedWithoutWriteRule(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
 	defer srv.Close()
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
+	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)})
 	_, err := n.Fetch(context.Background(), secret.Request{Method: "POST", URL: srv.URL, Body: []byte("x")})
 	if !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
@@ -329,7 +329,7 @@ func TestFetch_EgressLeak_Blocked(t *testing.T) {
 
 	store := secret.NewStore()
 	store.Set("tok", []byte("supersecretvalue123"))
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Scanner: secret.NewScanner(store)}
+	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)}, netcap.WithScanner(secret.NewScanner(store)))
 
 	_, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL + "/?x=supersecretvalue123"})
 	if !errors.Is(err, secret.ErrLeaked) {
@@ -349,7 +349,7 @@ func TestFetch_IngressLeak_Redacted(t *testing.T) {
 
 	store := secret.NewStore()
 	store.Set("tok", []byte("supersecretvalue123"))
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Scanner: secret.NewScanner(store)}
+	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)}, netcap.WithScanner(secret.NewScanner(store)))
 
 	resp, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
@@ -374,7 +374,7 @@ func TestFetch_IngressLeak_RedactedInHeader(t *testing.T) {
 
 	store := secret.NewStore()
 	store.Set("tok", []byte("supersecretvalue123"))
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}, Scanner: secret.NewScanner(store)}
+	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)}, netcap.WithScanner(secret.NewScanner(store)))
 
 	resp, err := n.Fetch(context.Background(), secret.Request{URL: srv.URL})
 	if err != nil {
@@ -400,7 +400,7 @@ func TestFetchTool_Post(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowReadWrite()}}
+	n := netcap.New(&gateway.Guard{Policy: allowReadWrite()})
 	var write tool.Tool
 	for _, tl := range n.Tools() {
 		if tl.Name == "http.write" {

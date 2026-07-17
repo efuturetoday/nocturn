@@ -321,11 +321,11 @@ func TestBrain_Integration_FetchThroughGateway(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	netCap := &netcap.Net{Guard: &gateway.Guard{
+	netCap := netcap.New(&gateway.Guard{
 		Policy: capability.Policy{Rules: []capability.Rule{
 			{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
 		}},
-	}}
+	})
 
 	reg := tool.NewRegistry().AddMany([]tool.Tool{
 		mkTool("net.fetch", func(ctx context.Context, args string) (string, error) {

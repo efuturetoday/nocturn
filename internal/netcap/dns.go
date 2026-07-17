@@ -11,9 +11,9 @@ import (
 )
 
 // resolver returns the configured resolver, defaulting to the system one.
-func (n *Net) resolver() *net.Resolver {
-	if n.Resolver != nil {
-		return n.Resolver
+func (n *Net) dnsResolver() *net.Resolver {
+	if n.resolver != nil {
+		return n.resolver
 	}
 	return net.DefaultResolver
 }
@@ -35,15 +35,15 @@ func (n *Net) Lookup(ctx context.Context, host, recordType string) ([]string, er
 	// nameserver leaks whatever is encoded in it). Ingress: records — TXT above all —
 	// are attacker-controllable inbound text, so redact any echoed vault secret before
 	// it reaches the model.
-	return gateway.Do(ctx, n.Guard, call, intent,
-		gateway.ScanEgress(n.Scanner, func() []string { return []string{host} }),
+	return gateway.Do(ctx, n.guard, call, intent,
+		gateway.ScanEgress(n.scanner, func() []string { return []string{host} }),
 		func() ([]string, error) {
 			records, err := n.lookupRecords(ctx, typ, host, recordType)
 			if err != nil {
 				return nil, err
 			}
 			for i := range records {
-				records[i] = string(n.Scanner.RedactIngress([]byte(records[i])))
+				records[i] = string(n.scanner.RedactIngress([]byte(records[i])))
 			}
 			return records, nil
 		})
@@ -51,7 +51,7 @@ func (n *Net) Lookup(ctx context.Context, host, recordType string) ([]string, er
 
 // lookupRecords performs the raw resolution for a record type (no gating/scanning).
 func (n *Net) lookupRecords(ctx context.Context, typ, host, recordType string) ([]string, error) {
-	r := n.resolver()
+	r := n.dnsResolver()
 	switch typ {
 	case "A", "AAAA", "IP":
 		network := map[string]string{"A": "ip4", "AAAA": "ip6", "IP": "ip"}[typ]

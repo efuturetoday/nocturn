@@ -27,7 +27,7 @@ func toolByName(tools []tool.Tool, name string) (tool.Tool, bool) {
 // The capability group exports its own tools with valid JSON-Schema args — the
 // tool contract lives with the capability, not in the caller.
 func TestTools_ExposesCapabilitiesWithSchemas(t *testing.T) {
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: capability.Policy{}}}
+	n := netcap.New(&gateway.Guard{Policy: capability.Policy{}})
 	tools := n.Tools()
 
 	for _, name := range []string{"http.read", "http.write", "dns.resolve"} {
@@ -45,7 +45,7 @@ func TestTools_ExposesCapabilitiesWithSchemas(t *testing.T) {
 }
 
 func TestFetchTool_ValidatesArguments(t *testing.T) {
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
+	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)})
 	ft, _ := toolByName(n.Tools(), "http.read")
 
 	if _, err := ft.Invoke(context.Background(), `not json`); err == nil {
@@ -63,7 +63,7 @@ func TestFetchTool_Invoke_ReturnsEnvelope(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowRead(capability.Wildcard)}}
+	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)})
 	ft, _ := toolByName(n.Tools(), "http.read")
 
 	out, err := ft.Invoke(context.Background(), fmt.Sprintf(`{"url":%q}`, srv.URL))

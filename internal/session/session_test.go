@@ -128,7 +128,7 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 		Approvals: engine,
 		TTL:       time.Second,
 	}
-	netCap := &netcap.Net{Guard: guard}
+	netCap := netcap.New(guard)
 
 	tools := []tool.Tool{{
 		Spec: tool.Spec{Name: "net.fetch"},
