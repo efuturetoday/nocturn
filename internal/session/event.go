@@ -10,6 +10,7 @@ const (
 	SourceUser   Source = "user"
 	SourceWake   Source = "wake"
 	SourceRemind Source = "remind"
+	SourceAgent  Source = "agent" // a child-agent run submitted via SubmitAgent
 )
 
 // Event is one thing that happened in a Runner, delivered to every subscriber. It
@@ -27,10 +28,13 @@ type ThinkingEvent struct{ Text string }
 // ToolEvent is a tool call's start or end (the observable forest).
 type ToolEvent struct{ Event activity.ToolEvent }
 
-// TurnStartEvent marks a turn beginning with its input and where it came from.
+// TurnStartEvent marks a turn beginning: Display is the client-facing line to render
+// (a typed "/skill …" or "/agent task"), Input is what actually ran (an expanded skill
+// body). They differ only when a client submitted them apart; otherwise Display == Input.
 type TurnStartEvent struct {
-	Input  string
-	Source Source
+	Display string
+	Input   string
+	Source  Source
 }
 
 // TurnEndEvent marks a turn finishing, with its final answer or error.
@@ -40,10 +44,12 @@ type TurnEndEvent struct {
 }
 
 // QueuedEvent marks an input buffered while a turn was running (type-ahead, or a
-// wake/remind that fired mid-turn); it will run when the current turn ends.
+// wake/remind that fired mid-turn); it will run when the current turn ends. Display is
+// the client-facing line (see TurnStartEvent).
 type QueuedEvent struct {
-	Input  string
-	Source Source
+	Display string
+	Input   string
+	Source  Source
 }
 
 // NoticeEvent is a dim system line (a reset happened, a background scheduler line).

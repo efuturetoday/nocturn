@@ -41,7 +41,8 @@ type shared struct {
 // injector hold only its own secrets/grants, so N run in one process without crossing.
 type bound struct {
 	ws        *workspace.Workspace
-	session   *session.Session // the interactive session; Close() at shutdown
+	session   *session.Session // the interactive session; Close() at shutdown, MarkSkill for /name
+	runner    *session.Runner  // the turn loop the TUI drives (Submit in, Subscribe out)
 	waker     *wakecap.Waker
 	scheduler *agent.Scheduler
 }
@@ -111,13 +112,22 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 
 	sess := w.OpenSession()
 
+	// The Runner is the single serialized turn loop for THIS workspace's session: the TUI
+	// Submits inputs and Subscribes to its events; a self-wake and a scheduled agent run
+	// feed the same loop. Agent runs (/name, and a wake that targets one) route through the
+	// injected agent runner so they stream + gate exactly like a chat turn.
+	runner := session.NewRunner(sess, session.WithAgentRunner(func(runCtx context.Context, name, task string) (string, error) {
+		res, err := w.RunAgent(runCtx, name, task)
+		return res.Answer, err
+	}))
+	runner.Start(ctx)
+
 	// wake: the running agent schedules its OWN resume after a delay (self-paced loops /
-	// polling); ungated, bounded (delay clamp + pending cap). The resume routes through
-	// the TUI event loop (selfWakeMsg) so it serializes with normal turns — and carries
-	// THIS session, so a wake resumes its own workspace even if the user switched away.
-	// The wake tool is wired here (not inside the workspace) because that transport is a
-	// TUI concern. Cancelled on Reset (via the chatModel).
-	waker := wakecap.New(func(note string) { sh.send(selfWakeMsg{note: note, sess: sess}) })
+	// polling); ungated, bounded (delay clamp + pending cap). The resume Submits to THIS
+	// workspace's runner, so it serializes with normal turns and resumes its own workspace
+	// even if the user switched away. The wake tool is wired here (not inside the workspace)
+	// because that transport is a runner concern. Cancelled on Reset (via the chatModel).
+	waker := wakecap.New(func(note string) { runner.Submit(session.SourceWake, note) })
 	w.Tools().Add(waker.Tool())
 
 	sched, err := agent.NewScheduler(w.Agents(), func(runCtx context.Context, def agent.Agent) error {
@@ -131,5 +141,5 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		return nil, err
 	}
 
-	return &bound{ws: w, session: sess, waker: waker, scheduler: sched}, nil
+	return &bound{ws: w, session: sess, runner: runner, waker: waker, scheduler: sched}, nil
 }

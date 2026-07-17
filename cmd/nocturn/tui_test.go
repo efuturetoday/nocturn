@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/efuturetoday/nocturn/internal/activity"
-	"github.com/efuturetoday/nocturn/internal/hitl"
 )
 
 // The observer tracks a forest of calls by id: concurrent roots run at once, a
@@ -77,8 +76,8 @@ func TestToolHeadline_Compact(t *testing.T) {
 // off-by-one that used to clip the transcript during an approval).
 func TestApprovalHeight_MatchesRender(t *testing.T) {
 	m := chatModel{width: 40, approval: &approvalPrompt{
-		intent:  "POST api.example.com",
-		options: []hitl.Option{{Label: "Allow once"}, {Label: "Allow session"}, {Label: "Deny"}},
+		intent: "POST api.example.com",
+		labels: []string{"Allow once", "Allow session", "Deny"},
 	}}
 	if got := lipgloss.Height(m.approvalView()); got != m.approvalHeight() {
 		t.Fatalf("approvalView renders %d lines, layout reserves %d", got, m.approvalHeight())

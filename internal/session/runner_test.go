@@ -246,6 +246,55 @@ func TestRunner_Approval(t *testing.T) {
 	}
 }
 
+// SubmitAgent runs the injected agent runner on the same serialized loop: its Display
+// is the client line, its Input is the task, and it streams/gates like a session turn.
+func TestRunner_SubmitAgent_RoutesToAgentRunner(t *testing.T) {
+	var mu sync.Mutex
+	var gotName, gotTask string
+	r := session.NewRunner(
+		&fakeTurns{ask: func(context.Context, string) (string, error) { return "session", nil }},
+		session.WithAgentRunner(func(_ context.Context, name, task string) (string, error) {
+			mu.Lock()
+			gotName, gotTask = name, task
+			mu.Unlock()
+			return "agent-answer", nil
+		}),
+	)
+	sub, unsub := r.Subscribe()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { unsub(); cancel() })
+	r.Start(ctx)
+
+	r.SubmitAgent("/researcher dig in", "researcher", "dig in")
+	e, ok := recv(t, sub).(session.TurnStartEvent)
+	if !ok || e.Source != session.SourceAgent || e.Display != "/researcher dig in" || e.Input != "dig in" {
+		t.Fatalf("want TurnStart(agent, display, task), got %#v", e)
+	}
+	mustTurnEnd(t, sub, "agent-answer")
+	mu.Lock()
+	defer mu.Unlock()
+	if gotName != "researcher" || gotTask != "dig in" {
+		t.Fatalf("agent runner saw (%q,%q), want (researcher,dig in)", gotName, gotTask)
+	}
+}
+
+// A SubmitAgent with no agent runner wired fails the turn (an error TurnEnd), never panics.
+func TestRunner_SubmitAgent_NoRunner_ErrorsTurn(t *testing.T) {
+	r := session.NewRunner(&fakeTurns{ask: func(context.Context, string) (string, error) { return "", nil }})
+	sub, unsub := r.Subscribe()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { unsub(); cancel() })
+	r.Start(ctx)
+
+	r.SubmitAgent("/x", "x", "go")
+	if _, ok := recv(t, sub).(session.TurnStartEvent); !ok {
+		t.Fatal("want TurnStart")
+	}
+	if e, ok := recv(t, sub).(session.TurnEndEvent); !ok || e.Err == nil {
+		t.Fatalf("want TurnEnd with an error, got %#v", e)
+	}
+}
+
 func mustTurnStart(t *testing.T, sub <-chan session.Event, input string, src session.Source) {
 	t.Helper()
 	e, ok := recv(t, sub).(session.TurnStartEvent)

@@ -80,7 +80,9 @@ func (n attendedNotifier) Notify(intent string, options []hitl.Option) error {
 	n.sink.PresentApproval(intent, labels, func(choice int) {
 		if choice >= 0 && choice < len(options) {
 			_ = n.resolve(options[choice].Token) // enacts the chosen option; unblocks the parked Request
+			return
 		}
+		_ = n.resolve(denyToken(options)) // Esc / out-of-range = deny (fail-closed)
 	})
 	return nil
 }
@@ -225,7 +227,7 @@ func tuiCmd(args []string) error {
 	// Detect the terminal background ONCE, before bubbletea takes over stdin. The TUI
 	// opens on the active workspace; /ws switches among all built workspaces.
 	dark := lipgloss.HasDarkBackground()
-	p = tea.NewProgram(newChatModel(active, workspaces, names, modelName, dark, sh.send, ctx), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p = tea.NewProgram(newChatModel(active, workspaces, names, modelName, dark, sh.send), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	notifier.p = p
 
 	// Start EVERY workspace's scheduler — one instance fires all workspaces' cron

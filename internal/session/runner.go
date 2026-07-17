@@ -20,7 +20,8 @@ import (
 // production a *Session is passed directly (no closure-injection to dodge an import,
 // now that both live in this package).
 type Runner struct {
-	sess turns
+	sess     turns
+	runAgent func(ctx context.Context, name, task string) (string, error) // nil = agent runs unsupported
 
 	parent context.Context
 	cmds   chan command
@@ -37,8 +38,10 @@ type Runner struct {
 }
 
 type queuedInput struct {
-	source Source
-	input  string
+	source  Source
+	display string // client-facing line (typed "/skill …"); == input for a plain message
+	input   string // what actually runs (an expanded skill body)
+	agent   string // non-empty: run this named agent with input as its task (via runAgent)
 }
 
 type turnResult struct {
@@ -56,11 +59,13 @@ const (
 )
 
 type command struct {
-	kind   cmdKind
-	source Source
-	input  string
-	id     string // cmdResolve: the approval id
-	choice int    // cmdResolve: the chosen option index
+	kind    cmdKind
+	source  Source
+	display string
+	input   string
+	agent   string
+	id      string // cmdResolve: the approval id
+	choice  int    // cmdResolve: the chosen option index
 }
 
 // pendingApproval is the at-most-one approval a turn is parked on (turns are serial).
@@ -83,14 +88,28 @@ type turns interface {
 	History() []brain.Message
 }
 
+// RunnerOption configures a Runner built with NewRunner.
+type RunnerOption func(*Runner)
+
+// WithAgentRunner wires how a SubmitAgent command runs a named child agent to a final
+// answer (in production, the workspace's RunAgent). Without it, SubmitAgent fails the
+// turn with an error — a session-only client simply never submits one.
+func WithAgentRunner(fn func(ctx context.Context, name, task string) (string, error)) RunnerOption {
+	return func(r *Runner) { r.runAgent = fn }
+}
+
 // NewRunner builds a Runner over sess. Call Start to spin the command/turn loop.
-func NewRunner(sess turns) *Runner {
-	return &Runner{
+func NewRunner(sess turns, opts ...RunnerOption) *Runner {
+	r := &Runner{
 		sess: sess,
 		cmds: make(chan command, 8),
 		done: make(chan turnResult, 1),
 		subs: map[int]chan Event{},
 	}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
 }
 
 // Start runs the command/turn loop until ctx is cancelled. Turns derive from ctx, so
@@ -102,11 +121,25 @@ func (r *Runner) Start(ctx context.Context) {
 
 // --- commands (the IN port; safe to call from any goroutine / client) ---
 
-// Submit enqueues an input to run as a turn — from the user, or from a wake/remind
-// resumption. If a turn is running it is buffered (a QueuedEvent) and runs when the
-// current turn ends; otherwise it starts immediately.
+// Submit enqueues an input to run as a session turn — from the user, or from a
+// wake/remind resumption. If a turn is running it is buffered (a QueuedEvent) and runs
+// when the current turn ends; otherwise it starts immediately. Display equals input.
 func (r *Runner) Submit(source Source, input string) {
-	r.cmds <- command{kind: cmdSubmit, source: source, input: input}
+	r.cmds <- command{kind: cmdSubmit, source: source, display: input, input: input}
+}
+
+// SubmitInput is Submit with a distinct client-facing display line (input is what runs;
+// display is what a client shows) — for a slash-skill whose expanded body must not be
+// echoed into the transcript.
+func (r *Runner) SubmitInput(source Source, display, input string) {
+	r.cmds <- command{kind: cmdSubmit, source: source, display: display, input: input}
+}
+
+// SubmitAgent enqueues a named child-agent run (via the injected agent runner) as a turn
+// on this same serialized loop, so it streams and gates exactly like a session turn.
+// display is the client-facing line; task is the agent's input.
+func (r *Runner) SubmitAgent(display, name, task string) {
+	r.cmds <- command{kind: cmdSubmit, source: SourceAgent, display: display, input: task, agent: name}
 }
 
 // Cancel stops the running turn (if any). Buffered inputs remain.
@@ -187,8 +220,9 @@ type Snapshot struct {
 
 // QueuedItem is one buffered input in a Snapshot.
 type QueuedItem struct {
-	Input  string
-	Source Source
+	Display string
+	Input   string
+	Source  Source
 }
 
 // Snapshot returns the current session state. (Message history reflects completed
@@ -197,7 +231,7 @@ func (r *Runner) Snapshot() Snapshot {
 	r.mu.Lock()
 	s := Snapshot{Running: r.running, Queue: make([]QueuedItem, len(r.queue))}
 	for i, q := range r.queue {
-		s.Queue[i] = QueuedItem{Input: q.input, Source: q.source}
+		s.Queue[i] = QueuedItem{Display: q.display, Input: q.input, Source: q.source}
 	}
 	if r.approval != nil {
 		ev := r.approval.event
@@ -216,7 +250,7 @@ func (r *Runner) loop(ctx context.Context) {
 		case c := <-r.cmds:
 			switch c.kind {
 			case cmdSubmit:
-				r.onSubmit(c.source, c.input)
+				r.onSubmit(queuedInput{source: c.source, display: c.display, input: c.input, agent: c.agent})
 			case cmdCancel:
 				r.onCancel()
 			case cmdReset:
@@ -232,18 +266,18 @@ func (r *Runner) loop(ctx context.Context) {
 	}
 }
 
-func (r *Runner) onSubmit(src Source, input string) {
+func (r *Runner) onSubmit(qi queuedInput) {
 	r.mu.Lock()
 	running := r.running
 	if running {
-		r.queue = append(r.queue, queuedInput{src, input})
+		r.queue = append(r.queue, qi)
 	}
 	r.mu.Unlock()
 	if running {
-		r.emit(QueuedEvent{Input: input, Source: src})
+		r.emit(QueuedEvent{Display: qi.display, Input: qi.input, Source: qi.source})
 		return
 	}
-	r.begin(queuedInput{src, input})
+	r.begin(qi)
 }
 
 func (r *Runner) begin(qi queuedInput) {
@@ -254,11 +288,24 @@ func (r *Runner) begin(qi queuedInput) {
 	r.running = true
 	r.cancelTurn = cancel
 	r.mu.Unlock()
-	r.emit(TurnStartEvent{Input: qi.input, Source: qi.source})
+	r.emit(TurnStartEvent{Display: qi.display, Input: qi.input, Source: qi.source})
 	go func() {
-		ans, err := r.sess.Ask(turnCtx, qi.input)
+		ans, err := r.runTurn(turnCtx, qi)
 		r.done <- turnResult{ans, err}
 	}()
+}
+
+// runTurn executes one queued item: a named agent run (via the injected runAgent) or,
+// by default, a session turn (sess.Ask). An agent submission with no runAgent wired is a
+// turn-level error, not a panic — the loop surfaces it as a TurnEndEvent.
+func (r *Runner) runTurn(ctx context.Context, qi queuedInput) (string, error) {
+	if qi.agent != "" {
+		if r.runAgent == nil {
+			return "", fmt.Errorf("agent runs not supported by this runner")
+		}
+		return r.runAgent(ctx, qi.agent, qi.input)
+	}
+	return r.sess.Ask(ctx, qi.input)
 }
 
 func (r *Runner) onTurnDone(res turnResult) {
