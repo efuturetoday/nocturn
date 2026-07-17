@@ -24,7 +24,7 @@ import (
 	"math"
 	"net/url"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	aho "github.com/petar-dambovaliev/aho-corasick"
@@ -151,10 +151,15 @@ func (sc *Scanner) ScanEgress(parts ...string) error {
 		if p == "" {
 			continue
 		}
-		if len(sc.scanExact(p)) > 0 {
-			return fmt.Errorf("%w: a stored vault secret in the outbound request", ErrLeaked)
-		}
-		for _, text := range []string{p, percentDecode(p)} {
+		// Scan the raw part AND every percent-decoding of it. Tier 1 (exact) must
+		// run over the decoded text too: a secret URL-encoded to evade a raw
+		// substring check — even every byte, even multiple layers — is recovered
+		// by decodeVariants and then caught. Running only scanExact(p) here would
+		// let a fully percent-encoded vault value slip past the load-bearing tier.
+		for _, text := range decodeVariants(p) {
+			if len(sc.scanExact(text)) > 0 {
+				return fmt.Errorf("%w: a stored vault secret in the outbound request", ErrLeaked)
+			}
 			for _, h := range sc.scanPatterns(text) {
 				if h.action == actionBlock {
 					return fmt.Errorf("%w: %s pattern in the outbound request", ErrLeaked, h.rule)
@@ -167,7 +172,9 @@ func (sc *Scanner) ScanEgress(parts ...string) error {
 
 // RedactIngress replaces every stored vault value and block/redact-action pattern
 // in b with [REDACTED], so a secret echoed back in a response never reaches the
-// model. warn-action patterns are left in place.
+// model. warn-action patterns are left in place. A percent-encoded stored value is
+// matched via encodingVariants (including the fully-encoded form) so its raw-offset
+// span is redacted directly — no decode-then-offset-map needed.
 func (sc *Scanner) RedactIngress(b []byte) []byte {
 	if sc == nil || len(b) == 0 {
 		return b
@@ -255,7 +262,32 @@ func encodingVariants(s string) []string {
 	add(pctEncode(s, "%20", true))
 	add(pctEncode(s, "+", false))
 	add(pctEncode(s, "+", true))
+	// Fully percent-encoded forms (every byte, incl. alphanumerics). pctEncode
+	// above leaves unreserved bytes literal, so it does NOT cover a value that was
+	// encoded byte-for-byte to evade a raw match; these variants do, at raw offsets
+	// (so ingress redaction lands on the encoded span without offset-mapping).
+	add(pctEncodeAll(s, false))
+	add(pctEncodeAll(s, true))
 	return out
+}
+
+// pctEncodeAll percent-encodes every byte of s, including unreserved ones.
+// lowerHex chooses %xx vs %XX. Unlike pctEncode this leaves nothing literal, so
+// it matches a value an attacker encoded byte-for-byte.
+func pctEncodeAll(s string, lowerHex bool) string {
+	hexDigits := "0123456789ABCDEF"
+	if lowerHex {
+		hexDigits = "0123456789abcdef"
+	}
+	var b strings.Builder
+	b.Grow(len(s) * 3)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		b.WriteByte('%')
+		b.WriteByte(hexDigits[c>>4])
+		b.WriteByte(hexDigits[c&0x0f])
+	}
+	return b.String()
 }
 
 // pctEncode percent-encodes every non-unreserved byte of s. space is what a
@@ -289,14 +321,44 @@ func percentDecode(s string) string {
 	return s
 }
 
+// maxDecodePasses bounds how many percent-decoding layers decodeVariants unwinds,
+// so a maliciously deeply-encoded payload can't drive unbounded work.
+const maxDecodePasses = 4
+
+// decodeVariants returns s plus each successive percent-decoding of it, up to a
+// fixed point (or maxDecodePasses). This unwinds multi-layer encoding so a scan
+// sees the plaintext a receiving server would decode to — not just the raw text.
+func decodeVariants(s string) []string {
+	out := []string{s}
+	seen := map[string]bool{s: true}
+	cur := s
+	for range maxDecodePasses {
+		d := percentDecode(cur)
+		if seen[d] {
+			break
+		}
+		seen[d] = true
+		out = append(out, d)
+		cur = d
+	}
+	return out
+}
+
 // applyRedactions replaces the given spans of text with [REDACTED]. Spans are
 // sorted; any span starting inside a prior one is skipped (overlap-safe).
 func applyRedactions(text string, spans [][2]int) string {
-	sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
+	slices.SortFunc(spans, func(x, y [2]int) int { return x[0] - y[0] })
 	var b strings.Builder
 	last := 0
 	for _, s := range spans {
 		if s[0] < last {
+			// Overlapping span. "Skip" is only safe when this span is nested in the
+			// prior one; for a PARTIAL overlap ([0,5] then [3,10]) skipping without
+			// extending last would emit the tail (text[5:10]) verbatim — a leak.
+			// Absorb the tail into the current redaction instead.
+			if s[1] > last {
+				last = s[1]
+			}
 			continue
 		}
 		b.WriteString(text[last:s[0]])

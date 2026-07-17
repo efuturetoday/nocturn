@@ -56,11 +56,11 @@ func withToolName(ctx context.Context, name string) context.Context {
 	return context.WithValue(ctx, toolNameKey{}, name)
 }
 
-// ToolName returns the outermost tool name stamped for the current call chain, or
+// Name returns the outermost tool name stamped for the current call chain, or
 // "" if none. The gateway keys a standing grant on this (the model-facing tool)
 // rather than the reconstructed primitive, so approving "gmail.send" never
 // silently allows "gmail.delete" on the same host.
-func ToolName(ctx context.Context) string {
+func Name(ctx context.Context) string {
 	n, _ := ctx.Value(toolNameKey{}).(string)
 	return n
 }

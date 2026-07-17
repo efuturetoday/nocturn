@@ -65,7 +65,7 @@ func (p *Plugin) engine() (*sandbox.Engine, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.built == nil {
-		eng, err := sandbox.NewEngine(context.Background(), p.artifact, sandbox.EngineConfig{
+		eng, err := sandbox.New(context.Background(), p.artifact, sandbox.EngineConfig{
 			HostNames: []string{"call"},
 		})
 		if err != nil {

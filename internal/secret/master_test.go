@@ -12,10 +12,10 @@ import (
 const testLogN = 10 // cheap scrypt for tests; production uses 2^18
 
 func TestDeriveMaster_RejectsEmpty(t *testing.T) {
-	if _, err := secret.DeriveMaster("", []byte("salt"), secret.MasterWorkFactor(testLogN)); err == nil {
+	if _, err := secret.DeriveMaster("", []byte("salt"), secret.WithWorkFactor(testLogN)); err == nil {
 		t.Error("empty passphrase must be rejected")
 	}
-	if _, err := secret.DeriveMaster("pw", nil, secret.MasterWorkFactor(testLogN)); err == nil {
+	if _, err := secret.DeriveMaster("pw", nil, secret.WithWorkFactor(testLogN)); err == nil {
 		t.Error("empty salt must be rejected")
 	}
 }
@@ -26,7 +26,7 @@ func TestDeriveMaster_RejectsEmpty(t *testing.T) {
 // about another.
 func TestMaster_WorkspaceKeyDomainSeparated(t *testing.T) {
 	salt := []byte("a-16-byte-salt!!")
-	m, err := secret.DeriveMaster("correct horse", salt, secret.MasterWorkFactor(testLogN))
+	m, err := secret.DeriveMaster("correct horse", salt, secret.WithWorkFactor(testLogN))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestMaster_WorkspaceKeyDomainSeparated(t *testing.T) {
 	}
 
 	// A different passphrase → different master → different key for the same name.
-	m2, err := secret.DeriveMaster("wrong horse", salt, secret.MasterWorkFactor(testLogN))
+	m2, err := secret.DeriveMaster("wrong horse", salt, secret.WithWorkFactor(testLogN))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestMasterSalt_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, _ := secret.DeriveMaster("pw", salt, secret.MasterWorkFactor(logN))
+	m, _ := secret.DeriveMaster("pw", salt, secret.WithWorkFactor(logN))
 	if err := secret.WriteMasterSalt(path, salt, logN, m.Verifier()); err != nil {
 		t.Fatal(err)
 	}
@@ -84,12 +84,12 @@ func TestMasterSalt_RoundTrip(t *testing.T) {
 // master passes, a wrong one fails (GCM tag) — so a typo is caught up front.
 func TestMaster_Verifier(t *testing.T) {
 	salt := []byte("verifier-16-byte")
-	right, _ := secret.DeriveMaster("correct", salt, secret.MasterWorkFactor(testLogN))
+	right, _ := secret.DeriveMaster("correct", salt, secret.WithWorkFactor(testLogN))
 	blob := right.Verifier()
 	if !right.CheckVerifier(blob) {
 		t.Fatal("the correct master must pass its own verifier")
 	}
-	wrong, _ := secret.DeriveMaster("typo", salt, secret.MasterWorkFactor(testLogN))
+	wrong, _ := secret.DeriveMaster("typo", salt, secret.WithWorkFactor(testLogN))
 	if wrong.CheckVerifier(blob) {
 		t.Fatal("a wrong passphrase's master must fail the verifier")
 	}
@@ -99,7 +99,7 @@ func TestMaster_Verifier(t *testing.T) {
 // — the whole passphrase → master → key_ws → AES-GCM vault chain round-trips.
 func TestMaster_DerivedKeyOpensVault(t *testing.T) {
 	salt := []byte("another-16-byte!")
-	m, err := secret.DeriveMaster("pw", salt, secret.MasterWorkFactor(testLogN))
+	m, err := secret.DeriveMaster("pw", salt, secret.WithWorkFactor(testLogN))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestMaster_DerivedKeyOpensVault(t *testing.T) {
 	}
 
 	// Re-derive the key from the same passphrase+salt and reopen.
-	m2, _ := secret.DeriveMaster("pw", salt, secret.MasterWorkFactor(testLogN))
+	m2, _ := secret.DeriveMaster("pw", salt, secret.WithWorkFactor(testLogN))
 	re, err := secret.OpenVault(path, m2.WorkspaceKey("default"))
 	if err != nil {
 		t.Fatal(err)

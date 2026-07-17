@@ -39,9 +39,10 @@ type masterCfg struct{ logN int }
 // MasterOption configures DeriveMaster.
 type MasterOption func(*masterCfg)
 
-// MasterWorkFactor overrides the scrypt cost (2^logN). Meant for tests, where the
-// default's latency would dominate; production uses the stored/default factor.
-func MasterWorkFactor(logN int) MasterOption {
+// WithWorkFactor overrides the scrypt cost (2^logN): production passes the stored
+// per-vault factor from NewMasterSalt, and tests pass a small one to avoid the
+// default's latency dominating. Omit it to use the built-in default.
+func WithWorkFactor(logN int) MasterOption {
 	return func(c *masterCfg) { c.logN = logN }
 }
 

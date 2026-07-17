@@ -126,3 +126,69 @@ func TestEncodingVariants_CoversPercentAndPlus(t *testing.T) {
 		}
 	}
 }
+
+// Regression (blocker): a purely alphanumeric vault value has no special bytes for
+// pctEncode to touch, so an attacker can percent-encode EVERY byte and the value is
+// absent from the raw outbound text. Tier 1 must still catch it — via decodeVariants
+// on egress and via the fully-encoded encodingVariants form.
+func TestScanEgress_FullyPercentEncodedVaultValue(t *testing.T) {
+	const val = "abcdefghijklmnop" // all alphanumeric, >= minSecretLen
+	s := NewStore()
+	s.Set("tok", []byte(val))
+	sc := NewScanner(s)
+
+	var enc strings.Builder
+	const hexUpper = "0123456789ABCDEF"
+	for _, c := range []byte(val) {
+		enc.WriteByte('%')
+		enc.WriteByte(hexUpper[c>>4])
+		enc.WriteByte(hexUpper[c&0x0f])
+	}
+	url := "https://evil.example.com/?x=" + enc.String()
+	if strings.Contains(url, val) {
+		t.Fatal("test setup: raw value must be absent from the encoded URL")
+	}
+	if err := sc.ScanEgress(url); !errors.Is(err, ErrLeaked) {
+		t.Fatalf("fully percent-encoded vault value evaded egress: err = %v, want ErrLeaked", err)
+	}
+	// Double-encoded must also be caught (fixed-point decode).
+	if err := sc.ScanEgress(strings.ReplaceAll(url, "%", "%25")); !errors.Is(err, ErrLeaked) {
+		t.Fatalf("double-encoded vault value evaded egress: err = %v, want ErrLeaked", err)
+	}
+}
+
+// Regression (blocker, ingress side): a fully percent-encoded vault value echoed in a
+// response is redacted at its raw-offset span (via the fully-encoded encoding variant).
+func TestRedactIngress_FullyPercentEncodedValue(t *testing.T) {
+	const val = "abcdefghijklmnop"
+	s := NewStore()
+	s.Set("tok", []byte(val))
+	sc := NewScanner(s)
+
+	encoded := pctEncodeAll(val, false)
+	out := string(sc.RedactIngress([]byte("prefix " + encoded + " suffix")))
+	if strings.Contains(out, encoded) {
+		t.Fatalf("encoded value not redacted on ingress: %q", out)
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("no redaction marker: %q", out)
+	}
+}
+
+// Regression (major): partially-overlapping spans must not leak the trailing bytes of
+// the second span. [0,5] then [3,10] over "0123456789" must fully redact 0..10, not
+// emit text[5:10] verbatim.
+func TestApplyRedactions_PartialOverlapNoTailLeak(t *testing.T) {
+	got := applyRedactions("0123456789", [][2]int{{0, 5}, {3, 10}})
+	if got != "[REDACTED]" {
+		t.Fatalf("partial overlap leaked a tail: got %q, want %q", got, "[REDACTED]")
+	}
+	// Nested spans still collapse to one redaction.
+	if got := applyRedactions("0123456789", [][2]int{{0, 8}, {2, 5}}); got != "[REDACTED]89" {
+		t.Fatalf("nested span: got %q, want %q", got, "[REDACTED]89")
+	}
+	// Disjoint spans stay separate.
+	if got := applyRedactions("0123456789", [][2]int{{0, 2}, {5, 7}}); got != "[REDACTED]234[REDACTED]789" {
+		t.Fatalf("disjoint spans: got %q, want %q", got, "[REDACTED]234[REDACTED]789")
+	}
+}

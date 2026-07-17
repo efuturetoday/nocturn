@@ -59,11 +59,11 @@ func (l *Listener) Run(ctx context.Context) error {
 	for {
 		_ = l.stream(ctx)
 		if ctx.Err() != nil {
-			return nil // cancelled: clean stop
+			return ctx.Err() // cancelled: clean stop, cause observable
 		}
 		select {
 		case <-ctx.Done():
-			return nil
+			return ctx.Err()
 		case <-time.After(l.backoff):
 		}
 	}

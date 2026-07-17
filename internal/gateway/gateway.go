@@ -197,7 +197,9 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 	// dial (see capability.WithPolicy).
 	policy := g.Policy
 	if extra := capability.PolicyRulesFrom(ctx); len(extra) > 0 {
-		policy = capability.Policy{Rules: append(append([]capability.Rule(nil), g.Policy.Rules...), extra...)}
+		rules := append([]capability.Rule(nil), g.Policy.Rules...)
+		rules = append(rules, extra...)
+		policy = capability.Policy{Rules: rules}
 	}
 	decision := policy.Evaluate(call, env)
 	if consequential && decision == capability.Allow {
@@ -212,7 +214,7 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 		return g.rateCheck(call)
 	case capability.Ask:
 		grants := capability.GrantsFrom(ctx)
-		toolName := tool.ToolName(ctx) // the model-facing tool a grant is remembered against
+		toolName := tool.Name(ctx) // the model-facing tool a grant is remembered against
 		if !consequential && grants != nil && grants.Allows(toolName, call, env) {
 			// A standing grant answers the Ask — but still respects the rate cap, so a
 			// remembered "always" cannot be replayed without bound (the grant path used

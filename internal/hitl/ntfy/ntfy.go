@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -125,7 +126,14 @@ func (p *Publisher) post(ctx context.Context, m message) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	// Drain before close so http.Client can reuse the keep-alive connection, but
+	// only up to a few KB: an ntfy publish reply is tiny, and we won't burn CPU/mem
+	// draining a gigabyte from a hostile/misbehaving server — past the cap we just
+	// let the connection close instead.
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		resp.Body.Close()
+	}()
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("ntfy: publish failed: %s", resp.Status)
 	}

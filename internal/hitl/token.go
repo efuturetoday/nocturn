@@ -4,7 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"fmt"
+	"errors"
 	"strconv"
 	"strings"
 )
@@ -43,36 +43,36 @@ func sign(key []byte, t token) string {
 func verifyToken(key []byte, s string, nowUnix int64) (token, error) {
 	parts := strings.SplitN(s, ".", 2)
 	if len(parts) != 2 {
-		return token{}, fmt.Errorf("hitl: malformed token")
+		return token{}, errors.New("hitl: malformed token")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return token{}, fmt.Errorf("hitl: bad token payload")
+		return token{}, errors.New("hitl: bad token payload")
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return token{}, fmt.Errorf("hitl: bad token signature")
+		return token{}, errors.New("hitl: bad token signature")
 	}
 	mac := hmac.New(sha256.New, key)
 	mac.Write(payload)
 	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return token{}, fmt.Errorf("hitl: signature mismatch")
+		return token{}, errors.New("hitl: signature mismatch")
 	}
 
 	fields := strings.Split(string(payload), "|")
 	if len(fields) != 4 {
-		return token{}, fmt.Errorf("hitl: bad payload")
+		return token{}, errors.New("hitl: bad payload")
 	}
 	expires, err := strconv.ParseInt(fields[2], 10, 64)
 	if err != nil {
-		return token{}, fmt.Errorf("hitl: bad expiry")
+		return token{}, errors.New("hitl: bad expiry")
 	}
 	if nowUnix >= expires {
-		return token{}, fmt.Errorf("hitl: token expired")
+		return token{}, errors.New("hitl: token expired")
 	}
 	oc, err := strconv.Atoi(fields[3])
 	if err != nil {
-		return token{}, fmt.Errorf("hitl: bad outcome")
+		return token{}, errors.New("hitl: bad outcome")
 	}
 	return token{id: fields[0], nonce: fields[1], expires: expires, outcome: Outcome(oc)}, nil
 }

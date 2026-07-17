@@ -14,7 +14,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"sync"
 	"time"
 
@@ -136,9 +136,9 @@ func (e *Engine) Request(ctx context.Context, intent string, choices []Choice, t
 	// resumes when the human answers (or on timeout/cancel). Placed before Notify
 	// so slow notify I/O (e.g. the ntfy push) is off-budget too; the defer also
 	// balances the notify-error early return below.
-	if p := deadline.PauserFrom(ctx); p != nil {
-		p.Pause()
-		defer p.Resume()
+	if pauser := deadline.PauserFrom(ctx); pauser != nil {
+		pauser.Pause()
+		defer pauser.Resume()
 	}
 
 	// Pick the channel for this request: the router (if set) decides from ctx —
@@ -154,7 +154,10 @@ func (e *Engine) Request(ctx context.Context, intent string, choices []Choice, t
 		return Denied, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, ttl)
+	// Wait on the SAME instant the token expires at (computed pre-Notify), not a
+	// fresh ttl started post-Notify. Otherwise slow notify I/O makes the wait window
+	// outlive the token, and a genuine but late tap gets rejected as expired.
+	ctx, cancel := context.WithDeadline(ctx, expires)
 	defer cancel()
 	select {
 	case out := <-p.resolved:
@@ -177,7 +180,7 @@ func (e *Engine) Resolve(tokenStr string) error {
 	p, ok := e.pending[t.id]
 	if !ok || p.nonce != t.nonce {
 		e.mu.Unlock()
-		return fmt.Errorf("hitl: no matching pending request (already resolved, expired, or unknown)")
+		return errors.New("hitl: no matching pending request (already resolved, expired, or unknown)")
 	}
 	delete(e.pending, t.id) // single-use: consume before delivering
 	e.mu.Unlock()
@@ -194,6 +197,12 @@ func (e *Engine) discard(id string) {
 
 func randID() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand.Read never fails on supported platforms (Go >= 1.24 panics
+		// internally instead). This is the id AND single-use nonce for the whole
+		// token scheme — a silent all-zero fill would be predictable and colliding,
+		// so make the impossible loud rather than fail open.
+		panic("hitl: out of randomness: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }

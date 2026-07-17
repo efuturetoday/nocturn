@@ -29,7 +29,7 @@ var interpreterGuest []byte
 // is cached — the embedded wasm is deterministic, so a failure is a build bug, not
 // a transient error worth retrying.
 var InterpreterEngine = sync.OnceValues(func() (*sandbox.Engine, error) {
-	return sandbox.NewEngine(context.Background(), interpreterGuest, sandbox.EngineConfig{
+	return sandbox.New(context.Background(), interpreterGuest, sandbox.EngineConfig{
 		HostNames: []string{gateName},
 	})
 })

@@ -42,7 +42,7 @@ func unlockMaster(saltPath string) (*secret.Master, error) {
 		if err != nil {
 			return nil, err
 		}
-		m, err := secret.DeriveMaster(pass, salt, secret.MasterWorkFactor(logN))
+		m, err := secret.DeriveMaster(pass, salt, secret.WithWorkFactor(logN))
 		if err != nil {
 			return nil, err
 		}
@@ -60,7 +60,7 @@ func unlockMaster(saltPath string) (*secret.Master, error) {
 		if err != nil {
 			return nil, err
 		}
-		m, err := secret.DeriveMaster(pass, salt, secret.MasterWorkFactor(logN))
+		m, err := secret.DeriveMaster(pass, salt, secret.WithWorkFactor(logN))
 		if err != nil {
 			return nil, err
 		}

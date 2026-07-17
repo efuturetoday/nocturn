@@ -8,7 +8,7 @@ import (
 )
 
 func TestPolicy_Evaluate(t *testing.T) {
-	cap := func(name string, host string) capability.Call {
+	mkCall := func(name string, host string) capability.Call {
 		c := capability.Call{Family: name}
 		if host != "" {
 			c.Target = host
@@ -25,13 +25,13 @@ func TestPolicy_Evaluate(t *testing.T) {
 		{
 			name:   "empty policy denies by default",
 			policy: capability.Policy{},
-			call:   cap("log", ""),
+			call:   mkCall("log", ""),
 			want:   capability.Deny,
 		},
 		{
 			name:   "matching allow permits",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "log", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("log", ""),
+			call:   mkCall("log", ""),
 			want:   capability.Allow,
 		},
 		{
@@ -40,7 +40,7 @@ func TestPolicy_Evaluate(t *testing.T) {
 				{Family: "log", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
 				{Family: "log", Writes: capability.MatchAny, Effect: capability.Deny, Epoch: capability.Permanent},
 			}},
-			call: cap("log", ""),
+			call: mkCall("log", ""),
 			want: capability.Deny,
 		},
 		{
@@ -49,61 +49,61 @@ func TestPolicy_Evaluate(t *testing.T) {
 				{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
 				{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Ask, Epoch: capability.Permanent},
 			}},
-			call: cap("http", "api.example.com"),
+			call: mkCall("http", "api.example.com"),
 			want: capability.Ask,
 		},
 		{
 			name:   "explicit star family matches any",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("log", ""),
+			call:   mkCall("log", ""),
 			want:   capability.Allow,
 		},
 		{
 			name:   "empty family matches nothing (fail closed)",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("log", ""),
+			call:   mkCall("log", ""),
 			want:   capability.Deny,
 		},
 		{
 			name:   "MatchNone (forgotten Writes) matches nothing (fail closed)",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "log", Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("log", ""),
+			call:   mkCall("log", ""),
 			want:   capability.Deny,
 		},
 		{
 			name:   "forgotten host does NOT allow a host-bearing call",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("http", "evil.com"),
+			call:   mkCall("http", "evil.com"),
 			want:   capability.Deny,
 		},
 		{
 			name:   "explicit star host allows any host",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("http", "anything.com"),
+			call:   mkCall("http", "anything.com"),
 			want:   capability.Allow,
 		},
 		{
 			name:   "host rule does not match a hostless call",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("http", ""),
+			call:   mkCall("http", ""),
 			want:   capability.Deny,
 		},
 		{
 			name:   "family mismatch falls through to default deny",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "log", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("http", ""),
+			call:   mkCall("http", ""),
 			want:   capability.Deny,
 		},
 		{
 			name:   "host glob allows matching host",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: "*.example.com", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("http", "api.example.com"),
+			call:   mkCall("http", "api.example.com"),
 			want:   capability.Allow,
 		},
 		{
 			name:   "host glob denies non-matching host by default",
 			policy: capability.Policy{Rules: []capability.Rule{{Family: "http", TargetGlob: "*.example.com", Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent}}},
-			call:   cap("http", "evil.com"),
+			call:   mkCall("http", "evil.com"),
 			want:   capability.Deny,
 		},
 		{

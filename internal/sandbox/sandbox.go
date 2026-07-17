@@ -50,7 +50,7 @@ type Config struct {
 	Stdin     []byte        // fed to the guest as WASI fd 0
 	Workspace string        // host dir mounted read/write at /work; "" = no filesystem
 	Hosts     []HostFunc    // brokered host-function imports (module "nocturn")
-	Timeout   time.Duration // wall-clock CPU bound (0 = default 5s)
+	Timeout   time.Duration // wall-clock deadline (0 = default 5s)
 }
 
 // Result is the guest's captured output.
@@ -68,7 +68,7 @@ type Result struct {
 // A guest that traps, exits non-zero, exhausts memory, or exceeds the time limit
 // returns an error alongside whatever output it produced.
 func Run(ctx context.Context, guest []byte, cfg Config) (Result, error) {
-	eng, err := NewEngine(ctx, guest, EngineConfig{HostNames: hostNamesOf(cfg.Hosts)})
+	eng, err := New(ctx, guest, EngineConfig{HostNames: hostNamesOf(cfg.Hosts)})
 	if err != nil {
 		return Result{}, err
 	}
@@ -110,7 +110,7 @@ func writeToGuest(ctx context.Context, mod api.Module, b []byte) uint64 {
 	return uint64(addr)<<32 | uint64(len(b))
 }
 
-func finish(stdout, stderr []byte, err error, runCtx context.Context) (Result, error) {
+func finish(runCtx context.Context, stdout, stderr []byte, err error) (Result, error) {
 	res := Result{Stdout: stdout, Stderr: stderr}
 	if err == nil {
 		return res, nil

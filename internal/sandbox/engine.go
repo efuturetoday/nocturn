@@ -25,7 +25,7 @@ type EngineConfig struct {
 
 // Engine is a guest compiled once and reused across many Run calls, concurrently.
 // Compilation (~97% of a cold call for a large interpreter guest) happens in
-// NewEngine; each Run only instantiates the already-compiled module, which is the
+// New; each Run only instantiates the already-compiled module, which is the
 // ~130× win over recompiling per call.
 type Engine struct {
 	rt        wazero.Runtime
@@ -33,7 +33,7 @@ type Engine struct {
 	hostNames map[string]struct{} // registered imports; used for Run's fail-loud check
 }
 
-// NewEngine builds the runtime, registers the host module (one stateless
+// New builds the runtime, registers the host module (one stateless
 // trampoline per HostNames entry), and compiles guest — all once. The per-call
 // dispatchers ride the ctx at Run time (see withHosts/trampoline), so the single
 // registered module is fixed and shareable across concurrent instantiations.
@@ -41,8 +41,8 @@ type Engine struct {
 // CompileModule does not resolve imports, so a guest that imports a name not in
 // HostNames compiles here but fails at InstantiateModule — preserving the
 // zero-authority instantiation floor.
-func NewEngine(ctx context.Context, guest []byte, ec EngineConfig) (*Engine, error) {
-	pages := ec.MaxPages
+func New(ctx context.Context, guest []byte, cfg EngineConfig) (*Engine, error) {
+	pages := cfg.MaxPages
 	if pages == 0 {
 		pages = defaultMaxPages
 	}
@@ -53,10 +53,10 @@ func NewEngine(ctx context.Context, guest []byte, ec EngineConfig) (*Engine, err
 
 	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
 
-	names := make(map[string]struct{}, len(ec.HostNames))
-	if len(ec.HostNames) > 0 {
+	names := make(map[string]struct{}, len(cfg.HostNames))
+	if len(cfg.HostNames) > 0 {
 		b := rt.NewHostModuleBuilder(hostModule)
-		for _, name := range ec.HostNames {
+		for _, name := range cfg.HostNames {
 			b = b.NewFunctionBuilder().WithFunc(trampoline(name)).Export(name)
 			names[name] = struct{}{}
 		}
@@ -107,7 +107,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config) (Result, error) {
 	if mod != nil {
 		_ = mod.Close(ctx) // release this instance's resources on the long-lived runtime
 	}
-	return finish(stdout.Bytes(), stderr.Bytes(), err, runCtx)
+	return finish(runCtx, stdout.Bytes(), stderr.Bytes(), err)
 }
 
 // Close releases the compiled module and the runtime. After Close the Engine
@@ -121,7 +121,7 @@ func (e *Engine) Close(ctx context.Context) error {
 // unexported struct type, so nothing outside this package can read or forge it.
 type hostsKey struct{}
 
-type dispatchFn = func(context.Context, []byte) ([]byte, error)
+type dispatchFn func(context.Context, []byte) ([]byte, error)
 
 // withHosts stamps a call's dispatchers onto ctx, keyed by HostFunc name. The
 // map is written once here and only read afterwards, so it is safe to share
@@ -134,7 +134,7 @@ func withHosts(ctx context.Context, hosts []HostFunc) context.Context {
 	return context.WithValue(ctx, hostsKey{}, m)
 }
 
-// trampoline is the fixed host function registered under name at NewEngine time.
+// trampoline is the fixed host function registered under name at New time.
 // It holds no per-call state: it reads the real dispatcher for its name off the
 // run context, so one compiled host module serves every call, concurrently.
 //

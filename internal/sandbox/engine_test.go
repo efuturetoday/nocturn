@@ -17,11 +17,11 @@ import (
 // run the echo guest with a dispatcher that returns a token unique to that call;
 // every guest must see back exactly its own token. Run under -race.
 func TestEngine_ConcurrentDispatchersNeverCross(t *testing.T) {
-	eng, err := sandbox.NewEngine(context.Background(), echoGuest, sandbox.EngineConfig{
+	eng, err := sandbox.New(context.Background(), echoGuest, sandbox.EngineConfig{
 		HostNames: []string{"echo"},
 	})
 	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
+		t.Fatalf("New engine: %v", err)
 	}
 	defer eng.Close(context.Background())
 
@@ -60,11 +60,11 @@ func TestEngine_ConcurrentDispatchersNeverCross(t *testing.T) {
 // register cannot instantiate. echoGuest imports nocturn.echo; an engine that
 // only exports nocturn.call gives it no such import.
 func TestEngine_UnregisteredImport_CannotInstantiate(t *testing.T) {
-	eng, err := sandbox.NewEngine(context.Background(), echoGuest, sandbox.EngineConfig{
+	eng, err := sandbox.New(context.Background(), echoGuest, sandbox.EngineConfig{
 		HostNames: []string{"call"},
 	})
 	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
+		t.Fatalf("New engine: %v", err)
 	}
 	defer eng.Close(context.Background())
 
@@ -78,11 +78,11 @@ func TestEngine_UnregisteredImport_CannotInstantiate(t *testing.T) {
 // a guest-visible error string, never a silent allow. The echo guest writes that
 // response straight to stdout, so we can assert it round-trips.
 func TestEngine_NoDispatcher_FailClosed(t *testing.T) {
-	eng, err := sandbox.NewEngine(context.Background(), echoGuest, sandbox.EngineConfig{
+	eng, err := sandbox.New(context.Background(), echoGuest, sandbox.EngineConfig{
 		HostNames: []string{"echo"},
 	})
 	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
+		t.Fatalf("New engine: %v", err)
 	}
 	defer eng.Close(context.Background())
 
@@ -98,11 +98,11 @@ func TestEngine_NoDispatcher_FailClosed(t *testing.T) {
 // A dispatcher whose name has no matching trampoline on the engine can never be
 // reached from the guest, so Run rejects it loudly rather than wiring a dead grant.
 func TestEngine_Run_RejectsUnregisteredHost(t *testing.T) {
-	eng, err := sandbox.NewEngine(context.Background(), echoGuest, sandbox.EngineConfig{
+	eng, err := sandbox.New(context.Background(), echoGuest, sandbox.EngineConfig{
 		HostNames: []string{"echo"},
 	})
 	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
+		t.Fatalf("New engine: %v", err)
 	}
 	defer eng.Close(context.Background())
 
@@ -116,9 +116,9 @@ func TestEngine_Run_RejectsUnregisteredHost(t *testing.T) {
 // reused Engine — the trap does not poison the runtime: a later run on the same
 // engine still executes and is trapped just as cleanly.
 func TestEngine_DeadlineTrapsRunawayGuest(t *testing.T) {
-	eng, err := sandbox.NewEngine(context.Background(), loopGuest, sandbox.EngineConfig{})
+	eng, err := sandbox.New(context.Background(), loopGuest, sandbox.EngineConfig{})
 	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
+		t.Fatalf("New engine: %v", err)
 	}
 	defer eng.Close(context.Background())
 
@@ -134,11 +134,11 @@ func TestEngine_DeadlineTrapsRunawayGuest(t *testing.T) {
 // resources (mod.Close per run) — no error accumulation, no degradation. This
 // exercises the release path M times; RSS stability is watched manually.
 func TestEngine_ReusedAcrossManyRuns(t *testing.T) {
-	eng, err := sandbox.NewEngine(context.Background(), echoGuest, sandbox.EngineConfig{
+	eng, err := sandbox.New(context.Background(), echoGuest, sandbox.EngineConfig{
 		HostNames: []string{"echo"},
 	})
 	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
+		t.Fatalf("New engine: %v", err)
 	}
 	defer eng.Close(context.Background())
 

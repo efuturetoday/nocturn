@@ -12,17 +12,18 @@ import (
 //
 // Per-key-with-unlimited-default is what lets the broker rate only the families that
 // need it (e.g. "notify" — reaching the user's device) while bursty reads (http.read,
-// file.read) pass freely. The broker consults it on every authorized path via Env.RateAllow.
+// file.read) pass freely. The gateway consults it on every authorized path
+// (gateway.Guard.Rate); it is deliberately NOT part of the pure capability.Env.
 type RateLimiter struct {
 	limits map[string]rateCfg // key -> config; a key absent here is UNLIMITED
 	mu     sync.Mutex
 	events map[string][]time.Time
 }
 
-// rateCfg is one key's cap: at most limit calls per per.
+// rateCfg is one key's cap: at most limit calls per window.
 type rateCfg struct {
-	limit int
-	per   time.Duration
+	limit  int
+	window time.Duration
 }
 
 // RateLimiterOption configures a RateLimiter.
@@ -31,7 +32,7 @@ type RateLimiterOption func(*RateLimiter)
 // WithLimit caps key at limit calls per window. A key with no WithLimit is UNLIMITED
 // (Allow always true), so only the families you name here are rate-limited.
 func WithLimit(key string, limit int, window time.Duration) RateLimiterOption {
-	return func(r *RateLimiter) { r.limits[key] = rateCfg{limit: limit, per: window} }
+	return func(r *RateLimiter) { r.limits[key] = rateCfg{limit: limit, window: window} }
 }
 
 // NewRateLimiter builds a limiter; configure each rate-limited key with WithLimit.
@@ -61,7 +62,7 @@ func (r *RateLimiter) Allow(key string) (allowed bool, retryAfter time.Duration)
 	}
 
 	now := time.Now()
-	cutoff := now.Add(-cfg.per)
+	cutoff := now.Add(-cfg.window)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -75,10 +76,10 @@ func (r *RateLimiter) Allow(key string) (allowed bool, retryAfter time.Duration)
 	if len(recent) >= cfg.limit {
 		r.events[key] = recent
 		if len(recent) == 0 {
-			return false, cfg.per // a limit of 0 blocks everything; no call to age out
+			return false, cfg.window // a limit of 0 blocks everything; no call to age out
 		}
 		// The oldest in-window call ages out at recent[0]+window → a slot frees then.
-		return false, recent[0].Add(cfg.per).Sub(now)
+		return false, recent[0].Add(cfg.window).Sub(now)
 	}
 	r.events[key] = append(recent, now)
 	return true, 0
