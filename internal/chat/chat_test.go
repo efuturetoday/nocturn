@@ -1,6 +1,7 @@
 package chat_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,8 +84,8 @@ func TestStore_RejectsUnsafeID(t *testing.T) {
 		if _, _, ok := s.Load(bad); ok {
 			t.Fatalf("Load(%q) succeeded — an unsafe id must be rejected", bad)
 		}
-		if err := s.Save(bad, "x", []brain.Message{{Role: "user", Content: "x"}}); err != nil {
-			t.Fatalf("Save(%q) errored instead of no-op: %v", bad, err)
+		if err := s.Save(bad, "x", []brain.Message{{Role: "user", Content: "x"}}); !errors.Is(err, chat.ErrInvalidID) {
+			t.Fatalf("Save(%q) = %v, want ErrInvalidID (rejected before the filesystem)", bad, err)
 		}
 	}
 	// The secret is untouched and no stray files were created in root.

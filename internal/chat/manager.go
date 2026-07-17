@@ -114,11 +114,18 @@ func (m *Manager) Open(id string) (*session.Runner, bool) {
 	go func() {
 		for e := range sub {
 			if _, ok := e.(session.TurnEndEvent); ok {
+				// Copy the name WHILE holding the lock — Rename writes lc.name under m.mu,
+				// so reading it unlocked would race. A concurrent Delete drops it from the
+				// map → stillLive false → skip the stale save.
 				m.mu.Lock()
-				cur, stillLive := m.live[id] // a concurrent Delete removes it → skip the stale save
+				cur, stillLive := m.live[id]
+				var name string
+				if stillLive {
+					name = cur.name
+				}
 				m.mu.Unlock()
 				if stillLive {
-					_ = m.deps.Store.Save(id, cur.name, runner.Snapshot().Messages)
+					_ = m.deps.Store.Save(id, name, runner.Snapshot().Messages)
 				}
 			}
 		}
@@ -130,13 +137,17 @@ func (m *Manager) Open(id string) (*session.Runner, bool) {
 
 // CloseAll saves and stops every live chat (on shutdown).
 func (m *Manager) CloseAll() {
+	// Detach the live set under the lock, then Save (file I/O) + stop OUTSIDE it — keep the
+	// critical section short and never hold m.mu across a disk write.
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, lc := range m.live {
+	live := m.live
+	m.live = map[string]*liveChat{}
+	m.mu.Unlock()
+
+	for _, lc := range live {
 		_ = m.deps.Store.Save(lc.id, lc.name, lc.runner.Snapshot().Messages)
 		lc.stop()
 	}
-	m.live = map[string]*liveChat{}
 }
 
 // stop ends the persistence pump (unsubscribe closes its channel) and closes the session

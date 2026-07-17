@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,6 +21,11 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/brain"
 )
+
+// ErrInvalidID rejects a chat id that isn't a server-minted lowercase-hex token (empty,
+// path separators, ".."). Returned instead of a silent no-op so a caller can tell a
+// rejected id from an unknown-but-valid one — the mutation never touches the filesystem.
+var ErrInvalidID = errors.New("chat: invalid id")
 
 // Meta is one chat's summary, for the picker (no messages).
 type Meta struct {
@@ -101,10 +107,11 @@ func (s *Store) Load(id string) ([]brain.Message, Meta, bool) {
 }
 
 // Save persists a chat's current messages (updating Updated and the turn count), preserving
-// its Created time and name (name overrides only when non-empty). A no-op for an invalid id.
+// its Created time and name (name overrides only when non-empty). Returns ErrInvalidID for
+// an id that isn't server-minted lowercase-hex.
 func (s *Store) Save(id, name string, msgs []brain.Message) error {
 	if !validID(id) {
-		return nil
+		return ErrInvalidID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -123,8 +130,11 @@ func (s *Store) Save(id, name string, msgs []brain.Message) error {
 
 // Rename changes a chat's display name.
 func (s *Store) Rename(id, name string) error {
-	if !validID(id) || name == "" {
-		return nil
+	if name == "" {
+		return nil // empty rename is a deliberate no-op, not a rejection
+	}
+	if !validID(id) {
+		return ErrInvalidID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,10 +147,11 @@ func (s *Store) Rename(id, name string) error {
 	return s.writeLocked(rec)
 }
 
-// Delete removes a chat. A no-op for an invalid or unknown id.
+// Delete removes a chat. Returns ErrInvalidID for a malformed id; a no-op (nil) for a
+// valid-but-unknown id.
 func (s *Store) Delete(id string) error {
 	if !validID(id) {
-		return nil
+		return ErrInvalidID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -182,7 +193,9 @@ func (s *Store) writeLocked(rec record) error {
 
 func newID() string {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // crypto/rand.Read never fails on supported platforms; a zero id would collide
+	}
 	return hex.EncodeToString(b)
 }
 
