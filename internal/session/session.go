@@ -48,6 +48,7 @@ type Session struct {
 	tools   *tool.Registry        // the toolset this session may use (passed to the brain per turn)
 	store   capability.GrantStore // durable "always" backing; nil = none
 	persona string                // the session's system prompt, re-seeded on every fresh conversation
+	history []brain.Message       // prior turns to seed a REOPENED chat (used once, at New; not on Reset)
 
 	conv   *brain.Conversation
 	scope  *gateway.Scope
@@ -62,6 +63,12 @@ type Option func(*Session)
 // no persona. The workspace supplies the resolved PERSONA.md here.
 func WithPersona(persona string) Option {
 	return func(s *Session) { s.persona = persona }
+}
+
+// WithHistory seeds a REOPENED chat with its saved turns (after the persona). Used once, at
+// New; Reset deliberately starts empty (a cleared chat), so history is not re-seeded there.
+func WithHistory(msgs []brain.Message) Option {
+	return func(s *Session) { s.history = msgs }
 }
 
 // New opens a session on the given brain over tools (the session's toolset), with a
@@ -80,7 +87,7 @@ func New(b *brain.Brain, tools *tool.Registry, g *gateway.Guard, store capabilit
 	for _, o := range opts {
 		o(s)
 	}
-	s.conv = b.NewConversation(tools, brain.WithSystem(s.persona))
+	s.conv = b.NewConversation(tools, brain.WithSystem(s.persona), brain.WithHistory(s.history))
 	return s
 }
 

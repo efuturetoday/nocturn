@@ -391,3 +391,25 @@ func TestBrain_MaxResultBypassesTruncation(t *testing.T) {
 		t.Error("ordinary result without MaxResult should be truncated at maxToolOutput")
 	}
 }
+
+// WithHistory seeds a reopened chat's prior turns after the system message, skipping any
+// saved system message (the current persona is re-seeded by WithSystem).
+func TestNewConversation_WithHistory(t *testing.T) {
+	prior := []brain.Message{
+		{Role: "system", Content: "OLD persona"}, // must be dropped
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "hello"},
+	}
+	conv := brain.New(&scriptedModel{}).NewConversation(tool.NewRegistry(),
+		brain.WithSystem("NEW persona"), brain.WithHistory(prior))
+	msgs := conv.Messages()
+	if len(msgs) != 3 {
+		t.Fatalf("messages = %d, want 3 (new system + 2 restored non-system): %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "system" || msgs[0].Content != "NEW persona" {
+		t.Fatalf("first = %+v, want the NEW persona system message", msgs[0])
+	}
+	if msgs[1].Content != "hi" || msgs[2].Content != "hello" {
+		t.Fatalf("restored turns wrong: %+v", msgs[1:])
+	}
+}

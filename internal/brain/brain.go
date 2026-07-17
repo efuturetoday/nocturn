@@ -177,9 +177,23 @@ func WithSystem(system string) ConvOption {
 	}
 }
 
+// WithHistory seeds prior conversation turns (a saved chat being reopened) after the
+// system message. It skips any role=system message in the restored history — the current
+// persona is provided fresh by WithSystem, so a chat reopened after a persona change picks
+// up the new one rather than the one it was saved with.
+func WithHistory(msgs []Message) ConvOption {
+	return func(c *Conversation) {
+		for _, m := range msgs {
+			if m.Role != "system" {
+				c.conv = append(c.conv, m)
+			}
+		}
+	}
+}
+
 // NewConversation starts a conversation on this Brain over tools — the toolset every
 // turn in it may use (an interactive session's shared Registry). Options seed the
-// system turn (WithSystem); with none it starts empty.
+// system turn (WithSystem) and any restored history (WithHistory); with none it starts empty.
 func (b *Brain) NewConversation(tools *tool.Registry, opts ...ConvOption) *Conversation {
 	c := &Conversation{brain: b, tools: tools}
 	for _, o := range opts {
