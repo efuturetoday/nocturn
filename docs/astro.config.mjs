@@ -92,6 +92,7 @@ export default defineConfig({
 						{ label: 'DNS', slug: 'reference/dns' },
 						{ label: 'Ping', slug: 'reference/ping' },
 						{ label: 'Files', slug: 'reference/files' },
+						{ label: 'Notify', slug: 'reference/notify' },
 					],
 				},
 				{

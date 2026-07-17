@@ -32,6 +32,7 @@ type (
 	tokenMsg     string
 	toolEventMsg tool.Event // one tool call's start/end, from the shared Registry
 	schedulerMsg string     // a scheduler firing/skip/result line (background cron runs)
+	notifyMsg    string     // a notify() fallback line when no out-of-band channel is configured
 	doneMsg      struct{ err error }
 	pulseMsg     struct{}
 	approvalMsg  struct {
@@ -861,6 +862,13 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A background cron run announced itself (firing/skip/done). Show it as a
 		// dim system line so it never masquerades as the interactive assistant.
 		m.entries = append(m.entries, &noticeEntry{text: string(msg)})
+		m.syncViewport()
+		return m, nil
+
+	case notifyMsg:
+		// notify() with no out-of-band channel configured — surface it inline as a
+		// dim system line (the attended fallback for a phone push).
+		m.entries = append(m.entries, &noticeEntry{text: "🔔 " + string(msg)})
 		m.syncViewport()
 		return m, nil
 

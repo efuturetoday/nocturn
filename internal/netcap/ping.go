@@ -39,41 +39,45 @@ type PingResult struct {
 // a clear error is returned when the OS forbids it rather than a silent failure.
 func (n *Net) Ping(ctx context.Context, host string) (*PingResult, error) {
 	call := capability.Call{Family: "ping", Write: false, Target: host}
-	return gateway.Do(ctx, n.Guard, call, "ping "+host, func() (*PingResult, error) {
-		// A raw IP (v4 or v6) is pinged directly — no DNS at all, so `ping 127.0.0.1`
-		// or `ping ::1` never depends on the resolver. Only a hostname is resolved.
-		var ips []net.IP
-		if ip := net.ParseIP(host); ip != nil {
-			ips = []net.IP{ip}
-		} else {
-			resolver := n.Resolver
-			if resolver == nil {
-				resolver = net.DefaultResolver
+	intent := "ping " + host
+	// Egress: the ping target is the exfiltration surface, same channel as a DNS name.
+	return gateway.Do(ctx, n.Guard, call, intent,
+		gateway.ScanEgress(n.Scanner, func() []string { return []string{host} }),
+		func() (*PingResult, error) {
+			// A raw IP (v4 or v6) is pinged directly — no DNS at all, so `ping 127.0.0.1`
+			// or `ping ::1` never depends on the resolver. Only a hostname is resolved.
+			var ips []net.IP
+			if ip := net.ParseIP(host); ip != nil {
+				ips = []net.IP{ip}
+			} else {
+				resolver := n.Resolver
+				if resolver == nil {
+					resolver = net.DefaultResolver
+				}
+				resolved, err := resolver.LookupIP(ctx, "ip", host)
+				if err != nil {
+					return nil, err
+				}
+				ips = resolved
 			}
-			resolved, err := resolver.LookupIP(ctx, "ip", host)
-			if err != nil {
-				return nil, err
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("netcap: no address for %q", host)
 			}
-			ips = resolved
-		}
-		if len(ips) == 0 {
-			return nil, fmt.Errorf("netcap: no address for %q", host)
-		}
-		// LookupIP returns A and AAAA in an unspecified order, and a machine may have
-		// only one family reachable. Try each resolved address (echo picks v4/v6 by the
-		// address family) until one answers, so a v6-first result on a v4-only host — or
-		// a genuinely v6-only host — still pings. The last error is reported if none do.
-		var lastErr error
-		for _, dst := range ips {
-			rtt, err := echo(ctx, dst)
-			if err != nil {
-				lastErr = err
-				continue
+			// LookupIP returns A and AAAA in an unspecified order, and a machine may have
+			// only one family reachable. Try each resolved address (echo picks v4/v6 by the
+			// address family) until one answers, so a v6-first result on a v4-only host — or
+			// a genuinely v6-only host — still pings. The last error is reported if none do.
+			var lastErr error
+			for _, dst := range ips {
+				rtt, err := echo(ctx, dst)
+				if err != nil {
+					lastErr = err
+					continue
+				}
+				return &PingResult{Host: host, IP: dst.String(), OK: true, RTTms: rtt.Milliseconds()}, nil
 			}
-			return &PingResult{Host: host, IP: dst.String(), OK: true, RTTms: rtt.Milliseconds()}, nil
-		}
-		return nil, lastErr
-	})
+			return nil, lastErr
+		})
 }
 
 // echo sends a single ICMP echo request to dst and returns the round-trip time,

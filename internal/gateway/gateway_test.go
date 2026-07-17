@@ -75,7 +75,7 @@ func TestDo_AllowedRunsEffect(t *testing.T) {
 	}}}
 
 	ran := false
-	out, err := gateway.Do(context.Background(), g, probeCall, "probe example.com", func() (string, error) {
+	out, err := gateway.Do(context.Background(), g, probeCall, "probe example.com", gateway.WithoutScan(), func() (string, error) {
 		ran = true
 		return "effect-ran", nil
 	})
@@ -87,13 +87,112 @@ func TestDo_AllowedRunsEffect(t *testing.T) {
 	}
 }
 
+// allowProbe permits the probe call (used by the EgressScan tests below).
+func allowProbe() *gateway.Guard {
+	return &gateway.Guard{Policy: capability.Policy{Rules: []capability.Rule{
+		{Family: "probe", TargetGlob: capability.Wildcard, Writes: capability.MatchAny, Effect: capability.Allow, Epoch: capability.Permanent},
+	}}}
+}
+
+// blockScanner is a fake EgressScanner that blocks any part it was told to.
+type blockScanner struct{ bad string }
+
+func (b blockScanner) ScanEgress(parts ...string) error {
+	for _, p := range parts {
+		if strings.Contains(p, b.bad) {
+			return errors.New("leak blocked")
+		}
+	}
+	return nil
+}
+
+// A zero-value EgressScan (neither ScanEgress nor WithoutScan chosen) fails closed:
+// the effect never runs, so a new capability cannot silently ship unscanned.
+func TestDo_ScanUnspecified_FailsClosed(t *testing.T) {
+	ran := false
+	_, err := gateway.Do(context.Background(), allowProbe(), probeCall, "probe", gateway.EgressScan{}, func() (string, error) {
+		ran = true
+		return "x", nil
+	})
+	if !errors.Is(err, gateway.ErrScanUnspecified) {
+		t.Fatalf("err = %v, want ErrScanUnspecified", err)
+	}
+	if ran {
+		t.Fatal("effect ran with no egress-scan decision")
+	}
+}
+
+// An external effect that declares ScanEgress but produces an EMPTY egress surface
+// fails closed — the caller forgot to extract the outbound bytes.
+func TestDo_EmptyEgress_FailsClosed(t *testing.T) {
+	for _, empty := range [][]string{nil, {}, {""}, {"  "}} {
+		ran := false
+		_, err := gateway.Do(context.Background(), allowProbe(), probeCall, "probe",
+			gateway.ScanEgress(blockScanner{}, func() []string { return empty }),
+			func() (string, error) { ran = true; return "x", nil })
+		if !errors.Is(err, gateway.ErrEmptyEgress) {
+			t.Fatalf("parts %q: err = %v, want ErrEmptyEgress", empty, err)
+		}
+		if ran {
+			t.Fatalf("parts %q: effect ran despite empty egress", empty)
+		}
+	}
+}
+
+// A leak in the egress surface blocks the effect; a clean surface lets it run.
+func TestDo_ScanEgress_BlocksLeakAllowsClean(t *testing.T) {
+	sc := blockScanner{bad: "SECRET"}
+
+	ran := false
+	_, err := gateway.Do(context.Background(), allowProbe(), probeCall, "probe",
+		gateway.ScanEgress(sc, func() []string { return []string{"https://x/?t=SECRET"} }),
+		func() (string, error) { ran = true; return "x", nil })
+	if err == nil || ran {
+		t.Fatalf("leaking egress: err=%v ran=%v, want a block and no effect", err, ran)
+	}
+
+	ran = false
+	out, err := gateway.Do(context.Background(), allowProbe(), probeCall, "probe",
+		gateway.ScanEgress(sc, func() []string { return []string{"https://x/clean"} }),
+		func() (string, error) { ran = true; return "ok", nil })
+	if err != nil || !ran || out != "ok" {
+		t.Fatalf("clean egress: out=%q ran=%v err=%v, want the effect to run", out, ran, err)
+	}
+}
+
+// WithoutScan runs a local effect with no scan — and never touches the scanner.
+func TestDo_WithoutScan_SkipsScan(t *testing.T) {
+	ran := false
+	out, err := gateway.Do(context.Background(), allowProbe(), probeCall, "probe", gateway.WithoutScan(),
+		func() (string, error) { ran = true; return "local", nil })
+	if err != nil || !ran || out != "local" {
+		t.Fatalf("out=%q ran=%v err=%v, want the local effect to run unscanned", out, ran, err)
+	}
+}
+
+// A denied external call is blocked BEFORE the egress surface is even built — the
+// scan closure must not run on a denied call (authorize wins first).
+func TestDo_DeniedBeforeEgress(t *testing.T) {
+	deny := &gateway.Guard{Policy: capability.Policy{}} // deny-by-default
+	built := false
+	_, err := gateway.Do(context.Background(), deny, probeCall, "probe",
+		gateway.ScanEgress(blockScanner{}, func() []string { built = true; return []string{"x"} }),
+		func() (string, error) { return "x", nil })
+	if !errors.Is(err, gateway.ErrDenied) {
+		t.Fatalf("err = %v, want ErrDenied", err)
+	}
+	if built {
+		t.Fatal("egress surface was built on a denied call — it should never run")
+	}
+}
+
 // On a denied call (empty policy = deny-by-default) Do returns ErrDenied and the
 // effect is UNREACHABLE — it must never run, and the result is the zero value.
 func TestDo_DeniedNeverRunsEffect(t *testing.T) {
 	g := &gateway.Guard{Policy: capability.Policy{}} // no rule matches → deny
 
 	ran := false
-	out, err := gateway.Do(context.Background(), g, probeCall, "probe example.com", func() (string, error) {
+	out, err := gateway.Do(context.Background(), g, probeCall, "probe example.com", gateway.WithoutScan(), func() (string, error) {
 		ran = true
 		return "effect-ran", nil
 	})

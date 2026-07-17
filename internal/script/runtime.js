@@ -337,6 +337,12 @@
   // dns; time.now carries no authority). Both return the parsed JSON object. ---
   g.nocturn.ping = function (host) { return JSON.parse(g.nocturn.call("ping", { host: String(host) })); };
   g.nocturn.now = function () { return JSON.parse(g.nocturn.call("time.now", {})); };
+  // notify(message[, title]) — proactively tell the user (fire-and-forget).
+  g.nocturn.notify = function (message, title) {
+    var args = { message: String(message) };
+    if (title != null) args.title = String(title);
+    return JSON.parse(g.nocturn.call("notify", args));
+  };
   // resolve(host[, type]) — type ∈ A|AAAA|IP|MX|TXT|CNAME|NS|PTR|SRV (default A).
   g.nocturn.resolve = function (host, type) {
     var args = { host: String(host) };

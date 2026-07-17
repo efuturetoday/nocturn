@@ -23,8 +23,23 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/hitl/ntfy"
 	"github.com/efuturetoday/nocturn/internal/llm"
+	"github.com/efuturetoday/nocturn/internal/notifycap"
 	"github.com/efuturetoday/nocturn/internal/timecap"
 )
+
+// consolePusher is the attended fallback for notify() when no out-of-band channel
+// (ntfy) is configured: it surfaces the notification as a dim inline TUI line
+// instead of a phone push. It satisfies notifycap.Pusher.
+type consolePusher struct{ send func(tea.Msg) }
+
+func (c consolePusher) Push(_ context.Context, title, message string) error {
+	line := message
+	if title != "" {
+		line = title + ": " + message
+	}
+	c.send(notifyMsg(line))
+	return nil
+}
 
 // tuiNotifier bridges HITL approval into the TUI.
 type tuiNotifier struct {
@@ -105,8 +120,11 @@ func tuiCmd(args []string) error {
 		lisOpts = append(lisOpts, ntfy.ListenerWithAuth(tok))
 	}
 	var oob hitl.Notifier
+	var notifyPush notifycap.Pusher
 	if reqTopic != "" && respTopic != "" {
-		oob = hitl.Serialize(ntfy.New(ntfyBase, reqTopic, ntfyBase+"/"+respTopic, pubOpts...))
+		pub := ntfy.New(ntfyBase, reqTopic, ntfyBase+"/"+respTopic, pubOpts...)
+		oob = hitl.Serialize(pub)
+		notifyPush = pub // fire-and-forget notify() goes to the same user channel
 	}
 
 	// One HITL engine for ALL workspaces (it is workspace-agnostic — routes by
@@ -132,8 +150,13 @@ func tuiCmd(args []string) error {
 		engine:    engine,
 		llmModel:  llm.New(baseURL, apiKey, modelName),
 		timeCap:   timecap.New(),
+		notify:    notifyPush,
 		send:      func(m tea.Msg) { p.Send(m) },
 		modelName: modelName,
+	}
+	if sh.notify == nil {
+		// No out-of-band channel configured: notify() falls back to a dim inline TUI line.
+		sh.notify = consolePusher{send: sh.send}
 	}
 
 	// Build ALL workspaces (the active one ∪ every directory under workspaces/). Each

@@ -18,6 +18,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
+	"github.com/efuturetoday/nocturn/internal/notifycap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/skill"
@@ -35,7 +36,8 @@ type shared struct {
 	engine    *hitl.Engine
 	llmModel  brain.Model // stateless client, safe to share across stacks
 	timeCap   *timecap.Clock
-	send      func(tea.Msg) // p.Send, late-bound (p is created after the stacks)
+	notify    notifycap.Pusher // out-of-band push (ntfy) or the attended TUI fallback
+	send      func(tea.Msg)    // p.Send, late-bound (p is created after the stacks)
 	modelName string
 }
 
@@ -125,7 +127,13 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 	}
 	fileCap := filecap.New(netCap.Guard, filepath.Join(wsDir, "mnt"))
 
-	reg := tool.NewRegistry(append(append(netCap.Tools(), fileCap.Tools()...), sh.timeCap.Tools()...))
+	// notify: proactively reach the user (fire-and-forget), the other half of HITL.
+	// Same Guard + leak scanner as the network family (it IS an external egress).
+	// (Anti-spam rate limiting belongs in the Guard's pipeline — see FRAGEN — not here.)
+	notifyCap := notifycap.New(netCap.Guard, sh.notify, scanner)
+
+	reg := tool.NewRegistry(append(append(append(
+		netCap.Tools(), fileCap.Tools()...), sh.timeCap.Tools()...), notifyCap.Tools()...))
 	reg.OnCall = func(ev tool.Event) { sh.send(toolEventMsg(ev)) }
 
 	runner := script.New(reg)

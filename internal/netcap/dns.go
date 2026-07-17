@@ -30,65 +30,84 @@ func (n *Net) resolver() *net.Resolver {
 func (n *Net) Lookup(ctx context.Context, host, recordType string) ([]string, error) {
 	typ := normalizeRecordType(recordType)
 	call := capability.Call{Family: "dns", Write: false, Target: host}
-	return gateway.Do(ctx, n.Guard, call, "resolve "+typ+" "+host, func() ([]string, error) {
-		r := n.resolver()
-		switch typ {
-		case "A", "AAAA", "IP":
-			network := map[string]string{"A": "ip4", "AAAA": "ip6", "IP": "ip"}[typ]
-			ips, err := r.LookupIP(ctx, network, host)
+	intent := "resolve " + typ + " " + host
+	// Egress: the queried NAME is the exfiltration surface (a lookup to an attacker's
+	// nameserver leaks whatever is encoded in it). Ingress: records — TXT above all —
+	// are attacker-controllable inbound text, so redact any echoed vault secret before
+	// it reaches the model.
+	return gateway.Do(ctx, n.Guard, call, intent,
+		gateway.ScanEgress(n.Scanner, func() []string { return []string{host} }),
+		func() ([]string, error) {
+			records, err := n.lookupRecords(ctx, typ, host, recordType)
 			if err != nil {
 				return nil, err
 			}
-			out := make([]string, len(ips))
-			for i, ip := range ips {
-				out[i] = ip.String()
+			for i := range records {
+				records[i] = string(n.Scanner.RedactIngress([]byte(records[i])))
 			}
-			return out, nil
-		case "MX":
-			mxs, err := r.LookupMX(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]string, len(mxs))
-			for i, mx := range mxs {
-				out[i] = fmt.Sprintf("%d %s", mx.Pref, mx.Host)
-			}
-			return out, nil
-		case "TXT":
-			return r.LookupTXT(ctx, host)
-		case "CNAME":
-			cname, err := r.LookupCNAME(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			return []string{cname}, nil
-		case "NS":
-			nss, err := r.LookupNS(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]string, len(nss))
-			for i, ns := range nss {
-				out[i] = ns.Host
-			}
-			return out, nil
-		case "PTR":
-			return r.LookupAddr(ctx, host)
-		case "SRV":
-			// Empty service+proto looks up the name directly (RFC 2782 already-qualified).
-			_, srvs, err := r.LookupSRV(ctx, "", "", host)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]string, len(srvs))
-			for i, s := range srvs {
-				out[i] = fmt.Sprintf("%d %d %d %s", s.Priority, s.Weight, s.Port, s.Target)
-			}
-			return out, nil
-		default:
-			return nil, fmt.Errorf("netcap: unsupported DNS record type %q", recordType)
+			return records, nil
+		})
+}
+
+// lookupRecords performs the raw resolution for a record type (no gating/scanning).
+func (n *Net) lookupRecords(ctx context.Context, typ, host, recordType string) ([]string, error) {
+	r := n.resolver()
+	switch typ {
+	case "A", "AAAA", "IP":
+		network := map[string]string{"A": "ip4", "AAAA": "ip6", "IP": "ip"}[typ]
+		ips, err := r.LookupIP(ctx, network, host)
+		if err != nil {
+			return nil, err
 		}
-	})
+		out := make([]string, len(ips))
+		for i, ip := range ips {
+			out[i] = ip.String()
+		}
+		return out, nil
+	case "MX":
+		mxs, err := r.LookupMX(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]string, len(mxs))
+		for i, mx := range mxs {
+			out[i] = fmt.Sprintf("%d %s", mx.Pref, mx.Host)
+		}
+		return out, nil
+	case "TXT":
+		return r.LookupTXT(ctx, host)
+	case "CNAME":
+		cname, err := r.LookupCNAME(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		return []string{cname}, nil
+	case "NS":
+		nss, err := r.LookupNS(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]string, len(nss))
+		for i, ns := range nss {
+			out[i] = ns.Host
+		}
+		return out, nil
+	case "PTR":
+		return r.LookupAddr(ctx, host)
+	case "SRV":
+		// Empty service+proto looks up the name directly (RFC 2782 already-qualified).
+		_, srvs, err := r.LookupSRV(ctx, "", "", host)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]string, len(srvs))
+		for i, s := range srvs {
+			out[i] = fmt.Sprintf("%d %d %d %s", s.Priority, s.Weight, s.Port, s.Target)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("netcap: unsupported DNS record type %q", recordType)
+	}
 }
 
 // Resolve is the address lookup (A + AAAA), the common convenience over Lookup.

@@ -103,70 +103,67 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) (*Response, error) 
 	// bindings key on. The raw HTTP method never reaches the security layer.
 	write := writeForMethod(method)
 	call := capability.Call{Family: "http", Write: write, Target: host}
+	intent := method + " " + req.URL
 
-	// Everything past the gate runs only if Do authorizes: the leak-scan,
-	// credential injection, and the request itself are unreachable on a denied
-	// call. Keeping them inside the closure makes the guarded pipeline cohesive
-	// and a bypass impossible by construction.
-	return gateway.Do(ctx, n.Guard, call, method+" "+req.URL, func() (*Response, error) {
-		// Egress leak scan on the guest-built request (URL + headers + body), BEFORE
-		// the legitimate credential is stamped in below — so the host's own injected
-		// bearer is never flagged.
-		if err := n.Scanner.ScanEgress(egressParts(req)...); err != nil {
-			return nil, err
-		}
-
-		// Host-owned, family- and host-scoped credential injection: only a
-		// credential whose binding matches the "http" family AND destination host
-		// rides along (a bearer is action-agnostic — same for read and write; nil
-		// Injector = none).
-		if _, err := n.Credentials.InjectMatching(ctx, &req, "http", host); err != nil {
-			return nil, err
-		}
-
-		var body io.Reader
-		if len(req.Body) > 0 {
-			body = bytes.NewReader(req.Body)
-		}
-		httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
-		if err != nil {
-			return nil, err
-		}
-		for k, v := range req.Headers {
-			httpReq.Header.Set(k, v)
-		}
-
-		client := n.HTTP
-		if client == nil {
-			client = http.DefaultClient
-		}
-		resp, err := client.Do(httpReq)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-		if err != nil {
-			return nil, err
-		}
-		// Ingress redaction: strip any secret echoed back before it reaches the
-		// model — from the body AND from the response header values (a secret can
-		// come back in a header too). Set-Cookie is dropped outright: the guest has
-		// no cookie jar and raw cookies are a needless leak surface.
-		hdr := make(map[string]string, len(resp.Header))
-		for k, vs := range resp.Header {
-			if strippedResponseHeaders[strings.ToLower(k)] {
-				continue
+	// Everything past the gate runs only if Do authorizes AND the egress scan is
+	// clean: the credential injection and the request itself are unreachable on a
+	// denied or leaking call. The scan is declared via ScanEgress over the guest-
+	// built request (URL + headers + body) and runs BEFORE the effect — hence before
+	// the credential is injected below, so the host's own bearer is never flagged.
+	return gateway.Do(ctx, n.Guard, call, intent,
+		gateway.ScanEgress(n.Scanner, func() []string { return egressParts(req) }),
+		func() (*Response, error) {
+			// Host-owned, family- and host-scoped credential injection: only a
+			// credential whose binding matches the "http" family AND destination host
+			// rides along (a bearer is action-agnostic — same for read and write; nil
+			// Injector = none).
+			if _, err := n.Credentials.InjectMatching(ctx, &req, "http", host); err != nil {
+				return nil, err
 			}
-			hdr[k] = string(n.Scanner.RedactIngress([]byte(strings.Join(vs, ", "))))
-		}
-		return &Response{
-			Status:     resp.StatusCode,
-			StatusText: http.StatusText(resp.StatusCode),
-			Headers:    hdr,
-			Body:       n.Scanner.RedactIngress(respBody),
-		}, nil
-	})
+
+			var body io.Reader
+			if len(req.Body) > 0 {
+				body = bytes.NewReader(req.Body)
+			}
+			httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
+			if err != nil {
+				return nil, err
+			}
+			for k, v := range req.Headers {
+				httpReq.Header.Set(k, v)
+			}
+
+			client := n.HTTP
+			if client == nil {
+				client = http.DefaultClient
+			}
+			resp, err := client.Do(httpReq)
+			if err != nil {
+				return nil, err
+			}
+			defer resp.Body.Close()
+			respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+			if err != nil {
+				return nil, err
+			}
+			// Ingress redaction: strip any secret echoed back before it reaches the
+			// model — from the body AND from the response header values (a secret can
+			// come back in a header too). Set-Cookie is dropped outright: the guest has
+			// no cookie jar and raw cookies are a needless leak surface.
+			hdr := make(map[string]string, len(resp.Header))
+			for k, vs := range resp.Header {
+				if strippedResponseHeaders[strings.ToLower(k)] {
+					continue
+				}
+				hdr[k] = string(n.Scanner.RedactIngress([]byte(strings.Join(vs, ", "))))
+			}
+			return &Response{
+				Status:     resp.StatusCode,
+				StatusText: http.StatusText(resp.StatusCode),
+				Headers:    hdr,
+				Body:       n.Scanner.RedactIngress(respBody),
+			}, nil
+		})
 }
 
 // egressParts collects the guest-built request's leak-scannable surfaces.

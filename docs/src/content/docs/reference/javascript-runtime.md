@@ -116,6 +116,9 @@ These look like the Web/Node APIs but route through `nocturn.call`, so every eff
 - **`nocturn.resolve(host, type?)`** → a DNS lookup via the `dns` capability. `type` ∈
   `A`/`AAAA`/`IP`/`MX`/`TXT`/`CNAME`/`NS`/`PTR`/`SRV` (default `A`). Returns `{host, type, records}`.
 
+- **`nocturn.notify(message, title?)`** → proactively message the user via the `notify` capability
+  (fire-and-forget, leak-scanned, rate-limited). Returns `{sent: true}`.
+
 - **`nocturn.now()`** → the current date/time (`{unix, iso, utc, timezone, offset_seconds}`). The
   sandbox guest has no wall clock of its own, so this is the way to get the time. It carries **no
   authority** and is never gated.

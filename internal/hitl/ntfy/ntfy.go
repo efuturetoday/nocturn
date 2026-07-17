@@ -13,6 +13,7 @@ package ntfy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -87,18 +88,32 @@ func (p *Publisher) Notify(intent string, options []hitl.Option) error {
 			Action: "http", Label: o.Label, URL: p.respURL, Method: http.MethodPost, Body: o.Token, Clear: true,
 		})
 	}
-	msg := message{
+	return p.post(context.Background(), message{
 		Topic:   p.reqTopic,
 		Title:   "Nocturn: approval needed",
 		Message: intent,
 		Actions: actions,
+	})
+}
+
+// Push publishes a plain notification to the user's channel — NO action buttons,
+// no token. Unlike Notify (an approval REQUEST that waits for a decision), this is
+// fire-and-forget: the assistant proactively telling the user something. It
+// satisfies notifycap.Pusher.
+func (p *Publisher) Push(ctx context.Context, title, msg string) error {
+	if title == "" {
+		title = "Nocturn"
 	}
-	body, err := json.Marshal(msg)
+	return p.post(ctx, message{Topic: p.reqTopic, Title: title, Message: msg})
+}
+
+// post marshals m and POSTs it to the ntfy server, shared by Notify and Push.
+func (p *Publisher) post(ctx context.Context, m message) error {
+	body, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-
-	req, err := http.NewRequest(http.MethodPost, p.baseURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -106,7 +121,6 @@ func (p *Publisher) Notify(intent string, options []hitl.Option) error {
 	if p.auth != "" {
 		req.Header.Set("Authorization", p.auth)
 	}
-
 	resp, err := p.client.Do(req)
 	if err != nil {
 		return err

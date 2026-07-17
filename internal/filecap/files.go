@@ -73,7 +73,8 @@ func (f *Files) readTool() tool.Tool {
 			}
 			// Target is the workspace-relative path — the string the broker gates on.
 			call := capability.Call{Family: "file", Write: false, Target: target}
-			return gateway.Do(ctx, f.Guard, call, "read "+target, func() (string, error) {
+			intent := "read " + target
+			return gateway.Do(ctx, f.Guard, call, intent, gateway.WithoutScan(), func() (string, error) {
 				data, err := os.ReadFile(abs)
 				if err != nil {
 					return "", err
@@ -111,7 +112,7 @@ func (f *Files) writeTool() tool.Tool {
 			}
 			call := capability.Call{Family: "file", Write: true, Target: target}
 			intent := fmt.Sprintf("write %s (%d bytes)", target, len(a.Content))
-			return gateway.Do(ctx, f.Guard, call, intent, func() (string, error) {
+			return gateway.Do(ctx, f.Guard, call, intent, gateway.WithoutScan(), func() (string, error) {
 				if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 					return "", err
 				}
@@ -150,7 +151,8 @@ func (f *Files) listTool() tool.Tool {
 				return "", err
 			}
 			call := capability.Call{Family: "file", Write: false, Target: target}
-			return gateway.Do(ctx, f.Guard, call, "list "+target, func() (string, error) {
+			intent := "list " + target
+			return gateway.Do(ctx, f.Guard, call, intent, gateway.WithoutScan(), func() (string, error) {
 				entries, err := os.ReadDir(abs)
 				if err != nil {
 					return "", err
@@ -188,7 +190,8 @@ func (f *Files) statTool() tool.Tool {
 				return "", err
 			}
 			call := capability.Call{Family: "file", Write: false, Target: target}
-			return gateway.Do(ctx, f.Guard, call, "stat "+target, func() (string, error) {
+			intent := "stat " + target
+			return gateway.Do(ctx, f.Guard, call, intent, gateway.WithoutScan(), func() (string, error) {
 				type stat struct {
 					Exists bool  `json:"exists"`
 					IsDir  bool  `json:"isDir"`
@@ -224,7 +227,8 @@ func (f *Files) removeTool() tool.Tool {
 				return "", err
 			}
 			call := capability.Call{Family: "file", Write: true, Target: target}
-			return gateway.Do(ctx, f.Guard, call, "remove "+target, func() (string, error) {
+			intent := "remove " + target
+			return gateway.Do(ctx, f.Guard, call, intent, gateway.WithoutScan(), func() (string, error) {
 				if err := os.Remove(abs); err != nil {
 					return "", err
 				}
@@ -277,7 +281,8 @@ func (f *Files) searchTool() tool.Tool {
 			// Gated on the search root as a read: the reach a cage/grant scopes is the
 			// directory being walked, exactly as list gates on the directory.
 			call := capability.Call{Family: "file", Write: false, Target: target}
-			return gateway.Do(ctx, f.Guard, call, "search "+a.Pattern+" in "+target, func() (string, error) {
+			intent := "search " + a.Pattern + " in " + target
+			return gateway.Do(ctx, f.Guard, call, intent, gateway.WithoutScan(), func() (string, error) {
 				rootAbs, err := filepath.Abs(f.Root)
 				if err != nil {
 					return "", err
@@ -371,7 +376,7 @@ func (f *Files) moveTool() tool.Tool {
 			// the intent names both endpoints so a human sees the whole move.
 			call := capability.Call{Family: "file", Write: true, Target: toTarget}
 			intent := fmt.Sprintf("move %s → %s", fromTarget, toTarget)
-			return gateway.Do(ctx, f.Guard, call, intent, func() (string, error) {
+			return gateway.Do(ctx, f.Guard, call, intent, gateway.WithoutScan(), func() (string, error) {
 				if err := os.MkdirAll(filepath.Dir(toAbs), 0o700); err != nil {
 					return "", err
 				}

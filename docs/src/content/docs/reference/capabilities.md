@@ -76,6 +76,7 @@ and your remembered [grants](/guides/approvals/#how-the-decision-is-made). Only 
 | `file.search` | `file` | <span class="axis axis--read">read</span> | path (in workspace) | `pattern`, `path` (base dir) | JSON array of matching paths |
 | `file.remove` | `file` | <span class="axis axis--write">write</span> | path (in workspace) | `path` | JSON `{path, removed}` |
 | `file.move`   | `file` | <span class="axis axis--write">write</span> | path (in workspace) | `from`, `to` | JSON `{from, to}` |
+| `notify`      | `notify` | <span class="axis axis--read">read</span> | user's channel (host-owned) | `message`, `title` | JSON `{sent}` |
 
 The tool name **is** the authority. `http.read` and `http.write` are split so the tool the
 model picks already decides the effect axis — the security layer never has to trust an HTTP

@@ -158,19 +158,18 @@ func (c *Conn) transport(ctx context.Context, body []byte, header http.Header) (
 	// asks. The cage is read+write either way, so a read is always within it.
 	call := capability.Call{Family: "http", Write: !readOnlyFrom(ctx), Target: c.host}
 	intent := "MCP " + c.server.Name + ": POST " + c.server.URL // overridden by the semantic WithIntent upstream
-	return gateway.Do(ctx, c.guard, call, intent, func() (*mcp.Response, error) {
-		// Egress leak scan on the model-reachable surfaces (URL, protocol headers,
-		// and the JSON-RPC body — tool arguments ride in the body) BEFORE the
-		// legitimate credential is stamped in, so the host's own bearer is never
-		// flagged.
+	// Egress surface: the model-reachable URL, protocol headers, and the JSON-RPC body
+	// (tool arguments ride in the body). Declared to Do, which scans it BEFORE the
+	// effect — hence before the credential is injected, so the host's own bearer is
+	// never flagged.
+	egress := func() []string {
 		parts := []string{c.server.URL, string(body)}
 		for _, vs := range header {
 			parts = append(parts, vs...)
 		}
-		if err := c.scanner.ScanEgress(parts...); err != nil {
-			return nil, err
-		}
-
+		return parts
+	}
+	return gateway.Do(ctx, c.guard, call, intent, gateway.ScanEgress(c.scanner, egress), func() (*mcp.Response, error) {
 		// Host-owned, capability-, host-, and owner-scoped credential injection:
 		// only THIS connection's bearer (or an unowned app default) rides along.
 		req := secret.Request{Method: http.MethodPost, URL: c.server.URL, Body: body, Headers: map[string]string{}}

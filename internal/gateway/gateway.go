@@ -13,6 +13,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
@@ -23,6 +24,17 @@ import (
 // ErrDenied is returned when a capability call is not permitted (broker Deny, or
 // a human denied / did not approve in time).
 var ErrDenied = errors.New("gateway: capability denied")
+
+// ErrScanUnspecified is returned when Do is called with a zero-value EgressScan —
+// i.e. neither ScanEgress(...) nor WithoutScan() was chosen. Every effect MUST
+// declare its egress-scan decision; failing to is a fail-closed programming error.
+var ErrScanUnspecified = errors.New("gateway: egress scan decision not specified")
+
+// ErrEmptyEgress is returned when an effect declared ScanEgress (external) but its
+// egress surface came out empty — almost always a bug: the caller forgot to extract
+// the outbound bytes. A genuinely external effect always has a target/URL/name to
+// scan, so an empty surface fails closed instead of scanning nothing.
+var ErrEmptyEgress = errors.New("gateway: external effect declared no egress surface to scan")
 
 // Guard authorizes capability calls. It is host-trusted and shared by every
 // capability group. It is a pure COMPOSER: the standing-grant state lives on the
@@ -221,20 +233,75 @@ func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent stri
 	}
 }
 
-// Do authorizes call (out-of-band HITL on Ask) and runs effect ONLY if the call
-// is allowed. Because the effect is a closure, it is unreachable unless Authorize
-// returned nil: a capability method physically cannot run its effect without
-// gating first, nor return a result on a denied call — bypass is impossible by
-// construction. This keeps a capability's guarded pipeline (authorize → its own
-// leak-scan / credential-inject / execute) cohesive while making a forgotten or
-// out-of-order gate unrepresentable. A free function, not a method, so it can be
-// generic over the effect's result type.
-func Do[T any](ctx context.Context, g *Guard, call capability.Call, intent string, effect func() (T, error)) (T, error) {
+// EgressScanner is the narrow behaviour Do needs to leak-scan an outbound surface.
+// *secret.Scanner satisfies it structurally — so gateway never imports secret and
+// stays decoupled from the credential layer (accept a narrow interface, don't
+// depend on the concrete type).
+type EgressScanner interface {
+	// ScanEgress reports a leak in any outbound part; nil means clean.
+	ScanEgress(parts ...string) error
+}
+
+// EgressScan is the MANDATORY leak-scan decision every Do carries. Because it is a
+// required argument, a new (external) capability cannot silently ship unscanned —
+// the author must choose at compile time between ScanEgress (an external effect,
+// whose outbound surface is scanned) and WithoutScan (a local effect — file/compute
+// — that never crosses to untrusted infra, an explicit and grep-able opt out). The
+// zero value is invalid and fails closed (ErrScanUnspecified).
+type EgressScan struct {
+	sc     EgressScanner
+	egress func() []string // the outbound surface — lazy, only built once authorized
+	omit   bool            // WithoutScan
+}
+
+// ScanEgress marks an external effect: its outbound surface (egress) is leak-scanned
+// with sc before the effect runs. egress is lazy so it is only assembled once the
+// call is authorized. A declared-but-empty surface fails closed (ErrEmptyEgress).
+func ScanEgress(sc EgressScanner, egress func() []string) EgressScan {
+	return EgressScan{sc: sc, egress: egress}
+}
+
+// WithoutScan is the explicit opt out for a LOCAL effect that never reaches
+// untrusted external infra (file.*, compute). It is deliberately visible so every
+// unscanned effect is auditable — `grep WithoutScan` lists them all.
+func WithoutScan() EgressScan { return EgressScan{omit: true} }
+
+// Do authorizes call (out-of-band HITL on Ask), then — for an external effect —
+// leak-scans the outbound surface, and runs effect ONLY if the call is allowed AND
+// the scan is clean. Because the effect is a closure, it is unreachable unless
+// Authorize returned nil and the egress scan passed: a capability method physically
+// cannot run its effect without gating and (when external) scanning first — bypass
+// is impossible by construction. The scan runs BEFORE the effect (hence before any
+// credential the effect injects, so the host's own bearer is never flagged). A free
+// function, not a method, so it can be generic over the effect's result type.
+func Do[T any](ctx context.Context, g *Guard, call capability.Call, intent string, es EgressScan, effect func() (T, error)) (T, error) {
+	var zero T
+	if !es.omit && (es.sc == nil || es.egress == nil) {
+		return zero, ErrScanUnspecified // neither ScanEgress(...) nor WithoutScan() — fail closed
+	}
 	if err := g.Authorize(ctx, call, intent); err != nil {
-		var zero T
 		return zero, err
 	}
+	if !es.omit {
+		parts := es.egress()
+		if !anyNonEmpty(parts) {
+			return zero, ErrEmptyEgress // external declared, nothing extracted → caller bug
+		}
+		if err := es.sc.ScanEgress(parts...); err != nil {
+			return zero, err // ErrLeaked → the effect never runs
+		}
+	}
 	return effect()
+}
+
+// anyNonEmpty reports whether ss holds at least one non-blank string.
+func anyNonEmpty(ss []string) bool {
+	for _, s := range ss {
+		if strings.TrimSpace(s) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // intentKey carries a higher layer's semantic intent for the current operation.

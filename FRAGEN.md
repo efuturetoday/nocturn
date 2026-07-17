@@ -349,3 +349,144 @@ ein A-Agent kann B's Token strukturell nicht ziehen, egal wie die Vaults verschl
 
 **Kopplung:** multi-WS-unattended = Daemon-Modus **+** Keychain **+** HKDF-Master. Einzel-WS-unattended geht schon
 (eine Entsperrung beim Start). Reload-Atomizität je WS s. #9.5.
+
+---
+
+### 13. `notify` — proaktiv den User erreichen (✅ GEBAUT)
+
+**Status:** umgesetzt als `internal/notifycap` (Tool `notify` + `nocturn.notify`), ntfy-`Push`
+(fire-and-forget), Leak-Scan + Rate-Limit, TUI-Fallback ohne ntfy. Race-clean getestet, docs
+aktualisiert. Design unten wie geplant umgesetzt.
+
+
+- **Ziel:** Der Assistent meldet sich **von sich aus** (fire-and-forget), im Gegensatz zu HITL
+  (das *fragt und wartet*). „Flug verspätet", „Task fertig", „Cron-Agent hat X gefunden". Die
+  fehlende „andere Hälfte" von HITL — ein Assistent, der dich nicht erreichen kann, ist ein halber.
+
+- **Form:** neue Host-Capability-Gruppe `internal/notifycap` (kleiner Typ + `*Guard` + ntfy-Push +
+  `secret.Scanner`). Familie `notify`. Tool **`notify`** `{title?, message}` → `{sent:true}`. JS:
+  `nocturn.notify(message, title?)`. Kommt Modell/Skript/Plugin/Cron-Agent gleichzeitig zugute.
+
+- **Ziel-Kanal host-owned, NIE modell-gewählt:** die Nachricht geht an den **konfigurierten**
+  User-Kanal (ntfy-Topic aus `NTFY_*`), das Modell liefert nur *Inhalt*, nie *Ziel* — exakt wie die
+  Credential-Injektion das Ziel bestimmt, nicht der Gast. Damit kann `notify` **kein Exfil-Kanal zu
+  Dritten** werden (der Klassiker „Agent pusht Secret an vom Angreifer beobachtetes Topic" ist zu).
+
+- **Gating (die Sicherheits-Balance):**
+  - **`Write:false`** — eine Nachricht an dein *eigenes* Gerät ist keine per-Message-freigabe-
+    pflichtige Mutation → Base-Policy **Allow** → läuft still (keine „darf ich dir X sagen?"-Prompts,
+    gute UX). Eine Workspace-/Agent-Policy kann trotzdem auf `Ask` verschärfen.
+  - **Leak-Scan (Egress):** `Scanner.ScanEgress(title, message)` → ein Vault-Secret in der Nachricht
+    wird **geblockt**. Das ist die eigentliche Kontrolle (Injection kann kein Secret rausschmuggeln).
+  - **Rate-Limit** (`RateLimiter`, Familie `notify`) → keine Spam-Salve aufs Handy.
+  - läuft durch den `Guard` → observable, cage-/policy-verschärfbar.
+
+- **Transport:** ntfy um ein schlichtes `Push(title, body)` erweitern (keine Action-Buttons, kein
+  Token — anders als das HITL-`Notify`). Reuse `NTFY_*`-Config. Kein ntfy konfiguriert → attended:
+  TUI-Zeile; unattended: no-op + Log (kanal-agnostisch, s. #7).
+
+- **Baugröße:** klein. **Zuerst bauen** (fundamentaler als #14; ein Reminder = #14 + #13).
+
+---
+
+### 14. `schedule` — künftige/wiederkehrende Läufe (PLAN, noch nicht gebaut)
+
+- **Ziel:** Autonomie über Zeit. „Erinnere mich morgen 9 Uhr", „prüf X jeden Morgen". Der
+  **Scheduler existiert schon** (`internal/agent/scheduler.go`: cron-getriggerte, *autor-deklarierte*
+  `Definition`s aus `<ws>/agents/<name>/agent.md`, unattended, mit Autonomy-Level). `schedule` ist die
+  **dynamische, modell-sichtbare** Hälfte: der laufende Agent legt selbst Läufe an/listet/löscht.
+
+- **DER Sicherheits-Kern (load-bearing):** ein Schedule erzeugt **künftige Autorität**. Könnte das
+  Modell einen unattended-Lauf mit beliebiger Autonomy planen, könnte eine Prompt-Injection einen
+  `full`-Lauf schedulen, der Effekte **auto-approved** → **HITL-Bypass über die Zukunft** (dieselbe
+  Klasse wie `grants.json` schreiben / Agents authoren, ADR-10). Das ganze Design folgt aus: *das
+  Modell darf sich keine künftige Autorität selbst verleihen.*
+
+- **Was ein Schedule tut — nach Sicherheit gestaffelt:**
+  - **(a) Reminder (MVP, sicher, hoher Wert):** `{when, message}` → zur Zeit feuert ein
+    **`notify(message)`** (und/oder re-prompted den Assistenten mit der Message als neuen **attended**
+    Turn, wenn du da bist). Autorität = nur `notify`. Eine Injection, die einen Reminder plant, kann
+    dich höchstens später benachrichtigen (leak-gescannt) — **kein** unattended-Effekt. Der 80%-Fall.
+  - **(b) benannten, vor-authorten Agent feuern (später):** `{when, agent}` mit `agent` = eine
+    **existierende** autor-deklarierte `Definition` (human-reviewtes agent.md). Modell wählt *wann*;
+    *was* + Tools/Cage/Autonomy kommen aus der Control-Plane-Datei, die das Modell **nicht** schreiben
+    kann → keine neue Autorität geprägt, nur ein bereits sanktionierter Lauf getriggert.
+  - **NIE:** Modell liefert Instructions + Tools + `full`-Autonomy inline → das wäre Agent-Authoring
+    zur Laufzeit = der Self-Modification-Threat. Verboten.
+
+- **Autonomy-Cap für modell-erzeugte Schedules:** höchstens `guarded` (out-of-band fragen → Mensch
+  bleibt in der Schleife) oder `strict`; `full` **nur** via autor-deklariertes agent.md.
+
+- **Form:** Tools `schedule.create {when, message | agent}`, `schedule.list`, `schedule.cancel {id}`.
+  `when` = one-shot absolut (`at:` RFC3339 / relativ „in 2h"/„morgen 9 Uhr") **oder** recurring
+  (`cron: "0 9 * * *"`). Braucht einen **One-shot-Schedule-Typ** (aktuell nur `ParseCron` = recurring)
+  der nach dem Feuern sich selbst löscht. JS: `nocturn.schedule(...)`.
+
+- **Persistenz (Control-Plane, modell-unerreichbar):** `<ws>/schedules.json`, host-managed, 0600,
+  **außerhalb** des Modell-Mounts — erreichbar **nur** übers gegatete `schedule`-Tool, **nie** via
+  `file.write` (dieselbe load-bearing Schutz-Logik wie `grants.json`, ADR-10). Scheduler lädt beim
+  Start; das Tool appended/entfernt zur Laufzeit → Scheduler braucht **dynamisches `Add(job)`/
+  `Remove(id)`** (heute statisch bei `NewScheduler`).
+
+- **Gating:** `schedule.create` = `Write:true` (legt einen stehenden künftigen Effekt an) → Base
+  `Ask` (HITL: „Reminder für morgen 9 Uhr anlegen?"); danach persistiert. `schedule.list` = read
+  (still); `schedule.cancel` = write (ask/allow-own). Rate-limited.
+
+- **Scheduler-Änderungen:** dynamisches Add/Remove (Mutex); One-shot-Jobs (self-delete nach fire);
+  neuer Run-Typ „Reminder" (nur notify) neben dem bestehenden `Definition`-Run.
+
+- **Offene Punkte:** re-entrant Reminder (Message als neuer Turn) vs. nur notify — MVP: nur notify;
+  Zeitzone (Workspace/Host-lokal, koppelt an `time.now`-tz); Max-Pending-Quota pro Workspace.
+
+- **Zusammenhang:** Reminder = **#14 + #13**. `notify` (#13) ist der kleinere, fundamentale Baustein
+  → zuerst. Beide sind **Bindegewebe** für einen echten Agent (den User erreichen; von Zeit geweckt
+  werden), nicht weitere Effekt-Tore.
+
+### 15. Cross-Workspace-`spawn` — bewusstes Loch in die harte Isolation (PLAN, noch nicht gebaut)
+
+**Frage (User):** Multi-Workspace-B isoliert Workspaces *strukturell* (jeder Stack eigener Guard/Injector/
+Grants; #12). Was, wenn man das bewusst *will* — `default` soll an einen Agent von `work` routen?
+
+**Antwort: harte Isolation ist der richtige Default (stoppt *ambientes* Quer-Leaken), aber keine
+unöffenbare Mauer.** Gezieltes Quer-Routing = der **Subagent-/`spawn`-Weg, workspace-übergreifend** —
+dieselbe Form wie Plugin-Cage→Hallway (strukturell dicht, ein **deklariertes, attenuiertes** Loch).
+
+**Design (sicher, weil der geroutete Agent im ZIEL-Stack läuft):**
+- Ein Agent in `default` darf `spawn work.<agent>` — **wenn eine Route deklariert + reviewt ist** (nicht
+  ambient; `default` erreicht nur freigegebene Workspaces/Agents).
+- Der Ziel-Agent läuft **in `work`s Stack** (`work`s Injector/Guard/Grants), `default` *triggert* nur und
+  bekommt das Ergebnis als **untrusted Data** zurück.
+- **Credential-Isolation hält:** `default` sieht `work`s Token nie (Injector stempelt an `work`s Grenze).
+- **Effekt-Isolation hält:** ein Write des `work`-Agents geht durch **`work`s Guard + HITL**, getaggt
+  `[work]` (der Workspace-Label-Seam aus #12-§5) — ein gekapertes `default` kann `work` **nicht still**
+  senden lassen.
+- **Schraube:** cross-workspace-erreichbare Agents **erzwingen ≥ `guarded`** (sonst könnte `default` einen
+  `full`-Agent still treiben). Die Route-Deklaration ist der Review-Punkt.
+
+**Kein Redesign:** map-of-stacks (eine Instanz) macht's zu einem **kontrollierten Entry-Point** (default's
+Stack kriegt ein `spawn(work.<agent>)`-Tool, das in `work`s Stack dispatcht) — additiv. Verallgemeinerung
+der geparkten Subagents (BB8, same-workspace) auf cross-workspace. **Erst wenn Subagents dran sind.**
+
+---
+
+### 16. Egress-Leak-Scan: Body als `[]byte` scannen statt kopieren (REFINE, noch zu klären)
+
+**Kontext:** Der Egress-Scan (`gateway.Do` → `EgressScan`/`ScanEgress`) bekommt die outbound-Fläche als
+`func() []string`. Das `[]string` selbst ist billig (Go-Strings = ptr+len-Referenzen, keine Kopien; der
+Scanner walkt + short-circuited beim ersten Leak). **Aber:** in `netcap.egressParts` steht
+`string(req.Body)` → die `[]byte→string`-Konvertierung **kopiert den Request-Body**, und
+`percentDecode` im Scanner kopiert nochmal. Bei einem großen POST-/Upload-Body sind das reale transiente
+Allokationen (~2× Body-Größe).
+
+**Zu klären / refinen (nicht jetzt):**
+- Scanner um einen **`[]byte`-Egress-Pfad** ergänzen (z. B. `ScanEgressBytes(...[]byte)` oder ein Egress-Part
+  als `[]byte` statt `string`), sodass der Body **ohne Konvertierung** gescannt wird.
+- `percentDecode` **überspringen**, wenn kein `%` im Input (spart die zweite Kopie im Normalfall).
+- Offene Design-Frage: wie mischt man `[]byte`-Body + `string`-Parts (URL/Header) in *einer* Egress-Fläche,
+  ohne die simple `func() []string`-Naht zu verbiegen? (Evtl. eine kleine Part-Union oder ein zweites
+  optionales `bodies func() [][]byte`.)
+- **Kein Walker/Iterator** statt `[]string` — der spart nur den winzigen Header-Slice (~nichts) und
+  verkompliziert den `anyNonEmpty`-Empty-Check. Der Hebel ist **body-spezifisch**, nicht die API-Form.
+
+**Status:** Mikro-Optimierung, erst relevant wenn große Uploads über `http.write`/Plugins laufen. Die
+`func() []string`-Naht bleibt vorerst.
