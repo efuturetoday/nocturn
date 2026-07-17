@@ -11,9 +11,7 @@ package workspace
 
 import (
 	"context"
-	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/agent"
@@ -25,6 +23,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
+	"github.com/efuturetoday/nocturn/internal/persona"
 	"github.com/efuturetoday/nocturn/internal/remindcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -62,32 +61,8 @@ type Workspace struct {
 	secrets     *secret.Vault    // the credentials vault
 	credentials *secret.Injector // host-side credentials injection
 	leakScanner *secret.Scanner  // bidirectional secret leak scan
-	persona     string           // the interactive session's system prompt (PERSONA.md, layered)
-}
 
-// defaultPersona is the built-in system prompt used when no PERSONA.md is found at
-// either layer. The lowest, always-present fallback of loadPersona.
-const defaultPersona = "You are Nocturn, a careful assistant. " +
-	"Use a tool when it helps; otherwise answer directly."
-
-// loadPersona resolves the interactive session's system prompt with OVERRIDE semantics
-// (first hit wins, never appended): the workspace's OWN PERSONA.md, else the shared
-// PERSONA.md in the parent directory (workspaces/PERSONA.md), else the built-in default.
-// PERSONA.md lives in the workspace ROOT — control-plane, never under mnt/ (ADR-10) — so
-// the model can neither read nor rewrite its own identity; a self-writable persona would
-// be a prompt-injection vector onto the assistant itself.
-func loadPersona(dir string) string {
-	for _, p := range []string{
-		filepath.Join(dir, "PERSONA.md"),
-		filepath.Join(filepath.Dir(dir), "PERSONA.md"),
-	} {
-		if b, err := os.ReadFile(p); err == nil {
-			if s := strings.TrimSpace(string(b)); s != "" {
-				return s
-			}
-		}
-	}
-	return defaultPersona
+	persona *persona.Store // the assistant's system prompt — its own state service (see Persona/SetPersona)
 }
 
 // toolTimeout bounds a single tool call inside the loop.
@@ -183,7 +158,7 @@ func Open(h Host, base func() capability.Policy, unlock Vault, name, dir string)
 		secrets:     vault,
 		credentials: credentials,
 		leakScanner: leakScanner,
-		persona:     loadPersona(dir),
+		persona:     persona.Load(dir),
 	}, nil
 }
 
@@ -191,8 +166,15 @@ func Open(h Host, base func() capability.Policy, unlock Vault, name, dir string)
 // references, no service-locator indirection. Its "Allow always" grants persist to the
 // workspace's own grants store; "Allow this session" grants die on Reset/Close.
 func (w *Workspace) OpenSession() *session.Session {
-	return session.New(w.loop, w.tools, w.guard, w.grants, session.WithPersona(w.persona))
+	return session.New(w.loop, w.tools, w.guard, w.grants, session.WithPersona(w.persona.Get()))
 }
+
+// Persona returns the workspace's current system prompt (state, not the loader detail).
+func (w *Workspace) Persona() string { return w.persona.Get() }
+
+// SetPersona persists a new persona; the persona service owns the write, the layering, and
+// its own synchronization. Callers deal in state, never the file or a lock.
+func (w *Workspace) SetPersona(text string) error { return w.persona.Set(text) }
 
 // RunAgent runs the named child agent to completion over this workspace's tools + guard,
 // with the agent's OWN durable grants (per-agent file). An unknown name returns an error.
