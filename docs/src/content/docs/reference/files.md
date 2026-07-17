@@ -18,78 +18,17 @@ the proof that the broker's `(family, target)` model is not HTTP-shaped: here th
 
 ## Tools
 
-### `file.read` <span class="axis axis--read">read</span>
+Seven tools exercise this capability — each page has its inputs, output, and a JavaScript example:
 
-| Field  | Type   | Required | Notes |
-|--------|--------|----------|-------|
-| `path` | string | yes      | Workspace-relative path to read. |
+- [`file.read`](/reference/tools/file-read/) <span class="axis axis--read">read</span> — read a text file
+- [`file.list`](/reference/tools/file-list/) <span class="axis axis--read">read</span> — list a directory
+- [`file.stat`](/reference/tools/file-stat/) <span class="axis axis--read">read</span> — stat a path
+- [`file.search`](/reference/tools/file-search/) <span class="axis axis--read">read</span> — find files by glob
+- [`file.write`](/reference/tools/file-write/) <span class="axis axis--write">write</span> — write a text file
+- [`file.remove`](/reference/tools/file-remove/) <span class="axis axis--write">write</span> — remove a file
+- [`file.move`](/reference/tools/file-move/) <span class="axis axis--write">write</span> — move / rename a file
 
-**Returns** the file contents (UTF-8), capped at 1 MiB.
-
-### `file.list` <span class="axis axis--read">read</span>
-
-| Field  | Type   | Required | Notes |
-|--------|--------|----------|-------|
-| `path` | string | no       | Workspace-relative directory. Defaults to the workspace root. |
-
-**Returns** a JSON array: `[{ "name": "todo.md", "isDir": false, "size": 128 }]`.
-
-### `file.stat` <span class="axis axis--read">read</span>
-
-| Field  | Type   | Required | Notes |
-|--------|--------|----------|-------|
-| `path` | string | yes      | Workspace-relative path to stat. |
-
-**Returns** `{ "exists": true, "isDir": false, "size": 128 }`. A missing path returns
-`{ "exists": false }`.
-
-### `file.search` <span class="axis axis--read">read</span>
-
-Find files by glob pattern, walking subdirectories under a base directory.
-
-| Field     | Type   | Required | Notes |
-|-----------|--------|----------|-------|
-| `pattern` | string | yes      | Glob. A pattern with **no `/`** (e.g. `*.md`) matches file **names** at any depth; a pattern with a `/` (e.g. `src/*.go`) matches the path relative to the search base. |
-| `path`    | string | no       | Workspace-relative directory to search under. Defaults to the workspace root. |
-
-**Returns** a JSON array of workspace-relative paths — e.g. `["a.md", "sub/b.md"]` — each usable
-directly by the other `file.*` tools. Capped at 500 results; a truncated sweep appends a
-`(truncated at 500 results)` line after the JSON so a capped result never reads as "found
-everything".
-
-### `file.write` <span class="axis axis--write">write</span>
-
-Changes the world, so it **asks for approval** unless a standing grant covers it.
-
-| Field     | Type   | Required | Notes |
-|-----------|--------|----------|-------|
-| `path`    | string | yes      | Workspace-relative path to write. Parent directories are created. |
-| `content` | string | yes      | File contents (UTF-8). |
-
-**Returns** `{ "path": "notes/todo.md", "bytesWritten": 8 }`.
-
-### `file.remove` <span class="axis axis--write">write</span>
-
-Changes the world, so it **asks for approval** unless a standing grant covers it.
-
-| Field  | Type   | Required | Notes |
-|--------|--------|----------|-------|
-| `path` | string | yes      | Workspace-relative path to remove (a file or an empty directory). |
-
-**Returns** `{ "path": "gone.txt", "removed": true }`.
-
-### `file.move` <span class="axis axis--write">write</span>
-
-Move or rename a file within the workspace. **Both** endpoints are confined to the workspace
-(see [Confinement](#confinement)); parent directories of the destination are created. It is
-gated on the **destination** path — that is the target a grant or cage scopes.
-
-| Field  | Type   | Required | Notes |
-|--------|--------|----------|-------|
-| `from` | string | yes      | Workspace-relative source path. |
-| `to`   | string | yes      | Workspace-relative destination path. |
-
-**Returns** `{ "from": "a.txt", "to": "b.txt" }`.
+Reads run silently under the default policy; writes ask for approval.
 
 ## Limiting reach — cage syntax
 

@@ -94,7 +94,57 @@ export default defineConfig({
 						{ label: 'Files', slug: 'reference/files' },
 						{ label: 'Notify', slug: 'reference/notify' },
 						{ label: 'Reminders', slug: 'reference/reminders' },
-						{ label: 'Wake', slug: 'reference/wake' },
+					],
+				},
+				{
+					label: 'Tools',
+					items: [
+						{
+							label: 'HTTP',
+							items: [
+								{ label: 'http.read', slug: 'reference/tools/http-read' },
+								{ label: 'http.write', slug: 'reference/tools/http-write' },
+							],
+						},
+						{
+							label: 'DNS',
+							items: [{ label: 'dns.resolve', slug: 'reference/tools/dns-resolve' }],
+						},
+						{
+							label: 'Ping',
+							items: [{ label: 'ping', slug: 'reference/tools/ping' }],
+						},
+						{
+							label: 'Files',
+							items: [
+								{ label: 'file.read', slug: 'reference/tools/file-read' },
+								{ label: 'file.write', slug: 'reference/tools/file-write' },
+								{ label: 'file.list', slug: 'reference/tools/file-list' },
+								{ label: 'file.stat', slug: 'reference/tools/file-stat' },
+								{ label: 'file.search', slug: 'reference/tools/file-search' },
+								{ label: 'file.remove', slug: 'reference/tools/file-remove' },
+								{ label: 'file.move', slug: 'reference/tools/file-move' },
+							],
+						},
+						{
+							label: 'Notify',
+							items: [{ label: 'notify', slug: 'reference/tools/notify' }],
+						},
+						{
+							label: 'Reminders',
+							items: [
+								{ label: 'remind', slug: 'reference/tools/remind' },
+								{ label: 'remind.list', slug: 'reference/tools/remind-list' },
+								{ label: 'remind.cancel', slug: 'reference/tools/remind-cancel' },
+							],
+						},
+						{
+							label: 'Other',
+							items: [
+								{ label: 'time.now', slug: 'reference/tools/time-now' },
+								{ label: 'wake', slug: 'reference/tools/wake' },
+							],
+						},
 					],
 				},
 				{

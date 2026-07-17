@@ -18,33 +18,10 @@ is a write. The security layer gates on that, never on the raw HTTP verb.
 
 ## Tools
 
-### `http.read` <span class="axis axis--read">read</span>
+Two tools exercise this capability — each page has its inputs, output, and a JavaScript example:
 
-Read a URL with a safe method. Runs silently under the default policy.
-
-| Field    | Type   | Required | Notes |
-|----------|--------|----------|-------|
-| `url`    | string | yes      | The URL to read. |
-| `method` | string | no       | `GET` or `HEAD`. Default `GET`. A mutating method here is rejected. |
-
-**Returns** a JSON envelope so the caller sees the real outcome, not just the body:
-
-```json
-{ "status": 200, "statusText": "OK", "headers": { "Content-Type": "application/json" }, "body": "…" }
-```
-
-### `http.write` <span class="axis axis--write">write</span>
-
-Send data with a mutating method. This **asks for approval** unless a standing grant covers it.
-
-| Field          | Type   | Required | Notes |
-|----------------|--------|----------|-------|
-| `url`          | string | yes      | The URL to send to. |
-| `method`       | string | no       | `POST`, `PUT`, `PATCH`, or `DELETE`. Default `POST`. |
-| `body`         | string | no       | The request body. |
-| `content_type` | string | no       | `Content-Type` of the body. Default `application/json`. |
-
-**Returns** the same `{status, statusText, headers, body}` envelope as `http.read`.
+- [`http.read`](/reference/tools/http-read/) <span class="axis axis--read">read</span> — read a URL (GET/HEAD)
+- [`http.write`](/reference/tools/http-write/) <span class="axis axis--write">write</span> — send data (POST/PUT/PATCH/DELETE)
 
 ## Limiting reach — cage syntax
 

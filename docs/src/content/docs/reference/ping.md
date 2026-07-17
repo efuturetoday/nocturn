@@ -17,16 +17,9 @@ answers. Like `dns`, it is a read-only sibling of `http` sharing the same one ga
 
 ## Tools
 
-### `ping` <span class="axis axis--read">read</span>
+One tool exercises this capability — its page has the inputs, output, and a JavaScript example:
 
-Probe a host with a single ICMP echo. A probe does not change the world, so under the default
-policy it runs **silently, exactly like `dns.resolve`** — it does not ask by default.
-
-| Field  | Type   | Required | Notes |
-|--------|--------|----------|-------|
-| `host` | string | yes      | The hostname or IP to ping. |
-
-**Returns** a JSON object `{ "host": "example.com", "ip": "93.184.216.34", "ok": true, "rtt_ms": 12 }`.
+- [`ping`](/reference/tools/ping/) <span class="axis axis--read">read</span> — probe a host with a single ICMP echo
 
 ## Why it is a gated capability anyway
 

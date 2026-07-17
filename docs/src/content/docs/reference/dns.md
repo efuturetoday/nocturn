@@ -17,23 +17,13 @@ sharing the same one gateway.
 
 ## Tools
 
-### `dns.resolve` <span class="axis axis--read">read</span>
+One tool exercises this capability — its page has the inputs, output, and a JavaScript example:
 
-Resolve a DNS record for a hostname. A lookup does not change the world, so under the default
-policy it runs **silently, exactly like `http.read` (a GET)** — it does not ask by default.
-
-| Field  | Type   | Required | Notes |
-|--------|--------|----------|-------|
-| `host` | string | yes      | The hostname to resolve (an IP for `PTR`). |
-| `type` | string | no       | Record type: `A` (IPv4, default), `AAAA` (IPv6), `IP` (both), `MX`, `TXT`, `CNAME`, `NS`, `PTR` (reverse), `SRV`. |
-
-**Returns** a JSON object `{ "host": "example.com", "type": "A", "records": ["140.82.121.4", "140.82.121.3"] }`.
-The `records` are strings: addresses for `A`/`AAAA`/`IP`/`PTR`, `"<pref> <host>"` for `MX`,
-`"<priority> <weight> <port> <target>"` for `SRV`, and the raw value otherwise.
+- [`dns.resolve`](/reference/tools/dns-resolve/) <span class="axis axis--read">read</span> — resolve a DNS record for a hostname
 
 The record **type is not an authority axis** — the reach that matters is the queried name (an
-exfiltration channel regardless of record), so it is gated on the host exactly the same for every
-type.
+exfiltration channel regardless of record), so `dns.resolve` is gated on the host exactly the same
+for every record type.
 
 ## Limiting reach — cage syntax
 

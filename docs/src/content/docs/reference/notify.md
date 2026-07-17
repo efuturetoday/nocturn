@@ -18,17 +18,24 @@ notify just **tells** you something ("flight delayed", "the scheduled report is 
 
 ## Tools
 
-### `notify` <span class="axis axis--read">read</span>
+One tool exercises this capability — its page has the inputs, output, and a JavaScript example:
 
-Send a notification to your device. It does **not** ask a question or wait for a reply — for that,
-an effect goes through an approval instead.
+- [`notify`](/reference/tools/notify/) <span class="axis axis--read">read</span> — send a fire-and-forget notification to your device
 
-| Field     | Type   | Required | Notes |
-|-----------|--------|----------|-------|
-| `message` | string | yes      | The notification text. |
-| `title`   | string | no       | Optional short title. |
+## Limiting reach
 
-**Returns** `{ "sent": true }`.
+The destination is the **host-owned channel**, not a model-chosen target, so there is no
+meaningful per-target scoping — the only sensible target is `*`. In a plugin cage you therefore
+allow or deny `notify` as a whole:
+
+```json
+{ "family": "notify", "target": "*", "access": ["read"] }
+```
+
+Because the target is fixed, this is effectively a **family-level** allow/deny, rather than the
+host/path scoping the [network](/reference/http/) and [file](/reference/files/) capabilities offer.
+To go the other way — require approval on *every* notification instead of the silent default — a
+workspace or agent policy tightens `notify` to **ask** (see the safety note below).
 
 ## Why it runs silently — and why that is safe
 
@@ -52,9 +59,3 @@ want every notification approved.
 Notifications are delivered over the same out-of-band channel as approvals (ntfy — see
 [getting set up](/guides/getting-started/)). When no channel is configured, a notification falls
 back to a dim inline line in the TUI (the attended case).
-
-## From a script
-
-```js
-nocturn.notify("Backup finished", "Nocturn");   // message, optional title
-```

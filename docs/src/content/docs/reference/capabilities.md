@@ -3,13 +3,17 @@ title: Capabilities reference
 description: Every host capability Nocturn exposes — its tools, inputs, read/write axis, target, and the data it returns.
 ---
 
-A **capability** is a real-world power the host lends the assistant: reaching the network,
-touching the workspace, resolving a name. Everything the model, a script, a plugin, or an
-MCP server can *actually do* passes through one of them. There is no other way out — a WASM
-guest has zero ambient authority, so a capability it was not handed is simply absent.
+A **capability** is a real-world power the host lends the assistant — reaching the network,
+touching the workspace, messaging you. A **tool** is what the model actually calls (`http.write`,
+`file.read`); each tool exercises exactly one capability, and *that* is the authority the broker
+gates. Several tools can share one capability — `http.read` and `http.write` are both `http`.
+Everything the model, a script, a plugin, or an MCP server can *actually do* passes through a
+capability; a WASM guest has zero ambient authority, so a capability it was not handed is simply
+absent.
 
-This section is the catalogue. Each family (HTTP, DNS, Ping, Files, Notify) has its own page listing
-every tool, its inputs, and what it returns. This page is the map over all of them.
+Two lists follow: the **capabilities** — one per family, each with its own page showing how to
+cage it and what credentials it handles — and every **tool**, linked back to the capability it
+exercises.
 
 ## The two axes
 
@@ -61,54 +65,27 @@ The same triple is the vocabulary everywhere a bound is set: a plugin's cage, an
 and your remembered [grants](/guides/approvals/#how-the-decision-is-made). Only the target's
 *shape* changes with the family; the structure never does.
 
-## Every tool at a glance
+## The capabilities
 
-| Tool          | Family | Axis | Target              | Inputs                                   | Returns |
-|---------------|--------|------|---------------------|------------------------------------------|---------|
-| `http.read`   | `http` | <span class="axis axis--read">read</span> | hostname | `url`, `method` (`GET`/`HEAD`) | JSON `{status, statusText, headers, body}` |
-| `http.write`  | `http` | <span class="axis axis--write">write</span> | hostname | `url`, `method` (`POST`/`PUT`/`PATCH`/`DELETE`), `body`, `content_type` | JSON `{status, statusText, headers, body}` |
-| `dns.resolve` | `dns`  | <span class="axis axis--read">read</span> | hostname | `host`, `type` (`A`/`AAAA`/`IP`/`MX`/`TXT`/`CNAME`/`NS`/`PTR`/`SRV`) | JSON `{host, type, records}` |
-| `ping`        | `ping` | <span class="axis axis--read">read</span> | hostname / IP | `host` | JSON `{host, ip, ok, rtt_ms}` |
-| `file.read`   | `file` | <span class="axis axis--read">read</span> | path (in workspace) | `path` | file contents (UTF-8, ≤ 1 MiB) |
-| `file.write`  | `file` | <span class="axis axis--write">write</span> | path (in workspace) | `path`, `content` | JSON `{path, bytesWritten}` |
-| `file.list`   | `file` | <span class="axis axis--read">read</span> | path (in workspace) | `path` (directory) | JSON array `[{name, isDir, size}]` |
-| `file.stat`   | `file` | <span class="axis axis--read">read</span> | path (in workspace) | `path` | JSON `{exists, isDir, size}` |
-| `file.search` | `file` | <span class="axis axis--read">read</span> | path (in workspace) | `pattern`, `path` (base dir) | JSON array of matching paths |
-| `file.remove` | `file` | <span class="axis axis--write">write</span> | path (in workspace) | `path` | JSON `{path, removed}` |
-| `file.move`   | `file` | <span class="axis axis--write">write</span> | path (in workspace) | `from`, `to` | JSON `{from, to}` |
-| `notify`      | `notify` | <span class="axis axis--read">read</span> | user's channel (host-owned) | `message`, `title` | JSON `{sent}` |
-| `remind`      | `remind` | <span class="axis axis--read">read</span> | user's channel (host-owned) | `when`, `message`, `title` | JSON `{id, fireAt}` |
-| `remind.list` | `remind` | <span class="axis axis--read">read</span> | user's channel (host-owned) | — | JSON array of reminders |
-| `remind.cancel` | `remind` | <span class="axis axis--read">read</span> | user's channel (host-owned) | `id` | JSON `{id, cancelled}` |
+Six capability families exist today. Each has its own page — how to cage it, the credentials it
+handles, and its tools:
 
-The tool name **is** the authority. `http.read` and `http.write` are split so the tool the
-model picks already decides the effect axis — the security layer never has to trust an HTTP
-verb it was handed.
+| Capability | Reaches | Target | Effects | Cage by |
+|------------|---------|--------|---------|---------|
+| [`http`](/reference/http/) | the network | host / IP / CIDR | read · write | target |
+| [`dns`](/reference/dns/) | name resolution | hostname | read | target |
+| [`ping`](/reference/ping/) | reachability probes | host / IP | read | target |
+| [`file`](/reference/files/) | the workspace filesystem | workspace path | read · write | target |
+| [`notify`](/reference/notify/) | messaging you | your channel (host-owned) | read | family only |
+| [`remind`](/reference/reminders/) | scheduled messages to you | your channel (host-owned) | read | family only |
 
-## Tools that are not capabilities
+**Cage by target** means you scope reach to specific hosts or paths (`http.write @ api.github.com`,
+`file.write @ notes/*`). **Family only** means the destination is host-owned and fixed (your own
+channel), so you allow or deny the whole capability rather than picking a target.
 
-Some tools the model can call reach **no** capability, so they are never gated:
-
-- **`code.run`** — runs JavaScript on the sandboxed interpreter. Pure computation needs zero
-  authority. When a script wants an effect it calls `nocturn.call(tool, args)`, which routes
-  back through *these same capabilities* and their gating — see the
-  [WASM data format](/reference/wasm-abi/).
-- **`skill.load` / `skill.read`** — pull in context (instructions, references). Context is
-  not authority: a skill can only *suggest* how to use gated tools, never grant new reach.
-- **`time.now`** — returns the current date and time (`{unix, iso, utc, timezone, offset_seconds}`).
-  A clock read leaks nothing and changes nothing, so it carries zero authority. It exists as a host
-  tool only because the sandbox guest has no wall clock of its own — without it a skill could not
-  answer *"what is due today?"*.
-- **`wake`** — schedules the agent's own resume after a delay (see [wake](/reference/wake/)).
-  It reaches nothing external, so it is ungated — **bounded** instead (delay clamp + pending cap). Any
-  effect in the *resumed* turn is gated normally.
-
-## MCP tools
-
-A remote [MCP server](/guides/remote-mcp/) contributes its own tools, but under the hood each
-one is an `http` capability call to the MCP host. It rides the exact same reach/effect axes
-(the MCP host is the target; a read-only tool is a read, otherwise a write), so remote tools
-are gated and approved just like a native `http.write` — no separate machinery.
+Each tool has its own page under **Tools** in the sidebar, grouped by the capability it exercises —
+including the ungated tools (`code.run`, `skill.*`, `time.now`, `wake`) that reach no capability at
+all.
 
 ## One door for everyone
 
