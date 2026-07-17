@@ -26,8 +26,9 @@ session" approvals you had given. Things you allowed *always* still stick.
 
 ## Watching it work
 
-As the assistant answers, it streams the text in real time. When it uses a tool, a small
-indicator shows what is happening:
+As the assistant answers, it streams the text in real time. If the model reasons before
+answering, that reasoning appears **dimmed** above the reply while it thinks, then gives
+way to the answer. When it uses a tool, a small indicator shows what is happening:
 
 - a **spinner** while it is working,
 - a **✓** or **✗** when it finishes,

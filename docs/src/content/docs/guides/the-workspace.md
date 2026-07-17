@@ -119,7 +119,8 @@ Because one Nocturn runs them all, using several is light:
 - Every workspace under `workspaces/` is loaded together, and each one's scheduled agents
   run side by side, each through its own walls.
 - In the chat, `/ws` lists your workspaces and `/ws <name>` switches the one you are talking
-  to.
+  to. Switching back shows that workspace's conversation where you left it — each keeps its
+  own history.
 - When a background run in another workspace needs your approval, the prompt is tagged with
   its workspace — `[work] Send the weekly summary?` — so you always know which world is
   asking before you say yes.
