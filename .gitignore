@@ -14,10 +14,10 @@ internal/script/qjs/.buildcache/
 # macOS
 .DS_Store
 
-# local runtime plugins (not source; testdata/example documents the format)
+# local runtime plugins — installed plugins may hold OAuth tokens; never commit them
+# (testdata/example documents the format). Anchored so it does not swallow internal/plugin/.
 /plugins/
 
-# per-workspace runtime state (mnt data, .skills, grants.json) — not source.
-# Anchored to the repo root so it does NOT also swallow internal/workspace/
-# (the composition-aggregate package — real source).
+# nocturne workspaces (per-workspace runtime state: mnt data, .skills, grants, vault).
+# Anchored so it does not swallow internal/workspace/.
 /workspaces/
