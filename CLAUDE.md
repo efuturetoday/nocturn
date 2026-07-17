@@ -1,7 +1,15 @@
 # Nocturn — Projektwissen (CLAUDE.md)
 
-> Destilliertes Wissen aus der gemeinsamen Entwicklung. Lies das zuerst, bevor du
-> weiterbaust. Vollständiger Ur-Plan: `~/.claude/plans/ich-m-chte-eine-openclaw-foamy-tulip.md`.
+> Destilliertes, **nicht-ableitbares** Wissen: Vision, Threat-Model, Muster, Pitfalls.
+> Lies das zuerst, bevor du weiterbaust.
+>
+> **Single sources of truth — hier NICHT duplizieren:**
+> - Was ein Paket tut → **`go doc ./internal/<pkg>`** (die Paket-Doc-Kommentare sind die
+>   destillierte Per-Paket-Wahrheit; §4 ist nur ein Index, keine Nach-Transkription).
+> - Warum wir X statt Y gewählt haben → **`ADRS.md`** (die Entscheidungs-Records).
+> - Was schon passiert ist → **git log** (keine „Erledigt"-Historie hier).
+>
+> Vollständiger Ur-Plan: `~/.claude/plans/ich-m-chte-eine-openclaw-foamy-tulip.md`.
 > Offene Fragen/Entscheidungen: **`FRAGEN.md`** (pflegen, wenn was aufkommt).
 
 ---
@@ -53,107 +61,114 @@ verifiziert.**
 Von innen (0) nach außen — jede Schale ruht auf der darunter, jede war stabil +
 getestet, bevor die nächste kam:
 
+**Die Schalen — von innen (0) nach außen (7), jede ruht auf der darunter:**
+
 ```
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│ 7  cmd/nocturn — TUI (parameterlos) · agent (Session) · plugin · oauth          │
-│ ┌──────────────────────────────────────────────────────────────────────────────┐ │
-│ │ 6  llm — go-openai-Adapter, native tool_calls                                │ │
-│ │ ┌──────────────────────────────────────────────────────────────────────────┐ │ │
-│ │ │ 5  brain — agentischer Loop, Model-Port, Streaming                       │ │ │
-│ │ │ ┌──────────────────────────────────────────────────────────────────────┐ │ │ │
-│ │ │ │ 4  gateway — Guard (die Pipeline) + Net (Fetch, Resolve)             │ │ │ │
-│ │ │ │ ┌──────────────────────────────────────────────────────────────────┐ │ │ │ │
-│ │ │ │ │ 3  hitl — Out-of-band-Freigabe, HMAC-Token (+ ntfy)              │ │ │ │ │
-│ │ │ │ │ ┌──────────────────────────────────────────────────────────────┐ │ │ │ │ │
-│ │ │ │ │ │ 2  secret — Store (nur Präsenz) + Credential-Injektion       │ │ │ │ │ │
-│ │ │ │ │ │ ┌──────────────────────────────────────────────────────────┐ │ │ │ │ │ │
-│ │ │ │ │ │ │ 1  capability — Broker deny>ask>allow, Epoch/Rate/Window │ │ │ │ │ │ │
-│ │ │ │ │ │ │ ┌──────────────────────────────────────────────────────┐ │ │ │ │ │ │ │
-│ │ │ │ │ │ │ │ 0  sandbox — Zero Authority + WASI + ABI + Härtung   │ │ │ │ │ │ │ │
-│ │ │ │ │ │ │ └──────────────────────────────────────────────────────┘ │ │ │ │ │ │ │
-│ │ │ │ │ │ └──────────────────────────────────────────────────────────┘ │ │ │ │ │ │
-│ │ │ │ │ └──────────────────────────────────────────────────────────────┘ │ │ │ │ │
-│ │ │ │ └──────────────────────────────────────────────────────────────────┘ │ │ │ │
-│ │ │ └──────────────────────────────────────────────────────────────────────┘ │ │ │
-│ │ └──────────────────────────────────────────────────────────────────────────┘ │ │
-│ └──────────────────────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────────────────────┘
+7  cmd/nocturn      TUI (parameterlos) = das ganze Interface; app.go = Prozess-Spine,
+                    stack.go = ein isolierter Stack pro Workspace
+   workspace        Composition-Aggregat: OWNS guard/tools/skills/agents/grants pro ws
+   session · agent  Session = interaktiver Chat (Runner-Loop); agent = Child-Run/Scheduler
+   plugin · mcp     sandboxed Plugins · remote-MCP-Client — beide über die geteilte Registry
+6  llm              go-openai-Adapter, native tool_calls, SSE  (erfüllt brain.Model)
+5  brain            agentischer Loop, Model-Port; Tokens/Tools/Reasoning → internal/activity
+4  gateway          Guard.Authorize = die eine Pipeline (Cage ∩ Grants ∩ Policy → HITL)
+                    Effekt-Adapter LEBEN AUSSERHALB: netcap/filecap/notifycap/… (je *Guard)
+3  hitl             Out-of-band-Freigabe, HMAC-Single-Use-Token; ntfy-Transport
+2  secret           Store (nur Präsenz) + Vault (verschlüsselt) + Injector + Leak-Scanner
+1  capability       Broker deny>ask>allow (fail-closed) + Epoch/Rate/Window/Cage/Grants
+0  sandbox          Zero Authority + WASI + Standard-ABI + Härtung (wazero)
 ```
 
 ### Request-Fluss
 
 ```
-   User "hol mir X"
+   User "hol mir X"  (TUI, parameterlos)
         │
         ▼
-   cmd/nocturn (CLI: run | chat) ── lädt .env (godotenv), baut alles zusammen
+   cmd/nocturn ── lädt .env; baut den Prozess-Spine (master key, HITL-Engine, LLM-Client);
+        │          workspace.Open setzt PRO Workspace den isolierten Stack zusammen
+        ▼
+   session.Runner ── serialisierter Turn-Loop (Submit rein / Subscribe raus); Ask → agent.Turn
         │
         ▼
    brain  ── agentischer Loop: Model fragen → Tool-Call | Antwort → Tool → zurück
-        │        Model = Interface (Port); Streaming via OnToken
-        ├──▶ llm  ── Adapter über go-openai (OpenAI-kompatibel), NATIVE tool_calls,
-        │            SSE-Streaming. Provider-Naht: brain.Model ⟵ llm.Client
+        │        Model = Port; Tokens/Tool-Events/Reasoning streamen via internal/activity (ctx-Sink)
+        ├──▶ llm  ── Adapter über go-openai, NATIVE tool_calls, SSE. Naht: brain.Model ⟵ llm.Client
         ▼
-   gateway.Net ── Capability-Gruppe (Fetch, Resolve …), hält *Guard + eigene Deps
+   tool.Registry ── ein Effekt-Tool (netcap/filecap/…) baut capability.Call{Family, Write, Target}
         │
         ▼
-   gateway.Guard.Authorize ── DIE eine Pipeline:
-        │   capability.Policy.Evaluate(call, Env{Now,Epochs,RateAllow})
+   gateway.Guard.Authorize ── DIE eine Pipeline (reiner Komponierer, kein per-session-State):
+        │   Cage-Kette ∩ stehende capability.Grants ∩ Policy.Evaluate(call, Env{Now,Epochs,Rate})
         │      → Allow: weiter · Deny: ErrDenied · Ask: HITL
-        ├──▶ hitl.Engine.Request ──[ntfy Publisher]──▶ 📱  (Approve/Deny)
-        │         ◀── hitl.Engine.Resolve ◀──[ntfy Listener]◀── signiertes Token
+        ├──▶ hitl.Engine ──[attended Stream ODER ntfy → 📱]──▶ (Approve/Deny, signiertes Token)
         ▼
-   secret.Store + Inject ── Bearer host-seitig an der Grenze injiziert (Gast nie)
+   secret.Injector ── Bearer host-seitig an der Grenze injiziert (Gast sieht ihn nie)
         ▼
-   echter Effekt (HTTP / DNS)  →  Ergebnis zurück ins Brain
+   echter Effekt (HTTP/DNS/File/…) → Egress/Ingress-Leak-Scan → Ergebnis zurück ins Brain
 ```
 
-### Schalen (jede stabil bevor die nächste kam)
-0. **Zero Authority** (`sandbox`) — wazero-Gast ohne Freigabe kann *nicht mal starten*
-   (ungranted import = strukturell abwesend).
-1. **ABI-Fenster** (`sandbox`) — gebrokerte HostFunc-Imports; Daten via `(ptr,len)`
-   über linearen Speicher (wazero bounds-checked); Standard-ABI (packed-ptr + Gast-`malloc`).
-2. **Broker** (`capability`) — `deny > ask > allow`, deny-by-default, deny-wins.
-3. **Epoch/Revocation** (`capability`) — task-gebundene, widerrufbare Grants (PORTICO).
-4. **Secret-Store** (`secret`) — Gast sieht nur Präsenz, nie den Wert; Host injiziert.
-5. **HITL** (`hitl`) — Out-of-band-Freigabe, HMAC-Single-Use-Token; `ntfy`-Transport.
-   + Konsolidierung: `Broker.Evaluate` konsultiert Epoch + Zeitfenster + Rate.
-   + Gateway (`Guard` + `Net`), Brain, LLM-Adapter, Binary (`run`/`chat`), Streaming.
+> Detail pro Schale: `go doc ./internal/<sandbox|capability|secret|hitl|gateway|brain|llm>`.
 
 ---
 
-## 4. Paket-Landkarte (`internal/`, minimal + überschaubar)
+## 4. Paket-Index (`internal/`)
 
-| Paket | Rolle |
-|---|---|
-| `sandbox` | **Die wazero-Schicht: Zero-Authority-Boden + generelle Guest-Engine** (Interpreter/Skills). `Run(ctx, guest, Config)`: gehärtet (Memory-Cap + Wall-Clock-Deadline trappt Runaways, #422), WASI-stdio, Workspace `WithDirMount(/work)` (Allowlist-by-construction), gebrokerte `HostFunc`-Imports über **Standard-ABI** (`nocturn.<name>(reqPtr,reqLen)→packed(addr<<32\|size)`, Host alloziert Antwort im Gast via dessen `malloc`). Der Sandbox **gated nichts** — Effekte sind caller-gelieferte HostFuncs, die ans Gateway delegieren. WAT-Test-Gäste (`echo`/`loop`/`logprobe`). |
-| `capability` | Reine Entscheidung (kein I/O, stdlib-only). **Zwei-Achsen-Modell** (`KONZEPT-sicherheit-ux.md` §3): **`Call{Family, Write, Target}`** — Reichweite (`Family` ∈ http/file/dns + `Target` = host/Pfad) getrennt von Wirkung (`Write`: false=read/still, true=write/ask, host-abgeleitet). **`Rule{Family, TargetGlob, Writes, …}`** mit **`Match`** (`MatchNone`/`Read`/`Write`/`Any`, fail-closed-Null) als Schreibrecht-Achse. `Target` glob-gematcht per `path.Match` (`*` kreuzt kein `/`); **`Wildcard`** (`"*"`) = expliziter Any-Token. **Reach-Limiter versteht IP-Ranges:** `targetMatches` probiert der Reihe nach CIDR (`10.0.0.0/8`, `2001:db8::/32` → numerische Containment auf IP-Literal-Target) → bare-IP (numerischer `IP.Equal`, robust gg. IPv6-Schreibweisen) → sonst `path.Match`-Glob. Gilt für alle Host-Familien (http/dns/ping) via Base-Policy **und** Cages/Grants (eine zentrale Stelle). CIDR/IP matcht nur IP-Literal-Targets — Namen werden im Entscheider **nicht** aufgelöst (wäre ein DNS-Effekt in der reinen Logik). `Policy.Evaluate` (deny>ask>allow, fail-closed). Base-Policy = `lesend→Allow, verändernd→Ask`. `EpochRegistry`, `RateLimiter`, `Window`. Konstante `Wildcard`, `Permanent`. **`Cage`** = komponierbare Obergrenze (Schnittmenge, ctx-**Kette** `WithCage`/`CagesFrom`/`WithinCages`; leere Kette = vacuously true = fail-**open**, bewusst — s.u.). **`Grants`** (ehem. `Context`) = Eigentümer des stehenden Permission-Sets einer Session/Workspace: session-scoped (epoch-gebunden) + `always` via `GrantStore`-Interface (I/O-frei gehalten); **`Allows(tool, call, env)`/`Record(tool, call, scope)` — tool-gescoped** (der äußerste modell-sichtbare Tool-Name aus `tool.ToolName(ctx)`, s. `KONZEPT-sicherheit-ux.md` Phase 0): ein „immer gmail.send" deckt nie „gmail.delete" am selben Host; Scope-Konstanten **`ScopeOnce`/`ScopeSession`/`ScopeAlways`**; ctx-Seam `WithGrants`/`GrantsFrom`. |
-| `deadline` | **Pausierbares Execution-Budget im Context** (`WithBudget`/`PauserFrom`/`Pauser`), stdlib-only. Wie `context.WithTimeout`, aber die Deadline lässt sich **pausieren** und ist per ctx-Value auffindbar (Muster wie `WithEpoch`); verkettet sich mit einem Eltern-Budget (Pause/Resume propagiert hoch). `hitl` pausiert es während einer Out-of-band-Freigabe → der Menschen-Wait zehrt **nicht** das Sandbox-/Brain-Timeout auf (nur die HITL-TTL begrenzt ihn), danach läuft es mit Restbudget weiter. Cancel via `WithCancelCause` → Grund über `context.Cause` (DeadlineExceeded vs Canceled); Esc/Ctrl-C/TTL trappen weiterhin sofort. |
-| `secret` | `Store` (Set/Exists, kind-agnostisch) + `GuestView` (nur Präsenz) + `Injector`/`Binding`/`Request` (host-owned Credential-Injektion, **capability + host scoped**; `capMatches`/`hostMatches`) + `Scanner` (bidirektionaler Leak-Scan: `ScanEgress`→`ErrLeaked`, `RedactIngress`→`[REDACTED]`; Tier1 exakter Vault-Wert encoding-robust + Tier2 gitleaks-Muster via Aho-Corasick + Entropy). |
-| `hitl` | `Engine` (Request/Resolve, queue-then-execute), HMAC-`token`; Outcomes `Approved`/`ApprovedSession`/`ApprovedAlways`/`Denied`; Sub-Paket `hitl/ntfy` (`Publisher` push + `Listener` subscribe). |
-| `tool` | **Der Tool-Bus (neutraler Vertrag, stdlib-only Leaf — importiert nichts Projekt-Internes).** `Tool`/`Spec` (Modell-sichtbare Aktion), die geteilte **`Registry`** (dispatch + `Add`/`Remove`/`Has`/`Specs`/`Invoke`, RWMutex, atomarer Call-id), und der Observer **`Event`** (`Start`/`End`-`Phase`, `ID`/`Parent` → Forest). Trennt Effekt-**Provider** (`netcap`/`script`/`plugin`) von **Consumern** (brain-Loop, TUI-Observer) → **kein Provider→Loop-Import mehr**. (Ehem. in `brain`; Typen entstuttert: `tool.Spec`, nicht `tool.ToolSpec`.) |
-| `gateway` | **`Guard.Authorize` = reiner Komponierer** (hält keinen per-session-State): Cage-Kette (`WithinCages`, außerhalb = **hart deny, nie fragen**) → **`WithConsequential`-Floor** (never-auto: fragt immer, keine Grants, nur once/deny) → aktive `capability.Grants` (stehender Grant short-circuit, **tool-gescoped** via `tool.ToolName(ctx)`, **respektiert Rate-Cap**) → `Policy.Evaluate` → HITL (`Once/Session/Always` → `Grants.Record(tool, …)`; Choice-Labels + zweizeiliger Prompt benennen die Merk-Einheit ehrlich: semantischer Kopf + **unfälschbare Faktenzeile** `via <tool> → <family> <read/write> @ <target>`, die ein Intent-Template nie ersetzt). `Do[T]` = authorize-then-execute. + `Net` (Capability-Gruppe, im Paket `netcap`): Tools `http.read`/`http.write` (`writeForMethod` → `Call.Write`), `dns.resolve` (**Record-Typ** A/AAAA/IP/MX/TXT/CNAME/NS/PTR/SRV als Input — reiner Effekt-Param, **kein** Autoritäts-Axis: gegatet wird der Name, egal welcher Record; `Net.Lookup`/`Resolve`), **`ping`** (Familie **`icmp`** — Protokoll = die gegatete Autorität, `ping` = Tool/Aktion; ICMP-Echo über unprivilegierten UDP-Socket via `x/net/icmp`, gated auf Host wie dns — Ziel ist Exfil-Kanal, pingt rohe IPs direkt + iteriert über v4/v6); family+host-scoped Credential-Injektion. `ErrDenied`, `ErrManualCredential`. (Depends **nicht** auf `brain`.) |
-| `brain` | Agentischer Loop (schlank). `Model`-Interface (Port, `Next(...[]tool.Spec...)`), `Conversation`/`Message`/`Step`/`ToolCall`, `Run`, `OnToken` (Streaming). Tool-Calls einer Runde laufen **nebenläufig** (`sync.WaitGroup.Go`), Ergebnisse in Call-Reihenfolge. (Tool-Abstraktion + Registry → `internal/tool` ausgelagert.) |
-| `script` | **Echter Interpreter auf der Sandbox: QuickJS (quickjs-ng) → wasm32-wasi**, embedded via `go:embed` (`qjs/nocturn-qjs.{c,wasm}`, Build `qjs/build.sh` mit wasi-sdk). `Runner.Run(ctx, source)` evaluiert JS-Source (stdin→eval→stdout); als Brain-Tool **`code.run`**. Der Gast deklariert **genau einen** Host-Import `nocturn.call(tool,args)` (+ `malloc`/`free`-Export für den packed-ptr-ABI); der Go-`dispatch` routet auf **dieselbe `tool.Registry` wie das Modell** (`Net.Tools()`) → jeder Effekt durch `Guard.Authorize` + HITL. Ein Gate = Reference-Monitor; neue Capability = Go-seitig, Interpreter unverändert. Reine Compute braucht null Caps; denied Effekt → JS-Exception (kein Host-Crash). `InterpreterGuest()` teilt das eingebettete QuickJS-`.wasm` an `plugin`. |
-| `plugin` | **Sandboxed Ersatz für MCP-Server.** Artefakt (`plugin.js` auf dem geteilten QuickJS **oder** `plugin.wasm`) + Sidecar `plugin.json` (`Manifest`: `tools[]` (+ `intent`, **`consequential`**), `cage[]`=Reach-Cage (**`{family, target, access:[read,write]}`** — Access explizit, fail-closed), `credentials[]` (**`{family, …}`**); `Validate()` fail-closed; `Load(dir)` **ohne** Ausführung). `Plugin.Tools()` → namespaced `<name>.<tool>` in die geteilte `tool.Registry`; **stateless** (frische Sandbox-Instanz pro Call, Cross-Call-State via `/work`). `runGuest` stempelt das **Plugin-Cage** in ctx (**einzige** Stelle, `SECURITY:`-Kommentar) → Effekte hart auf `cage` begrenzt; leeres Manifest = deny-all. `Host.Install`/`Uninstall` (eine HITL-Freigabe der Decke, **keine** Effekt-Grants; Uninstall lässt Context-Grants leben). **Semantisches HITL-Wording:** `ToolDecl.intent` = install-reviewtes Template (`{feld}`-Platzhalter aus den Args); der Host rendert es (`renderIntent`) + stempelt `gateway.WithIntent` → der Guard zeigt *„Send email to x@a"* statt Transport. Nur Wording — die gegatete `(family, write, target)` bleibt; das Template ist trusted (Manifest, kein Gast-Code). **`ToolDecl.consequential`** (install-reviewt) → `gateway.WithConsequential` → never-auto-Floor (fragt immer, ungrantbar). |
-| `filecap` | **Zweite Capability-Familie (nach netcap) — der Beweis, dass das Broker-Modell nicht HTTP-förmig ist.** `Files{Guard, Root}` → Tools **`file.read`/`file.list`/`file.stat`/`file.search`** (read) + **`file.write`/`file.remove`/`file.move`** (write) über *einen* Workspace-`Root`. `Target` = **workspace-relativer Pfad** (glob-gematcht wie ein Host) → ein Grant/Cage scoped per Pfad (`file.write @ notes/*`) exakt wie http per Host. `file.search` walkt Unterordner (slashloses Pattern = Basename in jeder Tiefe, sonst rel-Pfad; Cap 500 + ehrliche Truncation-Zeile); `file.move` gated auf Ziel, **beide** Endpunkte confined. Jeder Pfad **confined** zu `Root` (Escape via `..`/absolut = harter Fehler *vor* dem Broker); dann `Guard.Do` (Broker + HITL + Grants). |
-| `remindcap` | **Reminder-Capability — persistente Zukunfts-Erinnerung (die entkoppelte Hälfte des Schedulings).** `Reminders{Guard, Store, Push, Scanner}` → Tools **`remind {when,message,title?}`** / **`remind.list`** / **`remind.cancel {id}`**. Feuern = **reines `notify`** (kein Modell-Lauf), Inhalt beim Anlegen erfasst. **Eigene `time.AfterFunc`-Timer** (präzise, symmetrisch zu `wakecap` — NICHT an den `agent.Scheduler` gebolzt, der feuert Agent-Läufe). `Write:false` → still, aber **Leak-Scan** (Create + Fire) via `gateway.Do`+`ScanEgress`. **Persistenz `<ws>/reminders.json`** (`store.go`, Control-Plane, 0600, außerhalb `mnt/` → modell-unschreibbar wie `grants.json`, ADR-10); `Restore()` re-enrollt beim Start (alle Workspaces). `Pusher`-Port (ntfy/TUI). |
-| `wakecap` | **Self-Wake-Capability — der Agent plant seine EIGENE Wieder-Aufwachung (Claude-Code-`ScheduleWakeup`-Muster).** `Waker{resume func(note)}` → Tool **`wake {seconds, note}`**: aktueller Turn endet, nach `seconds` wird **dieselbe Session** via `session.Ask(note)` fortgesetzt (Kontext erhalten). **Null externe Autorität → UNgegated** (wie `time.now`); stattdessen **geboundet** gegen Runaway: Delay-Clamp `[defaultMinDelay=60s, defaultMaxDelay=1h]` + `defaultMaxPending=3` (named consts). Eigene `time.AfterFunc`-Timer, `Cancel()` bei Session-`Reset`. **Ephemeral** (Prozess-/Session-Lebensdauer). Resume routet durch die TUI-Schleife (`selfWakeMsg`) → serialisiert mit normalen Turns, nie re-entrant; busy → gedroppt (MVP). Getestet mit `testing/synctest` (Fake-Clock, deterministisch). |
-| `notifycap` | **Notify-Capability — die „andere Hälfte" von HITL (melden statt fragen).** `Notifier{Guard, Push, Scanner, Rate}` → Tool **`notify`** `{message, title?}` → `{sent:true}`. Ziel-Kanal **host-owned** (`channel="user"`, Target), **nie modell-gewählt** → kein Exfil zu Dritten (Modell liefert nur Inhalt). `Write:false` → Base-Policy **Allow** → läuft **still** (keine „darf ich?"-Prompts); die Kontrollen sind strukturell: **Leak-Scan** (Egress, Secret in Message = geblockt) + **Rate-Limit** (Anti-Spam; im Tool geprüft, weil der Allow-Pfad den Guard-Limiter überspringt). Läuft durch den `Guard` → policy-verschärfbar auf Ask. Transport = **Port `Pusher`** (ntfy-`Push`, fire-and-forget ohne Action-Buttons/Token; TUI-Zeilen-Fallback wenn kein ntfy). |
-| `timecap` | **Uhr-Capability — bewusst UNgegated (Null-Autorität, wie `skill.read`).** `Clock{Now func()time.Time}` (injizierbar) → ein Tool **`time.now`** (`{unix, iso, utc, timezone, offset_seconds}`). Kein `*Guard`, kein Broker/HITL — eine Zeit-Lesung leakt/verändert nichts. Existiert nur als Host-Primitive, weil der Sandbox-Gast keine eigene Wall-Clock hat (QuickJS-Build ohne `Date.now`); sonst könnte ein Skill „was ist heute fällig" nicht rechnen. Trotzdem über die geteilte Registry observierbar wie jeder Call. |
-| `llm` | OpenAI-kompatibler Adapter (go-openai), native `tool_calls`, SSE-Streaming. `Next(...[]tool.Spec...)` erfüllt `brain.Model`. |
-| `skill` | **Die Skills-Schicht (agentskills.io-Standard) — Kontext, KEINE Tools.** Host-seitig, importiert **nur `tool` + stdlib + yaml.v3**. `Discover(scopes)` liest `SKILL.md` (yaml.v3-Frontmatter, 16-KB-Cap + typed decode; lenient, Shadowing, Diagnostics) aus `<ws>/.skills/`. **Model-driven progressive disclosure** über EIN Meta-Tool **`skill.load`** (Katalog in der Description, `name`-enum der sichtbaren Skills, Body on-demand → `<skill>`-wrapped, `Spec.MaxResult` hebt die Truncation; `metadata.nocturn.model-invocation:never` versteckt aus dem Katalog). **`skill.read`** = Tier-3-Resources (references/templates/scripts) eines *geladenen* Skills, confined (symlink-aufgelöst), read-only, **nicht gegated** (null Autorität), observable. `Active` = per-Session-Dedup-Set (ctx-Seam, von `agent.Session` gestempelt). Skills verleihen **keine** Autorität (`allowed-tools` geparst, **ignoriert**) → jeder Effekt bleibt Broker+HITL. `/name`+`/skills` im TUI. |
-| `oauth` | Host-managed OAuth (ADR-5). **`Provider(authURL, tokenURL, clientID, …)`** = provider-agnostisch (Plugin bringt eigene Endpoints/Scopes mit; `Google()` = dünner Wrapper); Loopback-PKCE-`Authorize`; refreshing `Source` (wrappt `golang.org/x/oauth2`-TokenSource) → an `secret.Injector` als Bearer-Quelle; Gast sieht das Token nie. |
-| `agent` | **Session-Lifecycle-Owner.** `Session` bündelt `brain.Conversation` + geteilten `gateway.Guard` + geteilte `EpochRegistry` + die eigene **`capability.Grants`** + `GrantStore`. `Ask` stempelt die Grants via `capability.WithGrants` (+ optional Workspace-`Cage`) in ctx; `Reset` schließt die Epoche (widerruft Session-Grants), öffnet frische Grants+Conversation (`always`-Grants überleben); `Close` schließt die Epoche. Enthält **`GrantsStore`** (file-backed `capability.GrantStore`, `<config>/nocturn/grants.json`, 0600; ehem. in `gateway`). |
+> **Nur ein Index — was ein Paket wirklich TUT steht im Paket-Doc-Kommentar: `go doc
+> ./internal/<pkg>`.** Hier nichts duplizieren (sonst driftet es). Ein Einzeiler pro Paket,
+> nach Rolle gruppiert.
 
-`cmd/nocturn` — **die TUI ist das ganze Interface** (parameterlos, `go run ./cmd/nocturn`);
-`app.go` = Composition-Root (Stack zusammenbauen), `plugins.go` (walkt `./plugins/`, Install-
-Review pre-TUI), `auth.go` (`wireGoogleCredential`), `tui.go` (View). Kein `run`/`chat`-Subcommand mehr.
-`spike/extism`, `spike/javy` — **Wegwerf**-Spikes (Skill-Schicht-Entscheidung, geparkt), eigene go.mod.
+**Sicherheitskern (reine Entscheidung + Grenze):**
+- `capability` — der Broker: `Call{Family,Write,Target}` gegen `Policy` → allow/ask/deny; `Cage`, `Grants`, `EpochRegistry`, `RateLimiter`, `Window`. Kein I/O.
+- `gateway` — `Guard.Authorize` = die eine Pipeline (Broker + HITL + Grants); `Do` = authorize-then-execute; `Scope` = widerrufbare Epoche. Effekt-Adapter leben außerhalb.
+- `secret` — Store (nur Präsenz) + verschlüsselter `Vault` + `Injector` (host-owned Cred-Injektion) + `Scanner` (bidirektionaler Leak-Scan).
+- `hitl` — Out-of-band-Freigabe-Engine, HMAC-Single-Use-Token; Sub-Paket `hitl/ntfy`.
+- `sandbox` — wazero-Gast unter Zero Authority + WASI + Standard-ABI + Härtung (Memory-Cap, Wall-Clock-Deadline); gated selbst nichts.
+- `deadline` — pausierbares Execution-Budget im ctx (HITL-Wait zehrt nicht das Timeout).
+
+**Tool-Bus + Loop:**
+- `tool` — der neutrale Tool-Bus (`Tool`/`Spec`/`Registry`), stdlib-only Leaf; trennt Effekt-Provider von Consumern (kein Import-Zyklus).
+- `brain` — der agentische Loop; `Model`-Port, `Conversation`, parallele Tool-Calls.
+- `llm` — OpenAI-kompatibler Adapter (go-openai, native tool_calls, SSE) → erfüllt `brain.Model`.
+- `activity` — ein ctx-getragener Sink für Live-Aktivität (Antwort-Tokens, Reasoning, Tool-Events); one-way Observability, keine Domänendaten.
+
+**Effekt-Capabilities (jede = kleiner Typ mit `*Guard`):**
+- `netcap` — `http.read`/`http.write`, `dns.resolve`, `ping` (icmp).
+- `filecap` — `file.read/list/stat/search` + `file.write/remove/move`, confined auf einen Workspace-Root (Target = Pfad).
+- `notifycap` — `notify` (proaktiv den User erreichen; still, host-owned Kanal, Leak-Scan + Rate).
+- `remindcap` — `remind`/`remind.list`/`remind.cancel` (persistent, feuert ein `notify`).
+- `wakecap` — `wake` (Agent plant seine eigene Wieder-Aufwachung; ungegated, geboundet).
+- `timecap` — `time.now` (ungegated, Null-Autorität; der Gast hat keine Wall-Clock).
+
+**Interpreter · Plugins · MCP:**
+- `script` — echter JS-Interpreter (QuickJS→wasm) auf der Sandbox; Tool `code.run`; ein Host-Gate `nocturn.call` auf die geteilte Registry.
+- `plugin` — installierte, sandboxed Plugins (`plugin.js`/`.wasm` + `plugin.json`-Manifest mit Cage); Ersatz für lokale MCP-Server.
+- `mcp` — protokoll-reiner Client für remote-MCP (JSON-RPC/HTTP, stdlib-only, injizierter Transport).
+- `mcpcap` — die gegatete Verbindungsschicht darunter (jeder JSON-RPC-POST = ein `http.write` durch den Guard).
+
+**Kontext · Identität · Credentials:**
+- `skill` — die Skills-Schicht (agentskills.io): Kontext, KEINE Tools, null Autorität; progressive disclosure via `skill.load`.
+- `oauth` — host-managed OAuth2 (Loopback-PKCE + Refresh); Token nur host-seitig als Bearer injiziert.
+- `approval` — durabler „schon reviewed"-Record für Plugins/MCP (kein Re-Prompt bei unverändert); KEINE Autorität.
+- `grantstore` — file-backed `capability.GrantStore` (`<ws>/grants.json`, 0600) — die stehenden Rechte.
+
+**Composition + Lifecycle:**
+- `workspace` — das Composition-Aggregat: OWNS pro Workspace guard/tools/skills/agents/grants; `Open` baut den Stack, `OpenSession`/`RunAgent`. Persona via `PERSONA.md` (layered).
+- `session` — ein interaktiver Chat: `Session` (State) + `Runner` (serialisierter Turn-Loop, Submit/Subscribe — der headless-Kern, den TUI/REST/Mobile gleich treiben).
+- `agent` — das Child-Agent-Subsystem: `Agent`-Deklaration (`<ws>/agents/<name>/agent.md`), `Run`→`Result`, `Scheduler`; teilt `Turn` mit der Session.
+
+`cmd/nocturn` — **die TUI ist das ganze Interface** (parameterlos, `go run ./cmd/nocturn [ws]`):
+`app.go` (Prozess-Spine + bubbletea-Programm), `stack.go` (`shared`/`bound`, ein isolierter Stack
+pro Workspace), `tui.go` (View, event-getrieben über den `session.Runner`), `plugins.go`/`mcp.go`/
+`auth.go` (interaktives Wiring: Plugins, remote-MCP, Plugin-OAuth), `vault.go` (Unlock), `agents.go`/
+`skills.go` (Startup-Reports), `theme.go` (Styles). Detail: `go doc`. `spike/extism`, `spike/javy` =
+Wegwerf-Spikes (eigene go.mod).
 
 **Dependencies (bewusst minimal):** Kern (`internal/`): `wazero` (pure Go, kein
-CGo), `go-openai` (**0 transitive Deps**), `golang.org/x/sys`, `golang.org/x/oauth2`
-(nur im `oauth`-Paket), `gopkg.in/yaml.v3` (nur im `skill`-Paket, SKILL.md-Frontmatter;
+CGo), `go-openai` (**0 transitive Deps**), `golang.org/x/sys`, `golang.org/x/net`
+(nur `icmp` für `ping` in `netcap`), `golang.org/x/oauth2` (nur im `oauth`-Paket),
+`github.com/petar-dambovaliev/aho-corasick` (nur im `secret`-Leak-Scanner),
+`gopkg.in/yaml.v3` (nur im `skill`-Paket, SKILL.md-Frontmatter;
 in Go kein RCE-Deserialisierungs-Risiko, Input size-capped + typed decode; `check.v1`
 = test-only). `cmd/`: `godotenv`, **charm** (bubbletea/lipgloss/bubbles) — nur
 Präsentation, berührt die **Trusted-TCB nicht**. **Verworfen:** langchaingo (290 Deps,
@@ -164,87 +179,10 @@ bringt eigenen Agent-Loop der unsere Sicherheit umgeht).
 
 ## 5. Zentrale Design-Entscheidungen (ADRs)
 
-- **ADR-1: Ein Isolations-Tor = WASM/wazero.** Kein zweiter In-Process-Interpreter
-  (goja) für Fremd-Skills (kein Speicher-Isolation, zweite Sicherheitstür = Wildwuchs).
-  Polyglot via Kompilier-Stufen; JS/TS → QuickJS-in-WASM. **Code-Ausführung ist
-  First-Class**; reine Compute-Transformation braucht **null Capabilities**.
-- **ADR-2: Native Effekte = Host-Capabilities, nicht Gast-Code.** WASM kann keine
-  Binaries exec'en. Gängiges (http, dns, ping) **nativ in Go** nachbauen; echtes
-  `exec` nur als letzte Option (Allowlist + HITL + OS-Sandbox). Das Brain ruft
-  Capabilities direkt durch den Broker.
-- **ADR-3: Verteilung von IronHub geliehen, vereinfacht.** Git-Monorepo + `index.json`
-  (url+sha256) + Release-Assets, *kein* OCI. Tool(wasm)/Skill(Markdown)-Split.
-  **Nocturn-Plus: Code-Signing** (hat IronClaw nicht).
-- **ADR-4: Dynamisches Ziel-Gating statt statischer Allowlist-Starrheit.** Bekannter
-  Host → auto-allow; unbekannter → **verpflichtende Out-of-band-HITL**; + Zeitfenster/Rate.
-- **ADR-5: Host-managed Credentials/OAuth; der Gast sieht nie das Token.** Host fährt
-  OAuth-Flow + Refresh, injiziert Bearer erst an der Grenze; Gast hat nur `secret_exists`.
-- **LLM-Provider:** **go-openai** (dep-frei) für den Chat-Call; **native tool_calls**
-  (live bestätigt gegen freellm) statt geparstem Prompt-Protokoll; Args JSON-Schema-
-  validiert (unmarshal + Retry-bei-Fehler). Extism/Javy-Skill-Schicht **geparkt**
-  (beide gespiket) — die erste echte Capability (`net.fetch`) ist host-native und
-  braucht sie nicht.
-- **ADR-6: Produkt-Identität = sicherer persönlicher Assistent, NICHT Coding-Agent.**
-  Der verteidigbare Moat ist die Kombination *verpflichtendes Out-of-band-HITL + WASM-
-  Isolation + Capability-Broker + single binary* — den hat niemand. Jeder Schritt Richtung
-  „Voll-Coding-Agent" (Ambient-`exec`, lokale MCP-Server, Node/Python-Runtime sandboxen)
-  **erodiert genau diesen Moat** und macht Nocturn zu einem schlechteren Claude Code.
-  Darum: **Assistent-first als Default.** Coding-Navigation (grep/read/edit/git-Porzellan)
-  wird trotzdem abgedeckt — ohne `exec`. „Alles was *Coding*-Agents nutzen" ist die falsche
-  Messlatte. Nicht irreversibel: die `exec`-Escape-Hatch (s. ADR-7) lässt sich später
-  bruchfrei ergänzen, ohne den Default zu kippen.
-- **ADR-7: Tool-Taxonomie = 3-Eimer-Kompass** (klassifiziere nach *was das Tool tut*, nicht
-  „es ist ein CLI"): **(A) lokales Lesen/Rechnen** (grep/find/ls/jq/Text) → **`code.run`**
-  (Modell schreibt JS im QuickJS-Sandbox, liest via `file.read`, **null neue Caps**) oder eine
-  `file.search`-Cap. **(B) API-Client-„CLIs"** (gh, aws, gcloud, stripe, linear, curl) →
-  **Plugin über `http.read/write` + host-injizierter Token** — *sicherer* als das echte CLI
-  (Token host-gehalten, Cage-bounded, HITL auf Writes); der Sweet-Spot des Modells.
-  **(C) echtes Arbitrary-Exec** (npm test, go build, make) → **einzige `exec`-Escape-Hatch**
-  (OS-Sandbox + Allowlist + HITL, ADR-2 „letzte Option"), **nie Default**. A+B decken die
-  überwältigende Mehrheit ab, ohne `exec`.
-- **ADR-8: Kernel-vs-Plugin-Grenze — „lässt es sich durch die Primitive ausdrücken? → Plugin."**
-  Der **Host bleibt ein minimaler Kernel**: Broker + HITL + Interpreter (`code.run`) + die
-  **Primitive, die einen echten Syscall brauchen** (`http`, `file`, `dns` — ein Gast kann
-  selbst keinen Socket/kein FS öffnen). **Alles, was sich durch diese Primitive ausdrücken
-  lässt → Plugin** (git = `file` auf `/work` + `http` für push/pull; gmail/github = `http`).
-  Trusted-First-Party-Code in ein Plugin zu geben bringt *keine* Isolation, aber hält die
-  **TCB klein** (Säule 4) + einheitliches Erweiterungsmodell + signier-/versionierbar — das
-  wiegt schwerer als der Sandbox-Overhead. **git-Weg konkret: go-git nach `GOOS=wasip1
-  GOARCH=wasm` als `plugin.wasm`** (Go kann das nativ; go-git-Dep lebt im Plugin-Build, nie
-  im Host). **NICHT** `wasm-git`/libgit2 (Emscripten↔wazero-Bruch) und **kein** CGo. Kosten
-  bewusst: WASI-FS langsamer, Plugin schreibt den http-Transport selbst, lokale git-FS-Ops
-  laufen über den `/work`-Mount (confined, nicht per-op HITL) — nur push/commit-Gate gebrokert.
-- **ADR-9: MCP-Linie — remote (HTTP) JA, lokal (stdio) NEIN.** *Lokales* stdio-MCP = fremder
-  **Prozess auf deiner Maschine** mit deinen Rechten → die Supply-Chain-Bedrohung, die wir
-  meiden. *Remote* MCP = Dienst auf **fremder Infra**; lokal läuft **kein Code** → architektonisch
-  identisch zu „HTTP-API aufrufen" und passt exakt ins Modell (MCP-Client als JSON-RPC-über-HTTP:
-  `tools/list` → `tool.Spec`, `tools/call` → gebrokerter `http.write` an den MCP-Host, OAuth
-  host-injiziert, HITL auf Writes, Ergebnisse leak-gescannt/untrusted). **Kein Sandbox nötig
-  (kein fremder Code).** Öffnet das wachsende **Hosted-MCP-Ökosystem** (GitHub, Notion, Linear,
-  Sentry, Atlassian …) *ohne* Modell-Bruch — und dorthin bewegt sich MCP ohnehin. Damit ist die
-  „MCP-Nachteil"-Sorge weitgehend erledigt: wir nehmen den **sicheren** Teil (remote), lassen den
-  unsicheren (lokale Prozesse) weg. Erinnerung (Anhang B): das *größte* Assistant-Ökosystem sind
-  ohnehin **Markdown-Skills** (5.400+), nicht MCP — die adoptiert Nocturn un-sandboxed-safe, weil
-  ein Skill nur über gegatete Tools wirkt.
-- **ADR-10: Workspace = portable/versionierbare Einheit; das LLM bewohnt nur `mnt/`.** Kein DB —
-  der **Workspace-Ordner IST der Zustand** (Daten + Skills + stehende Rechte), kopier-/gitt-bar als
-  Ganzes. Struktur:
-  ```
-  workspaces/default/
-    mnt/          ← das EINZIGE, was das LLM sieht: filecap.Root + sandbox /work (Data-Plane)
-    .skills/      ← von Go/Host gelesen, NICHT gemountet (Control-Plane)
-    .agents/      ← Subagents (TBD)
-    grants.json   ← host-managed, außerhalb des Mounts
-  ```
-  **Control-Plane/Data-Plane-Split ist strukturell (Mount-Scope), nicht per Deny-Regel:** das Modell
-  kann `.skills`/`.agents`/`grants` **weder sehen noch schreiben**, weil sie schlicht nicht im Mount
-  liegen — Confinement by construction. Damit ist der Self-Modification-Threat gratis gelöst. **Severity-
-  Klärung:** ein selbst-geschriebener Skill verleiht *keine* Autorität (Broker liest keine Skills,
-  `allowed-tools` ignoriert) → niedrig; der **load-bearing** Schutz gilt `grants.json` (autoritäts-
-  verleihend — dürfte das Modell es schreiben, könnte eine Injection sich stehende Grants setzen →
-  HITL stumm → Broker umgangen). `grants.json` wandert damit von `~/.config` in den Workspace
-  (per-Workspace-Rechte, portabel) — genau der „persistente Workspace = Drop-in", den `capability.Grants`
-  schon vorsah.
+**Ausgelagert → `ADRS.md`.** Dort liegen die Entscheidungs-*Records* (das *Warum*: X
+statt Y) — ADR-1…10 plus LLM-Provider, Trust-Grenze (Variante A), wazero-vs-Wasmtime
+und PORTICO. Ergänze einen ADR dort, wenn du eine tragende Entscheidung triffst oder
+umkehrst. Kurzform des resultierenden Sicherheitsmodells: siehe §8.
 
 ---
 
@@ -301,6 +239,12 @@ bringt eigenen Agent-Loop der unsere Sicherheit umgeht).
   + `brain.Message.ToolCalls`/`.ToolCallID`; der llm-Adapter fängt die id (Fallback `call_<idx>`,
   falls der Endpoint keine liefert) und baut natives `tool_calls`/`role=tool` in `buildMessages`.
   (Früher: `[tool result] …`-Text; abgelöst.) Voraussetzung für parallele Tool-Ausführung.
+- **`.gitignore`-Regeln an den Root ankern** (`/plugins/`, `/workspaces/`), sonst matcht
+  `plugins/` **jedes** gleichnamige Verzeichnis in jeder Tiefe — `internal/workspace/` war so
+  aus Versehen ge-ignored und **nie committet** (HEAD baute aus frischem Clone nicht).
+- **gopls-Diagnostics können stale sein — der Compiler ist die Wahrheit.** „undefined: X" bei
+  grünem `go build ./...` = stale Index (`go clean -cache` hilft beim nächsten Reload). Nie
+  auf Verdacht Code umbauen; erst `go build`.
 
 ---
 
@@ -357,152 +301,27 @@ go run ./cmd/nocturn
 
 ## 11. Status & nächste Schritte
 
-**Gebaut & getestet (race-clean), live verifiziert:** Sicherheitskern (Schalen
-0–5) · Gateway (`http.read`/`http.write`, `dns.resolve`) · Brain (agentischer Loop, native
-tool_calls, parallele Calls) · LLM-Adapter (freellm, Streaming) · **TUI** (parameterlos,
-Streaming/Markdown/Tool-Indicator) · **Out-of-band-HITL gegen ntfy.sh + iPhone** · **End-to-End
-mit echtem LLM, gestreamt** · **Plugin-System** (JS/WASM, Cage-begrenzt) · **OAuth** (Google).
+> Was schon passiert ist steht in **git log** — hier nur der grobe Ist-Stand + was offen ist.
+
+**Steht (race-clean getestet, live gg. iPhone verifiziert):** der ganze Sicherheitskern
+(Schalen 0–5) · Effekt-Capabilities `netcap`/`filecap`/`notifycap`/`remindcap`/`wakecap`/
+`timecap` · `code.run` (QuickJS auf der Sandbox) · `plugin`-System (JS/WASM, Cage-begrenzt) ·
+remote-**MCP** (`mcp`/`mcpcap`, ADR-9) · **Skills**-Schicht · **OAuth** (nur aus Plugins) ·
+**Workspace**-Aggregat (N isolierte Stacks/Prozess, `PERSONA.md` layered) · `session.Runner`
+als alleiniger Turn-Loop · **TUI** (parameterlos, event-getrieben, Streaming/Reasoning/Tool-
+Forest/`/ws`) · **Out-of-band-HITL** (attended Stream **oder** ntfy → Handy).
 
 **Offen / als Nächstes:**
-1. **Weitere Capabilities** (Mail, Kalender) — Muster: kleiner Typ + `*Guard`.
-   Kommen Modell, Skripten **und** Plugins gleichzeitig zugute (ein Tool = alle Aufrufer).
-   (`exec` = **bewusst nie**, ADR-7 Bucket C bleibt Default-los.)
-2. **Workspace-Layer** — persistenter Workspace als `capability.Grants`-Eigentümer (eigene id +
-   Persistenz + Workspace-`Cage`); die Grants/Cage-Mechanik ist schon Drop-in dafür gebaut.
-3. **Verteilung** (IronHub-Stil + Code-Signing) + **Skill/Plugin-Signing/Attenuation** (M2-Rest,
-   Ed25519). **Weg B (async Skript-Gate) — nur TODO**, s. FRAGEN.md.
-4. **Keychain-Backend** für `secret` (statt Prozess-Speicher); Manifest-Hash-„approved"-Record
-   (unverändertes Plugin = kein Boot-Prompt).
+1. **Weitere Capabilities** (Mail, Kalender) — Muster: kleiner Typ + `*Guard`, kommt Modell/
+   Skript/Plugin gleichzeitig zugute. (`exec` = **bewusst nie**, ADR-7 Bucket C bleibt leer.)
+2. **Verteilung** (IronHub-Stil + Code-Signing) + **Skill/Plugin-Signing/Attenuation**
+   (Ed25519) — der M2-Rest.
+3. **Keychain-Backend** für `secret` (statt Prozess-Speicher).
+4. **Härtung**: SECURITY.md, append-only Audit-Sink, Metriken; Task- statt Session-Epoche
+   (PORTICO-Feinung).
 
-**Erledigt (Host-Primitive vervollständigt — Kernel-Lücken, nicht Plugin-Arbeit):** nach der
-ADR-8-Regel „nur was einen echten Syscall braucht, den der Gast nicht selbst machen kann, kommt in
-den Kernel". (1) **filecap komplettiert** — `file.list`/`file.stat`/`file.search` (read) +
-`file.remove`/`file.move` (write) neben read/write; `code.run` + `file.*` decken jetzt ADR-7-Bucket-A
-voll ab (grep/find/ls/jq lokal, null Netz-Caps). (2) **`ping`** (Familie **`icmp`**) — zweite Netz-Familie in `netcap`,
-ICMP-Echo (unprivilegiert), gated wie dns. (3) **`time.now`** (`internal/timecap`) — ungegatete
-Uhr, weil der QuickJS-Gast keine Wall-Clock hat. (4) **JS-Runtime mitgezogen** (`nocturn.fs.search/move`,
-`fs.renameSync`→`file.move`, `nocturn.ping`, `nocturn.now`). Race-clean getestet; Docs-Site + Sidebar
-aktualisiert. **FS-Sicherheit doppelt festgenagelt:** die Frage „nutzen wir nicht WASI-FS?" geklärt —
-`code.run`/Plugins laufen mit `Config.Workspace==""` → **kein Preopen, kein WASI-FS** (räumliche
-Confinement ≠ Effekt-Gating; ein Mount wäre eine zweite, ungebrokerte FS-Tür, die HITL umgeht). Zwei
-Regressionstests sichern die Invariante: `sandbox.TestRun_NoWorkspace_HasNoFilesystem` (fsGuest ohne
-Mount ⇒ jeder `path_open` scheitert, Byte 0x00) + `script.TestRun_NoAmbientFilesystem` (ohne gegatetes
-File-Tool ist eine existierende Host-Datei unerreichbar — kein WASI-Fallback). WASI-Mount bleibt nur
-für Plugin-**Scratch** (`WorkDir`) reserviert, nie für den User-Workspace `mnt`.
-
-**Erledigt (Scripting-Frontier):** **Echter Interpreter auf der Sandbox** — `internal/script`:
-QuickJS (quickjs-ng) → wasm32-wasi (wasi-sdk, embedded), Brain-Tool **`code.run`**. Effekte
-über **ein generisches Host-Gate** `nocturn.call(tool,args)` → Dispatcher auf `Net.Tools()` →
-`Guard.Authorize` + HITL. Damit ist die **M2-Weiche „Extism vs. eigener Host" zugunsten des
-eigenen Hosts (QuickJS, ein Gate) entschieden** — minimale TCB (Säule 4), Erweitern nur
-Go-seitig (Interpreter-`.wasm` unverändert). Race-clean getestet (Pure-Compute-Eval, Gate-
-Dispatch durch echten Interpreter, denied-Effekt = fangbare JS-Exception, Runaway getrappt,
-E2E gg. echtes `gateway.Net` + `httptest`).
-
-**Erledigt (Plugin-System — sandboxed MCP-Ersatz):** `internal/plugin`. Artefakt (`plugin.js` auf
-dem geteilten QuickJS **oder** `plugin.wasm`) + Sidecar `plugin.json`-Manifest; ein Runtime-Vertrag
-(stdin `{tool,args}` → self-dispatch → Effekte via `nocturn.call` → stdout). Manifest `cage[]` =
-**Cage** (Obergrenze, **kein** Auto-Grant): Install zeigt die Decke, **eine** HITL-Freigabe,
-danach fragt der Agent **weiterhin pro Effekt** (du wählst einmal/Session/immer). Effekte hart auf
-`cage` begrenzt (`runGuest` stempelt das Plugin-Cage — außerhalb = **deny ohne zu fragen**,
-Anti-Injection). **Stateless** (frische Instanz pro Call, Cross-Call-State via `/work`). Tools
-namespaced `<name>.<tool>` in die geteilte `tool.Registry` → identisch gegated/beobachtet wie
-Modell-/Script-Calls. Race-clean + echt-QuickJS-E2E (in-Cage fragt→Session→still; out-of-Cage
-hart-deny ohne HITL; Uninstall entfernt Tools, `always`-Grant überlebt).
-
-**Erledigt (Target-Generalisierung + zweite Capability-Familie):** Der Broker-Match ist nicht mehr
-HTTP-förmig: `Call{Capability, Attrs{host}}`→**`Call{Capability, Target}`**, `Rule.HostGlob`→**`TargetGlob`**
-— `Target` ist ein **capability-definierter Resource-String** (host/pfad/command), glob-gematcht wie
-Claudes `Tool(specifier)`. `Wildcard` als expliziter Any-Token matcht jetzt auch Mehrsegment-Pfade
-(path.Match-`*` kreuzt kein `/`; Regressionstest). http/dns bit-identisch (Target=host). Neu:
-**`internal/filecap`** (`file.read`/`file.write`, workspace-confined) als **zweite Capability-Familie**
-— beweist, dass `(capability, Target=Pfad)` trägt (`file.write @ notes/*` glob-scoped, `..`-Escape hart
-geblockt) und gibt Modell/Skript/Plugins ein Dateisystem-Tool. Ins Binary verdrahtet (Base-Policy +
-Registry, Root `./workspace`). *Konzept-Klärung dabei:* **Tool = was das LLM/`nocturn.call` aufruft
-(`tool.Registry`); Capability = die Autorität, die ein Effekt-Tool am Broker konstruiert (`capability×Target`).**
-Tools bilden Capabilities ab — `nocturn.call` ruft nie eine Capability direkt.
-
-**Erledigt (semantisches HITL-Wording, Phase C):** `plugin.ToolDecl.intent` = install-reviewtes Template mit
-`{feld}`-Platzhaltern; `renderIntent(tmpl,args)` füllt sie, der Plugin-Host stempelt `gateway.WithIntent(ctx)`,
-und `Guard.Authorize` **bevorzugt an einer Stelle** diesen Intent vor dem transport-abgeleiteten → der Mensch
-liest *„Send hi to the example API"* statt *„http.write api.example.com"*. **Nur Wording:** die gegatete
-`(capability, target)` und der Grant-Scope (host-level) bleiben unverändert; das Template ist **trusted**
-(Manifest, install-reviewed — nie Gast-Code), also kann ein Plugin keinen irreführenden Prompt für einen Effekt
-fälschen, den es gar nicht versuchen darf (Cage bounded weiterhin das echte Ziel). Getestet: Guard-Override-
-Unit + Plugin-E2E durch echtes QuickJS (`msg:"hi"` → gerenderter Prompt am HITL). **Offen (Phase D, optional):**
-Consent am Tool-Boundary + semantischer Grant-Key (statt host-level) — nur falls per-Effekt-Asks nerven.
-
-**Erledigt (Skills-Schicht — agentskills.io, model-driven):** `internal/skill`. Skills sind
-**Kontext, keine Tools** (nie im `tools`-Array) — sie steuern, *wie* das Modell seine gegateten Tools
-nutzt, und verleihen **null Autorität** (`allowed-tools` geparst, **ignoriert** — Broker/HITL bleibt
-einzige Instanz; ADR-6/9). **Progressive disclosure** über EIN Meta-Tool **`skill.load`** (Katalog in
-der Description, `name`-enum; Body on-demand → `<skill>`-wrapped; `tool.Spec.MaxResult` verhindert
-Truncation des Bodies; `metadata.nocturn.model-invocation:never` versteckt aus dem Katalog).
-**`skill.read`** = Tier-3-Resources (references/templates/scripts) *geladener* Skills, confined
-(symlink-aufgelöst) + read-only + nur aktiviert + ungegated (Ingestion, keine Autorität). Frontmatter
-via **yaml.v3** (16-KB-Cap + typed decode). `agent.Session` besitzt das `Active`-Dedup-Set (stempelt es
-in `Ask`, erneuert bei `Reset`). TUI: **`/name`** (explizite Aktivierung, Harness injiziert den Body) +
-**`/skills`** (Listing) + Startup-Notice. Workspace (ADR-10): `<ws>/.skills/` (host-gelesen, außerhalb
-`mnt` → Modell kann keine Skills schreiben). Race-clean getestet inkl. E2E `skill.read`→`code.run` durch
-echtes QuickJS. *Klärung:* das größte Assistant-Ökosystem sind Markdown-Skills (5.400+), nicht MCP —
-un-sandboxed-safe adoptierbar, weil ein Skill nur über gegatete Tools wirkt.
-
-**Erledigt (OAuth, ADR-5):** `internal/oauth` — Loopback-PKCE-`Authorize` (einmalige Consent-
-Zeremonie, druckt URL) + refreshing `Source` über `golang.org/x/oauth2`; via `secret.Injector`
-host-seitig als Bearer an der Grenze injiziert (Gast sieht das Token nie).
-
-**Erledigt (Plugin bringt eigenen OAuth-Provider — IronClaw-`auth.oauth`-Modell):** `oauth.Google`→
-generisches **`oauth.Provider(authURL, tokenURL, clientID, scopes…)`** (Endpoint war der einzige
-Google-Unterschied). `plugin.Manifest.OAuth []OAuthDecl{Name, AuthURL, TokenURL, ClientID, Scopes}` —
-`Validate` erzwingt https + `Name` muss auf ein `credentials`-Entry linken. `cmd/plugins.go`:
-`wirePluginOAuth` fährt pro Decl den Flow **install-time** (stdin, vor TUI), persistiert Token per
-`(plugin,name)` unter `<config>/nocturn/oauth/`, `inj.SetSource(name, refreshing-source)` — das
-`AddBinding` (read+send) macht `Install`. **Host bleibt provider-agnostisch, `plugin`-Paket bleibt
-`oauth`-frei** (Orchestrierung in `cmd`). Install-Review zeigt `auth_url`+Scopes. Sicherheit: Token
-host-gehalten/gast-blind, `client_id` = public PKCE (kein Secret). Echtes `plugins/gmail/` (search+send,
-base64url-RFC2822 in JS) + `plugins/weather/` als lokale Referenz (gitignored; `testdata/example`
-dokumentiert das Format committed). Manifest-`oauth`-Validierung getestet.
-
-**Erledigt (Autorisierung neu komponiert + `tool`-Extraktion):** (1) **`Guard` = reiner Komponierer**
-— Cage-Kette (`capability.Cage`, Schnittmenge, ctx-getragen) ∩ stehende **`capability.Grants`**
-(ehem. `Context`; session- + `always`-Tier über `GrantStore`) ∩ Base-Policy → HITL{once/session/always};
-Guard hält keinen per-session-State mehr. `hitl.ApprovedAlways` + „Allow always"-Choice. (2) **Neutraler
-Tool-Bus `internal/tool`** — `Tool`/`Spec`/`Registry`/`Event`/`Phase` aus `brain` ausgelagert (stdlib-only
-Leaf); Provider (`netcap`/`script`/`plugin`) importieren **nicht mehr** `brain` (Inversion behoben). Typen
-**entstuttert** (`tool.Spec`, `tool.Event`), Scope-Konstanten geprefixt (`ScopeOnce/Session/Always`),
-`capability.Context`-vs-`context.Context`-Namensclash eliminiert. `GrantsStore` (file-backed) von `gateway`
-→ `agent` verschoben (Lifecycle-Owner). `go build`/`vet`/`test -race ./...` grün; `gateway`/`capability`
-haben 0 `brain`-Deps.
-
-**Erledigt (Nebenläufigkeit):** (1) **native `tool_call_id`-History** (`brain.Message.ToolCalls`/
-`.ToolCallID`, Adapter baut natives `tool_calls`/`role=tool`, Fallback-id `nocturn_call_<idx>`);
-(2) **parallele Tool-Calls** — `brain.run` fächert die Calls einer Runde per `sync.WaitGroup.Go`
-nebenläufig aus (kein Abbruch bei Fehler/Deny; Ergebnisse in Call-Reihenfolge → deterministische
-History); (3) **serialisierte Freigaben** via `hitl.Serialize` (Mutex ums blockierende `Notify` —
-auto-`Allow` läuft parallel, nur `Ask` serialisiert am Menschen, transport-agnostisch); (4)
-**Observer mit id+parent** (`ToolEvent{ID,Parent}`, atomarer Registry-Zähler, ctx-getragene Call-id)
-→ TUI-Observer von LIFO-`callStack` auf **Forest nach id** (nebenläufige Wurzeln + Verschachtelung).
-Race-clean getestet (Barriere-Test beweist Parallelität; Forest-Bookkeeping headless). Der Mensch
-bleibt bei gegateten Effekten der Flaschenhals — genau so gewollt.
-
-**Erledigt (HITL-Wait pausiert Deadlines):** neues `internal/deadline` (pausierbares Budget im
-ctx). `brain.ToolTimeout` und das Sandbox-Guest-Deadline nutzen jetzt `deadline.WithBudget`;
-`hitl.Engine.Request` pausiert das Budget während der Freigabe (vor `Notify`, damit auch Notify-I/O
-off-budget ist). Folge: eine langsame Out-of-band-Freigabe trappt den suspendierten Gast **nicht**
-mehr (nur die HITL-TTL begrenzt den Menschen-Wait); danach läuft das Restbudget weiter. Gilt auch
-für direkte Tools (`http.write`-Freigabe > 20 s). Esc/Ctrl-C/TTL trappen weiter sofort. Race-clean
-getestet inkl. Money-Test: Freigabe (400 ms) überlebt ein 200-ms-Sandbox-Budget, Skript vollendet.
-Fable-5-Review adressiert (brain `context.Cause`-Spiegel, `remaining=d`, untyped-nil-Pauser).
-
-**Erledigt (Refactor):** **Epoch verdrahtet** — `agent.Session` als expliziter
-Lifecycle-Owner; „Allow this session"-Grants sind epoch-gebunden und werden bei
-`Reset`/`Close` widerrufen (Epoche schließen → `IsAlive`=false → Grant matcht nicht
-mehr). Epoche fließt via `capability.WithEpoch(ctx)` durch `Ask → Conversation.Send
-→ brain.run → tool.Invoke → Guard.Authorize`. TUI: **Ctrl+N = new session** (Grants
-widerrufen + Chat leeren). Race-clean getestet (`internal/agent`, Gateway-Revocation).
-
-**Arbeitsweise:** Zwiebelschalig, ein Aspekt klären → bauen → als stabil beweisen.
-Explizit statt implizit. Kein Wildwuchs. Kein Cruft.
+**Arbeitsweise:** Zwiebelschalig — einen Aspekt klären → bauen → als stabil beweisen. Explizit
+statt implizit. Kein Wildwuchs, kein Cruft, kein Backward-Compat-Ballast in Greenfield.
 
 ---
 
@@ -512,6 +331,10 @@ Explizit statt implizit. Kein Wildwuchs. Kein Cruft.
 > aber zu wertvoll, um in einer Plan-Datei zu verrotten. `★`-Zahlen/Timestamps
 > sind grobe Richtwerte (Fetch-Summarizer konfabuliert Zahlen — vor externer
 > Nutzung via GitHub-API prüfen). Alles Übrige ist repo-/primärquellen-verifiziert.
+>
+> **Hinweis:** Die **Wettbewerbs-Recherche (A/B/C, Positionierung)** ist der bleibende Teil.
+> Die **Roadmap/Milestones (E) und die Beweis-Checkliste (F)** sind ein historischer
+> Schnappschuss — für den echten Ist-Stand siehe **§11 + git log**, nicht die Häkchen hier.
 
 ## A — Wettbewerb (Deep-Dive)
 
@@ -642,39 +465,12 @@ OpenClaw-Arch: **channel** (Messaging-Adapter) → **brain** (Loop, Memory) → 
 → **Broker + Out-of-band-HITL** (Sandbox allein stoppt Injection nicht; in-band-
 Freigabe liegt im selben Trust-Domain → **separates Gerät**).
 
-## C — wazero-Realität & PORTICO (ehrliche Runtime-Einordnung)
+## C · D — Runtime-Einordnung & Trust-Grenze → `ADRS.md`
 
-- **wazero ist WASIp1-only, kein Component-Model** (#2289 „not planned"), **kein Fuel**.
-  Kosten ggü. Wasmtime: (a) keine typisierten WIT-Interfaces / kein WIT→Tool-Mapping →
-  **eigene Manifest-/Schema-Schicht** (Extism-Stil) nötig; (b) WASIp1 gröber; (c)
-  CPU-Grenze nur über **Context-Deadline + Memory-Page-Cap**; (d) Component-Tools von
-  Wassette/wasmCloud laufen ohne Shim nicht.
-- **Warum trotzdem richtig:** CGo-freie **Single-Binary** (Cross-Compile trivial), und
-  **jede Capability = deine Go-Funktion** → Boundary maximal auditierbar, wrappbar,
-  revozierbar.
-- **PORTICO** (arXiv 2606.22504): Capabilities als **epoch-gebundene opake Handles**
-  statt stehender Rechte — Grant an Task/Subgoal-Epoche binden, **Revoke = Epoche
-  invalidieren**; jede Host-Function = Reference-Monitor (Stale-Replay vor dem Effekt
-  abgewiesen). Attenuierbare **Biscuit/Macaroon**-Tokens (nur Verengung). → Die
-  `EpochRegistry` + `agent.Session` sind der erste Schritt dieses Musters.
-- **Escape-Hatch:** Capability-Interfaces abstrakt genug für ein späteres
-  **wasmtime-go/Component-Backend**, falls Component-Portabilität hart wird.
-
-## D — Trust-Grenze: Variante A (entschieden)
-
-**„Skills/Tools im WASM, Brain im Host"** (aktuell umgesetzt). Alternative B (Brain +
-Skills im WASM) offen gehalten.
-
-| | A: Brain im Host (**gewählt**) | B: Brain + Skills im WASM |
-|---|---|---|
-| LLM-Keys | nie im Sandbox | müssen gebrokert werden |
-| Isolation | Skill-Code isoliert; Broker+HITL gegen Injection-Wirkung | auch Loop isoliert |
-| Komplexität | gering, idiomatisch Go | hoch (Loop+LLM-I/O über ABI) |
-| Injection-Schutz | **identisch** (kommt aus Broker/HITL) | identisch |
-
-**Begründung:** Injection-Abwehr kommt aus **Broker + Out-of-band-HITL**, nicht aus
-der Loop-Position. A ist simpler, gleiche Netto-Sicherheit, Keys aus dem Sandbox.
-Host-Function-Grenze so bauen, dass die Loop später bruchfrei nach B wandern kann.
+Ausgelagert zu den Entscheidungs-Records: **wazero vs. Wasmtime** (WASIp1-only, kein
+Component-Model/Fuel — warum trotzdem richtig), **PORTICO** (epoch-gebundene Capabilities,
+Revoke = Epoche invalidieren — erster Schritt: `capability.EpochRegistry` + `gateway.Scope`),
+und **Trust-Grenze Variante A** (Brain im Host, Skills/Tools im WASM). Siehe `ADRS.md`.
 
 ## E — Roadmap M0–M7 + Ziel-Layout
 
