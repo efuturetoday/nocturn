@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,20 +14,14 @@ import (
 	"github.com/efuturetoday/nocturn/internal/session"
 )
 
-// fakeRunner is a test double for the Bridge's Runner: it exposes a controllable event
-// channel and a fixed snapshot, and records the commands the Bridge dispatched.
+// fakeRunner is a test double for a workspace's turn loop: a controllable event channel,
+// a fixed snapshot, and a record of the commands that reached it.
 type fakeRunner struct {
 	events chan session.Event
 	snap   session.Snapshot
 
-	mu       sync.Mutex
-	submits  []string
-	resolves []resolveCall
-}
-
-type resolveCall struct {
-	id     string
-	choice int
+	mu      sync.Mutex
+	submits []string
 }
 
 func (f *fakeRunner) Subscribe() (<-chan session.Event, func()) { return f.events, func() {} }
@@ -40,25 +35,51 @@ func (f *fakeRunner) SubmitInput(_ session.Source, _, _ string) {}
 func (f *fakeRunner) SubmitAgent(_, _, _ string)                {}
 func (f *fakeRunner) Cancel()                                   {}
 func (f *fakeRunner) Reset()                                    {}
-func (f *fakeRunner) Resolve(id string, choice int) {
-	f.mu.Lock()
-	f.resolves = append(f.resolves, resolveCall{id, choice})
-	f.mu.Unlock()
-}
+func (f *fakeRunner) Resolve(string, int)                       {}
 func (f *fakeRunner) gotSubmit(input string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Contains(f.submits, input)
 }
-func (f *fakeRunner) gotResolve(id string, choice int) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, r := range f.resolves {
-		if r.id == id && r.choice == choice {
-			return true
-		}
+
+// fakeWorkspaces is a test double for the state service — it never touches a filesystem,
+// exactly as the real one must not. It holds one workspace ("work") and records writes.
+type fakeWorkspaces struct {
+	runner *fakeRunner
+
+	mu      sync.Mutex
+	persona string
+}
+
+func (w *fakeWorkspaces) getPersona() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.persona
+}
+func (w *fakeWorkspaces) List() []appserver.WorkspaceSummary {
+	return []appserver.WorkspaceSummary{{Name: "work", Running: true, Agents: 2, Skills: 3, PersonaSet: w.getPersona() != ""}}
+}
+func (w *fakeWorkspaces) Get(name string) (appserver.WorkspaceState, bool) {
+	if name != "work" {
+		return appserver.WorkspaceState{}, false
 	}
-	return false
+	return appserver.WorkspaceState{
+		Name:    "work",
+		Persona: w.getPersona(),
+		Agents:  []appserver.AgentInfo{{Name: "researcher", Description: "digs"}},
+	}, true
+}
+func (w *fakeWorkspaces) Open(name string) (appserver.Runner, bool) {
+	if name != "work" {
+		return nil, false
+	}
+	return w.runner, true
+}
+func (w *fakeWorkspaces) SetPersona(name, text string) error {
+	w.mu.Lock()
+	w.persona = text
+	w.mu.Unlock()
+	return nil
 }
 
 // fakeConn scripts client→server messages (in) and captures server→client messages (out).
@@ -92,18 +113,29 @@ func (c *fakeConn) Close() error {
 	return nil
 }
 
-func recvMsg(t *testing.T, out <-chan []byte) map[string]any {
+func newConn() *fakeConn {
+	return &fakeConn{in: make(chan []byte, 8), out: make(chan []byte, 32), closed: make(chan struct{})}
+}
+
+// recvUntil reads messages until one has the wanted `type`, skipping interleaved others
+// (control replies and chat events share the one outbound channel).
+func recvUntil(t *testing.T, out <-chan []byte, typ string) map[string]any {
 	t.Helper()
-	select {
-	case m := <-out:
-		var v map[string]any
-		if err := json.Unmarshal(m, &v); err != nil {
-			t.Fatalf("bad json written to conn: %v (%s)", err, m)
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case m := <-out:
+			var v map[string]any
+			if err := json.Unmarshal(m, &v); err != nil {
+				t.Fatalf("bad json on conn: %v (%s)", err, m)
+			}
+			if v["type"] == typ {
+				return v
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for a %q message", typ)
+			return nil
 		}
-		return v
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for a message on the conn")
-		return nil
 	}
 }
 
@@ -118,53 +150,66 @@ func eventually(t *testing.T, cond func() bool, msg string) {
 	t.Fatal(msg)
 }
 
-// The Bridge sends a snapshot first, forwards Runner events as tagged JSON, and dispatches
-// client commands to the Runner — the whole app protocol in one round trip.
-func TestBridge_SnapshotEventsAndCommands(t *testing.T) {
-	fr := &fakeRunner{events: make(chan session.Event, 4), snap: session.Snapshot{Running: true}}
-	fc := &fakeConn{in: make(chan []byte, 4), out: make(chan []byte, 8), closed: make(chan struct{})}
-	b := appserver.NewBridge(fr, fc)
+// The server multiplexes the control plane (list/get/setPersona) and one open chat
+// (snapshot + streamed events + routed commands) over one connection.
+func TestServer_ControlPlaneAndChat(t *testing.T) {
+	fr := &fakeRunner{events: make(chan session.Event, 8), snap: session.Snapshot{Running: true}}
+	fw := &fakeWorkspaces{runner: fr, persona: "You are helpful."}
+	fc := newConn()
+	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
 
-	go func() { _ = b.Serve(t.Context()) }()
-
-	// 1. the first message is the snapshot with the running flag.
-	if snap := recvMsg(t, fc.out); snap["type"] != "snapshot" || snap["running"] != true {
-		t.Fatalf("first message = %v, want a snapshot with running:true", snap)
+	// Control: list workspaces.
+	fc.in <- []byte(`{"cmd":"listWorkspaces"}`)
+	ws := recvUntil(t, fc.out, "workspaces")
+	if items, _ := ws["items"].([]any); len(items) != 1 {
+		t.Fatalf("workspaces = %v, want one item", ws["items"])
 	}
 
-	// 2. a Runner event is encoded and forwarded.
+	// Open a workspace → its snapshot arrives.
+	fc.in <- []byte(`{"cmd":"openWorkspace","name":"work"}`)
+	if snap := recvUntil(t, fc.out, "snapshot"); snap["running"] != true {
+		t.Fatalf("snapshot = %v, want running:true", snap)
+	}
+
+	// The open workspace's events stream.
 	fr.events <- session.TokenEvent{Text: "hi"}
-	if tok := recvMsg(t, fc.out); tok["type"] != "token" || tok["text"] != "hi" {
+	if tok := recvUntil(t, fc.out, "token"); tok["text"] != "hi" {
 		t.Fatalf("event = %v, want token(hi)", tok)
 	}
 
-	// 3. an approval event carries its id + options.
-	fr.events <- session.ApprovalEvent{ID: "appr-1", Intent: "Send email", Options: []string{"Allow once", "Deny"}}
-	if ap := recvMsg(t, fc.out); ap["type"] != "approval" || ap["id"] != "appr-1" {
-		t.Fatalf("event = %v, want approval(appr-1)", ap)
+	// A chat command routes to the OPEN workspace's runner.
+	fc.in <- []byte(`{"cmd":"submit","input":"hello"}`)
+	eventually(t, func() bool { return fr.gotSubmit("hello") }, "submit did not reach the open runner")
+
+	// Control: get the workspace detail (persona + agents).
+	fc.in <- []byte(`{"cmd":"getWorkspace","name":"work"}`)
+	if got := recvUntil(t, fc.out, "workspace"); got["persona"] != "You are helpful." {
+		t.Fatalf("workspace = %v, want persona 'You are helpful.'", got)
 	}
 
-	// 4. a submit command reaches the Runner.
-	fc.in <- []byte(`{"cmd":"submit","input":"hello"}`)
-	eventually(t, func() bool { return fr.gotSubmit("hello") }, "submit command did not reach the runner")
-
-	// 5. a resolve command (approve choice 0) reaches the Runner.
-	fc.in <- []byte(`{"cmd":"resolve","id":"appr-1","choice":0}`)
-	eventually(t, func() bool { return fr.gotResolve("appr-1", 0) }, "resolve command did not reach the runner")
+	// Control: set the persona → the service is written and the new state is echoed.
+	fc.in <- []byte(`{"cmd":"setPersona","name":"work","text":"New persona."}`)
+	if echoed := recvUntil(t, fc.out, "workspace"); echoed["persona"] != "New persona." {
+		t.Fatalf("echoed workspace = %v, want the new persona", echoed)
+	}
+	if fw.getPersona() != "New persona." {
+		t.Fatalf("service persona = %q, want it persisted", fw.getPersona())
+	}
 }
 
-// A malformed or unknown command is ignored, not fatal — the session stays alive.
-func TestBridge_BadCommandKeepsSessionAlive(t *testing.T) {
-	fr := &fakeRunner{events: make(chan session.Event, 4)}
-	fc := &fakeConn{in: make(chan []byte, 4), out: make(chan []byte, 8), closed: make(chan struct{})}
-	b := appserver.NewBridge(fr, fc)
+// Opening an unknown workspace replies with an error, not a snapshot — and keeps the
+// connection alive.
+func TestServer_UnknownWorkspaceErrors(t *testing.T) {
+	fw := &fakeWorkspaces{runner: &fakeRunner{events: make(chan session.Event, 1)}}
+	fc := newConn()
+	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
 
-	go func() { _ = b.Serve(t.Context()) }()
+	fc.in <- []byte(`{"cmd":"openWorkspace","name":"nope"}`)
+	if e := recvUntil(t, fc.out, "error"); !strings.Contains(e["text"].(string), "unknown workspace") {
+		t.Fatalf("error = %v, want 'unknown workspace'", e)
+	}
 
-	recvMsg(t, fc.out) // drain the snapshot
-
-	fc.in <- []byte(`not json`)             // malformed
-	fc.in <- []byte(`{"cmd":"frobnicate"}`) // unknown
-	fc.in <- []byte(`{"cmd":"submit","input":"still here"}`)
-	eventually(t, func() bool { return fr.gotSubmit("still here") }, "session died on a bad command")
+	// still alive: a following list works.
+	fc.in <- []byte(`{"cmd":"listWorkspaces"}`)
+	recvUntil(t, fc.out, "workspaces")
 }

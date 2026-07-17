@@ -129,6 +129,8 @@ func EncodeSnapshot(s session.Snapshot) ([]byte, error) {
 
 type wireCommand struct {
 	Cmd     string `json:"cmd"`
+	Name    string `json:"name,omitempty"`    // control: getWorkspace, openWorkspace, setPersona
+	Text    string `json:"text,omitempty"`    // setPersona
 	Input   string `json:"input,omitempty"`   // submit, submitSkill
 	Display string `json:"display,omitempty"` // submitSkill, submitAgent
 	Agent   string `json:"agent,omitempty"`   // submitAgent
@@ -137,14 +139,19 @@ type wireCommand struct {
 	Choice  int    `json:"choice,omitempty"`  // resolve
 }
 
-// dispatchCommand parses one client message and drives r. An unknown cmd is a protocol
-// error (the caller decides whether to close the conn or ignore). Every command that
-// runs an effect goes through the Runner, so the broker + HITL still gate it.
-func dispatchCommand(r Runner, msg []byte) error {
+// decodeCommand parses one client message into a command. The server switches on Cmd.
+func decodeCommand(msg []byte) (wireCommand, error) {
 	var c wireCommand
 	if err := json.Unmarshal(msg, &c); err != nil {
-		return fmt.Errorf("appserver: bad command json: %w", err)
+		return wireCommand{}, fmt.Errorf("appserver: bad command json: %w", err)
 	}
+	return c, nil
+}
+
+// routeChatCommand drives the OPEN workspace's Runner for a chat command; an unknown cmd
+// is ignored (the server already handled control commands). Every command that runs an
+// effect goes through the Runner, so the broker + HITL still gate it.
+func routeChatCommand(r Runner, c wireCommand) {
 	switch c.Cmd {
 	case "submit":
 		r.Submit(session.SourceUser, c.Input)
@@ -158,10 +165,37 @@ func dispatchCommand(r Runner, msg []byte) error {
 		r.Reset()
 	case "resolve":
 		r.Resolve(c.ID, c.Choice)
-	default:
-		return fmt.Errorf("appserver: unknown command %q", c.Cmd)
 	}
-	return nil
+}
+
+// --- control replies (server → client) ---------------------------------------
+
+// encodeWorkspaces / encodeWorkspace / encodeError render the control-plane replies. They
+// marshal plain structs (no channels/funcs), so json.Marshal cannot fail — the error is
+// deliberately ignored (see decisions.md §Handle errors).
+
+func encodeWorkspaces(items []WorkspaceSummary) []byte {
+	b, _ := json.Marshal(struct {
+		Type  string             `json:"type"`
+		Items []WorkspaceSummary `json:"items"`
+	}{"workspaces", items})
+	return b
+}
+
+func encodeWorkspace(st WorkspaceState) []byte {
+	b, _ := json.Marshal(struct {
+		Type string `json:"type"`
+		WorkspaceState
+	}{"workspace", st})
+	return b
+}
+
+func encodeError(text string) []byte {
+	b, _ := json.Marshal(struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{"error", text})
+	return b
 }
 
 func errString(err error) string {
