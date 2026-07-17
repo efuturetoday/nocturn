@@ -43,6 +43,7 @@ workspaces/work/
 │  └─ summary.md
 │
 │  ── everything below is yours, and invisible to the agent ──
+├─ PERSONA.md      ← the assistant's persona (its system prompt) — optional
 ├─ secrets.vault   ← encrypted vault (connected accounts, tokens)
 ├─ grants.json     ← the standing permissions you have granted
 ├─ mcp.json        ← remote MCP servers you have connected
@@ -70,6 +71,30 @@ the permissions, the agent definitions — is the control plane you manage, and 
 outside the agent's view. So a hijacked agent cannot read its own permissions file to grant
 itself more, and cannot rewrite its own instructions, because those files are not in its
 world.
+
+## The assistant's persona
+
+Who the assistant *is* — its tone, its standing instructions, the way it approaches your
+work — is its **persona**: the system prompt it carries into every conversation. Drop a
+`PERSONA.md` in a workspace to set it, and this workspace's assistant follows it from then
+on. It is optional; without one, a careful built-in default is used.
+
+The persona resolves in layers, first match wins — so a shared house style can sit above
+per-workspace overrides:
+
+```
+workspaces/PERSONA.md        ← a shared default for every workspace
+workspaces/work/PERSONA.md   ← this workspace's own persona (overrides the shared one)
+(no file)                    ← the built-in default
+```
+
+Like the permissions and the agent definitions, `PERSONA.md` lives in the control plane —
+outside `mnt/`. The assistant reads it but cannot see or rewrite it, so a prompt injection
+cannot quietly rewrite the assistant's own identity.
+
+Child agents are different: each carries *its own* instructions (see
+[Agents](/guides/agents/)) and does not inherit this persona — a focused worker is defined
+entirely by its own brief.
 
 ## The second wall: workspaces cannot see each other
 
