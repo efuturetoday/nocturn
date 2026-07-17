@@ -120,7 +120,7 @@ These look like the Web/Node APIs but route through `nocturn.call`, so every eff
   (fire-and-forget, leak-scanned). Returns `{sent: true}`.
 
 - **`nocturn.remind(when, message, title?)`** → schedule a notification at a future time (`when` is
-  RFC3339 or `"in <duration>"`). Returns `{id, fireAt}`. See [scheduling](/reference/scheduling/).
+  RFC3339 or `"in <duration>"`). Returns `{id, fireAt}`. See [reminders](/reference/reminders/).
 
 - **`nocturn.wake(seconds, note)`** → resume this session after a delay with `note` as the prompt
   (bounded, ungated). Returns `{wakeInSeconds}`.

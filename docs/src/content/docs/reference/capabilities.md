@@ -99,7 +99,7 @@ Some tools the model can call reach **no** capability, so they are never gated:
   A clock read leaks nothing and changes nothing, so it carries zero authority. It exists as a host
   tool only because the sandbox guest has no wall clock of its own — without it a skill could not
   answer *"what is due today?"*.
-- **`wake`** — schedules the agent's own resume after a delay (see [scheduling](/reference/scheduling/)).
+- **`wake`** — schedules the agent's own resume after a delay (see [wake](/reference/wake/)).
   It reaches nothing external, so it is ungated — **bounded** instead (delay clamp + pending cap). Any
   effect in the *resumed* turn is gated normally.
 
