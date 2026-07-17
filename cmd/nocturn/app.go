@@ -186,7 +186,6 @@ func tuiCmd(args []string) error {
 	// send captures it late.
 	var p *tea.Program
 	sh := shared{
-		ctx:       ctx,
 		master:    master,
 		approvals: approvals,
 		llmModel:  llm.New(baseURL, apiKey, modelName),
@@ -211,7 +210,7 @@ func tuiCmd(args []string) error {
 	workspaces := make(map[string]*bound, len(names))
 	for _, name := range names {
 		fmt.Printf("Workspace: %s\n", name)
-		bw, err := buildStack(sh, name, filepath.Join("workspaces", name))
+		bw, err := buildStack(ctx, sh, name, filepath.Join("workspaces", name))
 		if err != nil {
 			return fmt.Errorf("workspace %s: %w", name, err)
 		}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -26,7 +26,6 @@ import (
 // (workspace-agnostic; routes by autonomy, not workspace), one stateless LLM client,
 // one clock tool, and one sink to the single bubbletea program. Passed to buildStack.
 type shared struct {
-	ctx       context.Context
 	master    *secret.Master
 	approvals *hitl.Engine
 	llmModel  brain.Model      // stateless client, safe to share across stacks
@@ -73,7 +72,7 @@ func discoverWorkspaces(root string) ([]string, error) {
 			names = append(names, e.Name())
 		}
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names, nil
 }
 
@@ -82,9 +81,7 @@ func discoverWorkspaces(root string) ([]string, error) {
 // skills/agents, and its own scheduler. This is exactly the per-workspace sequence
 // that used to live inline in tuiCmd — extracted so N of them can run in one process
 // (and, later, a headless daemon can reuse it without a TUI).
-func buildStack(sh shared, wsName, wsDir string) (*bound, error) {
-	ctx := sh.ctx
-
+func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, error) {
 	// The workspace OWNS the composition (broker, tools, skills, agents, loop, grants).
 	// This function keeps only what a domain package must not hold: interactive
 	// provisioning (plugins/MCP/OAuth prompts) and the TUI transport (self-wake, scheduler
