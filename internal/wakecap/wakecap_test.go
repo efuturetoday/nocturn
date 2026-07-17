@@ -61,8 +61,11 @@ func TestWake_ClampsDelay(t *testing.T) {
 		json.Unmarshal([]byte(out), &r)
 		return r.WakeInSeconds
 	}
-	if got := read(`{"seconds":5,"note":"x"}`); got != 60 {
-		t.Errorf("5s → %v, want clamped up to 60", got)
+	if got := read(`{"seconds":0,"note":"x"}`); got != 1 {
+		t.Errorf("0s → %v, want clamped up to 1", got)
+	}
+	if got := read(`{"seconds":2,"note":"x"}`); got != 2 {
+		t.Errorf("2s → %v, want 2 (within range, not clamped)", got)
 	}
 	if got := read(`{"seconds":99999,"note":"x"}`); got != 3600 {
 		t.Errorf("99999s → %v, want clamped down to 3600", got)

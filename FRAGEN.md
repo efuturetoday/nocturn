@@ -500,7 +500,9 @@ Allokationen (~2× Body-Größe).
 (ephemeral, ungegated + geboundet, `wake` + `nocturn.wake`, TUI-Resume via `selfWakeMsg`). **NICHT** in
 den `agent.Scheduler` gemischt (bewusst zurückgebaut — der feuert Agent-Läufe, Reminder feuern nur
 notify). Timer-Tests mit `testing/synctest`. Design unten wie geplant. Offen bleibt: wake×User-Input-
-Interrupt (MVP: busy → drop), remind-`cron`-wiederkehrend, Quota/TZ-Kanten.
+Interrupt — **gelöst via Input-Buffer** (Type-ahead + `wake` queuen → bei Turn-Ende füttern, FIFO, sichtbar
+im TUI; s. #18). Offen: Clamp war 60s (Claude-Code-Erbe) → auf **1s** gesenkt (lokaler Assistent: „in 2s"
+ist legitim). remind-`cron`-wiederkehrend, Quota/TZ-Kanten.
 
 
 Präzisiert #14. Beim Ausdiskutieren kam raus: „Schedule" meint in Wahrheit **zwei grundverschiedene
@@ -562,3 +564,39 @@ Dinge**, plus der schon existierende Cron-Agent. **Drei Feuer-Verhalten:**
 - **Baureihenfolge:** Scheduler-One-shot/Dynamik zuerst (gemeinsam), dann `remind` (persistent, gegated),
   dann `wake` (ephemeral, geboundet). `remind` ist näher an dem, was bisher steht (notify + Scheduler);
   `wake` braucht den Session-Resume-Pfad im `agent`-Paket.
+
+---
+
+### 18. Turn-Orchestrierung (Buffer/Run-Loop) gehört in einen App-Kern, nicht ins TUI (RICHTUNG festgelegt)
+
+**Kontext:** Der Input-Buffer (Type-ahead während eines Turns + `wake`-Note queuen → bei Turn-Ende
+füttern) sitzt aktuell im bubbletea-`chatModel` (`cmd/nocturn/tui.go`: `m.queue`, `runQueued`, drain in
+`doneMsg`, `wake` via `selfWakeMsg`). Das ist ein **MVP für die Ein-Client-Welt**.
+
+**Entscheidung/Richtung:** Sobald weitere Clients kommen (REST, WebSocket, Tauri-App, Daemon), gehört die
+**Turn-Orchestrierung in einen headless App-/Session-Kern, der Events emittiert** — TUI/REST/WS/Tauri werden
+dünne Adapter. **Nicht** in bubbletea verankern.
+
+**Warum:**
+- **Gleiche Semantik für alle Clients:** „ein Turn zur Zeit + Buffer + drain-on-done" darf nicht pro Client
+  reimplementiert werden (Drift/Bugs).
+- **Headless/Daemon hat kein TUI:** ein unattended Lauf / WS-Client ohne Terminal braucht trotzdem
+  Serialisierung + Puffern (eine `wake`-Note, die während eines Turns feuert, muss *irgendwo* queuen).
+- **Die Queue ist Domain-State, nicht View-State:** sie bestimmt, *was als nächstes läuft* → jeder Client
+  sollte sie sehen/steuern (queued Item canceln, Reihenfolge).
+- **`wake` zeigt den Smell schon:** heute TUI-Umweg `selfWakeMsg` → `startTurn`; im Kern würde `wake` direkt
+  `core.Submit(note, fromWake)` rufen, `selfWakeMsg` verschwände.
+
+**Form (Ports & Adapters):**
+- **Kern (pro Session/Workspace):** Commands rein (`Submit`/`Cancel`/`Interrupt`/`NewSession`/`SwitchWorkspace`)
+  + Event-Stream raus (`token`/`toolStart-End`/`turnStart-End`/`queued`/`approvalNeeded`/`notice`); besitzt
+  Run-Loop + Queue; `wake`/`remind` verdrahten in *dieselbe* Queue.
+- **Clients = Adapter:** übersetzen Transport ↔ Commands/Events. Das heutige `send func(tea.Msg)`-Closure IST
+  schon ein primitiver Event-Sink → zu einem typisierten Event-Port generalisieren = der Refactor. `agent.Session`
+  (Lifecycle-Owner) ist der natürliche Ort; heute ist `Ask` synchron → Kern macht daraus eine async
+  Command/Event-Fassade.
+- **Client-lokal bleibt:** Rendering/Markdown/Scroll/Textarea/Keybindings + **Drafts** (getippt, noch nicht
+  committed). Die *committed* Queue ist der Kern; zwei Clients an EINER Session teilen EINE Queue.
+
+**Status:** Richtung festgelegt, **nicht jetzt bauen**. Extraktion fällig mit dem 2. Client — koppelt an #9
+(REST/WebGUI-Zukunft). Bis dahin: keine *weitere* Orchestrierung ins TUI stapeln.

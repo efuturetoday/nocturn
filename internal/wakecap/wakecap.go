@@ -30,7 +30,7 @@ import (
 // clamped so a wake can neither hammer (too short) nor pin resources forever (too
 // long); the pending cap limits how many self-wakes can be outstanding at once.
 const (
-	defaultMinDelay   = 60 * time.Second
+	defaultMinDelay   = 1 * time.Second // just enough to stop a tight resume loop; "in 2s" is legit
 	defaultMaxDelay   = time.Hour
 	defaultMaxPending = 3
 )
@@ -88,9 +88,9 @@ func (w *Waker) Tool() tool.Tool {
 			Name: "wake",
 			Description: "Pause and resume yourself later: after `seconds`, this same conversation is re-invoked " +
 				"with `note` as the prompt. Use it to wait then continue — poll something, or re-check after a delay. " +
-				"The delay is clamped (min 60s, max 1h). Returns {wakeInSeconds}.",
+				"The delay is clamped (min 1s, max 1h). Returns {wakeInSeconds}.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{` +
-				`"seconds":{"type":"number","description":"How long to wait before resuming (clamped to 60..3600)"},` +
+				`"seconds":{"type":"number","description":"How long to wait before resuming (clamped to 1..3600)"},` +
 				`"note":{"type":"string","description":"The prompt to resume with, e.g. \"re-check the deploy status\""}` +
 				`},"required":["seconds","note"]}`),
 		},

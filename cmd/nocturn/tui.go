@@ -166,6 +166,54 @@ func (e *noticeEntry) render(m *chatModel, width int) string {
 	return hintStyle.Render(e.text)
 }
 
+// queuedEntry is an input that arrived while a turn was running (the user typed
+// ahead, or a wake fired). It renders DIM with a ⏳ while pending, and flips to a
+// normal input line once its turn actually starts (see runQueued). wake notes get a
+// ⏰ instead of the ›-prefixed user bubble.
+type queuedEntry struct {
+	text    string
+	pending bool
+	wake    bool
+}
+
+func (e *queuedEntry) render(m *chatModel, width int) string {
+	switch {
+	case e.pending && e.wake:
+		return hintStyle.Render("⏳ ⏰ " + e.text)
+	case e.pending:
+		return hintStyle.Render("⏳ " + e.text)
+	case e.wake:
+		return hintStyle.Render("⏰ resuming: " + e.text)
+	default:
+		return styleWidth(userStyle, width).Render("› " + e.text)
+	}
+}
+
+// queuedInput is one buffered input: the visible entry (flipped from pending when it
+// runs) plus the session-starter to use — nil means the active stack's startTurn (a
+// normal user message); a wake carries its originating stack's starter.
+type queuedInput struct {
+	entry *queuedEntry
+	start func(string) context.CancelFunc
+}
+
+// runQueued begins a turn for a buffered input: its entry (already in m.entries)
+// flips from pending to live, and the session is resumed with its text. The starter
+// is the item's own (a wake's originating stack) or the active startTurn.
+func (m *chatModel) runQueued(qi queuedInput) tea.Cmd {
+	qi.entry.pending = false
+	m.resetStream()
+	m.running = true
+	start := qi.start
+	if start == nil {
+		start = m.startTurn
+	}
+	m.cancel = start(qi.entry.text)
+	m.layout()
+	m.syncViewport()
+	return tea.Batch(m.sw.Reset(), m.sw.Start())
+}
+
 type chatModel struct {
 	startTurn  func(string) context.CancelFunc
 	startAgent func(name, task string) context.CancelFunc // run a workspace agent (/<name> <task>)
@@ -199,6 +247,7 @@ type chatModel struct {
 	pausedAt  time.Time // when the current approval wait began; zero = not waiting
 	running   bool
 	cancel    context.CancelFunc
+	queue     []queuedInput // inputs buffered while a turn runs; fed FIFO on turn end
 	approval  *approvalPrompt
 	notice    string // transient one-line status (e.g. "new session"); cleared on next input
 	width     int
@@ -709,9 +758,6 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if msg.Paste {
-			if m.running {
-				return m, nil
-			}
 			var cmd tea.Cmd
 			m.ta, cmd = m.ta.Update(msg)
 			m.growInput()
@@ -727,6 +773,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.reset()
 			m.entries = nil
+			m.queue = nil
 			m.resetStream()
 			m.active, m.roots = nil, nil
 			m.notice = "new session — grants revoked"
@@ -738,11 +785,24 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			if m.running {
-				return m, nil
-			}
 			input := strings.TrimSpace(m.ta.Value())
 			if input == "" {
+				return m, nil
+			}
+			// While a turn runs, a plain message is BUFFERED (fed when the turn ends);
+			// slash commands are immediate UI actions and are ignored mid-turn.
+			if m.running {
+				if strings.HasPrefix(input, "/") {
+					return m, nil
+				}
+				m.ta.Reset()
+				m.inputH = 1
+				m.ta.SetHeight(1)
+				qe := &queuedEntry{text: input, pending: true}
+				m.entries = append(m.entries, qe)
+				m.queue = append(m.queue, queuedInput{entry: qe})
+				m.layout()
+				m.syncViewport()
 				return m, nil
 			}
 			m.ta.Reset()
@@ -779,6 +839,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else if st, ok := m.stacks[target]; ok {
 						m.bindStack(st)
 						m.entries = nil
+						m.queue = nil
 						m.resetStream()
 						m.active, m.roots = nil, nil
 						m.notice = "workspace: " + target
@@ -796,7 +857,6 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if task == "" {
 						task = "Do your task."
 					}
-					m.ta.Blur()
 					m.entries = append(m.entries, &userEntry{text: input})
 					m.resetStream()
 					m.running = true
@@ -827,7 +887,6 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				turnInput = skill.WrapBody(cmd, body) + "\n\n<user_request>\n" + req + "\n</user_request>"
 			}
 
-			m.ta.Blur()
 			m.entries = append(m.entries, &userEntry{text: input})
 			m.resetStream()
 			m.running = true
@@ -880,18 +939,18 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case selfWakeMsg:
-		// A wake() fired. If a turn is already running we drop it (MVP: no queue) so
-		// two turns never run at once; otherwise we resume the originating session.
+		// A wake() fired. If a turn is running, BUFFER the note (fed when it ends);
+		// otherwise resume the originating session now. Either way it is visible.
+		qi := queuedInput{entry: &queuedEntry{text: msg.note, wake: true}, start: msg.start}
 		if m.running {
-			m.entries = append(m.entries, &noticeEntry{text: "⏰ self-wake dropped (busy): " + msg.note})
+			qi.entry.pending = true
+			m.entries = append(m.entries, qi.entry)
+			m.queue = append(m.queue, qi)
 			m.syncViewport()
 			return m, nil
 		}
-		m.entries = append(m.entries, &noticeEntry{text: "⏰ resuming: " + msg.note})
-		m.running = true
-		m.cancel = msg.start(msg.note)
-		m.syncViewport()
-		return m, tea.Batch(m.sw.Reset(), m.sw.Start())
+		m.entries = append(m.entries, qi.entry)
+		return m, m.runQueued(qi)
 
 	case approvalMsg:
 		m.approval = &approvalPrompt{intent: msg.intent, options: msg.options, reply: msg.reply}
@@ -916,18 +975,24 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resetStream()
 		m.running = false
 		m.pausedAt = time.Time{}
+		// Drain the input buffer: a message typed (or a wake fired) during the turn
+		// was queued — feed the next one now as its own turn, FIFO.
+		if len(m.queue) > 0 {
+			qi := m.queue[0]
+			m.queue = m.queue[1:]
+			return m, m.runQueued(qi)
+		}
 		m.syncViewport()
 		return m, tea.Batch(m.ta.Focus(), m.sw.Stop())
 	}
 
-	// Non-key messages (and idle keys while not running) fall through here.
+	// A key not handled above goes to the textarea — even while a turn runs, so the
+	// user can type ahead (Enter then buffers it; see the enter case).
 	var cmd tea.Cmd
 	if _, isKey := msg.(tea.KeyMsg); isKey {
-		if !m.running {
-			m.ta, cmd = m.ta.Update(msg)
-			m.growInput()
-			m.syncViewport()
-		}
+		m.ta, cmd = m.ta.Update(msg)
+		m.growInput()
+		m.syncViewport()
 	} else {
 		m.vp, cmd = m.vp.Update(msg)
 	}
