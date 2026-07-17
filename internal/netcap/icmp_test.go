@@ -27,10 +27,11 @@ func TestPing_EgressBlocksSecretInHost(t *testing.T) {
 	}
 }
 
-// allowPing permits ping over the given target glob (a read).
+// allowPing permits the icmp capability over the given target glob (a read). The
+// family is "icmp" (protocol); the tool the model picks is "ping" (action).
 func allowPing(targetGlob string) capability.Policy {
 	return capability.Policy{Rules: []capability.Rule{
-		{Family: "ping", TargetGlob: targetGlob, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
+		{Family: "icmp", TargetGlob: targetGlob, Writes: capability.MatchRead, Effect: capability.Allow, Epoch: capability.Permanent},
 	}}
 }
 

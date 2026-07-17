@@ -3,10 +3,10 @@ title: ping
 description: Probe a host with a single ICMP echo to check reachability.
 ---
 
-**Capability:** [`ping`](/reference/ping/) · <span class="axis axis--read">read</span>
+**Capability:** [`icmp`](/reference/icmp/) · <span class="axis axis--read">read</span>
 
 Probe a host with one ICMP echo. Runs silently under the default policy. Why it is gated and how to
-cage it (per host / CIDR) lives on the [`ping` capability](/reference/ping/).
+cage it (per host / CIDR) lives on the [`icmp` capability](/reference/icmp/).
 
 ## Input
 

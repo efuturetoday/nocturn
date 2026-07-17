@@ -28,9 +28,9 @@ Three tools exercise this capability — each page has its inputs, output, and a
 - [`remind.list`](/reference/tools/remind-list/) <span class="axis axis--read">read</span> — list pending reminders
 - [`remind.cancel`](/reference/tools/remind-cancel/) <span class="axis axis--read">read</span> — cancel a reminder
 
-## Limiting reach
+## Cage syntax
 
-Like [`notify`](/reference/notify/#limiting-reach), the destination is the **host-owned channel**,
+Like [`notify`](/reference/notify/#cage-syntax), the destination is the **host-owned channel**,
 not a model-chosen target — so there is no per-target scoping and the only sensible target is `*`.
 In a plugin cage you allow or deny the whole `remind` capability:
 
@@ -43,13 +43,25 @@ This is a **family-level** allow/deny rather than the host/path scoping the
 on every reminder instead of the silent default, a workspace or agent policy tightens `remind` to
 **ask**.
 
+## Limits
+
+- **Rate limit** — _TBD_. Enforced **per capability family, not per tool** once wired; an anti-spam
+  rate limiter is planned for `remind` but is not yet attached to the Guard, so no cap is enforced
+  today.
+
+## Leak scanning
+
+The message is **leak-scanned on egress** — both when the reminder is **created** and again when it
+**fires** — so a stored vault secret in the text is **blocked** at either point. `remind` injects no
+credentials of its own.
+
 ## Why it runs silently — and why that is safe
 
-A reminder is a scheduled [notification](/reference/notify/) to your own device, so — like
-`notify` — it runs silently under the default policy (no per-reminder approval). What keeps it
-safe is structural: the destination is host-owned, the message is **leak-scanned** on create and
-again at fire, and the store lives in the control-plane where the model can't forge it. It still
-passes the one gateway, so a policy can tighten `remind` to ask.
+A reminder is a scheduled [notification](/reference/notify/) to your own device, so — like `notify`
+— it runs silently under the default policy (no per-reminder approval). What keeps it safe is
+structural: the destination is host-owned, and the store lives in the workspace control-plane where
+the model can neither read nor forge it. It still passes the one gateway, so a policy can tighten
+`remind` to ask.
 
 Delivery goes over the same out-of-band channel as approvals (a phone push, or a dim TUI line when
 none is configured).

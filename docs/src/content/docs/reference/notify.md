@@ -22,7 +22,7 @@ One tool exercises this capability — its page has the inputs, output, and a Ja
 
 - [`notify`](/reference/tools/notify/) <span class="axis axis--read">read</span> — send a fire-and-forget notification to your device
 
-## Limiting reach
+## Cage syntax
 
 The destination is the **host-owned channel**, not a model-chosen target, so there is no
 meaningful per-target scoping — the only sensible target is `*`. In a plugin cage you therefore
@@ -37,19 +37,26 @@ host/path scoping the [network](/reference/http/) and [file](/reference/files/) 
 To go the other way — require approval on *every* notification instead of the silent default — a
 workspace or agent policy tightens `notify` to **ask** (see the safety note below).
 
+## Limits
+
+- **Rate limit** — _TBD_. Enforced **per capability family, not per tool** once wired; an anti-spam
+  rate limiter is planned for `notify` but is not yet attached to the Guard, so no cap is enforced
+  today.
+
+## Leak scanning
+
+The message is **leak-scanned on egress** before it leaves: a stored vault secret in the `message`
+or `title` is **blocked**, so a prompt-injected caller cannot smuggle a credential out inside a
+notification. `notify` injects no credentials of its own — nothing flows *in*.
+
 ## Why it runs silently — and why that is safe
 
 A notification to your **own** device is not the kind of world-changing effect that warrants a
 per-message *"may I tell you this?"* prompt, so under the default policy it runs silently. What
-keeps that safe is **structural**, not a prompt:
-
-- **The destination is host-owned, never model-chosen.** The message goes to *your* configured
-  channel. The model supplies only the *content*, never the *target* — exactly like host-side
-  [credential injection](/reference/http/#credentials--leak-scanning). So `notify` can never become
-  an exfiltration channel to a third party.
-- **The message is leak-scanned on egress.** A stored vault secret in the text is **blocked** — a
-  prompt-injected caller cannot smuggle a credential out inside a notification.
-- **It is rate-limited.** A runaway or injected caller cannot spam your device.
+keeps that safe is **structural**, not a prompt: the destination is **host-owned, never
+model-chosen** — the message goes to *your* configured channel, and the model supplies only the
+*content*, never the *target* (exactly like host-side credential injection). So `notify` can never
+become an exfiltration channel to a third party.
 
 It still passes the one gateway, so a workspace or agent **policy can tighten it to ask** if you
 want every notification approved.

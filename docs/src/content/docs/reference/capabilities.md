@@ -40,7 +40,7 @@ families and a path for the file family:
 
 | Family              | `target` is…                                   | Example                 |
 |---------------------|------------------------------------------------|-------------------------|
-| `http`, `dns`, `ping` | a **hostname**, an **IP**, or a **CIDR range** | `gmail.googleapis.com`, `10.0.0.0/8`  |
+| `http`, `dns`, `icmp` | a **hostname**, an **IP**, or a **CIDR range** | `gmail.googleapis.com`, `10.0.0.0/8`  |
 | `file`              | a **workspace-relative path** (glob)           | `notes/*`           |
 
 That single `(family, target, access)` triple is exactly how a limit is written down. In a
@@ -74,7 +74,7 @@ handles, and its tools:
 |------------|---------|--------|---------|---------|
 | [`http`](/reference/http/) | the network | host / IP / CIDR | read · write | target |
 | [`dns`](/reference/dns/) | name resolution | hostname | read | target |
-| [`ping`](/reference/ping/) | reachability probes | host / IP | read | target |
+| [`icmp`](/reference/icmp/) | reachability probes (tool `ping`) | host / IP | read | target |
 | [`file`](/reference/files/) | the workspace filesystem | workspace path | read · write | target |
 | [`notify`](/reference/notify/) | messaging you | your channel (host-owned) | read | family only |
 | [`remind`](/reference/reminders/) | scheduled messages to you | your channel (host-owned) | read | family only |

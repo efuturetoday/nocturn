@@ -90,7 +90,7 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'reference/capabilities' },
 						{ label: 'HTTP', slug: 'reference/http' },
 						{ label: 'DNS', slug: 'reference/dns' },
-						{ label: 'Ping', slug: 'reference/ping' },
+						{ label: 'ICMP', slug: 'reference/icmp' },
 						{ label: 'Files', slug: 'reference/files' },
 						{ label: 'Notify', slug: 'reference/notify' },
 						{ label: 'Reminders', slug: 'reference/reminders' },
@@ -111,7 +111,7 @@ export default defineConfig({
 							items: [{ label: 'dns.resolve', slug: 'reference/tools/dns-resolve' }],
 						},
 						{
-							label: 'Ping',
+							label: 'ICMP',
 							items: [{ label: 'ping', slug: 'reference/tools/ping' }],
 						},
 						{

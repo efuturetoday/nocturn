@@ -30,7 +30,7 @@ Seven tools exercise this capability — each page has its inputs, output, and a
 
 Reads run silently under the default policy; writes ask for approval.
 
-## Limiting reach — cage syntax
+## Cage syntax
 
 A cage bounds where this capability may reach. For `file` the `target` is a workspace-relative
 path (a glob is allowed); `access` is the read/write axis. See the
@@ -47,6 +47,13 @@ for the shared `(family, target, access)` rules.
   `notes/todo.md` but not `notes/2026/todo.md`. Use `*` on its own to mean **any path** in the
   workspace.
 - `access` must be explicit — a missing `access` is a fail-closed error, never a silent "both".
+
+## Limits
+
+- **Rate limit** — _TBD_. Enforced **per capability family, not per tool** once wired; the
+  sliding-window rate limiter exists as a primitive but is not yet attached to the Guard, so no
+  per-family call cap is enforced today.
+- **Read size** — a single `file.read` returns at most **1 MiB**.
 
 ## Confinement
 

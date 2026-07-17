@@ -38,7 +38,9 @@ type PingResult struct {
 // needs no root on macOS and on Linux where net.ipv4.ping_group_range permits it —
 // a clear error is returned when the OS forbids it rather than a silent failure.
 func (n *Net) Ping(ctx context.Context, host string) (*PingResult, error) {
-	call := capability.Call{Family: "ping", Write: false, Target: host}
+	// Family is "icmp" (the protocol/reach the broker gates — raw ICMP to a host is
+	// the exfil/probe channel); "ping" is the action, exposed as the tool name.
+	call := capability.Call{Family: "icmp", Write: false, Target: host}
 	intent := "ping " + host
 	// Egress: the ping target is the exfiltration surface, same channel as a DNS name.
 	return gateway.Do(ctx, n.Guard, call, intent,

@@ -14,7 +14,7 @@ a tool, follow this exactly so the pages stay **uniform** and **complete**. The 
   one *and* calls `gateway.Do` is a capability.
 - A **tool** is what the model / `nocturn.call` invokes (a `tool.Tool` in the registry). A tool
   exercises **zero, one, or several** capabilities.
-- **Capabilities today** (by family): `http`, `dns`, `ping`, `file`, `notify`, `remind`.
+- **Capabilities today** (by family): `http`, `dns`, `icmp` (tool `ping`), `file`, `notify`, `remind`.
 - **Ungated tools** (no capability, never gated): `code.run`, `skill.load`, `skill.read`,
   `time.now`, `wake`.
 
@@ -38,11 +38,22 @@ Sections, in order (include those that apply):
 2. Intro — one paragraph: what authority it lends.
 3. `## At a glance` — table: Family · Target · Tools · Default policy.
 4. `## Tools` — **links only** to the tool pages (no schemas), each with its read/write tag.
-5. `## Limiting reach — cage syntax` — cage examples with `{family, target, access}`.
-   For a **host-owned** capability (`notify`/`remind`) use a `## Limiting reach` section stating it
-   is **family-level** (`target: "*"`), not per-target.
-6. Capability-specific detail as applicable: `## Credentials & leak scanning` (secret injection +
-   bidirectional leak scan), `## Confinement` (file), `## Requirements` (ping),
+5. `## Cage syntax` — how to cage this capability, with `{family, target, access}` examples. For a
+   **host-owned** capability (`notify`/`remind`) it is **family-level** (`target: "*"`), not per-target.
+6. `## Limits` — **required on every capability page.** The **rate limit** is enforced **per
+   capability family, not per tool** (`RateLimiter.Allow(call.Family)`). State the concrete cap, or
+   **TBD** while it is unwired (today the rate limiter is a primitive not yet attached to the Guard,
+   so it is TBD). Use this exact section on every capability page so it stays uniform. **Size /
+   resource caps also belong here** (e.g. response-body cap for `http`, single-read cap for
+   `file`) — they are limits, not scanning or confinement details.
+7. `## Credentials` — **only if the capability injects secrets** (`http`, and MCP-over-http).
+   Host-side bearer injection at the boundary; the guest never sees the token; a guest-supplied
+   credential (URL userinfo or an auth header) is rejected.
+8. `## Leak scanning` — **only if the capability scans.** Describe **what is scanned** and **what is
+   stripped**. `http`: egress scan of URL + headers + body, ingress scan of response body + header
+   values, and credential headers stripped outright (`Set-Cookie`, `Authorization`, …).
+   `notify`/`remind`: the message text is leak-scanned on egress.
+9. Capability-specific detail as applicable: `## Confinement` (file), `## Requirements` (icmp),
    `## Why it is a gated capability anyway` / `## Why it runs silently`.
 
 **Capability pages never contain tool input/output schemas** — those live on the tool pages.

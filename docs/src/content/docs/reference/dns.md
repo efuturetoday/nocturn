@@ -25,7 +25,7 @@ The record **type is not an authority axis** — the reach that matters is the q
 exfiltration channel regardless of record), so `dns.resolve` is gated on the host exactly the same
 for every record type.
 
-## Limiting reach — cage syntax
+## Cage syntax
 
 A cage bounds where this capability may reach. For `dns` the `target` is a hostname (a glob is
 allowed); `access` is always `["read"]` because a lookup never writes. See the
@@ -42,6 +42,12 @@ for the shared `(family, target, access)` rules.
   up**, not an address — so you cage it by name. (IP and CIDR ranges are for `http` and `ping`,
   whose target is a destination *address*.)
 - `access` must be explicit; `["write"]` on a `dns` entry is meaningless — DNS only reads.
+
+## Limits
+
+- **Rate limit** — _TBD_. Enforced **per capability family, not per tool** once wired; the
+  sliding-window rate limiter exists as a primitive but is not yet attached to the Guard, so no
+  per-family call cap is enforced today.
 
 ## Why it is a gated capability anyway
 

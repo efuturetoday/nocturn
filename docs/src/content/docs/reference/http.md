@@ -23,7 +23,7 @@ Two tools exercise this capability — each page has its inputs, output, and a J
 - [`http.read`](/reference/tools/http-read/) <span class="axis axis--read">read</span> — read a URL (GET/HEAD)
 - [`http.write`](/reference/tools/http-write/) <span class="axis axis--write">write</span> — send data (POST/PUT/PATCH/DELETE)
 
-## Limiting reach — cage syntax
+## Cage syntax
 
 A cage bounds where this capability may reach. For `http` the `target` is a hostname,
 an IP, or a CIDR range (a glob is allowed); `access` is the read/write axis. See the
@@ -46,16 +46,27 @@ for the shared `(family, target, access)` rules.
 - The cage only sets the *maximum* reach. Within it, writes still ask each time (until you
   grant them).
 
-## Credentials & leak scanning
+## Limits
 
-- **Credentials are attached host-side, at the boundary, for the matching host only.** The
-  guest never sees the token and never chooses it — the destination does. A request that tries
-  to carry its own credential (userinfo in the URL, or an `Authorization` / `Cookie` /
-  `X-Api-Key` header) is rejected outright.
-- **Credential headers are stripped from the response** (`Set-Cookie`, `WWW-Authenticate`,
-  `Proxy-Authenticate`, …) — the guest has no cookie jar and no business hoarding credential
-  material.
-- **Leak scanning is bidirectional.** The outbound request (URL + headers + body) is scanned
-  before the host's own credential is stamped in; the response body and headers are scanned on
-  the way back and any echoed secret is redacted before the model sees it.
-- The response body is capped at 10 MiB in memory.
+- **Rate limit** — _TBD_. Enforced **per capability family, not per tool** once wired; the
+  sliding-window rate limiter exists as a primitive but is not yet attached to the Guard, so no
+  per-family call cap is enforced today.
+- **Response size** — the response body is capped at **10 MiB** in memory.
+
+## Credentials
+
+- Credentials are attached **host-side, at the boundary, for the matching host only**. The guest
+  never sees the token and never chooses it — the destination does.
+- A request that carries its **own** credential is **rejected outright**: userinfo in the URL
+  (`user:pass@host`), or an `Authorization` / `Cookie` / `Proxy-Authorization` / `X-Api-Key` header.
+
+## Leak scanning
+
+Bidirectional — a secret can neither be smuggled out nor echoed back:
+
+- **Egress (the request):** the URL, request headers, and body are scanned **before** the host's own
+  credential is stamped in — a request carrying a stored vault secret is blocked.
+- **Ingress (the response):** the body and header values are scanned and any echoed secret is
+  **redacted** before the model sees it.
+- **Stripped outright:** credential-bearing response headers — `Set-Cookie`, `Set-Cookie2`,
+  `Authorization`, `WWW-Authenticate`, `Proxy-Authenticate` (the guest has no cookie jar).
