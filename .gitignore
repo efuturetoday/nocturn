@@ -14,11 +14,10 @@ internal/script/qjs/.buildcache/
 # macOS
 .DS_Store
 
-# filecap workspace (runtime, not source)
-workspace/
-
 # local runtime plugins (not source; testdata/example documents the format)
-plugins/
+/plugins/
 
-# per-workspace runtime state (mnt data, .skills, grants.json) — not source
-workspaces/
+# per-workspace runtime state (mnt data, .skills, grants.json) — not source.
+# Anchored to the repo root so it does NOT also swallow internal/workspace/
+# (the composition-aggregate package — real source).
+/workspaces/
