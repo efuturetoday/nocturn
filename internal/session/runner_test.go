@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/activity"
@@ -151,99 +152,96 @@ func TestRunner_StreamsTokenFromTurn(t *testing.T) {
 	}
 }
 
-// Reset drops the queue and starts fresh, even mid-turn.
+// Reset drops the queue and starts fresh, even mid-turn. Under synctest the async
+// unwind of the cancelled turn is awaited deterministically with synctest.Wait, so no
+// polling sleep is needed (go.dev/blog/testing-time).
 func TestRunner_Reset(t *testing.T) {
-	g := newGatedRun()
-	ft := &fakeTurns{ask: g.fn}
-	r := session.NewRunner(ft)
-	sub, unsub := r.Subscribe()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() { unsub(); cancel() })
-	r.Start(ctx)
+	synctest.Test(t, func(t *testing.T) {
+		g := newGatedRun()
+		ft := &fakeTurns{ask: g.fn}
+		r := session.NewRunner(ft)
+		sub, unsub := r.Subscribe()
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(func() { unsub(); cancel() })
+		r.Start(ctx)
 
-	r.Submit(session.SourceUser, "a")
-	mustTurnStart(t, sub, "a", session.SourceUser)
-	r.Submit(session.SourceUser, "queued")
-	if _, ok := recv(t, sub).(session.QueuedEvent); !ok {
-		t.Fatal("want Queued")
-	}
-
-	r.Reset() // cancels the running turn, drops the queue, resets the session
-
-	// We should see a notice and, eventually, an idle empty runner.
-	sawNotice := false
-	deadline := time.After(2 * time.Second)
-	for !sawNotice {
-		select {
-		case e := <-sub:
-			if _, ok := e.(session.NoticeEvent); ok {
-				sawNotice = true
-			}
-		case <-deadline:
-			t.Fatal("no NoticeEvent after Reset")
+		r.Submit(session.SourceUser, "a")
+		mustTurnStart(t, sub, "a", session.SourceUser)
+		r.Submit(session.SourceUser, "queued")
+		if _, ok := recv(t, sub).(session.QueuedEvent); !ok {
+			t.Fatal("want Queued")
 		}
-	}
-	// Give the cancelled turn a moment to unwind, then assert idle+empty.
-	for range 50 {
-		if s := r.Snapshot(); !s.Running && len(s.Queue) == 0 {
-			if rc := ft.resetCount(); rc != 1 {
-				t.Fatalf("reset called %d times, want 1", rc)
+
+		r.Reset() // cancels the running turn, drops the queue, resets the session
+
+		// Drain events until the notice (the cancelled turn may emit others first).
+		for {
+			if _, ok := recv(t, sub).(session.NoticeEvent); ok {
+				break
 			}
-			return
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("runner not idle/empty after Reset")
+		// Wait for the cancelled turn to fully unwind, then assert idle + empty.
+		synctest.Wait()
+		if s := r.Snapshot(); s.Running || len(s.Queue) != 0 {
+			t.Fatalf("runner not idle/empty after Reset: running=%v queue=%d", s.Running, len(s.Queue))
+		}
+		if rc := ft.resetCount(); rc != 1 {
+			t.Fatalf("reset called %d times, want 1", rc)
+		}
+	})
 }
 
 // An approval surfaces as an event; Resolve runs the chosen option's apply callback
 // and clears the pending state. A stale Resolve is a no-op. The engine holds no
 // approval-mechanism types — apply is opaque.
 func TestRunner_Approval(t *testing.T) {
-	var mu sync.Mutex
-	var applied []int
-	r := session.NewRunner(&fakeTurns{ask: func(context.Context, string) (string, error) { return "", nil }})
-	sub, unsub := r.Subscribe()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() { unsub(); cancel() })
-	r.Start(ctx)
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		var applied []int
+		r := session.NewRunner(&fakeTurns{ask: func(context.Context, string) (string, error) { return "", nil }})
+		sub, unsub := r.Subscribe()
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(func() { unsub(); cancel() })
+		r.Start(ctx)
 
-	// What the attended notifier does during a turn: show labels + supply apply(choice)
-	// (which, in production, resolves the chosen hitl token).
-	apply := func(choice int) { mu.Lock(); applied = append(applied, choice); mu.Unlock() }
-	r.PresentApproval("Send email to x@a", []string{"Allow once", "Deny"}, apply)
+		// What the attended notifier does during a turn: show labels + supply apply(choice)
+		// (which, in production, resolves the chosen hitl token).
+		apply := func(choice int) { mu.Lock(); applied = append(applied, choice); mu.Unlock() }
+		r.PresentApproval("Send email to x@a", []string{"Allow once", "Deny"}, apply)
 
-	ev, ok := recv(t, sub).(session.ApprovalEvent)
-	if !ok || ev.Intent != "Send email to x@a" || len(ev.Options) != 2 || ev.Options[0] != "Allow once" {
-		t.Fatalf("want ApprovalEvent, got %#v", ev)
-	}
-	if s := r.Snapshot(); s.Pending == nil || s.Pending.ID != ev.ID {
-		t.Fatalf("snapshot pending = %#v", s.Pending)
-	}
+		ev, ok := recv(t, sub).(session.ApprovalEvent)
+		if !ok || ev.Intent != "Send email to x@a" || len(ev.Options) != 2 || ev.Options[0] != "Allow once" {
+			t.Fatalf("want ApprovalEvent, got %#v", ev)
+		}
+		if s := r.Snapshot(); s.Pending == nil || s.Pending.ID != ev.ID {
+			t.Fatalf("snapshot pending = %#v", s.Pending)
+		}
 
-	r.Resolve(ev.ID, 0) // "Allow once"
-	if e, ok := recv(t, sub).(session.ApprovalResolvedEvent); !ok || e.ID != ev.ID {
-		t.Fatalf("want ApprovalResolvedEvent, got %#v", e)
-	}
-	mu.Lock()
-	got := append([]int(nil), applied...)
-	mu.Unlock()
-	if len(got) != 1 || got[0] != 0 {
-		t.Fatalf("apply got %v, want [0]", got)
-	}
-	if s := r.Snapshot(); s.Pending != nil {
-		t.Fatal("pending not cleared after resolve")
-	}
+		r.Resolve(ev.ID, 0) // "Allow once"
+		if e, ok := recv(t, sub).(session.ApprovalResolvedEvent); !ok || e.ID != ev.ID {
+			t.Fatalf("want ApprovalResolvedEvent, got %#v", e)
+		}
+		mu.Lock()
+		got := append([]int(nil), applied...)
+		mu.Unlock()
+		if len(got) != 1 || got[0] != 0 {
+			t.Fatalf("apply got %v, want [0]", got)
+		}
+		if s := r.Snapshot(); s.Pending != nil {
+			t.Fatal("pending not cleared after resolve")
+		}
 
-	// A stale resolve (already answered) does nothing.
-	r.Resolve(ev.ID, 1)
-	time.Sleep(30 * time.Millisecond)
-	mu.Lock()
-	n := len(applied)
-	mu.Unlock()
-	if n != 1 {
-		t.Fatalf("stale resolve applied again (%d)", n)
-	}
+		// A stale resolve (already answered) does nothing. synctest.Wait lets any work it
+		// might spawn settle before we assert nothing changed — no arbitrary sleep.
+		r.Resolve(ev.ID, 1)
+		synctest.Wait()
+		mu.Lock()
+		n := len(applied)
+		mu.Unlock()
+		if n != 1 {
+			t.Fatalf("stale resolve applied again (%d)", n)
+		}
+	})
 }
 
 // SubmitAgent runs the injected agent runner on the same serialized loop: its Display

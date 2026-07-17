@@ -50,7 +50,6 @@ type Reminders struct {
 	Store   *Store
 	Push    Pusher
 	Scanner *secret.Scanner
-	Clock   func() time.Time // injectable for tests; nil = time.Now
 
 	seq    atomic.Uint64
 	mu     sync.Mutex
@@ -61,13 +60,6 @@ type Reminders struct {
 // re-enroll reminders persisted from a previous run.
 func New(guard *gateway.Guard, store *Store, push Pusher, scanner *secret.Scanner) *Reminders {
 	return &Reminders{Guard: guard, Store: store, Push: push, Scanner: scanner, timers: map[string]*time.Timer{}}
-}
-
-func (r *Reminders) now() time.Time {
-	if r.Clock != nil {
-		return r.Clock()
-	}
-	return time.Now()
 }
 
 // Restore re-enrolls every persisted reminder (call at startup). An overdue reminder
@@ -83,7 +75,7 @@ func (r *Reminders) Restore() {
 // or overdue fireAt is fine — the delay is clamped to >= 0 and Go timers handle long
 // durations.
 func (r *Reminders) enroll(rem Reminder) {
-	delay := max(rem.FireAt.Sub(r.now()), 0)
+	delay := max(time.Until(rem.FireAt), 0)
 	r.mu.Lock()
 	r.timers[rem.ID] = time.AfterFunc(delay, func() { r.fire(rem) })
 	r.mu.Unlock()
@@ -249,7 +241,7 @@ func (r *Reminders) parseWhen(when string) (time.Time, error) {
 		if d <= 0 {
 			return time.Time{}, fmt.Errorf("reminder time must be in the future (got %q)", when)
 		}
-		return r.now().Add(d), nil
+		return time.Now().Add(d), nil
 	}
 	t, err := time.Parse(time.RFC3339, when)
 	if err != nil {
@@ -260,5 +252,5 @@ func (r *Reminders) parseWhen(when string) (time.Time, error) {
 
 // newID mints a unique reminder id from the current time plus a per-instance counter.
 func (r *Reminders) newID() string {
-	return fmt.Sprintf("rem-%d-%d", r.now().UnixNano(), r.seq.Add(1))
+	return fmt.Sprintf("rem-%d-%d", time.Now().UnixNano(), r.seq.Add(1))
 }

@@ -42,69 +42,78 @@ func tokenFor(opts []hitl.Option, o hitl.Outcome) string {
 }
 
 func TestEngine_ApproveReleasesCaller(t *testing.T) {
-	e, n := newEngine()
-	res := make(chan hitl.Outcome, 1)
-	go func() {
-		out, _ := e.Request(context.Background(), "send email to boss", choices, 2*time.Second)
-		res <- out
-	}()
+	synctest.Test(t, func(t *testing.T) {
+		e, n := newEngine()
+		res := make(chan hitl.Outcome, 1)
+		go func() {
+			out, _ := e.Request(context.Background(), "send email to boss", choices, 2*time.Second)
+			res <- out
+		}()
 
-	opts := <-n.options
-	if err := e.Resolve(tokenFor(opts, hitl.Approved)); err != nil {
-		t.Fatalf("resolve approve: %v", err)
-	}
-	if out := <-res; out != hitl.Approved {
-		t.Fatalf("got %v, want Approved", out)
-	}
+		opts := <-n.options
+		if err := e.Resolve(tokenFor(opts, hitl.Approved)); err != nil {
+			t.Fatalf("resolve approve: %v", err)
+		}
+		if out := <-res; out != hitl.Approved {
+			t.Fatalf("got %v, want Approved", out)
+		}
+	})
 }
 
 func TestEngine_DenyReleasesCaller(t *testing.T) {
-	e, n := newEngine()
-	res := make(chan hitl.Outcome, 1)
-	go func() {
-		out, _ := e.Request(context.Background(), "delete all files", choices, 2*time.Second)
-		res <- out
-	}()
+	synctest.Test(t, func(t *testing.T) {
+		e, n := newEngine()
+		res := make(chan hitl.Outcome, 1)
+		go func() {
+			out, _ := e.Request(context.Background(), "delete all files", choices, 2*time.Second)
+			res <- out
+		}()
 
-	opts := <-n.options
-	if err := e.Resolve(tokenFor(opts, hitl.Denied)); err != nil {
-		t.Fatalf("resolve deny: %v", err)
-	}
-	if out := <-res; out != hitl.Denied {
-		t.Fatalf("got %v, want Denied", out)
-	}
+		opts := <-n.options
+		if err := e.Resolve(tokenFor(opts, hitl.Denied)); err != nil {
+			t.Fatalf("resolve deny: %v", err)
+		}
+		if out := <-res; out != hitl.Denied {
+			t.Fatalf("got %v, want Denied", out)
+		}
+	})
 }
 
-// No decision within the ttl denies — fail closed.
+// No decision within the ttl denies — fail closed. Under synctest the ttl fires on the
+// fake clock, so the wait is instant and deterministic (go.dev/blog/testing-time).
 func TestEngine_TimeoutDenies(t *testing.T) {
-	e, _ := newEngine()
-	out, err := e.Request(context.Background(), "risky action", choices, 30*time.Millisecond)
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	if out != hitl.Denied {
-		t.Fatalf("timeout must deny, got %v", out)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		e, _ := newEngine()
+		out, err := e.Request(context.Background(), "risky action", choices, time.Second)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		if out != hitl.Denied {
+			t.Fatalf("timeout must deny, got %v", out)
+		}
+	})
 }
 
 // A token is single-use: a second Resolve of the same token is rejected.
 func TestEngine_TokenIsSingleUse(t *testing.T) {
-	e, n := newEngine()
-	res := make(chan hitl.Outcome, 1)
-	go func() {
-		out, _ := e.Request(context.Background(), "wire payment", choices, 2*time.Second)
-		res <- out
-	}()
+	synctest.Test(t, func(t *testing.T) {
+		e, n := newEngine()
+		res := make(chan hitl.Outcome, 1)
+		go func() {
+			out, _ := e.Request(context.Background(), "wire payment", choices, 2*time.Second)
+			res <- out
+		}()
 
-	opts := <-n.options
-	tok := tokenFor(opts, hitl.Approved)
-	if err := e.Resolve(tok); err != nil {
-		t.Fatalf("first resolve: %v", err)
-	}
-	<-res
-	if err := e.Resolve(tok); err == nil {
-		t.Fatal("second resolve of a consumed token must be rejected")
-	}
+		opts := <-n.options
+		tok := tokenFor(opts, hitl.Approved)
+		if err := e.Resolve(tok); err != nil {
+			t.Fatalf("first resolve: %v", err)
+		}
+		<-res
+		if err := e.Resolve(tok); err == nil {
+			t.Fatal("second resolve of a consumed token must be rejected")
+		}
+	})
 }
 
 func TestEngine_ResolveRejectsGarbageToken(t *testing.T) {

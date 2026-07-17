@@ -82,7 +82,6 @@ type Engine struct {
 	key      []byte
 	notifier Notifier
 	route    func(ctx context.Context) Notifier
-	now      func() time.Time
 
 	mu      sync.Mutex
 	pending map[string]*pending
@@ -105,7 +104,7 @@ func WithRouter(route func(ctx context.Context) Notifier) EngineOption {
 // NewEngine returns an engine that signs tokens with key and notifies via n (the
 // default channel; WithRouter can override it per request).
 func NewEngine(key []byte, n Notifier, opts ...EngineOption) *Engine {
-	e := &Engine{key: key, notifier: n, now: time.Now, pending: make(map[string]*pending)}
+	e := &Engine{key: key, notifier: n, pending: make(map[string]*pending)}
 	for _, o := range opts {
 		o(e)
 	}
@@ -117,7 +116,7 @@ func NewEngine(key []byte, n Notifier, opts ...EngineOption) *Engine {
 // cancelled. Anything but an explicit approval returns Denied (fail closed).
 func (e *Engine) Request(ctx context.Context, intent string, choices []Choice, ttl time.Duration) (Outcome, error) {
 	id, nonce := randID(), randID()
-	expires := e.now().Add(ttl)
+	expires := time.Now().Add(ttl)
 
 	p := &pending{nonce: nonce, resolved: make(chan Outcome, 1)}
 	e.mu.Lock()
@@ -170,7 +169,7 @@ func (e *Engine) Request(ctx context.Context, intent string, choices []Choice, t
 // It verifies the token's signature and expiry, matches it to a live pending
 // request (by id and nonce), and consumes it single-use.
 func (e *Engine) Resolve(tokenStr string) error {
-	t, err := verifyToken(e.key, tokenStr, e.now().Unix())
+	t, err := verifyToken(e.key, tokenStr, time.Now().Unix())
 	if err != nil {
 		return err
 	}

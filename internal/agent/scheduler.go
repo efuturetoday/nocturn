@@ -22,9 +22,8 @@ import (
 //   - Autonomy: each firing stamps the agent's declared level (capability.WithAutonomy)
 //     so an Ask with no human present resolves per the dial (guarded/strict/full).
 type Scheduler struct {
-	run   func(ctx context.Context, def Agent) error // runs one firing (caller wires Run)
-	clock func() time.Time
-	log   func(string)
+	run func(ctx context.Context, def Agent) error // runs one firing (caller wires Run)
+	log func(string)
 
 	jobs []job
 
@@ -41,11 +40,6 @@ type job struct {
 // SchedulerOption configures a Scheduler.
 type SchedulerOption func(*Scheduler)
 
-// WithClock injects the time source (for deterministic tests). Default time.Now.
-func WithClock(clock func() time.Time) SchedulerOption {
-	return func(s *Scheduler) { s.clock = clock }
-}
-
 // WithLog sets a line logger for firings, skips and results. Default no-op.
 func WithLog(log func(string)) SchedulerOption {
 	return func(s *Scheduler) { s.log = log }
@@ -58,7 +52,7 @@ func WithLog(log func(string)) SchedulerOption {
 // fires wrong). run is how one firing executes (the caller wires Run + the
 // agent's own grant store + the scheduled task).
 func NewScheduler(defs []Agent, run func(ctx context.Context, def Agent) error, opts ...SchedulerOption) (*Scheduler, error) {
-	s := &Scheduler{run: run, clock: time.Now, log: func(string) {}, inFlight: map[string]bool{}}
+	s := &Scheduler{run: run, log: func(string) {}, inFlight: map[string]bool{}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -96,7 +90,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}
 	go func() {
 		for {
-			now := s.clock()
+			now := time.Now()
 			next := now.Truncate(time.Minute).Add(time.Minute)
 			timer := time.NewTimer(next.Sub(now))
 			select {

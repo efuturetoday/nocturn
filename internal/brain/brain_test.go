@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/activity"
@@ -131,49 +132,51 @@ func TestBrain_LongToolOutputBoundedForModel(t *testing.T) {
 // until all have started, so a sequential executor would deadlock here. Results
 // are still stitched into history in CALL ORDER, not completion order.
 func TestBrain_ParallelToolCallsRunConcurrently(t *testing.T) {
-	const n = 3
-	started := make(chan struct{}, n)
-	proceed := make(chan struct{})
-	mk := func(name, out string) tool.Tool {
-		return mkTool(name, func(context.Context, string) (string, error) {
-			started <- struct{}{} // announce start
-			<-proceed             // wait for the barrier to open
-			return out, nil
-		})
-	}
-	reg := tool.NewRegistry().AddMany([]tool.Tool{mk("a", "ra"), mk("b", "rb"), mk("c", "rc")}...)
-	model := &scriptedModel{steps: []brain.Step{
-		{ToolCalls: []brain.ToolCall{{ID: "1", Tool: "a"}, {ID: "2", Tool: "b"}, {ID: "3", Tool: "c"}}},
-		{Answer: "done"},
-	}}
-	b := brain.New(model)
-
-	ansCh := make(chan string, 1)
-	go func() { ans, _ := b.NewConversation(reg).Send(context.Background(), "go"); ansCh <- ans }()
-
-	// All three must start before any is allowed to finish — impossible if serial.
-	for i := 0; i < n; i++ {
-		select {
-		case <-started:
-		case <-time.After(2 * time.Second):
-			t.Fatal("tool calls did not run concurrently (a sequential executor deadlocks here)")
+	// Under synctest the barrier itself proves concurrency: if the executor were serial,
+	// the second tool could never send on `started` while the first is parked on
+	// `proceed`, so every goroutine would be durably blocked and synctest would panic
+	// with a deadlock — no 2s watchdog needed (go.dev/blog/testing-time).
+	synctest.Test(t, func(t *testing.T) {
+		const n = 3
+		started := make(chan struct{}, n)
+		proceed := make(chan struct{})
+		mk := func(name, out string) tool.Tool {
+			return mkTool(name, func(context.Context, string) (string, error) {
+				started <- struct{}{} // announce start
+				<-proceed             // wait for the barrier to open
+				return out, nil
+			})
 		}
-	}
-	close(proceed)
+		reg := tool.NewRegistry().AddMany([]tool.Tool{mk("a", "ra"), mk("b", "rb"), mk("c", "rc")}...)
+		model := &scriptedModel{steps: []brain.Step{
+			{ToolCalls: []brain.ToolCall{{ID: "1", Tool: "a"}, {ID: "2", Tool: "b"}, {ID: "3", Tool: "c"}}},
+			{Answer: "done"},
+		}}
+		b := brain.New(model)
 
-	if ans := <-ansCh; ans != "done" {
-		t.Fatalf("answer = %q, want done", ans)
-	}
-	// The model's second turn saw the results in call order a,b,c.
-	var got []string
-	for _, m := range model.convs[1] {
-		if m.Role == "tool" {
-			got = append(got, m.Content)
+		ansCh := make(chan string, 1)
+		go func() { ans, _ := b.NewConversation(reg).Send(context.Background(), "go"); ansCh <- ans }()
+
+		// All three must start before any is allowed to finish — impossible if serial.
+		for range n {
+			<-started
 		}
-	}
-	if len(got) != 3 || got[0] != "ra" || got[1] != "rb" || got[2] != "rc" {
-		t.Fatalf("tool results in history = %v, want [ra rb rc] in call order", got)
-	}
+		close(proceed)
+
+		if ans := <-ansCh; ans != "done" {
+			t.Fatalf("answer = %q, want done", ans)
+		}
+		// The model's second turn saw the results in call order a,b,c.
+		var got []string
+		for _, m := range model.convs[1] {
+			if m.Role == "tool" {
+				got = append(got, m.Content)
+			}
+		}
+		if len(got) != 3 || got[0] != "ra" || got[1] != "rb" || got[2] != "rc" {
+			t.Fatalf("tool results in history = %v, want [ra rb rc] in call order", got)
+		}
+	})
 }
 
 // Every invocation gets a unique id, and a nested call (a tool whose Invoke
@@ -216,31 +219,34 @@ func TestRegistry_NestedCallsCarryIDAndParent(t *testing.T) {
 }
 
 // A slow tool is cut off by ToolTimeout, and the timeout error is fed back so
-// the model can move on instead of hanging.
+// the model can move on instead of hanging. Under synctest the per-tool deadline fires
+// on the fake clock, so the cutoff is instant and deterministic (go.dev/blog/testing-time).
 func TestBrain_ToolTimeout(t *testing.T) {
-	reg := tool.NewRegistry().AddMany([]tool.Tool{
-		mkTool("slow", func(ctx context.Context, _ string) (string, error) {
-			<-ctx.Done()
-			return "", ctx.Err()
-		}),
-	}...)
+	synctest.Test(t, func(t *testing.T) {
+		reg := tool.NewRegistry().AddMany([]tool.Tool{
+			mkTool("slow", func(ctx context.Context, _ string) (string, error) {
+				<-ctx.Done()
+				return "", ctx.Err()
+			}),
+		}...)
 
-	model := &scriptedModel{steps: []brain.Step{
-		{ToolCalls: []brain.ToolCall{{Tool: "slow"}}},
-		{Answer: "moved on"},
-	}}
+		model := &scriptedModel{steps: []brain.Step{
+			{ToolCalls: []brain.ToolCall{{Tool: "slow"}}},
+			{Answer: "moved on"},
+		}}
 
-	b := brain.New(model, brain.WithToolTimeout(20*time.Millisecond))
-	ans, err := b.NewConversation(reg).Send(context.Background(), "call the slow tool")
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if ans != "moved on" {
-		t.Fatalf("answer = %q", ans)
-	}
-	if !convContains(model.convs[1], "deadline exceeded") {
-		t.Fatal("the timeout error was not fed back to the model")
-	}
+		b := brain.New(model, brain.WithToolTimeout(time.Second))
+		ans, err := b.NewConversation(reg).Send(context.Background(), "call the slow tool")
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if ans != "moved on" {
+			t.Fatalf("answer = %q", ans)
+		}
+		if !convContains(model.convs[1], "deadline exceeded") {
+			t.Fatal("the timeout error was not fed back to the model")
+		}
+	})
 }
 
 func TestBrain_MaxStepsExceeded(t *testing.T) {

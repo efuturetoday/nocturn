@@ -16,6 +16,12 @@ func (f notifierFunc) Notify(intent string, options []hitl.Option) error { retur
 // With a serialized notifier, two concurrent approval Requests never present
 // their prompts at the same time: the second Notify does not start until the
 // first has been released.
+// NOTE: deliberately NOT migrated to testing/synctest. Serialize uses a sync.Mutex
+// (serialize.go), and mutex contention is NOT durably blocking in a synctest bubble
+// (go.dev/blog/testing-time — "Mutex acquisition is not durably blocking"). The second
+// request parks on that mutex, so synctest.Wait() could never observe it settle and the
+// test would hang. This is a real-time concurrency test; the 50ms window is a pragmatic
+// "give the second goroutine time to reach the mutex" guard, which is the right tool here.
 func TestSerialize_OneApprovalAtATime(t *testing.T) {
 	entered := make(chan string, 2)
 	release := make(chan struct{})

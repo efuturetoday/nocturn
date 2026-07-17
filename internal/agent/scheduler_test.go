@@ -5,23 +5,19 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
 )
 
-// waitForLog drains the log channel until a line contains substr, failing on timeout
-// rather than hanging.
+// waitForLog drains the log channel until a line contains substr. Callers run inside a
+// synctest bubble, so a log that never arrives surfaces as an instant deadlock panic
+// (with a stack) rather than a real-time timeout (go.dev/blog/testing-time).
 func waitForLog(t *testing.T, logs <-chan string, substr string) {
 	t.Helper()
-	for {
-		select {
-		case m := <-logs:
-			if strings.Contains(m, substr) {
-				return
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatalf("timed out waiting for a log containing %q", substr)
+	for m := range logs {
+		if strings.Contains(m, substr) {
+			return
 		}
 	}
 }
@@ -60,43 +56,45 @@ func TestScheduler_TickFiresMatchWithAutonomy(t *testing.T) {
 // Overlap prevention: a firing while the agent is still running is skipped, not
 // queued or parallelized; once it completes, the next firing runs again.
 func TestScheduler_SkipsOverlap(t *testing.T) {
-	def := Agent{Name: "x", When: `cron("* * * * *")`, Autonomy: capability.AutonomyGuarded, Tools: []string{"file"}}
-	started := make(chan struct{}, 4)
-	release := make(chan struct{})
-	var runs int32
-	run := func(ctx context.Context, _ Agent) error {
-		atomic.AddInt32(&runs, 1)
-		started <- struct{}{}
-		<-release
-		return nil
-	}
-	logs := make(chan string, 32)
-	s, err := NewScheduler([]Agent{def}, run, WithLog(func(m string) { logs <- m }))
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := at(2026, 7, 15, 7, 0) // "* * * * *" matches every minute
+	synctest.Test(t, func(t *testing.T) {
+		def := Agent{Name: "x", When: `cron("* * * * *")`, Autonomy: capability.AutonomyGuarded, Tools: []string{"file"}}
+		started := make(chan struct{}, 4)
+		release := make(chan struct{})
+		var runs int32
+		run := func(ctx context.Context, _ Agent) error {
+			atomic.AddInt32(&runs, 1)
+			started <- struct{}{}
+			<-release
+			return nil
+		}
+		logs := make(chan string, 32)
+		s, err := NewScheduler([]Agent{def}, run, WithLog(func(m string) { logs <- m }))
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := at(2026, 7, 15, 7, 0) // "* * * * *" matches every minute
 
-	s.tick(context.Background(), now)
-	<-started // run #1 is in flight, blocked on release
+		s.tick(context.Background(), now)
+		<-started // run #1 is in flight, blocked on release
 
-	// A second firing while #1 runs → skipped, no new run.
-	s.tick(context.Background(), now)
-	waitForLog(t, logs, "skipping")
-	if n := atomic.LoadInt32(&runs); n != 1 {
-		t.Fatalf("overlap: run invoked %d times, want 1", n)
-	}
+		// A second firing while #1 runs → skipped, no new run.
+		s.tick(context.Background(), now)
+		waitForLog(t, logs, "skipping")
+		if n := atomic.LoadInt32(&runs); n != 1 {
+			t.Fatalf("overlap: run invoked %d times, want 1", n)
+		}
 
-	// Release #1 → it completes and the in-flight mark clears (before the done log).
-	close(release)
-	waitForLog(t, logs, "x done")
+		// Release #1 → it completes and the in-flight mark clears (before the done log).
+		close(release)
+		waitForLog(t, logs, "x done")
 
-	// Now the agent is free: the next firing runs again.
-	s.tick(context.Background(), now)
-	<-started
-	if n := atomic.LoadInt32(&runs); n != 2 {
-		t.Fatalf("after completion run invoked %d times, want 2", n)
-	}
+		// Now the agent is free: the next firing runs again.
+		s.tick(context.Background(), now)
+		<-started
+		if n := atomic.LoadInt32(&runs); n != 2 {
+			t.Fatalf("after completion run invoked %d times, want 2", n)
+		}
+	})
 }
 
 func TestNewScheduler_BadCronFailsClosed(t *testing.T) {
