@@ -78,6 +78,14 @@ export interface WorkspaceState {
   accounts: string[];
 }
 
+/** One chat's summary in a workspace's chat list. A workspace holds several named chats. */
+export interface ChatMeta {
+  id: string;
+  name: string;
+  updated: string; // RFC3339
+  turns: number; // user messages, for an "N messages" hint
+}
+
 // ── server → client events ───────────────────────────────────────────────────
 
 /** One streamed chunk of the assistant's answer. */
@@ -166,6 +174,13 @@ export interface WorkspaceEvent extends WorkspaceState {
   type: "workspace";
 }
 
+/** Reply to `listChats` / `newChat` / `renameChat` / `deleteChat` — a workspace's chat list. */
+export interface ChatsEvent {
+  type: "chats";
+  ws: string;
+  items: ChatMeta[];
+}
+
 /** A control error (e.g. unknown workspace). */
 export interface ErrorEvent {
   type: "error";
@@ -186,6 +201,7 @@ export type ServerEvent =
   | SnapshotEvent
   | WorkspacesEvent
   | WorkspaceEvent
+  | ChatsEvent
   | ErrorEvent;
 
 // ── client → server commands ─────────────────────────────────────────────────
@@ -236,20 +252,49 @@ export interface ListWorkspacesCommand {
 /** Get one workspace's detail (→ WorkspaceEvent). */
 export interface GetWorkspaceCommand {
   cmd: "getWorkspace";
-  name: string;
-}
-
-/** Open a workspace's chat: subscribes to its stream (→ SnapshotEvent then events). */
-export interface OpenWorkspaceCommand {
-  cmd: "openWorkspace";
-  name: string;
+  ws: string;
 }
 
 /** Set a workspace's persona (→ WorkspaceEvent echo of the new state). */
 export interface SetPersonaCommand {
   cmd: "setPersona";
-  name: string;
+  ws: string;
   text: string;
+}
+
+/** List a workspace's chats (→ ChatsEvent). */
+export interface ListChatsCommand {
+  cmd: "listChats";
+  ws: string;
+}
+
+/** Create a new empty chat in a workspace (→ ChatsEvent with the updated list). */
+export interface NewChatCommand {
+  cmd: "newChat";
+  ws: string;
+  name: string;
+}
+
+/** Open a chat: subscribes to its stream (→ SnapshotEvent then events). */
+export interface OpenChatCommand {
+  cmd: "openChat";
+  ws: string;
+  id: string;
+}
+
+/** Rename a chat (→ ChatsEvent with the updated list). */
+export interface RenameChatCommand {
+  cmd: "renameChat";
+  ws: string;
+  id: string;
+  name: string;
+}
+
+/** Delete a chat and stop its runner (→ ChatsEvent with the updated list). */
+export interface DeleteChatCommand {
+  cmd: "deleteChat";
+  ws: string;
+  id: string;
 }
 
 /** The closed union of everything the client sends. */
@@ -262,5 +307,9 @@ export type ClientCommand =
   | ResolveCommand
   | ListWorkspacesCommand
   | GetWorkspaceCommand
-  | OpenWorkspaceCommand
-  | SetPersonaCommand;
+  | SetPersonaCommand
+  | ListChatsCommand
+  | NewChatCommand
+  | OpenChatCommand
+  | RenameChatCommand
+  | DeleteChatCommand;

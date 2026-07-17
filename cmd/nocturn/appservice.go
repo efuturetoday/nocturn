@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/efuturetoday/nocturn/internal/appserver"
+	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/persona"
 )
 
@@ -52,15 +54,6 @@ func (a *appWorkspaces) Get(name string) (appserver.WorkspaceState, bool) {
 	return st, true
 }
 
-// Open returns the workspace's live turn loop so the client can stream its chat.
-func (a *appWorkspaces) Open(name string) (appserver.Runner, bool) {
-	b, ok := a.bounds[name]
-	if !ok {
-		return nil, false
-	}
-	return b.runner, true
-}
-
 // SetPersona persists a new persona via the workspace's persona service.
 func (a *appWorkspaces) SetPersona(name, text string) error {
 	b, ok := a.bounds[name]
@@ -68,4 +61,70 @@ func (a *appWorkspaces) SetPersona(name, text string) error {
 		return fmt.Errorf("unknown workspace %q", name)
 	}
 	return b.ws.SetPersona(text)
+}
+
+// --- chats: each workspace's chat.Manager owns the live runners + persistence ---
+
+// Chats lists a workspace's chats (most recent first), read from its chat manager.
+func (a *appWorkspaces) Chats(ws string) ([]appserver.ChatMeta, bool) {
+	b, ok := a.bounds[ws]
+	if !ok {
+		return nil, false
+	}
+	metas := b.chats.List()
+	out := make([]appserver.ChatMeta, 0, len(metas))
+	for _, m := range metas {
+		out = append(out, toChatMeta(m))
+	}
+	return out, true
+}
+
+// NewChat creates an empty chat in the workspace; its runner spins on first OpenChat.
+func (a *appWorkspaces) NewChat(ws, name string) (appserver.ChatMeta, bool) {
+	b, ok := a.bounds[ws]
+	if !ok {
+		return appserver.ChatMeta{}, false
+	}
+	m, err := b.chats.New(name)
+	if err != nil {
+		return appserver.ChatMeta{}, false
+	}
+	return toChatMeta(m), true
+}
+
+// OpenChat returns the chat's live turn loop (lazily spun by the manager).
+func (a *appWorkspaces) OpenChat(ws, id string) (appserver.Runner, bool) {
+	b, ok := a.bounds[ws]
+	if !ok {
+		return nil, false
+	}
+	return b.chats.Open(id)
+}
+
+// RenameChat updates a chat's name; false for an unknown workspace or a failed write.
+func (a *appWorkspaces) RenameChat(ws, id, name string) bool {
+	b, ok := a.bounds[ws]
+	if !ok {
+		return false
+	}
+	return b.chats.Rename(id, name) == nil
+}
+
+// DeleteChat stops the chat's live runner and removes it; false for an unknown workspace.
+func (a *appWorkspaces) DeleteChat(ws, id string) bool {
+	b, ok := a.bounds[ws]
+	if !ok {
+		return false
+	}
+	return b.chats.Delete(id) == nil
+}
+
+// toChatMeta maps a chat.Meta (domain) to the wire ChatMeta (RFC3339 timestamp).
+func toChatMeta(m chat.Meta) appserver.ChatMeta {
+	return appserver.ChatMeta{
+		ID:      m.ID,
+		Name:    m.Name,
+		Updated: m.Updated.Format(time.RFC3339),
+		Turns:   m.Turns,
+	}
 }

@@ -216,6 +216,12 @@ func (w *Workspace) Tools() *tool.Registry { return w.tools }
 // Guard is the workspace's authorization pipeline (for MCP wiring).
 func (w *Workspace) Guard() *gateway.Guard { return w.guard }
 
+// Brain is the shared model loop (for the chat manager to open sessions).
+func (w *Workspace) Brain() *brain.Brain { return w.loop }
+
+// Grants is the workspace's durable "always" grant store (session backing for its chats).
+func (w *Workspace) Grants() capability.GrantStore { return w.grants }
+
 // Vault is the workspace's credentials vault (for plugin/MCP/OAuth wiring).
 func (w *Workspace) Vault() *secret.Vault { return w.secrets }
 

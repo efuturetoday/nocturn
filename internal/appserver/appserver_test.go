@@ -69,18 +69,34 @@ func (w *fakeWorkspaces) Get(name string) (appserver.WorkspaceState, bool) {
 		Agents:  []appserver.AgentInfo{{Name: "researcher", Description: "digs"}},
 	}, true
 }
-func (w *fakeWorkspaces) Open(name string) (appserver.Runner, bool) {
-	if name != "work" {
-		return nil, false
-	}
-	return w.runner, true
-}
 func (w *fakeWorkspaces) SetPersona(name, text string) error {
 	w.mu.Lock()
 	w.persona = text
 	w.mu.Unlock()
 	return nil
 }
+
+// The fake models one chat "c1" whose live runner is the shared fakeRunner.
+func (w *fakeWorkspaces) Chats(ws string) ([]appserver.ChatMeta, bool) {
+	if ws != "work" {
+		return nil, false
+	}
+	return []appserver.ChatMeta{{ID: "c1", Name: "first", Updated: "2026-07-18T00:00:00Z", Turns: 1}}, true
+}
+func (w *fakeWorkspaces) NewChat(ws, name string) (appserver.ChatMeta, bool) {
+	if ws != "work" {
+		return appserver.ChatMeta{}, false
+	}
+	return appserver.ChatMeta{ID: "c2", Name: name}, true
+}
+func (w *fakeWorkspaces) OpenChat(ws, id string) (appserver.Runner, bool) {
+	if ws != "work" || id != "c1" {
+		return nil, false
+	}
+	return w.runner, true
+}
+func (w *fakeWorkspaces) RenameChat(ws, id, name string) bool { return ws == "work" }
+func (w *fakeWorkspaces) DeleteChat(ws, id string) bool       { return ws == "work" }
 
 // fakeConn scripts client→server messages (in) and captures server→client messages (out).
 type fakeConn struct {
@@ -165,30 +181,30 @@ func TestServer_ControlPlaneAndChat(t *testing.T) {
 		t.Fatalf("workspaces = %v, want one item", ws["items"])
 	}
 
-	// Open a workspace → its snapshot arrives.
-	fc.in <- []byte(`{"cmd":"openWorkspace","name":"work"}`)
+	// Open a chat → its snapshot arrives.
+	fc.in <- []byte(`{"cmd":"openChat","ws":"work","id":"c1"}`)
 	if snap := recvUntil(t, fc.out, "snapshot"); snap["running"] != true {
 		t.Fatalf("snapshot = %v, want running:true", snap)
 	}
 
-	// The open workspace's events stream.
+	// The open chat's events stream.
 	fr.events <- session.TokenEvent{Text: "hi"}
 	if tok := recvUntil(t, fc.out, "token"); tok["text"] != "hi" {
 		t.Fatalf("event = %v, want token(hi)", tok)
 	}
 
-	// A chat command routes to the OPEN workspace's runner.
+	// A chat command routes to the OPEN chat's runner.
 	fc.in <- []byte(`{"cmd":"submit","input":"hello"}`)
 	eventually(t, func() bool { return fr.gotSubmit("hello") }, "submit did not reach the open runner")
 
 	// Control: get the workspace detail (persona + agents).
-	fc.in <- []byte(`{"cmd":"getWorkspace","name":"work"}`)
+	fc.in <- []byte(`{"cmd":"getWorkspace","ws":"work"}`)
 	if got := recvUntil(t, fc.out, "workspace"); got["persona"] != "You are helpful." {
 		t.Fatalf("workspace = %v, want persona 'You are helpful.'", got)
 	}
 
 	// Control: set the persona → the service is written and the new state is echoed.
-	fc.in <- []byte(`{"cmd":"setPersona","name":"work","text":"New persona."}`)
+	fc.in <- []byte(`{"cmd":"setPersona","ws":"work","text":"New persona."}`)
 	if echoed := recvUntil(t, fc.out, "workspace"); echoed["persona"] != "New persona." {
 		t.Fatalf("echoed workspace = %v, want the new persona", echoed)
 	}
@@ -204,7 +220,7 @@ func TestServer_UnknownWorkspaceErrors(t *testing.T) {
 	fc := newConn()
 	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
 
-	fc.in <- []byte(`{"cmd":"openWorkspace","name":"nope"}`)
+	fc.in <- []byte(`{"cmd":"getWorkspace","ws":"nope"}`)
 	if e := recvUntil(t, fc.out, "error"); !strings.Contains(e["text"].(string), "unknown workspace") {
 		t.Fatalf("error = %v, want 'unknown workspace'", e)
 	}

@@ -129,13 +129,14 @@ func EncodeSnapshot(s session.Snapshot) ([]byte, error) {
 
 type wireCommand struct {
 	Cmd     string `json:"cmd"`
-	Name    string `json:"name,omitempty"`    // control: getWorkspace, openWorkspace, setPersona
+	WS      string `json:"ws,omitempty"`      // workspace: getWorkspace, setPersona, all chat cmds
+	ID      string `json:"id,omitempty"`      // chat id (openChat/renameChat/deleteChat) OR approval id (resolve)
+	Name    string `json:"name,omitempty"`    // chat name (newChat, renameChat)
 	Text    string `json:"text,omitempty"`    // setPersona
 	Input   string `json:"input,omitempty"`   // submit, submitSkill
 	Display string `json:"display,omitempty"` // submitSkill, submitAgent
 	Agent   string `json:"agent,omitempty"`   // submitAgent
 	Task    string `json:"task,omitempty"`    // submitAgent
-	ID      string `json:"id,omitempty"`      // resolve
 	Choice  int    `json:"choice,omitempty"`  // resolve
 }
 
@@ -187,6 +188,15 @@ func encodeWorkspace(st WorkspaceState) []byte {
 		Type string `json:"type"`
 		WorkspaceState
 	}{"workspace", st})
+	return b
+}
+
+func encodeChats(ws string, items []ChatMeta) []byte {
+	b, _ := json.Marshal(struct {
+		Type  string     `json:"type"`
+		WS    string     `json:"ws"`
+		Items []ChatMeta `json:"items"`
+	}{"chats", ws, items})
 	return b
 }
 

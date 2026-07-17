@@ -12,6 +12,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/approval"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
+	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
@@ -41,8 +42,9 @@ type shared struct {
 // injector hold only its own secrets/grants, so N run in one process without crossing.
 type bound struct {
 	ws        *workspace.Workspace
-	session   *session.Session // the interactive session; Close() at shutdown, MarkSkill for /name
+	session   *session.Session // the TUI's single interactive session; Close() at shutdown, MarkSkill for /name
 	runner    *session.Runner  // the turn loop the TUI drives (Submit in, Subscribe out)
+	chats     *chat.Manager    // the app's multi-chat manager (N persistent named chats); TUI doesn't use it
 	waker     *wakecap.Waker
 	scheduler *agent.Scheduler
 }
@@ -110,17 +112,33 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		return nil, err
 	}
 
-	sess := w.OpenSession()
-
-	// The Runner is the single serialized turn loop for THIS workspace's session: the TUI
-	// Submits inputs and Subscribes to its events; a self-wake and a scheduled agent run
-	// feed the same loop. Agent runs (/name, and a wake that targets one) route through the
-	// injected agent runner so they stream + gate exactly like a chat turn.
-	runner := session.NewRunner(sess, session.WithAgentRunner(func(runCtx context.Context, name, task string) (string, error) {
+	// A child-agent run routes through this, shared by the TUI runner and the app's chats.
+	agentRun := func(runCtx context.Context, name, task string) (string, error) {
 		res, err := w.RunAgent(runCtx, name, task)
 		return res.Answer, err
-	}))
+	}
+
+	sess := w.OpenSession()
+
+	// The Runner is the single serialized turn loop for THIS workspace's TUI session: the
+	// TUI Submits inputs and Subscribes to its events; a self-wake and a scheduled agent run
+	// feed the same loop.
+	runner := session.NewRunner(sess, session.WithAgentRunner(agentRun))
 	runner.Start(ctx)
+
+	// The chat manager backs the companion app's several named, persisted chats — separate
+	// live sessions over the SAME workspace parts (guard/tools/brain/grants). The TUI stays
+	// on its single session above; the app browses/opens chats here.
+	chatStore := chat.LoadStore(filepath.Join(wsDir, "chats"))
+	chatMgr := chat.NewManager(ctx, chat.Deps{
+		Brain:    w.Brain(),
+		Tools:    w.Tools(),
+		Guard:    w.Guard(),
+		Grants:   w.Grants(),
+		Persona:  w.Persona,
+		Store:    chatStore,
+		AgentRun: agentRun,
+	})
 
 	// wake: the running agent schedules its OWN resume after a delay (self-paced loops /
 	// polling); ungated, bounded (delay clamp + pending cap). The resume Submits to THIS
@@ -141,5 +159,5 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		return nil, err
 	}
 
-	return &bound{ws: w, session: sess, runner: runner, waker: waker, scheduler: sched}, nil
+	return &bound{ws: w, session: sess, runner: runner, chats: chatMgr, waker: waker, scheduler: sched}, nil
 }

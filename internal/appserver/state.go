@@ -10,10 +10,28 @@ type Workspaces interface {
 	List() []WorkspaceSummary
 	// Get is the detail view: one workspace's config (no secret values, only presence).
 	Get(name string) (WorkspaceState, bool)
-	// Open returns the workspace's live turn loop, so the client can stream its chat.
-	Open(name string) (Runner, bool)
 	// SetPersona persists a new persona for the workspace (the service owns the write).
 	SetPersona(name, text string) error
+
+	// --- chats: a workspace holds several named chats, each with saved history ---
+
+	// Chats lists a workspace's chats (most recent first). ok is false for an unknown ws.
+	Chats(ws string) ([]ChatMeta, bool)
+	// NewChat creates an empty chat in the workspace and returns its metadata.
+	NewChat(ws, name string) (ChatMeta, bool)
+	// OpenChat returns a chat's live turn loop, so the client can stream it (lazily spun).
+	OpenChat(ws, id string) (Runner, bool)
+	// RenameChat / DeleteChat mutate a chat; false for an unknown ws.
+	RenameChat(ws, id, name string) bool
+	DeleteChat(ws, id string) bool
+}
+
+// ChatMeta is one chat's summary for the app's chat list.
+type ChatMeta struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Updated string `json:"updated"` // RFC3339
+	Turns   int    `json:"turns"`
 }
 
 // WorkspaceSummary is the list-view state — enough to render the workspace picker.

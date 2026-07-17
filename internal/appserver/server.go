@@ -90,23 +90,37 @@ func (h *clientConn) dispatch(ctx context.Context, msg []byte) {
 	case "listWorkspaces":
 		h.send(encodeWorkspaces(h.workspaces.List()))
 	case "getWorkspace":
-		if st, ok := h.workspaces.Get(c.Name); ok {
+		if st, ok := h.workspaces.Get(c.WS); ok {
 			h.send(encodeWorkspace(st))
 		} else {
-			h.send(encodeError("unknown workspace: " + c.Name))
+			h.send(encodeError("unknown workspace: " + c.WS))
 		}
-	case "openWorkspace":
-		h.openWorkspace(ctx, c.Name)
 	case "setPersona":
-		if err := h.workspaces.SetPersona(c.Name, c.Text); err != nil {
+		if err := h.workspaces.SetPersona(c.WS, c.Text); err != nil {
 			h.send(encodeError("set persona: " + err.Error()))
 			return
 		}
-		if st, ok := h.workspaces.Get(c.Name); ok {
+		if st, ok := h.workspaces.Get(c.WS); ok {
 			h.send(encodeWorkspace(st)) // echo the new state back
 		}
+	case "listChats":
+		h.sendChats(c.WS)
+	case "newChat":
+		if _, ok := h.workspaces.NewChat(c.WS, c.Name); !ok {
+			h.send(encodeError("unknown workspace: " + c.WS))
+			return
+		}
+		h.sendChats(c.WS)
+	case "renameChat":
+		h.workspaces.RenameChat(c.WS, c.ID, c.Name)
+		h.sendChats(c.WS)
+	case "deleteChat":
+		h.workspaces.DeleteChat(c.WS, c.ID)
+		h.sendChats(c.WS)
+	case "openChat":
+		h.openChat(ctx, c.WS, c.ID)
 	default:
-		// A chat command — route to the open workspace's Runner.
+		// A turn command (submit/resolve/…) — route to the OPEN chat's Runner.
 		h.mu.Lock()
 		r := h.runner
 		h.mu.Unlock()
@@ -116,17 +130,27 @@ func (h *clientConn) dispatch(ctx context.Context, msg []byte) {
 	}
 }
 
-// openWorkspace switches the active chat: it stops the current pump, resolves the named
-// workspace's Runner, and starts a fresh pump that sends a snapshot then streams events.
-func (h *clientConn) openWorkspace(ctx context.Context, name string) {
-	r, ok := h.workspaces.Open(name)
+// sendChats replies with a workspace's chat list (or an error for an unknown workspace).
+func (h *clientConn) sendChats(ws string) {
+	if chats, ok := h.workspaces.Chats(ws); ok {
+		h.send(encodeChats(ws, chats))
+	} else {
+		h.send(encodeError("unknown workspace: " + ws))
+	}
+}
+
+// openChat makes a chat the active stream: it stops the current pump, resolves the chat's
+// live Runner (lazily spun by the manager), and starts a fresh pump that sends a snapshot
+// then streams its events. Switching chats is another openChat.
+func (h *clientConn) openChat(ctx context.Context, ws, id string) {
+	r, ok := h.workspaces.OpenChat(ws, id)
 	if !ok {
-		h.send(encodeError("unknown workspace: " + name))
+		h.send(encodeError("cannot open chat"))
 		return
 	}
 	h.mu.Lock()
 	if h.chatCancel != nil {
-		h.chatCancel() // stop the previous workspace's pump
+		h.chatCancel() // stop the previous chat's pump
 	}
 	cctx, cancel := context.WithCancel(ctx)
 	h.runner, h.chatCancel = r, cancel
