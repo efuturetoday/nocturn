@@ -26,12 +26,12 @@ func TestRegistry_Select_NestedCall_NoIDCollision(t *testing.T) {
 	}
 
 	var shared *tool.Registry
-	shared = tool.NewRegistry([]tool.Tool{
+	shared = tool.NewRegistry().AddMany([]tool.Tool{
 		{Spec: tool.Spec{Name: "inner"}, Invoke: func(context.Context, string) (string, error) { return "ok", nil }},
 		{Spec: tool.Spec{Name: "outer"}, Invoke: func(ctx context.Context, _ string) (string, error) {
-			return shared.Invoke(ctx, "inner", "{}") // the "plugin" re-enters the shared registry
+			return shared.Invoke(ctx, "inner", "{}")
 		}},
-	})
+	}...)
 
 	// The model calls "outer" through a FILTERED view; "outer" nests "inner". The
 	// sink rides ctx, so the nested call inherits it automatically.

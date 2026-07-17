@@ -65,8 +65,8 @@ func TestSession_ThreadsContext_ResetRotatesEpoch(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "two"},
 	}}
 
-	b := &brain.Brain{Model: model}
-	s := session.New(b, tool.NewRegistry(tools), &gateway.Guard{}, nil)
+	b := brain.New(model)
+	s := session.New(b, tool.NewRegistry().AddMany(tools...), &gateway.Guard{}, nil)
 
 	if _, err := s.Ask(context.Background(), "first"); err != nil {
 		t.Fatalf("first ask: %v", err)
@@ -145,8 +145,8 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "net.fetch"}}}, {Answer: "two"},
 	}}
 
-	b := &brain.Brain{Model: model}
-	s := session.New(b, tool.NewRegistry(tools), guard, nil)
+	b := brain.New(model)
+	s := session.New(b, tool.NewRegistry().AddMany(tools...), guard, nil)
 
 	if _, err := s.Ask(context.Background(), "fetch it once"); err != nil {
 		t.Fatalf("first ask: %v", err)
@@ -195,7 +195,7 @@ func TestSession_SkillActiveSet_ResetClears(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "2"},
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "3"},
 	}}
-	s := session.New(&brain.Brain{Model: model}, tool.NewRegistry(tools),
+	s := session.New(brain.New(model), tool.NewRegistry().AddMany(tools...),
 		&gateway.Guard{}, nil)
 
 	s.Ask(context.Background(), "a") // marks x

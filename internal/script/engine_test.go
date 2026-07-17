@@ -17,7 +17,7 @@ import (
 // module instance with a fresh QuickJS heap. Run 1 sets a global; run 2 must not
 // see it.
 func TestEngine_Isolation_NoStateAcrossRuns(t *testing.T) {
-	r := script.New(tool.NewRegistry(nil))
+	r := script.New(tool.NewRegistry())
 	ctx := context.Background()
 
 	if _, err := r.Run(ctx, "globalThis.leak = 42;"); err != nil {
@@ -36,7 +36,7 @@ func TestEngine_Isolation_NoStateAcrossRuns(t *testing.T) {
 // no shared heap, no crash, race-clean. Each run sets and prints its own value;
 // every run must read back exactly its own. Run under -race.
 func TestEngine_Isolation_Concurrent(t *testing.T) {
-	r := script.New(tool.NewRegistry(nil))
+	r := script.New(tool.NewRegistry())
 	const n = 16
 	outs := make([]string, n)
 	errs := make([]error, n)

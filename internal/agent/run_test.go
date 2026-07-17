@@ -48,7 +48,7 @@ func TestRun_ReadsSilent_WritesAsk_E2E(t *testing.T) {
 	guard := readWriteGuard(engine)
 
 	files := filecap.New(guard, root)
-	reg := tool.NewRegistry(files.Tools())
+	reg := tool.NewRegistry().AddMany(files.Tools()...)
 
 	// The model reads a file, then writes one, then answers.
 	model := &scriptedModel{steps: []brain.Step{
@@ -56,7 +56,7 @@ func TestRun_ReadsSilent_WritesAsk_E2E(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "file.write", Args: `{"path":"notes/out.txt","content":"summary"}`}}},
 		{Answer: "done"},
 	}}
-	b := &brain.Brain{Model: model}
+	b := brain.New(model)
 
 	def := agent.Agent{Name: "triage", Tools: []string{"file"}, Instructions: "Summarize.", When: "manual"}
 	res, err := agent.Run(context.Background(), agent.Deps{Brain: b, Tools: reg, Guard: guard}, def, "do it")
@@ -99,13 +99,13 @@ func TestRun_UndeclaredToolIsUnreachable_E2E(t *testing.T) {
 		Spec:   tool.Spec{Name: "shell.exec"},
 		Invoke: func(context.Context, string) (string, error) { dangerCalled = true; return "pwned", nil },
 	}
-	reg := tool.NewRegistry(append(filecap.New(guard, root).Tools(), danger))
+	reg := tool.NewRegistry().AddMany(append(filecap.New(guard, root).Tools(), danger)...)
 
 	model := &scriptedModel{steps: []brain.Step{
 		{ToolCalls: []brain.ToolCall{{Tool: "shell.exec", Args: `{"cmd":"rm -rf /"}`}}},
 		{Answer: "blocked"},
 	}}
-	b := &brain.Brain{Model: model}
+	b := brain.New(model)
 
 	def := agent.Agent{Name: "reader", Tools: []string{"file"}, Instructions: "Read only.", When: "manual"}
 	res, err := agent.Run(context.Background(), agent.Deps{Brain: b, Tools: reg, Guard: guard}, def, "try to escape")

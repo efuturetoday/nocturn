@@ -65,14 +65,10 @@ func ToolName(ctx context.Context) string {
 	return n
 }
 
-// NewRegistry builds a Registry over the given tools. A nil slice yields an empty
-// registry (every call reports "unknown tool"), which is convenient for tests.
-func NewRegistry(tools []Tool) *Registry {
-	reg := make(map[string]Tool, len(tools))
-	for _, t := range tools {
-		reg[t.Name] = t
-	}
-	return &Registry{tools: reg, nextID: new(atomic.Uint64)}
+// NewRegistry builds an empty Registry. Tools are named ONE way — Add / AddMany — so
+// there is no tools parameter and no []Tool slice wrapper at construction.
+func NewRegistry() *Registry {
+	return &Registry{tools: map[string]Tool{}, nextID: new(atomic.Uint64)}
 }
 
 // Select returns a new Registry holding only the tools whose name satisfies
@@ -92,21 +88,24 @@ func (r *Registry) Select(keep func(name string) bool) *Registry {
 	return &Registry{tools: sub, nextID: r.nextID}
 }
 
-// Add registers a tool after construction — code.run, or a plugin's tools.
-func (r *Registry) Add(t Tool) {
+// Add registers a tool after construction — code.run, or a plugin's tools. It returns
+// the registry so calls chain: tool.NewRegistry().Add(a).AddMany(group...).
+func (r *Registry) Add(t Tool) *Registry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools[t.Name] = t
+	return r
 }
 
 // AddMany registers a group of tools at once — a capability group's Tools(). One lock
-// for the whole group.
-func (r *Registry) AddMany(ts ...Tool) {
+// for the whole group. Returns the registry so calls chain.
+func (r *Registry) AddMany(ts ...Tool) *Registry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, t := range ts {
 		r.tools[t.Name] = t
 	}
+	return r
 }
 
 // Remove unregisters a tool (plugin uninstall). A missing name is a no-op.

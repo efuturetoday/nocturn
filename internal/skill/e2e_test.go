@@ -19,8 +19,8 @@ import (
 // the model as context instead of to code.run.)
 func TestSkill_ReadResourceThenCodeRun_E2E(t *testing.T) {
 	ix := skill.Discover(scopes())
-	runner := script.New(tool.NewRegistry(nil)) // code.run over an empty effect registry
-	reg := tool.NewRegistry([]tool.Tool{ix.ReadTool(), runner.Tool()})
+	runner := script.New(tool.NewRegistry()) // code.run over an empty effect registry
+	reg := tool.NewRegistry().AddMany([]tool.Tool{ix.ReadTool(), runner.Tool()}...)
 
 	act := skill.NewActive()
 	act.Mark("scripted") // the skill is loaded, so its files are readable

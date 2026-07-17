@@ -42,7 +42,7 @@ var InterpreterEngine = sync.OnceValues(func() (*sandbox.Engine, error) {
 // engine is compiled lazily on the first Run, not here.
 func New(reg *tool.Registry) *Runner {
 	if reg == nil {
-		reg = tool.NewRegistry(nil)
+		reg = tool.NewRegistry()
 	}
 	return &Runner{Registry: reg}
 }

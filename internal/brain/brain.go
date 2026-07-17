@@ -75,24 +75,25 @@ type Model interface {
 // vary a toolset or a sink. The tools it is handed vary per run (an agent gets a
 // filtered Registry); the Brain never owns them.
 type Brain struct {
-	Model       Model
-	MaxSteps    int
-	ToolTimeout time.Duration // per-tool-call deadline; 0 = no limit
+	model       Model
+	maxSteps    int
+	toolTimeout time.Duration // per-tool-call deadline; 0 = no limit
 }
 
 // Option configures a Brain built with New.
 type Option func(*Brain)
 
 // WithMaxSteps caps how many loop iterations a run may take before ErrMaxSteps.
-func WithMaxSteps(n int) Option { return func(b *Brain) { b.MaxSteps = n } }
+func WithMaxSteps(n int) Option { return func(b *Brain) { b.maxSteps = n } }
 
 // WithToolTimeout sets the per-tool-call deadline (0 = no limit).
-func WithToolTimeout(d time.Duration) Option { return func(b *Brain) { b.ToolTimeout = d } }
+func WithToolTimeout(d time.Duration) Option { return func(b *Brain) { b.toolTimeout = d } }
 
-// New builds a Brain over model with the given options — the idiomatic constructor
-// (the struct stays usable directly in tests). model is the LLM port.
+// New builds a Brain over model (the LLM port) with the given options. It is the ONLY
+// way to construct a Brain — the fields are private, so there is no second, literal
+// path to keep in sync.
 func New(model Model, opts ...Option) *Brain {
-	b := &Brain{Model: model}
+	b := &Brain{model: model}
 	for _, o := range opts {
 		o(b)
 	}
@@ -119,13 +120,13 @@ func (b *Brain) Run(ctx context.Context, request string, tools *tool.Registry) (
 // and returning the answer plus the extended conversation. tools is the toolset this
 // run may use — passed in, not held, so the Brain stays stateless and shared.
 func (b *Brain) run(ctx context.Context, conv []Message, tools *tool.Registry) (string, []Message, error) {
-	steps := b.MaxSteps
+	steps := b.maxSteps
 	if steps <= 0 {
 		steps = defaultMaxSteps
 	}
 
 	for i := 0; i < steps; i++ {
-		step, err := b.Model.Next(ctx, conv, tools.Specs())
+		step, err := b.model.Next(ctx, conv, tools.Specs())
 		if err != nil {
 			return "", conv, err
 		}
@@ -189,11 +190,11 @@ func (c *Conversation) Send(ctx context.Context, input string) (string, error) {
 // an "error: ..." string on failure (an unknown tool or a validation/execution error
 // is reported, not fatal, so the Model can correct itself).
 func (b *Brain) invoke(ctx context.Context, tc ToolCall, tools *tool.Registry) string {
-	if b.ToolTimeout > 0 {
+	if b.toolTimeout > 0 {
 		var cancel context.CancelFunc
 		// A pausable budget so an out-of-band approval inside the tool doesn't
 		// burn the per-tool deadline (hitl pauses it during the human wait).
-		ctx, cancel = deadline.WithBudget(ctx, b.ToolTimeout)
+		ctx, cancel = deadline.WithBudget(ctx, b.toolTimeout)
 		defer cancel()
 	}
 	out, err := tools.Invoke(ctx, tc.Tool, tc.Args)

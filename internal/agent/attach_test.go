@@ -18,15 +18,16 @@ import (
 func TestRun_AttachedInheritsActivitySink_DetachedSilent(t *testing.T) {
 	// newDeps builds a fresh stateless Brain + the full tool registry for one run.
 	newDeps := func() agent.Deps {
-		reg := tool.NewRegistry([]tool.Tool{{
+		reg := tool.NewRegistry().AddMany([]tool.Tool{{
 			Spec:   tool.Spec{Name: "probe"},
 			Invoke: func(context.Context, string) (string, error) { return "ok", nil },
-		}})
+		}}...)
+
 		model := &scriptedModel{steps: []brain.Step{
 			{ToolCalls: []brain.ToolCall{{Tool: "probe"}}},
 			{Answer: "done"},
 		}}
-		return agent.Deps{Brain: &brain.Brain{Model: model}, Tools: reg, Guard: &gateway.Guard{}}
+		return agent.Deps{Brain: brain.New(model), Tools: reg, Guard: &gateway.Guard{}}
 	}
 	def := agent.Agent{Name: "child", Tools: []string{"probe"}, Instructions: "go", When: "manual"}
 

@@ -136,7 +136,7 @@ func TestPlugin_CageBoundsEffects_E2E(t *testing.T) {
 		TTL:       time.Second,
 	}
 	netCap := &netcap.Net{Guard: guard, HTTP: stub, Scanner: secret.NewScanner(secret.NewStore())}
-	reg := tool.NewRegistry(netCap.Tools())
+	reg := tool.NewRegistry().AddMany(netCap.Tools()...)
 
 	host := plugin.NewHost(reg, nil)
 	l, err := plugin.Load("testdata/example")
@@ -203,7 +203,7 @@ func TestPlugin_ManifestIntentReachesHITL(t *testing.T) {
 		TTL:       time.Second,
 	}
 	netCap := &netcap.Net{Guard: guard, HTTP: stub, Scanner: secret.NewScanner(secret.NewStore())}
-	reg := tool.NewRegistry(netCap.Tools())
+	reg := tool.NewRegistry().AddMany(netCap.Tools()...)
 
 	host := plugin.NewHost(reg, nil)
 	l, err := plugin.Load("testdata/example")
@@ -242,7 +242,7 @@ func (s staticSource) Value(context.Context) ([]byte, error) { return []byte(s),
 func TestHost_CredentialsPluginNamespaced_NoExfil(t *testing.T) {
 	store := secret.NewStore()
 	inj := secret.NewInjector(store)
-	host := plugin.NewHost(tool.NewRegistry(nil), inj)
+	host := plugin.NewHost(tool.NewRegistry(), inj)
 	approve := func(plugin.Manifest) (bool, error) { return true, nil }
 
 	loaded := func(name, dest string) plugin.Loaded {
@@ -285,7 +285,7 @@ func TestHost_CredentialHostBound_NoCrossHostReuse(t *testing.T) {
 	// The real token, issued for host A.
 	store.Set(plugin.SecretName(plugin.Owner("gmail"), "tok", "api.example.com"), []byte("TOKEN-A"))
 	inj := secret.NewInjector(store)
-	host := plugin.NewHost(tool.NewRegistry(nil), inj)
+	host := plugin.NewHost(tool.NewRegistry(), inj)
 	approve := func(plugin.Manifest) (bool, error) { return true, nil }
 
 	// Same plugin name, same credential name, repointed to host B.
@@ -332,7 +332,7 @@ func TestPlugin_WASM_DispatchesThroughGate_E2E(t *testing.T) {
 			return "pong", nil
 		},
 	}
-	reg := tool.NewRegistry([]tool.Tool{ping})
+	reg := tool.NewRegistry().AddMany([]tool.Tool{ping}...)
 	p := plugin.New(l, reg)
 
 	var pluginTool tool.Tool

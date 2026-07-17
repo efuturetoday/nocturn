@@ -46,7 +46,7 @@ func TestInterp_LanguageSurface(t *testing.T) {
 // the gate dispatches to the tool's Invoke, and the result returns into JS.
 func TestInterp_GateReachesTool(t *testing.T) {
 	var gotArgs string
-	r := script.New(tool.NewRegistry([]tool.Tool{recordingTool("greet", "hello from host", &gotArgs)}))
+	r := script.New(tool.NewRegistry().AddMany([]tool.Tool{recordingTool("greet", "hello from host", &gotArgs)}...))
 
 	src := `
 		const r = nocturn.call("greet", {name: "nocturn"});
@@ -71,7 +71,7 @@ func TestInterp_DeniedEffectIsCatchable(t *testing.T) {
 		Spec:   tool.Spec{Name: "http.write"},
 		Invoke: func(context.Context, string) (string, error) { return "", errDenied },
 	}
-	r := script.New(tool.NewRegistry([]tool.Tool{deny}))
+	r := script.New(tool.NewRegistry().AddMany([]tool.Tool{deny}...))
 
 	src := `
 		try {
@@ -102,7 +102,7 @@ func TestInterp_TopLevelAwaitAndLoop(t *testing.T) {
 			return "1.2.3.4", nil
 		},
 	}
-	r := script.New(tool.NewRegistry([]tool.Tool{dnsTool}))
+	r := script.New(tool.NewRegistry().AddMany([]tool.Tool{dnsTool}...))
 
 	// The exact shape from the failing session: a top-level await loop.
 	src := `
@@ -146,7 +146,7 @@ func TestInterp_UnhandledRejectionIsError(t *testing.T) {
 		Spec:   tool.Spec{Name: "dns.resolve"},
 		Invoke: func(context.Context, string) (string, error) { return "", errDenied },
 	}
-	r := script.New(tool.NewRegistry([]tool.Tool{deny}))
+	r := script.New(tool.NewRegistry().AddMany([]tool.Tool{deny}...))
 
 	// No try/catch: the rejection propagates to the top-level promise.
 	_, err := r.Run(context.Background(), `await nocturn.call("dns.resolve", {host: "x"});`)

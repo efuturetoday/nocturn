@@ -56,7 +56,7 @@ func benchRuntime(b *testing.B) (wazero.Runtime, wazero.CompiledModule) {
 // compile isn't billed to the loop — this measures instantiate + QuickJS boot +
 // prelude eval + trivial eval + close, the true per-call cost (~2.5 ms).
 func BenchmarkInterpreter_Run_Engine(b *testing.B) {
-	r := script.New(tool.NewRegistry(nil))
+	r := script.New(tool.NewRegistry())
 	ctx := context.Background()
 	if _, err := r.Run(ctx, "1+1"); err != nil { // warm the shared engine (one-time compile)
 		b.Fatal(err)

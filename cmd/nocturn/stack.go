@@ -111,14 +111,14 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 	reportAgents(w.Agents())
 
 	// Interactive extensions + credentials wire against the workspace's own parts.
-	if err := wireGoogleCredential(ctx, w.Credential(), w.Vault()); err != nil {
+	if err := wireGoogleCredential(ctx, w.Credentials(), w.Vault()); err != nil {
 		return nil, err
 	}
 	approvals := approval.Load(filepath.Join(wsDir, "approved.json"))
-	if err := loadPlugins(ctx, w.Tools(), w.Credential(), w.Vault(), approvals, wsDir); err != nil {
+	if err := loadPlugins(ctx, w.Tools(), w.Credentials(), w.Vault(), approvals, wsDir); err != nil {
 		return nil, err
 	}
-	if err := loadMCP(ctx, w.Tools(), w.Guard(), w.Credential(), w.LeakScan(), w.Vault(), approvals, wsDir); err != nil {
+	if err := loadMCP(ctx, w.Tools(), w.Guard(), w.Credentials(), w.LeakScanner(), w.Vault(), approvals, wsDir); err != nil {
 		return nil, err
 	}
 

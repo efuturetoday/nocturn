@@ -29,9 +29,10 @@ func sink(ctx context.Context, events *[]activity.ToolEvent) context.Context {
 // carrying the caller's args and the tool's result.
 func TestRegistry_InvokeEmitsStartThenEnd(t *testing.T) {
 	var events []activity.ToolEvent
-	reg := tool.NewRegistry([]tool.Tool{
+	reg := tool.NewRegistry().AddMany([]tool.Tool{
 		mkTool("echo", func(_ context.Context, args string) (string, error) { return "OUT:" + args, nil }),
-	})
+	}...)
+
 	ctx := sink(context.Background(), &events)
 
 	out, err := reg.Invoke(ctx, "echo", `{"a":1}`)
@@ -53,7 +54,7 @@ func TestRegistry_InvokeEmitsStartThenEnd(t *testing.T) {
 // not fatal — the caller can surface it.
 func TestRegistry_UnknownToolReportedInEndEvent(t *testing.T) {
 	var events []activity.ToolEvent
-	reg := tool.NewRegistry(nil)
+	reg := tool.NewRegistry()
 	ctx := sink(context.Background(), &events)
 
 	if _, err := reg.Invoke(ctx, "ghost", "{}"); err == nil ||
@@ -67,9 +68,10 @@ func TestRegistry_UnknownToolReportedInEndEvent(t *testing.T) {
 
 // A ctx with no sink is a no-op: dispatch still works (a detached run is silent).
 func TestRegistry_NoSinkIsNoOp(t *testing.T) {
-	reg := tool.NewRegistry([]tool.Tool{
+	reg := tool.NewRegistry().AddMany([]tool.Tool{
 		mkTool("echo", func(context.Context, string) (string, error) { return "ok", nil }),
-	})
+	}...)
+
 	if out, err := reg.Invoke(context.Background(), "echo", "{}"); err != nil || out != "ok" {
 		t.Fatalf("out=%q err=%v", out, err)
 	}
@@ -81,7 +83,7 @@ func TestRegistry_NoSinkIsNoOp(t *testing.T) {
 // code.run. The nested call inherits the sink from ctx automatically.
 func TestRegistry_NestedCallsNestByOrder(t *testing.T) {
 	var events []string
-	reg := tool.NewRegistry(nil)
+	reg := tool.NewRegistry()
 	ctx := activity.WithSink(context.Background(), func(e activity.Event) {
 		ev, ok := e.(activity.ToolEvent)
 		if !ok {

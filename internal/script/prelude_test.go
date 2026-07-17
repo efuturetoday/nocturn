@@ -19,7 +19,7 @@ func fakeTool(name string, fn func(args string) (string, error)) tool.Tool {
 
 func runScript(t *testing.T, tools []tool.Tool, src string) string {
 	t.Helper()
-	r := script.New(tool.NewRegistry(tools))
+	r := script.New(tool.NewRegistry().AddMany(tools...))
 	out, err := r.Run(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Run: %v", err)

@@ -33,7 +33,7 @@ func recordingTool(name, out string, gotArgs *string) tool.Tool {
 // in, the fs shim would have a bypass and this would stop erroring.
 func TestRun_NoAmbientFilesystem(t *testing.T) {
 	// Registry deliberately has NO file.read — so the gate has nothing to dispatch.
-	r := script.New(tool.NewRegistry(nil))
+	r := script.New(tool.NewRegistry())
 
 	_, err := r.Run(context.Background(), `
 		const fs = require("fs");
@@ -54,7 +54,7 @@ func TestRun_NoAmbientFilesystem(t *testing.T) {
 // interpreter JSON-stringifies them), and the result flows back to the script.
 func TestRun_GateDispatchesToTool(t *testing.T) {
 	var gotArgs string
-	r := script.New(tool.NewRegistry([]tool.Tool{recordingTool("echo", "PONG", &gotArgs)}))
+	r := script.New(tool.NewRegistry().AddMany([]tool.Tool{recordingTool("echo", "PONG", &gotArgs)}...))
 
 	out, err := r.Run(context.Background(), `console.log(nocturn.call("echo", {v: 42}))`)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestRun_ToolError_SurfacesErrorToGuest(t *testing.T) {
 		Spec:   tool.Spec{Name: "boom"},
 		Invoke: func(context.Context, string) (string, error) { return "", errors.New("kaboom") },
 	}
-	r := script.New(tool.NewRegistry([]tool.Tool{boom}))
+	r := script.New(tool.NewRegistry().AddMany([]tool.Tool{boom}...))
 
 	out, err := r.Run(context.Background(), `try { nocturn.call("boom", {}); } catch (e) { console.log(e.message); }`)
 	if err != nil {
@@ -104,7 +104,7 @@ func TestRun_ToolError_SurfacesErrorToGuest(t *testing.T) {
 // The interpreter never dispatches itself: a script calling nocturn.call("code.run", …)
 // is refused (no recursive interpreter), surfaced to the guest as a catchable error.
 func TestRun_CodeRunNotReentrant(t *testing.T) {
-	r := script.New(tool.NewRegistry(nil))
+	r := script.New(tool.NewRegistry())
 
 	out, err := r.Run(context.Background(), `try { nocturn.call("code.run", {source: "1"}); } catch (e) { console.log(e.message); }`)
 	if err != nil {
@@ -119,7 +119,7 @@ func TestRun_CodeRunNotReentrant(t *testing.T) {
 // returning the script's stdout.
 func TestTool_CodeRun_RunsSource(t *testing.T) {
 	var gotArgs string
-	r := script.New(tool.NewRegistry([]tool.Tool{recordingTool("echo", "OK", &gotArgs)}))
+	r := script.New(tool.NewRegistry().AddMany([]tool.Tool{recordingTool("echo", "OK", &gotArgs)}...))
 
 	tl := r.Tool()
 	if tl.Name != "code.run" {
