@@ -40,6 +40,13 @@ type (
 		options []hitl.Option
 		reply   chan string
 	}
+	// selfWakeMsg is a wake() firing: the originating stack asks to resume its own
+	// session with note. It routes through here so it serializes with normal turns
+	// (start is that stack's startTurn), rather than resuming re-entrantly.
+	selfWakeMsg struct {
+		note  string
+		start func(string) context.CancelFunc
+	}
 )
 
 func pulseTick() tea.Cmd {
@@ -871,6 +878,20 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entries = append(m.entries, &noticeEntry{text: "🔔 " + string(msg)})
 		m.syncViewport()
 		return m, nil
+
+	case selfWakeMsg:
+		// A wake() fired. If a turn is already running we drop it (MVP: no queue) so
+		// two turns never run at once; otherwise we resume the originating session.
+		if m.running {
+			m.entries = append(m.entries, &noticeEntry{text: "⏰ self-wake dropped (busy): " + msg.note})
+			m.syncViewport()
+			return m, nil
+		}
+		m.entries = append(m.entries, &noticeEntry{text: "⏰ resuming: " + msg.note})
+		m.running = true
+		m.cancel = msg.start(msg.note)
+		m.syncViewport()
+		return m, tea.Batch(m.sw.Reset(), m.sw.Start())
 
 	case approvalMsg:
 		m.approval = &approvalPrompt{intent: msg.intent, options: msg.options, reply: msg.reply}

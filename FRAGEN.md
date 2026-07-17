@@ -490,3 +490,75 @@ Allokationen (~2× Body-Größe).
 
 **Status:** Mikro-Optimierung, erst relevant wenn große Uploads über `http.write`/Plugins laufen. Die
 `func() []string`-Naht bleibt vorerst.
+
+---
+
+### 17. `remind` + `wake` — zwei getrennte Zeit-Mechanismen (✅ GEBAUT)
+
+**Status:** umgesetzt als `internal/remindcap` (persistent, gegated, eigene `time.AfterFunc`-Timer,
+`reminders.json` Control-Plane, `remind`/`.list`/`.cancel` + `nocturn.remind`) und `internal/wakecap`
+(ephemeral, ungegated + geboundet, `wake` + `nocturn.wake`, TUI-Resume via `selfWakeMsg`). **NICHT** in
+den `agent.Scheduler` gemischt (bewusst zurückgebaut — der feuert Agent-Läufe, Reminder feuern nur
+notify). Timer-Tests mit `testing/synctest`. Design unten wie geplant. Offen bleibt: wake×User-Input-
+Interrupt (MVP: busy → drop), remind-`cron`-wiederkehrend, Quota/TZ-Kanten.
+
+
+Präzisiert #14. Beim Ausdiskutieren kam raus: „Schedule" meint in Wahrheit **zwei grundverschiedene
+Dinge**, plus der schon existierende Cron-Agent. **Drei Feuer-Verhalten:**
+
+1. **notify-Reminder** → kein Modell-Lauf, nur Push. → `remind` (unten).
+2. **Cron-Agent** → frischer unattended `RunTask` (separate Session). → **existiert schon**
+   (`internal/agent/scheduler.go`, autor-deklarierte `agent.md`-`Definition`s). Der dynamische,
+   modell-erzeugte Task-Lauf (Autonomy-gekappt + HITL) ist der schwere Rest von #14.
+3. **Self-Wake** → **dieselbe** Session mit Fortsetzungs-Prompt wieder invoken. → `wake` (unten).
+   (Vorbild: Claude Code `ScheduleWakeup` im dynamischen `/loop`.)
+
+|                | `remind`                                   | `wake`                                      |
+|----------------|--------------------------------------------|---------------------------------------------|
+| Feuern         | reines `notify` (kein Lauf)                | **dieselbe** Session setzt fort             |
+| Kontext        | entkoppelt (Inhalt beim Anlegen erfasst)   | **erhalten** (gleiche Conversation)         |
+| Lebensdauer    | **persistent** (übersteht Neustart)        | **ephemeral** (nur solange Prozess lebt)    |
+| Autorität      | broker-gegated (still), leak-scan + rate   | **null extern** (Control-Flow), stattdessen *geboundet* |
+| Zweck          | „erinnere mich morgen an X"                | self-paced Loop / Polling („in 5 min nochmal prüfen") |
+
+#### `remind` — persistente Zukunfts-Erinnerung
+- **Tools:** `remind {when, message}` → `{id, fireAt}`; `remind.list` (read, still); `remind.cancel {id}` (write).
+- **`when`:** relativ (`"in 2h"`, `"morgen 09:00"`) | absolut (RFC3339) → host-seitig zu absolutem
+  `fireAt` (Workspace/Host-TZ, koppelt an `time.now`). Optional später: `cron` = wiederkehrend.
+- **Gating:** durch `Guard` (observable/cage-/policy-fähig), aber **`Write:false` → still** (ein benigner
+  Zukunfts-Hinweis braucht keine per-Reminder-Freigabe). Kontrollen wie `notify`: **Leak-Scan beim
+  Anlegen** (fail-fast) + **Rate-Limit** (Anti-Spam). Ziel-Kanal host-owned.
+- **Persistenz:** `<ws>/reminders.json` — **Control-Plane, 0600, AUSSERHALB `mnt/`** → Modell kann's
+  weder sehen noch `file.write`en; einziger Weg = das gegatete Tool (load-bearing wie `grants.json`,
+  ADR-10). Übersteht Neustart; per-Workspace portabel.
+- **Feuern:** Scheduler-One-shot zur `fireAt` → `notify`-Pusher (Message **nochmal** leak-gescannt) →
+  Eintrag löschen (one-shot).
+- **Layering:** `remindcap` (klein) = `*Guard` + Reminder-Store + `notify`-Pusher; `notifycap` bleibt
+  reiner Transport; der Store + One-shot-Job kommen in die Scheduler-Schicht.
+
+#### `wake` — Self-Wake / Resume derselben Session
+- **Tool:** `wake {seconds, note}` (oder `wait`): der aktuelle Turn **endet** (Modell hört auf), der
+  **in-Prozess-Scheduler** ruft nach `seconds` **`session.Ask(note)` auf DERSELBEN `agent.Session`**
+  (Conversation lebt weiter). Fortsetzung, **keine** Injection in einen laufenden Turn (der hat geyieldet).
+- **Autorität:** **nicht broker-gegated pro Call** — erreicht nichts Externes, reine Control-Flow-Planung
+  (wie `time.now`, null Autorität). Die Effekte im **wieder-aufgewachten** Turn treffen normal Broker + HITL.
+- **Bounds statt HITL (gegen Runaway):** Delay clampen (z. B. `[60s, 1h]` wie Claude Code); **Max-Wakes /
+  Budget-Cap** (koppelt an `internal/deadline`); ein Self-Wake-Loop teilt EIN Budget → weckt sich nicht endlos.
+- **Ephemeral:** lebt nur solange TUI/Daemon läuft; **nicht** persistiert. Prozess tot → pending Wakes weg.
+- **Session-Kopplung:** an die Epoche der Session gebunden — `Reset`/`Close` (Epoche schließt) **verwirft
+  pending Wakes** (alte Conversation/Autorität ist tot). Sauber by construction.
+
+#### Gemeinsame Scheduler-Arbeit (Voraussetzung für beide)
+`agent.Scheduler` kann heute nur cron-`Definition`s statisch bei `NewScheduler`. Beide brauchen:
+- **One-shot `at:`-Jobs** (feuern einmal zur absoluten Zeit, self-delete danach),
+- **dynamisches `Add(job)`/`Remove(id)`** zur Laufzeit (Mutex),
+- zwei Job-Arten: **notify-only** (remind) und **resume-session** (wake) neben dem bestehenden **fresh-RunTask** (cron).
+
+#### Offene Punkte
+- **wake × User-Input:** tippt der User, während ein Wake pending ist — Wake danach anhängen, oder
+  (wie Claude Code) User-Input **interrupted** den Loop? Interrupt-Semantik klären.
+- **remind:** Max-Pending-Quota pro Workspace; TZ-Kanten (DST); `cron`-wiederkehrend ja/nein im MVP.
+- **wake:** Max-Total-Wall-Clock / Max-Iterationen; Verhalten bei `/ws`-Switch.
+- **Baureihenfolge:** Scheduler-One-shot/Dynamik zuerst (gemeinsam), dann `remind` (persistent, gegated),
+  dann `wake` (ephemeral, geboundet). `remind` ist näher an dem, was bisher steht (notify + Scheduler);
+  `wake` braucht den Session-Resume-Pfad im `agent`-Paket.

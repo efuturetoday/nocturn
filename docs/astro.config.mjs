@@ -93,6 +93,7 @@ export default defineConfig({
 						{ label: 'Ping', slug: 'reference/ping' },
 						{ label: 'Files', slug: 'reference/files' },
 						{ label: 'Notify', slug: 'reference/notify' },
+						{ label: 'Scheduling', slug: 'reference/scheduling' },
 					],
 				},
 				{

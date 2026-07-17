@@ -343,6 +343,17 @@
     if (title != null) args.title = String(title);
     return JSON.parse(g.nocturn.call("notify", args));
   };
+  // remind(when, message[, title]) — schedule a notification at a future time.
+  // when = RFC3339 timestamp or "in <duration>" (e.g. "in 2h").
+  g.nocturn.remind = function (when, message, title) {
+    var args = { when: String(when), message: String(message) };
+    if (title != null) args.title = String(title);
+    return JSON.parse(g.nocturn.call("remind", args));
+  };
+  // wake(seconds, note) — resume this session after a delay with `note` as the prompt.
+  g.nocturn.wake = function (seconds, note) {
+    return JSON.parse(g.nocturn.call("wake", { seconds: Number(seconds), note: String(note) }));
+  };
   // resolve(host[, type]) — type ∈ A|AAAA|IP|MX|TXT|CNAME|NS|PTR|SRV (default A).
   g.nocturn.resolve = function (host, type) {
     var args = { host: String(host) };

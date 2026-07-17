@@ -19,11 +19,13 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
+	"github.com/efuturetoday/nocturn/internal/remindcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/timecap"
 	"github.com/efuturetoday/nocturn/internal/tool"
+	"github.com/efuturetoday/nocturn/internal/wakecap"
 )
 
 // shared is what EVERY workspace stack shares — the process-wide spine. Nothing here
@@ -202,6 +204,15 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 		return cancel
 	}
 
+	// wake: the running agent schedules its OWN resume after a delay (self-paced
+	// loops / polling). Reaching nothing external, it is ungated — bounded instead
+	// (delay clamp + pending cap in wakecap). The resume routes through the TUI event
+	// loop (selfWakeMsg) so it serializes with normal turns, never re-entrantly.
+	// Session-scoped: cancelled on Reset (below) so a new session's wakes don't resume
+	// a dead conversation.
+	waker := wakecap.New(func(note string) { sh.send(selfWakeMsg{note: note, start: startTurn}) })
+	reg.Add(waker.Tool())
+
 	// A QUIET registry view for scheduled (background) runs: same tools, but no OnCall
 	// observer — so a background firing in one workspace never spills tool events into
 	// the interactive chat (its token stream is muted too). Built once per stack.
@@ -222,9 +233,24 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 		return nil, err
 	}
 
+	// Reminders: persistent (control-plane reminders.json, outside mnt/), gated, and
+	// fire a plain notify at their time via their OWN timers (not the agent scheduler).
+	// Restore re-enrolls any that survived a restart. Tools join the shared registry, so
+	// the model/scripts can set them like any other gated tool.
+	reminders := remindcap.New(
+		netCap.Guard,
+		remindcap.LoadStore(filepath.Join(wsDir, "reminders.json")),
+		sh.notify, scanner,
+	)
+	reminders.Restore()
+	for _, rt := range reminders.Tools() {
+		reg.Add(rt)
+	}
+
 	return &stack{
 		name: wsName, session: session, scheduler: sched, agentDefs: agentDefs,
 		startTurn: startTurn, startAgent: startAgent,
-		reset: session.Reset, skills: skills, markSkill: session.MarkSkill,
+		reset:  func() { waker.Cancel(); session.Reset() }, // new session → drop pending self-wakes
+		skills: skills, markSkill: session.MarkSkill,
 	}, nil
 }

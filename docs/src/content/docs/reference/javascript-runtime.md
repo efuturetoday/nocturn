@@ -117,7 +117,13 @@ These look like the Web/Node APIs but route through `nocturn.call`, so every eff
   `A`/`AAAA`/`IP`/`MX`/`TXT`/`CNAME`/`NS`/`PTR`/`SRV` (default `A`). Returns `{host, type, records}`.
 
 - **`nocturn.notify(message, title?)`** → proactively message the user via the `notify` capability
-  (fire-and-forget, leak-scanned, rate-limited). Returns `{sent: true}`.
+  (fire-and-forget, leak-scanned). Returns `{sent: true}`.
+
+- **`nocturn.remind(when, message, title?)`** → schedule a notification at a future time (`when` is
+  RFC3339 or `"in <duration>"`). Returns `{id, fireAt}`. See [scheduling](/reference/scheduling/).
+
+- **`nocturn.wake(seconds, note)`** → resume this session after a delay with `note` as the prompt
+  (bounded, ungated). Returns `{wakeInSeconds}`.
 
 - **`nocturn.now()`** → the current date/time (`{unix, iso, utc, timezone, offset_seconds}`). The
   sandbox guest has no wall clock of its own, so this is the way to get the time. It carries **no

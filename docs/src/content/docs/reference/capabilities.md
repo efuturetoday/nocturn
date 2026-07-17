@@ -8,8 +8,8 @@ touching the workspace, resolving a name. Everything the model, a script, a plug
 MCP server can *actually do* passes through one of them. There is no other way out — a WASM
 guest has zero ambient authority, so a capability it was not handed is simply absent.
 
-This section is the catalogue. Each family (HTTP, DNS, Ping, Files) has its own page listing every
-tool, its inputs, and what it returns. This page is the map over all of them.
+This section is the catalogue. Each family (HTTP, DNS, Ping, Files, Notify) has its own page listing
+every tool, its inputs, and what it returns. This page is the map over all of them.
 
 ## The two axes
 
@@ -77,6 +77,9 @@ and your remembered [grants](/guides/approvals/#how-the-decision-is-made). Only 
 | `file.remove` | `file` | <span class="axis axis--write">write</span> | path (in workspace) | `path` | JSON `{path, removed}` |
 | `file.move`   | `file` | <span class="axis axis--write">write</span> | path (in workspace) | `from`, `to` | JSON `{from, to}` |
 | `notify`      | `notify` | <span class="axis axis--read">read</span> | user's channel (host-owned) | `message`, `title` | JSON `{sent}` |
+| `remind`      | `remind` | <span class="axis axis--read">read</span> | user's channel (host-owned) | `when`, `message`, `title` | JSON `{id, fireAt}` |
+| `remind.list` | `remind` | <span class="axis axis--read">read</span> | user's channel (host-owned) | — | JSON array of reminders |
+| `remind.cancel` | `remind` | <span class="axis axis--read">read</span> | user's channel (host-owned) | `id` | JSON `{id, cancelled}` |
 
 The tool name **is** the authority. `http.read` and `http.write` are split so the tool the
 model picks already decides the effect axis — the security layer never has to trust an HTTP
@@ -96,6 +99,9 @@ Some tools the model can call reach **no** capability, so they are never gated:
   A clock read leaks nothing and changes nothing, so it carries zero authority. It exists as a host
   tool only because the sandbox guest has no wall clock of its own — without it a skill could not
   answer *"what is due today?"*.
+- **`wake`** — schedules the agent's own resume after a delay (see [scheduling](/reference/scheduling/)).
+  It reaches nothing external, so it is ungated — **bounded** instead (delay clamp + pending cap). Any
+  effect in the *resumed* turn is gated normally.
 
 ## MCP tools
 
