@@ -1,0 +1,20 @@
+{
+  "enabledPlugins": {
+    "cc-skills-golang@samber": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "in=$(cat); cmd=$(printf '%s' \"$in\" | jq -r '.tool_input.command // \"\"'); case \"$cmd\" in *\"git commit\"*) ;; *) exit 0 ;; esac; files=$(git diff-tree --root --no-commit-id --name-only -r HEAD 2>/dev/null); src=$(printf '%s\\n' \"$files\" | grep -E '^(internal|cmd)/'); docs=$(printf '%s\\n' \"$files\" | grep -E '^docs/'); if [ -n \"$src\" ] && [ -z \"$docs\" ]; then reason=$(printf 'Der letzte Commit hat NUR diese Code-Dateien geaendert (keine docs/):\\n%s\\n\\nPruefe, ob IRGENDEINE Dokumentation aktualisiert werden muss — NICHT nur die Tool-/Capability-Referenz. Moegliche Bereiche der Doku-Site (docs/src/content/docs/): Guides (guides/), Architektur & Konzepte (architecture/), Referenz inkl. Sandbox/Runtime (reference/), sowie Tool-/Capability-Daten (docs/src/data/tools/ + docs/src/data/capabilities/, Regeln in docs/CONVENTIONS.md) und die Sidebar (docs/astro.config.mjs). Passe die betroffene Doku an — dokumentiere NUR die konkreten Aenderungen dieses Commits — ODER begruende kurz, warum fuer genau diese Aenderungen keine Doku noetig ist.' \"$src\"); jq -cn --arg r \"$reason\" '{decision:\"block\",reason:$r}'; fi",
+            "if": "Bash(git commit*)",
+            "statusMessage": "Doku-Check nach Commit"
+          }
+        ]
+      }
+    ]
+  }
+}

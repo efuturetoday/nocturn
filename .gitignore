@@ -14,6 +14,10 @@ internal/script/qjs/.buildcache/
 # macOS
 .DS_Store
 
+# Claude Code: shared project config (.claude/settings.json — plugins + hooks) IS
+# committed for all maintainers; personal overrides (permissions) stay local.
+.claude/settings.local.json
+
 # local runtime plugins — installed plugins may hold OAuth tokens; never commit them
 # (testdata/example documents the format). Anchored so it does not swallow internal/plugin/.
 /plugins/
