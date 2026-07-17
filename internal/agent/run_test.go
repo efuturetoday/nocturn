@@ -56,10 +56,10 @@ func TestRun_ReadsSilent_WritesAsk_E2E(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "file.write", Args: `{"path":"notes/out.txt","content":"summary"}`}}},
 		{Answer: "done"},
 	}}
-	b := &brain.Brain{Model: model, Registry: reg}
+	b := &brain.Brain{Model: model}
 
 	def := agent.Agent{Name: "triage", Tools: []string{"file"}, Instructions: "Summarize.", When: "manual"}
-	res, err := agent.Run(context.Background(), agent.Deps{Brain: b, Guard: guard}, def, "do it")
+	res, err := agent.Run(context.Background(), agent.Deps{Brain: b, Tools: reg, Guard: guard}, def, "do it")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -105,10 +105,10 @@ func TestRun_UndeclaredToolIsUnreachable_E2E(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "shell.exec", Args: `{"cmd":"rm -rf /"}`}}},
 		{Answer: "blocked"},
 	}}
-	b := &brain.Brain{Model: model, Registry: reg}
+	b := &brain.Brain{Model: model}
 
 	def := agent.Agent{Name: "reader", Tools: []string{"file"}, Instructions: "Read only.", When: "manual"}
-	res, err := agent.Run(context.Background(), agent.Deps{Brain: b, Guard: guard}, def, "try to escape")
+	res, err := agent.Run(context.Background(), agent.Deps{Brain: b, Tools: reg, Guard: guard}, def, "try to escape")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

@@ -64,8 +64,8 @@ func TestBrain_ToolCallResultFedBackThenFinal(t *testing.T) {
 		{Answer: "the page said PONG"},
 	}}
 
-	b := &brain.Brain{Model: model, Registry: reg}
-	ans, err := b.Run(context.Background(), "what does example.com say?")
+	b := &brain.Brain{Model: model}
+	ans, err := b.Run(context.Background(), "what does example.com say?", reg)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -83,13 +83,13 @@ func TestBrain_ToolCallResultFedBackThenFinal(t *testing.T) {
 func TestBrain_StreamsAnswerTokens(t *testing.T) {
 	model := &scriptedModel{steps: []brain.Step{{Answer: "streamed answer"}}}
 	var streamed string
-	b := &brain.Brain{Model: model, Registry: tool.NewRegistry(nil)}
+	b := &brain.Brain{Model: model}
 	ctx := activity.WithSink(context.Background(), func(e activity.Event) {
 		if tok, ok := e.(activity.Token); ok {
 			streamed += tok.Text
 		}
 	})
-	ans, err := b.Run(ctx, "hi")
+	ans, err := b.Run(ctx, "hi", tool.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -110,8 +110,8 @@ func TestBrain_LongToolOutputBoundedForModel(t *testing.T) {
 		{Answer: "done"},
 	}}
 
-	b := &brain.Brain{Model: model, Registry: reg}
-	if _, err := b.Run(context.Background(), "go"); err != nil {
+	b := &brain.Brain{Model: model}
+	if _, err := b.Run(context.Background(), "go", reg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	var toolMsg string
@@ -144,10 +144,10 @@ func TestBrain_ParallelToolCallsRunConcurrently(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{ID: "1", Tool: "a"}, {ID: "2", Tool: "b"}, {ID: "3", Tool: "c"}}},
 		{Answer: "done"},
 	}}
-	b := &brain.Brain{Model: model, Registry: reg}
+	b := &brain.Brain{Model: model}
 
 	ansCh := make(chan string, 1)
-	go func() { ans, _ := b.Run(context.Background(), "go"); ansCh <- ans }()
+	go func() { ans, _ := b.Run(context.Background(), "go", reg); ansCh <- ans }()
 
 	// All three must start before any is allowed to finish — impossible if serial.
 	for i := 0; i < n; i++ {
@@ -227,8 +227,8 @@ func TestBrain_ToolTimeout(t *testing.T) {
 		{Answer: "moved on"},
 	}}
 
-	b := &brain.Brain{Model: model, Registry: reg, ToolTimeout: 20 * time.Millisecond}
-	ans, err := b.Run(context.Background(), "call the slow tool")
+	b := &brain.Brain{Model: model, ToolTimeout: 20 * time.Millisecond}
+	ans, err := b.Run(context.Background(), "call the slow tool", reg)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -250,8 +250,8 @@ func TestBrain_MaxStepsExceeded(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "noop"}}},
 	}}
 
-	b := &brain.Brain{Model: model, Registry: reg, MaxSteps: 3}
-	if _, err := b.Run(context.Background(), "loop forever"); !errors.Is(err, brain.ErrMaxSteps) {
+	b := &brain.Brain{Model: model, MaxSteps: 3}
+	if _, err := b.Run(context.Background(), "loop forever", reg); !errors.Is(err, brain.ErrMaxSteps) {
 		t.Fatalf("err = %v, want ErrMaxSteps", err)
 	}
 	if model.calls != 3 {
@@ -265,8 +265,8 @@ func TestBrain_UnknownToolIsReportedNotFatal(t *testing.T) {
 		{Answer: "recovered"},
 	}}
 
-	b := &brain.Brain{Model: model, Registry: tool.NewRegistry(nil)}
-	ans, err := b.Run(context.Background(), "call a missing tool")
+	b := &brain.Brain{Model: model}
+	ans, err := b.Run(context.Background(), "call a missing tool", tool.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -299,8 +299,8 @@ func TestBrain_ToolValidationErrorFedBack(t *testing.T) {
 		{Answer: "handled"},
 	}}
 
-	b := &brain.Brain{Model: model, Registry: reg}
-	if _, err := b.Run(context.Background(), "fetch"); err != nil {
+	b := &brain.Brain{Model: model}
+	if _, err := b.Run(context.Background(), "fetch", reg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if !convContains(model.convs[1], "missing required field: url") {
@@ -342,8 +342,8 @@ func TestBrain_Integration_FetchThroughGateway(t *testing.T) {
 		{Answer: "done"},
 	}}
 
-	b := &brain.Brain{Model: model, Registry: reg}
-	if _, err := b.Run(context.Background(), "fetch the site"); err != nil {
+	b := &brain.Brain{Model: model}
+	if _, err := b.Run(context.Background(), "fetch the site", reg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if !convContains(model.convs[1], "hello from the web") {
@@ -364,8 +364,8 @@ func TestBrain_MaxResultBypassesTruncation(t *testing.T) {
 			{ToolCalls: []brain.ToolCall{{ID: "1", Tool: "probe", Args: "{}"}}},
 			{Answer: "done"},
 		}}
-		b := &brain.Brain{Model: model, Registry: reg}
-		if _, err := b.Run(context.Background(), "go"); err != nil {
+		b := &brain.Brain{Model: model}
+		if _, err := b.Run(context.Background(), "go", reg); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 		return model.convs[len(model.convs)-1] // what the model saw on its final turn

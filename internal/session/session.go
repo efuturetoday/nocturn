@@ -30,16 +30,21 @@ import (
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/skill"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // A *Session drives a Runner (it satisfies the turns interface: Ask/Reset/History) —
 // asserted here because production wires them together but the tests use a fake.
 var _ turns = (*Session)(nil)
 
-// Session is the owner of one interactive session's lifecycle.
+// Session is the owner of one interactive session's lifecycle. It holds everything a
+// chat needs: the toolset it may use (tools) and the loaded skills (both handed to /
+// stamped for each turn) alongside the conversation and permission scope. The Brain
+// is the stateless executor it drives — it owns none of this.
 type Session struct {
 	brain *brain.Brain
 	guard *gateway.Guard
+	tools *tool.Registry        // the toolset this session may use (passed to the brain per turn)
 	store capability.GrantStore // durable "always" backing; nil = none
 
 	conv   *brain.Conversation
@@ -47,15 +52,17 @@ type Session struct {
 	skills *skill.Active // skills loaded into THIS conversation (dedup); reset with it
 }
 
-// New opens a session on the given brain and guard, with a durable grant store (may
-// be nil — "always" then does not persist). It opens the first Scope (a fresh epoch +
-// grant set on the guard's registry) and a fresh conversation.
-func New(b *brain.Brain, g *gateway.Guard, store capability.GrantStore) *Session {
+// New opens a session on the given brain over tools (the session's toolset), with a
+// durable grant store (may be nil — "always" then does not persist). It opens the
+// first Scope (a fresh epoch + grant set on the guard's registry) and a fresh
+// conversation over tools.
+func New(b *brain.Brain, tools *tool.Registry, g *gateway.Guard, store capability.GrantStore) *Session {
 	return &Session{
 		brain:  b,
 		guard:  g,
+		tools:  tools,
 		store:  store,
-		conv:   b.NewConversation(),
+		conv:   b.NewConversation(tools),
 		scope:  g.NewScope(store),
 		skills: skill.NewActive(),
 	}
@@ -86,7 +93,7 @@ func (s *Session) MarkSkill(name string) { s.skills.Mark(name) }
 func (s *Session) Reset() {
 	s.scope.Revoke()
 	s.scope = s.guard.NewScope(s.store)
-	s.conv = s.brain.NewConversation()
+	s.conv = s.brain.NewConversation(s.tools)
 	s.skills = skill.NewActive() // a fresh conversation has no skills loaded
 }
 

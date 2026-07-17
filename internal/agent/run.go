@@ -8,15 +8,18 @@ import (
 	"github.com/efuturetoday/nocturn/internal/deadline"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/skill"
+	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
 // Deps is the shared machinery a child-agent run needs, bundled so Run's signature
 // stays small as the subsystem grows (no loose epochs/store arguments). Brain is the
-// shared stateless executor; Guard owns the permission-scope lifecycle; Store resolves
-// an agent's OWN durable "always" backing by name (nil, or a resolver returning nil,
+// shared stateless executor; Tools is the FULL workspace registry (Run filters it to
+// the agent's own tools); Guard owns the permission-scope lifecycle; Store resolves an
+// agent's OWN durable "always" backing by name (nil, or a resolver returning nil,
 // means no persistence — its always-grants do not survive the process).
 type Deps struct {
 	Brain *brain.Brain
+	Tools *tool.Registry
 	Guard *gateway.Guard
 	Store func(name string) capability.GrantStore
 }
@@ -69,8 +72,10 @@ func Run(ctx context.Context, d Deps, a Agent, task string) (Result, error) {
 		defer cancel()
 	}
 
-	sub := *d.Brain
-	sub.Registry = d.Brain.Registry.Select(a.Matches)
-	answer, err := sub.Run(ctx, a.Instructions+"\n\n---\nTask:\n"+task)
+	// The agent's OWN tools: the full registry filtered to what it declared — a tool
+	// outside the list is UNREACHABLE (Invoke reports "unknown tool"), not merely
+	// hidden. The shared stateless Brain is handed this subset for the run; no clone.
+	tools := d.Tools.Select(a.Matches)
+	answer, err := d.Brain.Run(ctx, a.Instructions+"\n\n---\nTask:\n"+task, tools)
 	return Result{Answer: answer}, err
 }

@@ -16,7 +16,8 @@ import (
 // A DETACHED run (bare ctx, no sink) is silent — the same shared Brain/Registry, the
 // mute is simply the absence of a sink. This is the whole attach/detach model.
 func TestRun_AttachedInheritsActivitySink_DetachedSilent(t *testing.T) {
-	newBrain := func() *brain.Brain {
+	// newDeps builds a fresh stateless Brain + the full tool registry for one run.
+	newDeps := func() agent.Deps {
 		reg := tool.NewRegistry([]tool.Tool{{
 			Spec:   tool.Spec{Name: "probe"},
 			Invoke: func(context.Context, string) (string, error) { return "ok", nil },
@@ -25,7 +26,7 @@ func TestRun_AttachedInheritsActivitySink_DetachedSilent(t *testing.T) {
 			{ToolCalls: []brain.ToolCall{{Tool: "probe"}}},
 			{Answer: "done"},
 		}}
-		return &brain.Brain{Model: model, Registry: reg}
+		return agent.Deps{Brain: &brain.Brain{Model: model}, Tools: reg, Guard: &gateway.Guard{}}
 	}
 	def := agent.Agent{Name: "child", Tools: []string{"probe"}, Instructions: "go", When: "manual"}
 
@@ -36,7 +37,7 @@ func TestRun_AttachedInheritsActivitySink_DetachedSilent(t *testing.T) {
 			events = append(events, te)
 		}
 	})
-	if _, err := agent.Run(attached, agent.Deps{Brain: newBrain(), Guard: &gateway.Guard{}}, def, "t"); err != nil {
+	if _, err := agent.Run(attached, newDeps(), def, "t"); err != nil {
 		t.Fatalf("attached run: %v", err)
 	}
 	if len(events) != 2 || events[0].Tool != "probe" || events[0].Phase != activity.Start {
@@ -49,7 +50,7 @@ func TestRun_AttachedInheritsActivitySink_DetachedSilent(t *testing.T) {
 	if s := activity.SinkFrom(detached); s != nil {
 		t.Fatal("bare ctx unexpectedly carries a sink")
 	}
-	if _, err := agent.Run(detached, agent.Deps{Brain: newBrain(), Guard: &gateway.Guard{}}, def, "t"); err != nil {
+	if _, err := agent.Run(detached, newDeps(), def, "t"); err != nil {
 		t.Fatalf("detached run: %v", err)
 	}
 }

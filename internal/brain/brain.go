@@ -68,15 +68,14 @@ type Model interface {
 	Next(ctx context.Context, conv []Message, tools []tool.Spec) (Step, error)
 }
 
-// Brain runs the loop with a Model and a shared Registry of tools. It is IMMUTABLE
-// and shared: it holds no per-run output hook (streaming and tool observation both
-// travel on ctx via internal/activity), so one Brain serves every conversation and
-// every agent run without being copied to vary a sink. Tool-call observation lives
-// on the Registry — which both the Brain and the script interpreter dispatch
-// through — so every tool call, model- or script-issued, is emitted in one place.
+// Brain runs the loop with a Model. It is IMMUTABLE, stateless, and shared: it holds
+// no per-run state at all — the toolset a turn may use is passed IN (to Run /
+// Conversation), and streaming + tool observation travel on ctx via internal/activity.
+// So one Brain serves every conversation and every agent run without being copied to
+// vary a toolset or a sink. The tools it is handed vary per run (an agent gets a
+// filtered Registry); the Brain never owns them.
 type Brain struct {
 	Model       Model
-	Registry    *tool.Registry
 	MaxSteps    int
 	ToolTimeout time.Duration // per-tool-call deadline; 0 = no limit
 }
@@ -90,23 +89,24 @@ const defaultMaxSteps = 8
 // results are processed programmatically and must not be truncated.
 const maxToolOutput = 4000
 
-// Run drives a single request to a final answer (fresh conversation).
-func (b *Brain) Run(ctx context.Context, request string) (string, error) {
-	ans, _, err := b.run(ctx, []Message{{Role: "user", Content: request}})
+// Run drives a single request to a final answer over tools (fresh conversation).
+func (b *Brain) Run(ctx context.Context, request string, tools *tool.Registry) (string, error) {
+	ans, _, err := b.run(ctx, []Message{{Role: "user", Content: request}}, tools)
 	return ans, err
 }
 
 // run drives the loop over conv until the Model gives a final answer or the step
 // budget is exhausted, appending every turn (assistant/tool/final answer) to conv
-// and returning the answer plus the extended conversation.
-func (b *Brain) run(ctx context.Context, conv []Message) (string, []Message, error) {
+// and returning the answer plus the extended conversation. tools is the toolset this
+// run may use — passed in, not held, so the Brain stays stateless and shared.
+func (b *Brain) run(ctx context.Context, conv []Message, tools *tool.Registry) (string, []Message, error) {
 	steps := b.MaxSteps
 	if steps <= 0 {
 		steps = defaultMaxSteps
 	}
 
 	for i := 0; i < steps; i++ {
-		step, err := b.Model.Next(ctx, conv, b.Registry.Specs())
+		step, err := b.Model.Next(ctx, conv, tools.Specs())
 		if err != nil {
 			return "", conv, err
 		}
@@ -125,7 +125,7 @@ func (b *Brain) run(ctx context.Context, conv []Message) (string, []Message, err
 		results := make([]string, len(step.ToolCalls))
 		var wg sync.WaitGroup
 		for idx, tc := range step.ToolCalls {
-			wg.Go(func() { results[idx] = b.invoke(ctx, tc) })
+			wg.Go(func() { results[idx] = b.invoke(ctx, tc, tools) })
 		}
 		wg.Wait()
 		for idx, tc := range step.ToolCalls {
@@ -141,11 +141,15 @@ func (b *Brain) run(ctx context.Context, conv []Message) (string, []Message, err
 // internal/agent, which drives this.
 type Conversation struct {
 	brain *Brain
+	tools *tool.Registry // the toolset this conversation runs against (the session's)
 	conv  []Message
 }
 
-// NewConversation starts an empty conversation on this Brain.
-func (b *Brain) NewConversation() *Conversation { return &Conversation{brain: b} }
+// NewConversation starts an empty conversation on this Brain over tools — the toolset
+// every turn in it may use (an interactive session's shared Registry).
+func (b *Brain) NewConversation(tools *tool.Registry) *Conversation {
+	return &Conversation{brain: b, tools: tools}
+}
 
 // Messages returns a copy of the conversation history so far — for a client snapshot
 // (a reconnecting/late-joining UI). It is a snapshot: call it between turns; the live
@@ -156,16 +160,16 @@ func (c *Conversation) Messages() []Message { return append([]Message(nil), c.co
 // whole exchange in the conversation's history.
 func (c *Conversation) Send(ctx context.Context, input string) (string, error) {
 	c.conv = append(c.conv, Message{Role: "user", Content: input})
-	ans, conv, err := c.brain.run(ctx, c.conv)
+	ans, conv, err := c.brain.run(ctx, c.conv, c.tools)
 	c.conv = conv
 	return ans, err
 }
 
-// invoke runs a tool call through the shared Registry (which emits the observer
-// events) and returns the content to feed back to the Model — the tool's output,
-// or an "error: ..." string on failure (an unknown tool or a validation/execution
-// error is reported, not fatal, so the Model can correct itself).
-func (b *Brain) invoke(ctx context.Context, tc ToolCall) string {
+// invoke runs a tool call through tools (the run's Registry, which emits the observer
+// events) and returns the content to feed back to the Model — the tool's output, or
+// an "error: ..." string on failure (an unknown tool or a validation/execution error
+// is reported, not fatal, so the Model can correct itself).
+func (b *Brain) invoke(ctx context.Context, tc ToolCall, tools *tool.Registry) string {
 	if b.ToolTimeout > 0 {
 		var cancel context.CancelFunc
 		// A pausable budget so an out-of-band approval inside the tool doesn't
@@ -173,7 +177,7 @@ func (b *Brain) invoke(ctx context.Context, tc ToolCall) string {
 		ctx, cancel = deadline.WithBudget(ctx, b.ToolTimeout)
 		defer cancel()
 	}
-	out, err := b.Registry.Invoke(ctx, tc.Tool, tc.Args)
+	out, err := tools.Invoke(ctx, tc.Tool, tc.Args)
 	if err != nil {
 		return truncate("error: "+timeoutCause(ctx, err).Error(), maxToolOutput)
 	}
@@ -181,7 +185,7 @@ func (b *Brain) invoke(ctx context.Context, tc ToolCall) string {
 	// whose output is durable instruction text (a skill body) may raise its own
 	// budget via Spec.MaxResult so it is not silently corrupted by truncation.
 	budget := maxToolOutput
-	if m := b.Registry.MaxResult(tc.Tool); m > maxToolOutput {
+	if m := tools.MaxResult(tc.Tool); m > maxToolOutput {
 		budget = m
 	}
 	return truncate(out, budget)

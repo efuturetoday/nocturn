@@ -183,16 +183,17 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 
 	b := &brain.Brain{
 		Model:       sh.llmModel,
-		Registry:    reg,
 		ToolTimeout: 20 * time.Second,
 	}
 	sessionGrants := grantstore.Load(filepath.Join(wsDir, "grants.json"))
-	session := session.New(b, netCap.Guard, sessionGrants)
+	sess := session.New(b, reg, netCap.Guard, sessionGrants)
 
-	// Shared deps for every child-agent run in this workspace. Store resolves each
-	// agent's OWN durable "always" backing by name; Run opens/revokes its scope itself.
+	// Shared deps for every child-agent run in this workspace. Tools is the full
+	// registry (Run filters per agent); Store resolves each agent's OWN durable
+	// "always" backing by name; Run opens/revokes its scope itself.
 	agentDeps := agent.Deps{
 		Brain: b,
+		Tools: reg,
 		Guard: netCap.Guard,
 		Store: func(name string) capability.GrantStore { return grantstore.Load(grantstore.Path(agentsDir, name)) },
 	}
@@ -201,7 +202,7 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 		turnCtx, cancel := context.WithCancel(ctx)
 		turnCtx = activity.WithSink(turnCtx, uiSink) // attended turn: tokens + tool events surface in the chat
 		go func() {
-			_, err := session.Ask(turnCtx, input)
+			_, err := sess.Ask(turnCtx, input)
 			sh.send(doneMsg{err: err})
 		}()
 		return cancel
@@ -265,9 +266,9 @@ func buildStack(sh shared, wsName, wsDir string) (*stack, error) {
 	}
 
 	return &stack{
-		name: wsName, session: session, scheduler: sched, agentDefs: agentDefs,
+		name: wsName, session: sess, scheduler: sched, agentDefs: agentDefs,
 		startTurn: startTurn, startAgent: startAgent,
-		reset:  func() { waker.Cancel(); session.Reset() }, // new session → drop pending self-wakes
-		skills: skills, markSkill: session.MarkSkill,
+		reset:  func() { waker.Cancel(); sess.Reset() }, // new session → drop pending self-wakes
+		skills: skills, markSkill: sess.MarkSkill,
 	}, nil
 }
