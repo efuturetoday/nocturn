@@ -24,6 +24,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/skill"
 )
 
@@ -40,12 +41,13 @@ type (
 		options []hitl.Option
 		reply   chan string
 	}
-	// selfWakeMsg is a wake() firing: the originating stack asks to resume its own
-	// session with note. It routes through here so it serializes with normal turns
-	// (start is that stack's startTurn), rather than resuming re-entrantly.
+	// selfWakeMsg is a wake() firing: it asks to resume its own workspace's session with
+	// note. It routes through here so it serializes with normal turns (rather than resuming
+	// re-entrantly) and carries the target session, so a wake resumes the RIGHT workspace
+	// even if the user switched away.
 	selfWakeMsg struct {
-		note  string
-		start func(string) context.CancelFunc
+		note string
+		sess *session.Session
 	}
 )
 
@@ -190,42 +192,43 @@ func (e *queuedEntry) render(m *chatModel, width int) string {
 }
 
 // queuedInput is one buffered input: the visible entry (flipped from pending when it
-// runs) plus the session-starter to use — nil means the active stack's startTurn (a
-// normal user message); a wake carries its originating stack's starter.
+// runs) plus the session to run it on — nil means the active workspace's session (a
+// normal user message); a wake carries its OWN workspace's session.
 type queuedInput struct {
 	entry *queuedEntry
-	start func(string) context.CancelFunc
+	sess  *session.Session
 }
 
-// runQueued begins a turn for a buffered input: its entry (already in m.entries)
-// flips from pending to live, and the session is resumed with its text. The starter
-// is the item's own (a wake's originating stack) or the active startTurn.
+// runQueued begins a turn for a buffered input: its entry (already in m.entries) flips
+// from pending to live, and the turn runs on the item's own session (a wake's) or the
+// active workspace's.
 func (m *chatModel) runQueued(qi queuedInput) tea.Cmd {
 	qi.entry.pending = false
 	m.resetStream()
 	m.running = true
-	start := qi.start
-	if start == nil {
-		start = m.startTurn
+	sess := qi.sess
+	if sess == nil {
+		sess = m.bw.session
 	}
-	m.cancel = start(qi.entry.text)
+	m.cancel = m.startTurnOn(sess, qi.entry.text)
 	m.layout()
 	m.syncViewport()
 	return tea.Batch(m.sw.Reset(), m.sw.Start())
 }
 
 type chatModel struct {
-	startTurn  func(string) context.CancelFunc
-	startAgent func(name, task string) context.CancelFunc // run a workspace agent (/<name> <task>)
-	agents     []agent.Agent                              // workspace agents, for /agents + /<name> dispatch
-	reset      func()                                     // starts a new session: revokes session grants, clears history
-	skills     *skill.Index                               // discovered skills, for /name + /skills (never nil)
-	markSkill  func(string)                               // mark a /name-activated skill loaded, so skill.load dedups
-	model      string                                     // model name, shown in the header
+	bw         *bound               // the bound workspace this TUI is driving (its session/ws/waker)
+	workspaces map[string]*bound    // all built workspaces, for /ws switching
+	send       func(tea.Msg)        // p.Send — the turn goroutine reports results via this
+	pctx       context.Context      // process ctx; turns derive from it (Esc cancels the derived one)
+	uiSink     func(activity.Event) // activity → TUI messages; stamped onto each turn's ctx
 
-	stacks  map[string]*stack // all built workspaces, for /ws switching
-	wsNames []string          // workspace names, for the /ws listing
-	ws      string            // the active workspace name
+	agents []agent.Agent // active workspace's agents, cached on bind (for /agents + /<name>)
+	skills *skill.Index  // active workspace's skill catalog, cached on bind (never nil)
+	model  string        // model name, shown in the header
+
+	wsNames []string // workspace names, for the /ws listing
+	ws      string   // the active workspace name
 
 	vp   viewport.Model
 	ta   textarea.Model
@@ -255,7 +258,7 @@ type chatModel struct {
 	ready     bool
 }
 
-func newChatModel(active *stack, stacks map[string]*stack, names []string, model string, dark bool) chatModel {
+func newChatModel(active *bound, workspaces map[string]*bound, names []string, model string, dark bool, send func(tea.Msg), ctx context.Context) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Message…"
 	ta.Prompt = "› "
@@ -263,8 +266,19 @@ func newChatModel(active *stack, stacks map[string]*stack, names []string, model
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
 	ta.SetHeight(1)
 	ta.Focus()
+	// uiSink translates the agent's live activity into TUI messages; it is stamped onto
+	// each turn's ctx (startTurnOn/startAgent). Built once — it only needs send.
+	uiSink := func(e activity.Event) {
+		switch ev := e.(type) {
+		case activity.Token:
+			send(tokenMsg(ev.Text))
+		case activity.ToolEvent:
+			send(toolEventMsg(ev))
+		}
+	}
 	m := chatModel{
-		stacks: stacks, wsNames: names,
+		workspaces: workspaces, wsNames: names,
+		send: send, pctx: ctx, uiSink: uiSink,
 		model: model, dark: dark, inputH: 1,
 		ta:   ta,
 		spin: spinner.New(spinner.WithSpinner(spinner.Dot)),
@@ -272,21 +286,59 @@ func newChatModel(active *stack, stacks map[string]*stack, names []string, model
 		help: help.New(),
 		keys: newKeyMap(),
 	}
-	m.bindStack(active) // points startTurn/startAgent/agents/reset/skills/markSkill at the active workspace
+	m.bindWorkspace(active)
 	return m
 }
 
-// bindStack points the model's per-workspace closures at st and records it active.
-// The single indirection that makes /ws switching a pure rebind — no rebuild.
-func (m *chatModel) bindStack(st *stack) {
-	m.startTurn = st.startTurn
-	m.startAgent = st.startAgent
-	m.agents = st.agentDefs
-	m.reset = st.reset
-	m.skills = st.skills
-	m.markSkill = st.markSkill
-	m.ws = st.name
+// bindWorkspace points the model at bw and caches its skill catalog + agent list. The
+// single rebind that makes /ws switching cheap — no rebuild.
+func (m *chatModel) bindWorkspace(bw *bound) {
+	m.bw = bw
+	m.agents = bw.ws.Agents()
+	m.skills = bw.ws.Skills()
+	m.ws = bw.ws.Name()
 }
+
+// startTurn runs a user turn on the active workspace's session.
+func (m *chatModel) startTurn(input string) context.CancelFunc {
+	return m.startTurnOn(m.bw.session, input)
+}
+
+// startTurnOn drives one turn on sess with the TUI activity sink stamped on its ctx, so
+// its tokens + tool events surface in the chat. Returns a CancelFunc (Esc). Used for a
+// user message (the active session) and a self-wake (its own workspace's session).
+func (m *chatModel) startTurnOn(sess *session.Session, input string) context.CancelFunc {
+	turnCtx, cancel := context.WithCancel(m.pctx)
+	turnCtx = activity.WithSink(turnCtx, m.uiSink)
+	go func() {
+		_, err := sess.Ask(turnCtx, input)
+		m.send(doneMsg{err: err})
+	}()
+	return cancel
+}
+
+// startAgent runs a workspace agent (/<name> <task>) on the active workspace; its tokens
+// and tool calls nest into the chat via the same sink.
+func (m *chatModel) startAgent(name, task string) context.CancelFunc {
+	turnCtx, cancel := context.WithCancel(m.pctx)
+	turnCtx = activity.WithSink(turnCtx, m.uiSink)
+	w := m.bw.ws
+	go func() {
+		_, err := w.RunAgent(turnCtx, name, task)
+		m.send(doneMsg{err: err})
+	}()
+	return cancel
+}
+
+// reset starts a fresh session on the active workspace: drop its pending self-wakes,
+// then revoke session grants + clear history.
+func (m *chatModel) reset() {
+	m.bw.waker.Cancel()
+	m.bw.session.Reset()
+}
+
+// markSkill records a /name-activated skill as loaded so a later model skill.load dedups.
+func (m *chatModel) markSkill(name string) { m.bw.session.MarkSkill(name) }
 
 // workspaceListing renders /ws: every built workspace as an invocable /ws <name>,
 // the active one marked.
@@ -836,8 +888,8 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cmd == "ws" {
 					if target := strings.TrimSpace(rest); target == "" {
 						m.entries = append(m.entries, &noticeEntry{text: m.workspaceListing()})
-					} else if st, ok := m.stacks[target]; ok {
-						m.bindStack(st)
+					} else if st, ok := m.workspaces[target]; ok {
+						m.bindWorkspace(st)
 						m.entries = nil
 						m.queue = nil
 						m.resetStream()
@@ -941,7 +993,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case selfWakeMsg:
 		// A wake() fired. If a turn is running, BUFFER the note (fed when it ends);
 		// otherwise resume the originating session now. Either way it is visible.
-		qi := queuedInput{entry: &queuedEntry{text: msg.note, wake: true}, start: msg.start}
+		qi := queuedInput{entry: &queuedEntry{text: msg.note, wake: true}, sess: msg.sess}
 		if m.running {
 			qi.entry.pending = true
 			m.entries = append(m.entries, qi.entry)

@@ -208,33 +208,33 @@ func tuiCmd(args []string) error {
 	if !contains(names, activeName) {
 		names = append(names, activeName)
 	}
-	stacks := make(map[string]*stack, len(names))
+	workspaces := make(map[string]*bound, len(names))
 	for _, name := range names {
 		fmt.Printf("Workspace: %s\n", name)
-		st, err := buildStack(sh, name, filepath.Join("workspaces", name))
+		bw, err := buildStack(sh, name, filepath.Join("workspaces", name))
 		if err != nil {
 			return fmt.Errorf("workspace %s: %w", name, err)
 		}
-		stacks[name] = st
-		defer st.session.Close()
+		workspaces[name] = bw
+		defer bw.session.Close()
 	}
-	active := stacks[activeName]
+	active := workspaces[activeName]
 
 	// Detect the terminal background ONCE, before bubbletea takes over stdin. The TUI
-	// opens on the active workspace; /ws switches among all built stacks.
+	// opens on the active workspace; /ws switches among all built workspaces.
 	dark := lipgloss.HasDarkBackground()
-	p = tea.NewProgram(newChatModel(active, stacks, names, modelName, dark), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p = tea.NewProgram(newChatModel(active, workspaces, names, modelName, dark, sh.send, ctx), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	notifier.p = p
 
 	// Start EVERY workspace's scheduler — one instance fires all workspaces' cron
 	// agents (each through its own isolated stack; log lines are workspace-tagged).
 	schedCtx, cancelSched := context.WithCancel(ctx)
 	defer cancelSched()
-	for _, st := range stacks {
-		if s := st.scheduler.Scheduled(); len(s) > 0 {
-			fmt.Printf("Scheduled [%s]: %s\n", st.name, strings.Join(s, ", "))
+	for _, b := range workspaces {
+		if s := b.scheduler.Scheduled(); len(s) > 0 {
+			fmt.Printf("Scheduled [%s]: %s\n", b.ws.Name(), strings.Join(s, ", "))
 		}
-		st.scheduler.Start(schedCtx)
+		b.scheduler.Start(schedCtx)
 	}
 
 	_, err = p.Run()
