@@ -66,7 +66,7 @@ func TestBrain_ToolCallResultFedBackThenFinal(t *testing.T) {
 	}}
 
 	b := brain.New(model)
-	ans, err := b.Run(context.Background(), "what does example.com say?", reg)
+	ans, err := b.NewConversation(reg).Send(context.Background(), "what does example.com say?")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestBrain_StreamsAnswerTokens(t *testing.T) {
 			streamed += tok.Text
 		}
 	})
-	ans, err := b.Run(ctx, "hi", tool.NewRegistry())
+	ans, err := b.NewConversation(tool.NewRegistry()).Send(ctx, "hi")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestBrain_LongToolOutputBoundedForModel(t *testing.T) {
 	}}
 
 	b := brain.New(model)
-	if _, err := b.Run(context.Background(), "go", reg); err != nil {
+	if _, err := b.NewConversation(reg).Send(context.Background(), "go"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	var toolMsg string
@@ -149,7 +149,7 @@ func TestBrain_ParallelToolCallsRunConcurrently(t *testing.T) {
 	b := brain.New(model)
 
 	ansCh := make(chan string, 1)
-	go func() { ans, _ := b.Run(context.Background(), "go", reg); ansCh <- ans }()
+	go func() { ans, _ := b.NewConversation(reg).Send(context.Background(), "go"); ansCh <- ans }()
 
 	// All three must start before any is allowed to finish — impossible if serial.
 	for i := 0; i < n; i++ {
@@ -231,7 +231,7 @@ func TestBrain_ToolTimeout(t *testing.T) {
 	}}
 
 	b := brain.New(model, brain.WithToolTimeout(20*time.Millisecond))
-	ans, err := b.Run(context.Background(), "call the slow tool", reg)
+	ans, err := b.NewConversation(reg).Send(context.Background(), "call the slow tool")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestBrain_MaxStepsExceeded(t *testing.T) {
 	}}
 
 	b := brain.New(model, brain.WithMaxSteps(3))
-	if _, err := b.Run(context.Background(), "loop forever", reg); !errors.Is(err, brain.ErrMaxSteps) {
+	if _, err := b.NewConversation(reg).Send(context.Background(), "loop forever"); !errors.Is(err, brain.ErrMaxSteps) {
 		t.Fatalf("err = %v, want ErrMaxSteps", err)
 	}
 	if model.calls != 3 {
@@ -270,7 +270,7 @@ func TestBrain_UnknownToolIsReportedNotFatal(t *testing.T) {
 	}}
 
 	b := brain.New(model)
-	ans, err := b.Run(context.Background(), "call a missing tool", tool.NewRegistry())
+	ans, err := b.NewConversation(tool.NewRegistry()).Send(context.Background(), "call a missing tool")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestBrain_ToolValidationErrorFedBack(t *testing.T) {
 	}}
 
 	b := brain.New(model)
-	if _, err := b.Run(context.Background(), "fetch", reg); err != nil {
+	if _, err := b.NewConversation(reg).Send(context.Background(), "fetch"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if !convContains(model.convs[1], "missing required field: url") {
@@ -349,7 +349,7 @@ func TestBrain_Integration_FetchThroughGateway(t *testing.T) {
 	}}
 
 	b := brain.New(model)
-	if _, err := b.Run(context.Background(), "fetch the site", reg); err != nil {
+	if _, err := b.NewConversation(reg).Send(context.Background(), "fetch the site"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if !convContains(model.convs[1], "hello from the web") {
@@ -372,7 +372,7 @@ func TestBrain_MaxResultBypassesTruncation(t *testing.T) {
 			{Answer: "done"},
 		}}
 		b := brain.New(model)
-		if _, err := b.Run(context.Background(), "go", reg); err != nil {
+		if _, err := b.NewConversation(reg).Send(context.Background(), "go"); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 		return model.convs[len(model.convs)-1] // what the model saw on its final turn

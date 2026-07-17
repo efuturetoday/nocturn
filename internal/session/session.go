@@ -26,6 +26,7 @@ package session
 import (
 	"context"
 
+	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
@@ -68,13 +69,13 @@ func New(b *brain.Brain, tools *tool.Registry, g *gateway.Guard, store capabilit
 	}
 }
 
-// Ask runs one turn under the session's scope: Bind stamps the scope's grants (and
-// its workspace cage, if any) onto ctx so the Guard binds standing grants to them and
-// enforces the cage, then drives the conversation to a final answer.
+// Ask runs one turn as the workspace's ROOT agent — the empty agent.Agent{} (no
+// restrictions, the session's full tools via s.conv), over its PERSISTENT scope and
+// conversation. It is the exact same execution as a child agent.Run, differing only in
+// its inputs (persistent memory + full tools + empty config vs. fresh + filtered +
+// declared), so it goes through the one shared agent.Turn — no duplicated ceremony.
 func (s *Session) Ask(ctx context.Context, input string) (string, error) {
-	ctx = s.scope.Bind(ctx)
-	ctx = skill.WithActive(ctx, s.skills) // so skill.load deduplicates within this conversation
-	return s.conv.Send(ctx, input)
+	return agent.Turn(ctx, s.scope, s.skills, agent.Agent{}, s.conv, input)
 }
 
 // History returns a copy of this session's conversation so far (for a client

@@ -109,12 +109,6 @@ const defaultMaxSteps = 8
 // results are processed programmatically and must not be truncated.
 const maxToolOutput = 4000
 
-// Run drives a single request to a final answer over tools (fresh conversation).
-func (b *Brain) Run(ctx context.Context, request string, tools *tool.Registry) (string, error) {
-	ans, _, err := b.run(ctx, []Message{{Role: "user", Content: request}}, tools)
-	return ans, err
-}
-
 // run drives the loop over conv until the Model gives a final answer or the step
 // budget is exhausted, appending every turn (assistant/tool/final answer) to conv
 // and returning the answer plus the extended conversation. tools is the toolset this

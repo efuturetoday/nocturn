@@ -30,24 +30,45 @@ type Result struct {
 	Answer string
 }
 
-// Run runs one task of a to a final answer, composing on ctx:
-//   - a fresh gateway.Scope over the agent's OWN durable store (Deps.Store(a.Name)) —
-//     so this agent's "always for this agent" approvals are ITS OWN and never leak to
-//     the interactive session or another agent; the scope's epoch is revoked when the
-//     run ends, dropping its session-scoped grants. The Guard owns the epoch registry,
-//     so the run never touches it directly.
-//   - an optional wall-clock budget (pausable: it does not drain while a HITL approval
-//     is pending).
-//   - a brain limited to the agent's OWN tools via a filtered Registry — a tool outside
-//     the list is UNREACHABLE, not merely hidden from the model. Skills are opt-in like
-//     any tool (add "skill" to Tools): off by default so a focused agent carries no
-//     skill-catalog context. skill.WithActive is stamped anyway — harmless when no skill
-//     tool is present, correct when one is.
+// Turn is THE execution — the one place the scoped-run ceremony lives. It binds the
+// scope, composes agent a's OWN restrictions onto ctx (policy: tightening deny/ask;
+// cage: intersecting reach bound; budget: a pausable wall-clock deadline), stamps the
+// active-skills set, and drives the brain loop over conv (which already holds a's tool
+// subset). A child Run and an interactive Session turn are the SAME operation through
+// here — they differ only in their inputs:
 //
-// Every effect is gated exactly as everywhere else (broker + HITL). An attended spawn
-// inherits the parent's activity + approval sinks from ctx (its tokens and prompts nest
-// into the parent chat); a detached/scheduled run carries neither and is resolved by its
-// autonomy dial out of band.
+//	Run      → a declared Agent, a FRESH conversation over its FILTERED tools, run once.
+//	Session  → the empty root Agent{} (no restrictions, FULL tools), a PERSISTENT
+//	           conversation, run per user turn.
+//
+// The scope is bound but NOT opened here — its lifetime (per-run vs. session-persistent)
+// belongs to the caller. Every effect is gated exactly as everywhere else (broker +
+// HITL); ctx carries the activity + approval sinks, so an attended spawn nests into the
+// parent chat and a detached run resolves out of band by its autonomy dial.
+func Turn(ctx context.Context, scope *gateway.Scope, active *skill.Active, a Agent, conv *brain.Conversation, input string) (string, error) {
+	ctx = scope.Bind(ctx)
+	// Author config, never grants (KONZEPT §9). Empty on the root agent → skipped.
+	if len(a.Policy.Rules) > 0 {
+		ctx = capability.WithPolicy(ctx, a.Policy)
+	}
+	if len(a.Cage) > 0 {
+		ctx = capability.WithCage(ctx, capability.NewCage(a.Cage...))
+	}
+	ctx = skill.WithActive(ctx, active)
+	if a.Budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = deadline.WithBudget(ctx, a.Budget)
+		defer cancel()
+	}
+	return conv.Send(ctx, input)
+}
+
+// Run runs one task of agent a to a final answer: it opens a's OWN revocable scope over
+// its OWN durable store (so its "always for this agent" grants never leak to the session
+// or another agent — closing the scope drops its session grants), builds a FRESH
+// conversation over the agent's tool subset (a tool outside a.Tools is UNREACHABLE, not
+// merely hidden), and runs one shared Turn. skill.load dedup is fresh per run — skills
+// are opt-in like any tool (add "skill" to Tools), off by default for a focused agent.
 func Run(ctx context.Context, d Deps, a Agent, task string) (Result, error) {
 	var store capability.GrantStore
 	if d.Store != nil {
@@ -55,27 +76,8 @@ func Run(ctx context.Context, d Deps, a Agent, task string) (Result, error) {
 	}
 	scope := d.Guard.NewScope(store)
 	defer scope.Revoke()
-	ctx = scope.Bind(ctx)
-	// The agent author's own scope: its policy (tightening: deny blacklist / force-ask)
-	// composes with the workspace base, and its optional cage intersects any outer
-	// bound — author config, never grants (KONZEPT §9).
-	if len(a.Policy.Rules) > 0 {
-		ctx = capability.WithPolicy(ctx, a.Policy)
-	}
-	if len(a.Cage) > 0 {
-		ctx = capability.WithCage(ctx, capability.NewCage(a.Cage...))
-	}
-	ctx = skill.WithActive(ctx, skill.NewActive()) // fresh skill.load dedup for this run
-	if a.Budget > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = deadline.WithBudget(ctx, a.Budget)
-		defer cancel()
-	}
 
-	// The agent's OWN tools: the full registry filtered to what it declared — a tool
-	// outside the list is UNREACHABLE (Invoke reports "unknown tool"), not merely
-	// hidden. The shared stateless Brain is handed this subset for the run; no clone.
-	tools := d.Tools.Select(a.Matches)
-	answer, err := d.Brain.Run(ctx, a.Instructions+"\n\n---\nTask:\n"+task, tools)
+	conv := d.Brain.NewConversation(d.Tools.Select(a.Matches))
+	answer, err := Turn(ctx, scope, skill.NewActive(), a, conv, a.Instructions+"\n\n---\nTask:\n"+task)
 	return Result{Answer: answer}, err
 }
