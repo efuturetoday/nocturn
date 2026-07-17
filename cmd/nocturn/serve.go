@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,8 +16,10 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl"
 )
 
-// serveDefaultAddr is where the daemon listens until pairing/auth lands (2b-3-ii): loopback
-// only, so nothing on the LAN can reach it before there is an auth gate.
+// serveDefaultAddr is the daemon's default listen address: loopback only. The MVP has no
+// authentication, so this default keeps it unreachable from the network — binding to a LAN
+// address is an explicit opt-in (NOCTURN_SERVE_ADDR) and is warned about. Auth (pairing)
+// comes before any non-dev network use.
 const serveDefaultAddr = "127.0.0.1:8765"
 
 // serveCmd runs the companion-app daemon: the same workspace spine as the TUI, exposed over
@@ -29,6 +32,15 @@ func serveCmd(_ []string) error {
 	addr := os.Getenv("NOCTURN_SERVE_ADDR")
 	if addr == "" {
 		addr = serveDefaultAddr
+	}
+	// MVP has NO authentication. Loopback is safe (only local processes reach it). Binding
+	// to a non-loopback address exposes an UNAUTHENTICATED control channel to the whole
+	// network — any device could drive the assistant and approve effects. Allowed for
+	// development (a real phone needs the LAN address), but warned loudly; add pairing/auth
+	// before using it on an untrusted network.
+	if !isLoopbackAddr(addr) {
+		fmt.Printf("\n⚠️  WARNING: serving on %s with NO authentication — any device on your\n"+
+			"    network can control this assistant and approve effects. Dev use only.\n\n", addr)
 	}
 
 	// No TUI: notify()/scheduler lines go to stdout, and an approval that can reach neither
@@ -77,6 +89,23 @@ type denyNotifier struct{}
 
 func (denyNotifier) Notify(string, []hitl.Option) error {
 	return errors.New("no approval channel available (connect the app or configure out-of-band push)")
+}
+
+// isLoopbackAddr reports whether a listen address is loopback-only (safe without auth). An
+// empty host (":8765" = all interfaces) is NOT loopback.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return false // all interfaces
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // logSend is the daemon's send sink (the TUI's is p.Send): notify()/scheduler lines print
