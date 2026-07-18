@@ -65,7 +65,9 @@ func (s *Server) Handle(ctx context.Context, conn Conn) error {
 			switch sig.Domain {
 			case DomainChats:
 				h.sendChats(sig.WS)
-				// future domains (agents, reminders, settings, jobs) add a case + a sendX here
+			case DomainReminders:
+				h.sendReminders(sig.WS)
+				// future domains (agents, settings, jobs) add a case + a sendX here
 			}
 		}
 	}()
@@ -122,7 +124,9 @@ func (h *clientConn) dispatch(ctx context.Context, msg []byte) {
 			h.send(encodeWorkspace(st)) // echo the new state back
 		}
 	case "listChats":
-		h.sendChats(c.WS) // an explicit pull — mutations below rely on the WatchChats broadcast
+		h.sendChats(c.WS) // an explicit pull — mutations below rely on the WatchSync broadcast
+	case "listReminders":
+		h.sendReminders(c.WS) // an explicit pull; changes arrive live via DomainReminders
 	case "newChat":
 		if _, ok := h.workspaces.NewChat(c.WS, c.Name); !ok {
 			h.send(encodeError("unknown workspace: " + c.WS))
@@ -149,6 +153,15 @@ func (h *clientConn) dispatch(ctx context.Context, msg []byte) {
 func (h *clientConn) sendChats(ws string) {
 	if chats, ok := h.workspaces.Chats(ws); ok {
 		h.send(encodeChats(ws, chats))
+	} else {
+		h.send(encodeError("unknown workspace: " + ws))
+	}
+}
+
+// sendReminders replies with a workspace's pending reminders (or an error for an unknown ws).
+func (h *clientConn) sendReminders(ws string) {
+	if rems, ok := h.workspaces.Reminders(ws); ok {
+		h.send(encodeReminders(ws, rems))
 	} else {
 		h.send(encodeError("unknown workspace: " + ws))
 	}

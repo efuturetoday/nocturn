@@ -247,3 +247,7 @@ func (w *Workspace) Skills() *skill.Index { return w.skills }
 
 // Agents is the workspace's child-agent declarations (for the UI and scheduler).
 func (w *Workspace) Agents() []agent.Agent { return w.agents }
+
+// Reminders is the workspace's reminder capability (for the app to list pending reminders and
+// for the composition root to wire a live-sync change hook).
+func (w *Workspace) Reminders() *remindcap.Reminders { return w.reminders }

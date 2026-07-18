@@ -128,6 +128,8 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 	if sh.sync != nil {
 		onActivity = func(chatID, kind string) { sh.sync.emitActivity(wsName, chatID, kind) }
 		onChange = func() { sh.sync.emitList(appserver.DomainChats, wsName) }
+		// reminders live-sync: a create/fire/cancel pushes the full reminder list to clients.
+		w.Reminders().OnChange = func() { sh.sync.emitList(appserver.DomainReminders, wsName) }
 	}
 	chatMgr := chat.NewManager(ctx, chat.Deps{
 		Engine:     w.Brain(),

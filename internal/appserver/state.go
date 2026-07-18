@@ -25,6 +25,11 @@ type Workspaces interface {
 	RenameChat(ws, id, name string) bool
 	DeleteChat(ws, id string) bool
 
+	// Reminders lists a workspace's pending reminders (soonest first). ok is false for an
+	// unknown ws. Reminders are set/cancelled by the model via gated tools, not from here —
+	// the app only VIEWS them (a read-only list), pushed live on change (DomainReminders).
+	Reminders(ws string) ([]ReminderMeta, bool)
+
 	// WatchSync subscribes to the ONE server-push stream across ALL workspaces: each Sync is a
 	// per-chat activity badge, a coarse "this workspace's chat list changed" marker, or both (a
 	// turn end is both). The server turns it into a chatActivity push and/or a full chats-list
@@ -50,7 +55,8 @@ type Sync struct {
 type Domain string
 
 const (
-	DomainChats Domain = "chats" // later: DomainAgents, DomainReminders, DomainSettings, DomainJobs, …
+	DomainChats     Domain = "chats"
+	DomainReminders Domain = "reminders" // later: DomainAgents, DomainSettings, DomainJobs, …
 )
 
 // ChatActivity is the lightweight badge signal for a chat the client may not have open:
@@ -69,6 +75,15 @@ const (
 	ActivityTurnEnd         = "turnEnd"
 	ActivityApprovalPending = "approvalPending"
 )
+
+// ReminderMeta is one pending reminder for the app's reminder list. It carries only the
+// display fields — the model owns creating/cancelling via its gated tools.
+type ReminderMeta struct {
+	ID      string `json:"id"`
+	FireAt  string `json:"fireAt"` // RFC3339
+	Message string `json:"message"`
+	Title   string `json:"title,omitempty"`
+}
 
 // ChatMeta is one chat's summary for the app's chat list.
 type ChatMeta struct {

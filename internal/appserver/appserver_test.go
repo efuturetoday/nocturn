@@ -98,6 +98,12 @@ func (w *fakeWorkspaces) OpenChat(ws, id string) (appserver.Runner, bool) {
 }
 func (w *fakeWorkspaces) RenameChat(ws, id, name string) bool { return ws == "work" }
 func (w *fakeWorkspaces) DeleteChat(ws, id string) bool       { return ws == "work" }
+func (w *fakeWorkspaces) Reminders(ws string) ([]appserver.ReminderMeta, bool) {
+	if ws != "work" {
+		return nil, false
+	}
+	return []appserver.ReminderMeta{{ID: "r1", FireAt: "2026-07-19T09:00:00Z", Message: "standup"}}, true
+}
 func (w *fakeWorkspaces) WatchSync() (<-chan appserver.Sync, func()) {
 	if w.syncs == nil {
 		w.syncs = make(chan appserver.Sync, 8)
@@ -258,6 +264,27 @@ func TestServer_ChatsListPush(t *testing.T) {
 	}
 	if items, _ := got["items"].([]any); len(items) == 0 {
 		t.Fatalf("chats push carried no items: %v", got)
+	}
+}
+
+// A reminder set/fired/cancelled (Sync with DomainReminders) pushes the workspace's full
+// pending-reminder list to the client unsolicited — same coarse bus as chats.
+func TestServer_RemindersListPush(t *testing.T) {
+	fw := &fakeWorkspaces{
+		runner: &fakeRunner{events: make(chan chat.Event, 1)},
+		syncs:  make(chan appserver.Sync, 8),
+	}
+	fc := newConn()
+	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
+
+	fw.syncs <- appserver.Sync{Domain: appserver.DomainReminders, WS: "work"}
+
+	got := recvUntil(t, fc.out, "reminders")
+	if got["ws"] != "work" {
+		t.Fatalf("reminders push = %v, want ws=work", got)
+	}
+	if items, _ := got["items"].([]any); len(items) == 0 {
+		t.Fatalf("reminders push carried no items: %v", got)
 	}
 }
 

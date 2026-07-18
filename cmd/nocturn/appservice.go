@@ -120,6 +120,26 @@ func (a *appWorkspaces) DeleteChat(ws, id string) bool {
 	return b.chats.Delete(id) == nil
 }
 
+// Reminders lists a workspace's pending reminders (soonest first), read from its reminder
+// capability. Read-only for the app — reminders are set/cancelled by the model's gated tools.
+func (a *appWorkspaces) Reminders(ws string) ([]appserver.ReminderMeta, bool) {
+	b, ok := a.bounds[ws]
+	if !ok {
+		return nil, false
+	}
+	pending := b.ws.Reminders().Store.List()
+	out := make([]appserver.ReminderMeta, 0, len(pending))
+	for _, r := range pending {
+		out = append(out, appserver.ReminderMeta{
+			ID:      r.ID,
+			FireAt:  r.FireAt.Format(time.RFC3339),
+			Message: r.Message,
+			Title:   r.Title,
+		})
+	}
+	return out, true
+}
+
 // WatchSync subscribes to the one client-sync stream (all workspaces' managers feed the one
 // hub — badges + list changes; the app server fans it to the client).
 func (a *appWorkspaces) WatchSync() (<-chan appserver.Sync, func()) {

@@ -50,10 +50,21 @@ type Reminders struct {
 	Store   *Store
 	Push    Pusher
 	Scanner *secret.Scanner
+	// OnChange, if set, fires when the pending-reminder LIST changes (a reminder created,
+	// fired, or cancelled) so a host can push the full list to clients — coarse live sync,
+	// mirroring chat.Manager.OnChange. Optional; must not block.
+	OnChange func()
 
 	seq    atomic.Uint64
 	mu     sync.Mutex
 	timers map[string]*time.Timer // id -> pending one-shot timer
+}
+
+// changed fires the optional list-change hook (a reminder was created/fired/cancelled).
+func (r *Reminders) changed() {
+	if r.OnChange != nil {
+		r.OnChange()
+	}
 }
 
 // New builds the reminder capability. Call Restore once after construction to
@@ -89,6 +100,7 @@ func (r *Reminders) fire(rem Reminder) {
 	delete(r.timers, rem.ID)
 	r.mu.Unlock()
 	r.Store.Remove(rem.ID)
+	r.changed() // the pending list shrank
 	if err := r.Scanner.ScanEgress(rem.Title, rem.Message); err != nil {
 		return // a stored value now leaks — drop it rather than deliver
 	}
@@ -104,7 +116,11 @@ func (r *Reminders) cancel(id string) bool {
 		delete(r.timers, id)
 	}
 	r.mu.Unlock()
-	return r.Store.Remove(id)
+	existed := r.Store.Remove(id)
+	if existed {
+		r.changed()
+	}
+	return existed
 }
 
 // Cancel stops every pending timer (for a clean workspace/app shutdown). Reminders
@@ -170,6 +186,7 @@ func (r *Reminders) createTool() tool.Tool {
 						return "", err
 					}
 					r.enroll(rem)
+					r.changed() // a new pending reminder appeared
 					b, _ := json.Marshal(struct {
 						ID     string `json:"id"`
 						FireAt string `json:"fireAt"`

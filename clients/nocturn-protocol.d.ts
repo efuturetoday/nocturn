@@ -95,6 +95,17 @@ export interface WorkspaceState {
   accounts: string[];
 }
 
+/**
+ * One pending reminder in a workspace's reminder list. Read-only for the app — the model
+ * sets/cancels reminders via its gated tools; the app only views them (pushed live on change).
+ */
+export interface ReminderMeta {
+  id: string;
+  fireAt: string; // RFC3339 — when it fires
+  message: string;
+  title?: string;
+}
+
 /** One chat's summary in a workspace's chat list. A workspace holds several named chats. */
 export interface ChatMeta {
   id: string;
@@ -218,6 +229,17 @@ export interface ChatsEvent {
 }
 
 /**
+ * A workspace's pending-reminder list. Sent as a reply to `listReminders` and pushed
+ * unsolicited whenever the list changes (a reminder set / fired / cancelled). Full list —
+ * just `set(items)`.
+ */
+export interface RemindersEvent {
+  type: "reminders";
+  ws: string;
+  items: ReminderMeta[];
+}
+
+/**
  * A lightweight badge signal for a chat the client may NOT have open: it finished a turn
  * (`turnEnd` — badge it) or is waiting on an approval (`approvalPending` — actionable). No
  * conversation content; refresh the real state with `listChats` / `openChat`. The currently
@@ -251,6 +273,7 @@ export type ServerEvent =
   | WorkspacesEvent
   | WorkspaceEvent
   | ChatsEvent
+  | RemindersEvent
   | ChatActivityEvent
   | ErrorEvent;
 
@@ -318,6 +341,12 @@ export interface ListChatsCommand {
   ws: string;
 }
 
+/** List a workspace's pending reminders (→ RemindersEvent; changes then arrive live). */
+export interface ListRemindersCommand {
+  cmd: "listReminders";
+  ws: string;
+}
+
 /** Create a new empty chat in a workspace (→ ChatsEvent with the updated list). */
 export interface NewChatCommand {
   cmd: "newChat";
@@ -359,6 +388,7 @@ export type ClientCommand =
   | GetWorkspaceCommand
   | SetPersonaCommand
   | ListChatsCommand
+  | ListRemindersCommand
   | NewChatCommand
   | OpenChatCommand
   | RenameChatCommand
