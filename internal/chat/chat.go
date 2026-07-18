@@ -4,7 +4,10 @@
 // skills, driven by a serialized turn loop (commands in via Submit/Cancel/Reset/
 // Resolve, events out via Subscribe). The Store persists chats and the Manager
 // keeps N of them live per workspace. A user chat and an agent run are the same
-// machinery; who mints the Charter is the only difference.
+// machinery; who mints the Charter is the only difference — and lifetime is a
+// choice, not a type: an attended in-chat spawn runs as a throwaway Once inside
+// the parent turn, a cron firing becomes a fresh one-shot chat (Manager.FireAgent)
+// whose persisted record is the run's audit trail.
 //
 // One Chat bundles everything that resets and closes together:
 //

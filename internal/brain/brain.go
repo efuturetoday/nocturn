@@ -31,7 +31,7 @@ var ErrMaxSteps = errors.New("brain: max steps exceeded without a final answer")
 
 // Message is one turn in the conversation. Role is "system", "user", "assistant",
 // or "tool". The optional leading "system" turn carries the standing instructions
-// (an interactive session's persona, or a child agent's own Instructions) — seeded
+// (an interactive chat's persona, or a child agent's own Instructions) — seeded
 // once by NewConversation, never appended to a user turn. An assistant turn that
 // calls tools carries them in ToolCalls (native tool_calls, not text); a tool result
 // carries the id of the call it answers in ToolCallID, so results match their calls
@@ -170,7 +170,7 @@ type Conversation struct {
 type ConvOption func(*Conversation)
 
 // WithSystem seeds the leading role=system message — the standing instruction (a
-// session's persona, or a child agent's Instructions). Optional: an empty string (or
+// chat's persona, or a child agent's Instructions). Optional: an empty string (or
 // omitting the option) starts a conversation with no system turn. This is the ONE place
 // the system role is set — the model adapter transports it, never invents it.
 func WithSystem(system string) ConvOption {

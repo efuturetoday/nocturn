@@ -1,8 +1,10 @@
 // Package workspace is the composition aggregate: the one place that OWNS everything
 // a workspace can do — its guard, its toolset, its skills catalog, its child agents,
 // its scheduler, its durable grants — assembled in one place instead of smeared across
-// a bootstrap function. An interactive Session and a child-agent run are opened FROM a
-// workspace and operate over its concrete parts; nothing is assembled ad hoc outside it.
+// a bootstrap function. It is also the ONLY chat.Charter factory: RootCharter mints
+// the interactive chat's spec, AgentCharter compiles an agent declaration into its
+// own; every chat operates over the workspace's concrete parts, nothing is assembled
+// ad hoc outside it.
 //
 // The process-wide shared services (the LLM connection, the approval engine, the master
 // key, the notify channel) live in Host and are handed to Open — those are genuinely

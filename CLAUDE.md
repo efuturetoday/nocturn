@@ -66,8 +66,10 @@ getestet, bevor die nächste kam:
 ```
 7  cmd/nocturn      TUI (parameterlos) = das ganze Interface; app.go = Prozess-Spine,
                     stack.go = ein isolierter Stack pro Workspace
-   workspace        Composition-Aggregat: OWNS guard/tools/skills/agents/grants pro ws
-   session · agent  Session = interaktiver Chat (Runner-Loop); agent = Child-Run/Scheduler
+   workspace        Composition-Aggregat: OWNS guard/tools/skills/agents/grants pro ws;
+                    mintet die Charters (RootCharter/AgentCharter)
+   chat · agent     Chat = DIE Konversations-Einheit (Charter-konstruiert, ein Turn-Loop,
+                    Once/Store/Manager); agent = nur Deklaration + Cron-Scheduler
    plugin · mcp     sandboxed Plugins · remote-MCP-Client — beide über die geteilte Registry
 6  llm              go-openai-Adapter, native tool_calls, SSE  (erfüllt brain.Model)
 5  brain            agentischer Loop, Model-Port; Tokens/Tools/Reasoning → internal/activity
@@ -88,7 +90,8 @@ getestet, bevor die nächste kam:
    cmd/nocturn ── lädt .env; baut den Prozess-Spine (master key, HITL-Engine, LLM-Client);
         │          workspace.Open setzt PRO Workspace den isolierten Stack zusammen
         ▼
-   session.Runner ── serialisierter Turn-Loop (Submit rein / Subscribe raus); Ask → agent.Turn
+   chat.Chat ── serialisierter Turn-Loop (Submit rein / Subscribe raus);
+        │        turn = Scope.Bind(ganze Authority) + Skills + Budget — DIE eine Zeremonie
         │
         ▼
    brain  ── agentischer Loop: Model fragen → Tool-Call | Antwort → Tool → zurück
@@ -153,13 +156,13 @@ getestet, bevor die nächste kam:
 - `grantstore` — file-backed `capability.GrantStore` (`<ws>/grants.json`, 0600) — die stehenden Rechte.
 
 **Composition + Lifecycle:**
-- `workspace` — das Composition-Aggregat: OWNS pro Workspace guard/tools/skills/agents/grants; `Open` baut den Stack, `OpenSession`/`RunAgent`. Persona via `PERSONA.md` (layered).
-- `session` — ein interaktiver Chat: `Session` (State) + `Runner` (serialisierter Turn-Loop, Submit/Subscribe — der headless-Kern, den TUI/REST/Mobile gleich treiben).
-- `agent` — das Child-Agent-Subsystem: `Agent`-Deklaration (`<ws>/agents/<name>/agent.md`), `Run`→`Result`, `Scheduler`; teilt `Turn` mit der Session.
+- `workspace` — das Composition-Aggregat: OWNS pro Workspace guard/tools/skills/agents/grants; `Open` baut den Stack; die EINZIGE Charter-Fabrik (`RootCharter`, `AgentCharter(name, autonomy)`). Persona via `PERSONA.md` (layered).
+- `chat` — DIE Konversations-Einheit: `Chat` (unter einem `Charter` konstruiert; serialisierter Turn-Loop, Submit/Subscribe — der headless-Kern, den TUI/REST/Mobile gleich treiben; `turn` = die eine Zeremonie), `Once` (Wegwerf-Chat = ein Agent-Run), `Store` (+`Meta.Agent`, `Prune`) + `Manager` (N live Chats, `FireAgent` für Cron-Firings mit persistiertem Transcript).
+- `agent` — nur noch DEKLARATION + Zeitplan: `Agent` (`<ws>/agents/<name>/agent.md`, `Matches`, `Discover`) und der Cron-`Scheduler`; Ausführung lebt in `chat` (Once/FireAgent), die Übersetzung in Autorität im `workspace` (AgentCharter).
 
 `cmd/nocturn` — **die TUI ist das ganze Interface** (parameterlos, `go run ./cmd/nocturn [ws]`):
 `app.go` (Prozess-Spine + bubbletea-Programm), `stack.go` (`shared`/`bound`, ein isolierter Stack
-pro Workspace), `tui.go` (View, event-getrieben über den `session.Runner`), `plugins.go`/`mcp.go`/
+pro Workspace), `tui.go` (View, event-getrieben über den offenen `chat.Chat`), `plugins.go`/`mcp.go`/
 `auth.go` (interaktives Wiring: Plugins, remote-MCP, Plugin-OAuth), `vault.go` (Unlock), `agents.go`/
 `skills.go` (Startup-Reports), `theme.go` (Styles). Detail: `go doc`. `spike/extism`, `spike/javy` =
 Wegwerf-Spikes (eigene go.mod).
@@ -318,9 +321,10 @@ go run ./cmd/nocturn
 (Schalen 0–5) · Effekt-Capabilities `netcap`/`filecap`/`notifycap`/`remindcap`/`wakecap`/
 `timecap` · `code.run` (QuickJS auf der Sandbox) · `plugin`-System (JS/WASM, Cage-begrenzt) ·
 remote-**MCP** (`mcp`/`mcpcap`, ADR-9) · **Skills**-Schicht · **OAuth** (nur aus Plugins) ·
-**Workspace**-Aggregat (N isolierte Stacks/Prozess, `PERSONA.md` layered) · `session.Runner`
-als alleiniger Turn-Loop · **TUI** (parameterlos, event-getrieben, Streaming/Reasoning/Tool-
-Forest/`/ws`) · **Out-of-band-HITL** (attended Stream **oder** ntfy → Handy).
+**Workspace**-Aggregat (N isolierte Stacks/Prozess, `PERSONA.md` layered, mintet Charters) ·
+**ein** `chat.Chat` als alleinige Konversations-Einheit (eine Turn-Zeremonie; Agent-Runs =
+`chat.Once`/`FireAgent` mit persistiertem Transcript) · **TUI** (parameterlos, event-getrieben,
+Streaming/Reasoning/Tool-Forest/`/ws`) · **Out-of-band-HITL** (attended Stream **oder** ntfy → Handy).
 
 **Offen / als Nächstes:**
 1. **Weitere Capabilities** (Mail, Kalender) — Muster: kleiner Typ + `*Guard`, kommt Modell/
