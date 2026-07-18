@@ -10,6 +10,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/approval"
+	"github.com/efuturetoday/nocturn/internal/appserver"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/chat"
@@ -31,7 +32,7 @@ type shared struct {
 	notify    notifycap.Pusher // out-of-band push (ntfy) or the attended TUI fallback
 	send      func(tea.Msg)    // p.Send, late-bound (p is created after the stacks)
 	modelName string
-	activity  *activityHub // process-wide badge fan-out for background chats (nil = no app server)
+	sync      *syncHub // process-wide client-sync fan-out (badges + chat-list changes); nil = no app server
 }
 
 // bound is one OPEN workspace: the workspace itself (which owns tools/skills/agents/guard/
@@ -120,11 +121,13 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 	// open chats from here; there is no separate per-front-end loop. Each chat binds wake to
 	// itself (its ctx decorator), so a wake resumes the chat that scheduled it.
 	chatStore := chat.LoadStore(filepath.Join(wsDir, "chats"))
-	// onActivity badges this workspace's background chats to any connected app; nil under the
-	// TUI (no hub), so the manager stays silent there.
+	// onActivity badges this workspace's background chats; onChange pushes the full chat list
+	// on any list change. Both nil under the TUI (no hubs), so the manager stays silent there.
 	var onActivity func(chatID, kind string)
-	if sh.activity != nil {
-		onActivity = func(chatID, kind string) { sh.activity.emit(wsName, chatID, kind) }
+	var onChange func()
+	if sh.sync != nil {
+		onActivity = func(chatID, kind string) { sh.sync.emitActivity(wsName, chatID, kind) }
+		onChange = func() { sh.sync.emitList(appserver.DomainChats, wsName) }
 	}
 	chatMgr := chat.NewManager(ctx, chat.Deps{
 		Engine:     w.Brain(),
@@ -133,6 +136,7 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		Root:       w.RootCharter,
 		Agent:      agentCharter,
 		OnActivity: onActivity,
+		OnChange:   onChange,
 	})
 
 	// wake: a running turn schedules its OWN resume after a delay (self-paced loops / polling);

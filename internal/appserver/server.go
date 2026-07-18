@@ -52,13 +52,21 @@ func (s *Server) Handle(ctx context.Context, conn Conn) error {
 	h := &clientConn{workspaces: s.workspaces, out: out}
 	defer h.closeChat()
 
-	// Background-chat activity: badge signals for chats that aren't the open stream. Runs for
-	// the whole connection; unsub closes the channel so this goroutine exits on disconnect.
-	acts, unsubActs := s.workspaces.WatchActivity()
-	defer unsubActs()
+	// The ONE server-push stream: per-chat activity badges and coarse chat-list changes for
+	// every workspace. A badge → chatActivity; a list change → the workspace's full chats list
+	// (unsolicited, no content). Runs for the whole connection; unsub closes it on disconnect.
+	syncs, unsubSync := s.workspaces.WatchSync()
+	defer unsubSync()
 	go func() {
-		for a := range acts {
-			h.send(encodeChatActivity(a))
+		for sig := range syncs {
+			if sig.Activity != nil {
+				h.send(encodeChatActivity(*sig.Activity))
+			}
+			switch sig.Domain {
+			case DomainChats:
+				h.sendChats(sig.WS)
+				// future domains (agents, reminders, settings, jobs) add a case + a sendX here
+			}
 		}
 	}()
 
@@ -114,19 +122,16 @@ func (h *clientConn) dispatch(ctx context.Context, msg []byte) {
 			h.send(encodeWorkspace(st)) // echo the new state back
 		}
 	case "listChats":
-		h.sendChats(c.WS)
+		h.sendChats(c.WS) // an explicit pull — mutations below rely on the WatchChats broadcast
 	case "newChat":
 		if _, ok := h.workspaces.NewChat(c.WS, c.Name); !ok {
 			h.send(encodeError("unknown workspace: " + c.WS))
-			return
 		}
-		h.sendChats(c.WS)
+		// success → the manager's OnChange fires the coarse chats push to every connection
 	case "renameChat":
 		h.workspaces.RenameChat(c.WS, c.ID, c.Name)
-		h.sendChats(c.WS)
 	case "deleteChat":
 		h.workspaces.DeleteChat(c.WS, c.ID)
-		h.sendChats(c.WS)
 	case "openChat":
 		h.openChat(ctx, c.WS, c.ID)
 	default:

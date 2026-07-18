@@ -46,7 +46,7 @@ func (f *fakeRunner) gotSubmit(input string) bool {
 // exactly as the real one must not. It holds one workspace ("work") and records writes.
 type fakeWorkspaces struct {
 	runner *fakeRunner
-	acts   chan appserver.ChatActivity // background-chat activity the test can push onto
+	syncs  chan appserver.Sync // client-sync signals the test can push onto
 
 	mu      sync.Mutex
 	persona string
@@ -98,11 +98,11 @@ func (w *fakeWorkspaces) OpenChat(ws, id string) (appserver.Runner, bool) {
 }
 func (w *fakeWorkspaces) RenameChat(ws, id, name string) bool { return ws == "work" }
 func (w *fakeWorkspaces) DeleteChat(ws, id string) bool       { return ws == "work" }
-func (w *fakeWorkspaces) WatchActivity() (<-chan appserver.ChatActivity, func()) {
-	if w.acts == nil {
-		w.acts = make(chan appserver.ChatActivity, 8)
+func (w *fakeWorkspaces) WatchSync() (<-chan appserver.Sync, func()) {
+	if w.syncs == nil {
+		w.syncs = make(chan appserver.Sync, 8)
 	}
-	return w.acts, func() {}
+	return w.syncs, func() {}
 }
 
 // fakeConn scripts client→server messages (in) and captures server→client messages (out).
@@ -225,17 +225,39 @@ func TestServer_ControlPlaneAndChat(t *testing.T) {
 func TestServer_BackgroundChatActivity(t *testing.T) {
 	fw := &fakeWorkspaces{
 		runner: &fakeRunner{events: make(chan chat.Event, 1)},
-		acts:   make(chan appserver.ChatActivity, 8),
+		syncs:  make(chan appserver.Sync, 8),
 	}
 	fc := newConn()
 	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
 
-	// A background chat in "work" finishes a turn — the manager would emit this.
-	fw.acts <- appserver.ChatActivity{WS: "work", ID: "c9", Kind: appserver.ActivityTurnEnd}
+	// A background chat in "work" finishes a turn — the manager would emit this badge.
+	fw.syncs <- appserver.Sync{Activity: &appserver.ChatActivity{WS: "work", ID: "c9", Kind: appserver.ActivityTurnEnd}}
 
 	got := recvUntil(t, fc.out, "chatActivity")
 	if got["ws"] != "work" || got["id"] != "c9" || got["kind"] != appserver.ActivityTurnEnd {
 		t.Fatalf("chatActivity = %v, want ws=work id=c9 kind=turnEnd", got)
+	}
+}
+
+// A coarse chat-list change (Sync with a Domain) pushes that workspace's full chats list to
+// the client unsolicited — no re-list round-trip.
+func TestServer_ChatsListPush(t *testing.T) {
+	fw := &fakeWorkspaces{
+		runner: &fakeRunner{events: make(chan chat.Event, 1)},
+		syncs:  make(chan appserver.Sync, 8),
+	}
+	fc := newConn()
+	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
+
+	// A chat was created/renamed/deleted in "work" — the manager would emit this.
+	fw.syncs <- appserver.Sync{Domain: appserver.DomainChats, WS: "work"}
+
+	got := recvUntil(t, fc.out, "chats")
+	if got["ws"] != "work" {
+		t.Fatalf("chats push = %v, want ws=work", got)
+	}
+	if items, _ := got["items"].([]any); len(items) == 0 {
+		t.Fatalf("chats push carried no items: %v", got)
 	}
 }
 

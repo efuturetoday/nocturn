@@ -39,6 +39,10 @@ type Deps struct {
 	// ("turnEnd" | "approvalPending") so a host can badge background chats. Optional (nil =
 	// no signal); it must not block — the pump calls it inline.
 	OnActivity func(chatID, kind string)
+	// OnChange, if set, fires on any change to THIS workspace's chat LIST (a chat created,
+	// deleted, renamed, or completing a turn) so a host can push the full list to clients —
+	// coarse list-sync, distinct from the per-chat OnActivity badge. Optional; must not block.
+	OnChange func()
 }
 
 // Manager owns a workspace's live chats. ctx is the RUNTIME lifetime (the daemon/session):
@@ -115,8 +119,9 @@ func (m *Manager) New(name string, origin Origin) (Meta, error) {
 	now := time.Now()
 	meta := Meta{ID: m.deps.Store.NewID(), Name: name, Origin: origin, Created: now, Updated: now}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.spinLocked(meta, m.deps.Root(), nil, nil)
+	m.mu.Unlock()
+	m.changed() // a new chat appeared in the list
 	return meta, nil
 }
 
@@ -127,7 +132,9 @@ func (m *Manager) Rename(id, name string) error {
 		c.rename(name)
 	}
 	m.mu.Unlock()
-	return m.deps.Store.Rename(id, name)
+	err := m.deps.Store.Rename(id, name)
+	m.changed()
+	return err
 }
 
 // Delete stops a chat (if live) and removes it from the store.
@@ -138,7 +145,9 @@ func (m *Manager) Delete(id string) error {
 		c.Close()
 	}
 	m.mu.Unlock()
-	return m.deps.Store.Delete(id)
+	err := m.deps.Store.Delete(id)
+	m.changed()
+	return err
 }
 
 // Open returns the live chat: the same one if it is already live, otherwise it
@@ -229,6 +238,7 @@ func (m *Manager) pump(c *Chat, sub <-chan Event) {
 			if len(snap.Messages) > 0 { // lazy-persist: never write an empty chat to disk
 				_ = m.deps.Store.Save(meta, snap.Messages, snap.Forest)
 				m.signal(meta.ID, "turnEnd")
+				m.changed() // updated time / turn count reorder the list
 			}
 			// Reap an agent one-shot that has gone idle. The idle check runs under m.mu,
 			// serialized with Deliver, so no delivery can land on the instance between
@@ -314,6 +324,7 @@ func (m *Manager) FireAgent(ctx context.Context, name string, ch Charter) error 
 	defer unsub()
 	c.Submit(SourceSchedule, scheduledTask)
 	m.mu.Unlock()
+	m.changed() // a fresh agent run appeared in the list
 
 	m.deps.Store.Prune(name, keepAgentRuns)
 
@@ -348,6 +359,14 @@ func (m *Manager) MarkSkill(id, name string) {
 func (m *Manager) signal(chatID, kind string) {
 	if m.deps.OnActivity != nil {
 		m.deps.OnActivity(chatID, kind)
+	}
+}
+
+// changed fires the optional list-change hook (the chat list of this workspace changed, so a
+// host can push the full list to clients). See Deps.OnChange.
+func (m *Manager) changed() {
+	if m.deps.OnChange != nil {
+		m.deps.OnChange()
 	}
 }
 

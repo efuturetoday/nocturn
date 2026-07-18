@@ -70,7 +70,7 @@ func serveCmd(_ []string) error {
 	defer cancelSched()
 	startSchedulers(schedCtx, sp)
 
-	server := appserver.NewServer(&appWorkspaces{bounds: sp.workspaces, names: sp.names, hub: sp.activity})
+	server := appserver.NewServer(&appWorkspaces{bounds: sp.workspaces, names: sp.names, sync: sp.sync})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		// InsecureSkipVerify: skip coder/websocket's same-origin check. A companion app

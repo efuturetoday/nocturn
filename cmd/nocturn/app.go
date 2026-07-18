@@ -161,7 +161,7 @@ type spine struct {
 	approvals  *hitl.Engine
 	workspaces map[string]*bound
 	names      []string
-	activity   *activityHub // background-chat badge fan-out; the app server subscribes, the TUI ignores it
+	sync       *syncHub // client-sync fan-out (badges + list changes); the app server subscribes, the TUI ignores it
 }
 
 // buildSpine unlocks the master, wires the shared HITL engine (attended → out-of-band →
@@ -223,7 +223,7 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 		fmt.Printf("Out-of-band approvals via ntfy %s (req=%s, resp=%s)\n", ntfyBase, reqTopic, respTopic)
 	}
 
-	hub := newActivityHub()
+	hub := newSyncHub()
 	sh := shared{
 		master:    master,
 		approvals: approvals,
@@ -231,7 +231,7 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 		notify:    notifyPush,
 		send:      send,
 		modelName: modelName,
-		activity:  hub,
+		sync:      hub,
 	}
 	if sh.notify == nil {
 		sh.notify = consolePusher{send: send} // no ntfy: notify() falls back to the send sink
@@ -253,7 +253,7 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 		}
 		workspaces[name] = bw
 	}
-	return &spine{sh: sh, approvals: approvals, workspaces: workspaces, names: names, activity: hub}, nil
+	return &spine{sh: sh, approvals: approvals, workspaces: workspaces, names: names, sync: hub}, nil
 }
 
 // closeSessions stops every workspace's live chats (saving each non-empty chat's history and

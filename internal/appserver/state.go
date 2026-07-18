@@ -25,12 +25,33 @@ type Workspaces interface {
 	RenameChat(ws, id, name string) bool
 	DeleteChat(ws, id string) bool
 
-	// WatchActivity subscribes to background-chat activity across ALL workspaces, so the
-	// client can badge chats it hasn't opened without polling. The returned func closes the
-	// stream. A workspace's OPEN chat still streams its full events separately — activity is
-	// only the lightweight "something changed" signal for the others.
-	WatchActivity() (<-chan ChatActivity, func())
+	// WatchSync subscribes to the ONE server-push stream across ALL workspaces: each Sync is a
+	// per-chat activity badge, a coarse "this workspace's chat list changed" marker, or both (a
+	// turn end is both). The server turns it into a chatActivity push and/or a full chats-list
+	// push. The returned func closes the stream. A workspace's OPEN chat still streams its full
+	// events separately — Sync is only the lightweight, no-content nudge for everything else.
+	WatchSync() (<-chan Sync, func())
 }
+
+// Sync is the ONE domain-neutral live-update signal fanned to every connection. It carries NO
+// content — only nudges: that some DOMAIN's list changed in a workspace (so the client
+// re-pulls that list), and/or a granular per-chat badge. The client fetches real content
+// lazily (openChat's snapshot). Chats is the only live domain today; agents / reminders /
+// settings / jobs slot in by adding a Domain value + a server push case + a manager emit —
+// no new hub, no new stream.
+type Sync struct {
+	Domain   Domain        // the list that changed in workspace WS → re-push it; "" when badge-only
+	WS       string        // the workspace the Domain change belongs to
+	Activity *ChatActivity // a per-chat badge to push, or nil
+}
+
+// Domain names a piece of workspace state that supports live full-list push. Coarse by
+// design: on a change the server re-pushes the whole list, which carries the full truth.
+type Domain string
+
+const (
+	DomainChats Domain = "chats" // later: DomainAgents, DomainReminders, DomainSettings, DomainJobs, …
+)
 
 // ChatActivity is the lightweight badge signal for a chat the client may not have open:
 // which chat, and what happened. It carries no conversation content — the client refreshes
