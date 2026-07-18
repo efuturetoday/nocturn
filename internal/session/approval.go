@@ -9,7 +9,15 @@ import "context"
 // approval-mechanism types: intent + labels are shown, apply(choice) is an opaque
 // callback the caller supplies to enact the chosen option (e.g. resolve a hitl token).
 type ApprovalSink interface {
+	// PresentApproval surfaces the request on the stream and records how to enact it.
 	PresentApproval(intent string, labels []string, apply func(choice int))
+	// HasClients reports whether a real client is watching right now — the router reads it
+	// at Ask-time to decide whether the request must ALSO go out-of-band to the phone.
+	HasClients() bool
+	// ClearPending drops the parked request and announces it resolved — called when a
+	// decision arrives through any channel (including out of band), so the snapshot never
+	// shows a phantom prompt. Idempotent.
+	ClearPending()
 }
 
 type approvalSinkKey struct{}

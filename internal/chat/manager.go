@@ -110,10 +110,11 @@ func (m *Manager) Open(id string) (*session.Runner, bool) {
 	runner.Start(m.ctx)
 
 	lc := &liveChat{runner: runner, session: sess, id: id, name: meta.Name}
-	// Persistence pump: a permanent subscriber that saves the conversation after every turn.
-	// Being always-subscribed also keeps the runner's approval sink stamped, so an approval
-	// is recorded as pending even with no live client — the app answers it on reconnect.
-	sub, unsub := runner.Subscribe()
+	// Persistence pump: a permanent TAP (not a Subscribe) that saves the conversation after
+	// every turn. A tap fans out the same events but does NOT count as a watching client, so
+	// an unwatched background chat stays "no live client" — its approval still records as
+	// pending (the sink is always stamped now) AND goes out-of-band to the phone.
+	sub, unsub := runner.Tap()
 	lc.unsub = unsub
 	go func() {
 		for e := range sub {

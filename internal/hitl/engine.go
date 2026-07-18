@@ -72,6 +72,14 @@ type Notifier interface {
 	Notify(intent string, options []Option) error
 }
 
+// resolvedNotifier is an OPTIONAL extension of Notifier: a channel that shows a persistent
+// prompt (an attended stream that records a pending approval) implements it so the engine
+// can tell it, on any resolution, to clear that prompt. A fire-and-forget channel (a phone
+// push) does not implement it — nothing to clear.
+type resolvedNotifier interface {
+	Resolved()
+}
+
 type pending struct {
 	nonce    string
 	resolved chan Outcome
@@ -148,6 +156,13 @@ func (e *Engine) Request(ctx context.Context, intent string, choices []Choice, t
 		if r := e.route(ctx); r != nil {
 			notifier = r
 		}
+	}
+	// However this request ends — answered on any channel, timed out, cancelled, or a
+	// notify error below — tell the notifier it is resolved, so an in-band prompt that was
+	// presented (and recorded as pending on a runner) is cleared. Optional: a channel that
+	// never shows a persistent prompt (a phone push) simply doesn't implement it.
+	if r, ok := notifier.(resolvedNotifier); ok {
+		defer r.Resolved()
 	}
 	if err := notifier.Notify(intent, options); err != nil {
 		e.discard(id)

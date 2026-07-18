@@ -28,8 +28,9 @@ type Runner struct {
 	done   chan turnResult
 
 	mu         sync.Mutex
-	subs       map[int]chan Event
-	nextSub    int
+	subs       map[int]chan Event // real clients watching the stream — count decides Ask-time attendance
+	taps       map[int]chan Event // passive observers (the persistence pump) — never count as attendance
+	nextID     int                // mints unique ids for both subs and taps
 	running    bool
 	queue      []queuedInput
 	cancelTurn context.CancelFunc
@@ -105,6 +106,7 @@ func NewRunner(sess turns, opts ...RunnerOption) *Runner {
 		cmds: make(chan command, 8),
 		done: make(chan turnResult, 1),
 		subs: map[int]chan Event{},
+		taps: map[int]chan Event{},
 	}
 	for _, o := range opts {
 		o(r)
@@ -196,8 +198,8 @@ func (r *Runner) Subscribe() (<-chan Event, func()) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	ch := make(chan Event, 256)
-	id := r.nextSub
-	r.nextSub++
+	id := r.nextID
+	r.nextID++
 	r.subs[id] = ch
 	return ch, func() {
 		r.mu.Lock()
@@ -209,13 +211,51 @@ func (r *Runner) Subscribe() (<-chan Event, func()) {
 	}
 }
 
-// hasSubscribers reports whether any client is currently watching this runner's event
-// stream — used to decide whether an approval can be surfaced attended (on the stream)
-// or must fall back to out-of-band. Checked at turn start (see begin).
-func (r *Runner) hasSubscribers() bool {
+// Tap registers a PASSIVE observer of the event stream: it fans out exactly like a
+// Subscribe, but does NOT count as a watching client (see HasClients). The persistence
+// pump taps — it must see every turn to save/badge, yet its presence must never make an
+// unwatched chat look attended (which would keep an approval off the phone). unsub closes
+// the channel so the tap's reader exits.
+func (r *Runner) Tap() (<-chan Event, func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ch := make(chan Event, 256)
+	id := r.nextID
+	r.nextID++
+	r.taps[id] = ch
+	return ch, func() {
+		r.mu.Lock()
+		if _, ok := r.taps[id]; ok {
+			delete(r.taps, id)
+			close(ch)
+		}
+		r.mu.Unlock()
+	}
+}
+
+// HasClients reports whether a REAL client is watching the stream right now (a tap does
+// not count). The approval router reads this at Ask-time to decide whether a human is
+// reachable in-band, or the request must also go out-of-band to the phone.
+func (r *Runner) HasClients() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.subs) > 0
+}
+
+// ClearPending drops the parked approval (if any) and announces it resolved. It is called
+// when a decision arrives through ANY channel — including out of band, where the runner's
+// own Resolve never ran — so a reconnecting client's Snapshot never shows a phantom prompt.
+// Idempotent: if nothing is parked (already resolved in-band), it is a no-op.
+func (r *Runner) ClearPending() {
+	r.mu.Lock()
+	if r.approval == nil {
+		r.mu.Unlock()
+		return
+	}
+	id := r.approval.event.ID
+	r.approval = nil
+	r.mu.Unlock()
+	r.emit(ApprovalResolvedEvent{ID: id})
 }
 
 // Snapshot is the state a late-joining or reconnecting client needs: the conversation
@@ -292,13 +332,12 @@ func (r *Runner) onSubmit(qi queuedInput) {
 func (r *Runner) begin(qi queuedInput) {
 	turnCtx, cancel := context.WithCancel(r.parent)
 	turnCtx = activity.WithSink(turnCtx, r.onStreamEvent) // tokens/thinking/tool events fan out to subscribers
-	// Route approvals to THIS stream only if someone is watching it. An UNWATCHED turn — a
-	// wake that fired on a workspace the user has switched away from — must not park its
-	// approval on a stream no one sees (it would just time out and deny). Leaving the sink
-	// off makes the gateway fall back to out-of-band (the phone), or the inline notifier.
-	if r.hasSubscribers() {
-		turnCtx = WithApprovalSink(turnCtx, r)
-	}
+	// ALWAYS carry the approval sink: the approval is recorded on this runner (so a
+	// reconnecting client sees it in the snapshot) whether or not a client is watching now.
+	// Whether it ALSO goes out-of-band is decided at Ask-time by the router (HasClients) —
+	// not latched here at turn start, because a long background turn can gain or lose a
+	// client between here and the Ask.
+	turnCtx = WithApprovalSink(turnCtx, r)
 	r.mu.Lock()
 	r.running = true
 	r.cancelTurn = cancel
@@ -379,12 +418,20 @@ func (r *Runner) onReset() {
 	r.emit(NoticeEvent{Text: "new session"})
 }
 
-// emit fans an event out to every subscriber, dropping for any that is behind (it
-// must re-Snapshot to resync — a slow client never stalls the loop or other clients).
+// emit fans an event out to every subscriber AND every passive tap, dropping for any
+// that is behind (it must re-Snapshot to resync — a slow client never stalls the loop or
+// other clients). Taps (the persistence pump) receive the same stream but never affect
+// attendance.
 func (r *Runner) emit(e Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, ch := range r.subs {
+		select {
+		case ch <- e:
+		default:
+		}
+	}
+	for _, ch := range r.taps {
 		select {
 		case ch <- e:
 		default:

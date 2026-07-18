@@ -86,6 +86,55 @@ func (n attendedNotifier) Notify(intent string, options []hitl.Option) error {
 	return nil
 }
 
+// Resolved clears the session's parked prompt once the engine's request ends on ANY
+// channel — crucial when the answer came out of band (the runner's own Resolve never
+// ran), so a reconnecting client's snapshot doesn't show a phantom approval. Idempotent:
+// an in-band answer already cleared it.
+func (n attendedNotifier) Resolved() { n.sink.ClearPending() }
+
+// teeNotifier presents an approval on BOTH the chat's own stream (in-band, recorded as
+// pending so a reconnecting app answers it) AND out of band (the phone) — used when no
+// client is watching the chat right now. One HITL token space makes this race-safe: the
+// first tap on either channel resolves the single-use pending; a later tap is a harmless
+// no-op. If the out-of-band push fails, the request fails closed (no client is watching,
+// so the phone was the only reachable human).
+type teeNotifier struct {
+	inband attendedNotifier
+	oob    hitl.Notifier
+}
+
+func (n teeNotifier) Notify(intent string, options []hitl.Option) error {
+	_ = n.inband.Notify(intent, options) // records the pending prompt on the runner; never errors
+	return n.oob.Notify(intent, options) // the reachable human; its error fails the request closed
+}
+
+// Resolved forwards to the in-band end so the recorded pending is cleared on resolution.
+func (n teeNotifier) Resolved() { n.inband.Resolved() }
+
+// routeApproval picks the HITL channel for one request from its ctx. The rule:
+//   - No approval sink on ctx (a direct background agent run, no runner): out-of-band if
+//     configured, else nil (the engine's front-end fallback).
+//   - A sink is present: ALWAYS record the request in-band on that chat's stream (so a
+//     reconnecting app answers it from the snapshot). Decide at Ask-time whether it must
+//     ALSO buzz the phone — only if no client is watching this chat right now.
+//
+// resolve is the engine's own Resolve (the in-band notifier hands a chosen token back to
+// it). Extracted from the engine wiring so this decision is testable in isolation.
+func routeApproval(rctx context.Context, oob hitl.Notifier, resolve func(token string) error) hitl.Notifier {
+	sink := session.ApprovalSinkFrom(rctx)
+	if sink == nil {
+		if oob != nil {
+			return oob
+		}
+		return nil
+	}
+	inband := attendedNotifier{sink: sink, resolve: resolve}
+	if oob != nil && !sink.HasClients() {
+		return teeNotifier{inband: inband, oob: oob}
+	}
+	return inband
+}
+
 var wsNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // resolveWorkspace picks the ACTIVE workspace from the optional first CLI argument,
@@ -162,23 +211,12 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 		notifyPush = pub
 	}
 
-	// One HITL engine for ALL workspaces. Router per request: an attended client's own
-	// stream (session.ApprovalSink) first; else out-of-band (unless the run is attended);
-	// else the front-end's fallback (TUI prompt, or serve's deny).
+	// One HITL engine for ALL workspaces. The router per request is routeApproval (extracted
+	// so it is unit-testable): in-band on the chat's own stream, additionally out-of-band
+	// when no client is watching, else the front-end's fallback (TUI prompt, or serve's deny).
 	var approvals *hitl.Engine
 	approvals = hitl.NewEngine(key, fallback, hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
-		if sink := session.ApprovalSinkFrom(rctx); sink != nil {
-			return attendedNotifier{sink: sink, resolve: approvals.Resolve}
-		}
-		// No attended client is watching (the app/TUI is not connected, or this is a
-		// background run): reach the human OUT-OF-BAND — ntfy today, native push (Phase 3)
-		// plugs in here as the same `oob`. This is exactly why an approval still lands on
-		// the phone when the app is not connected. Only with NO out-of-band channel at all
-		// does it fall through to the front-end fallback (TUI prompt, or serve's deny).
-		if oob != nil {
-			return oob
-		}
-		return nil
+		return routeApproval(rctx, oob, approvals.Resolve)
 	}))
 	if oob != nil {
 		go func() { _ = ntfy.NewListener(ntfyBase, respTopic, approvals.Resolve, lisOpts...).Run(ctx) }()

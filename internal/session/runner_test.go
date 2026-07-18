@@ -293,14 +293,19 @@ func TestRunner_SubmitAgent_NoRunner_ErrorsTurn(t *testing.T) {
 	}
 }
 
-// A turn on an UNWATCHED runner (no subscribers) carries NO approval sink, so the
-// gateway falls back to out-of-band instead of parking the approval on a stream no one
-// sees. A watched turn carries the sink so approvals surface attended.
-func TestRunner_ApprovalSink_OnlyWhenWatched(t *testing.T) {
-	sinkPresence := func(subscribe bool) bool {
-		got := make(chan bool, 1)
+// Every turn carries the approval sink now — the approval is always recorded on the
+// runner (so a reconnecting client sees it), watched or not. Attendance is no longer
+// latched at turn start; the router reads HasClients at Ask-time instead. So the sink is
+// present regardless of subscribers, and HasClients reflects only REAL subscribers (a
+// passive Tap must not count).
+func TestRunner_ApprovalSink_AlwaysStampedAndSeesRealClients(t *testing.T) {
+	// sink always present; HasClients tracks only real subscribers, never a passive tap.
+	check := func(subscribe, tap bool) (hasSink, hasClients bool) {
+		sinkCh, clientsCh := make(chan bool, 1), make(chan bool, 1)
 		run := func(ctx context.Context, _ string) (string, error) {
-			got <- session.ApprovalSinkFrom(ctx) != nil
+			s := session.ApprovalSinkFrom(ctx)
+			sinkCh <- s != nil
+			clientsCh <- s != nil && s.HasClients()
 			return "", nil
 		}
 		r := session.NewRunner(&fakeTurns{ask: run})
@@ -310,22 +315,57 @@ func TestRunner_ApprovalSink_OnlyWhenWatched(t *testing.T) {
 			_, unsub := r.Subscribe()
 			t.Cleanup(unsub)
 		}
+		if tap {
+			_, unsub := r.Tap()
+			t.Cleanup(unsub)
+		}
 		r.Start(ctx)
 		r.Submit(session.SourceUser, "go")
 		select {
-		case has := <-got:
-			return has
 		case <-time.After(2 * time.Second):
 			t.Fatal("turn did not run")
-			return false
+		case hasSink = <-sinkCh:
 		}
+		hasClients = <-clientsCh
+		return hasSink, hasClients
 	}
 
-	if sinkPresence(false) {
-		t.Error("unwatched turn carried an approval sink; want none (falls back to out-of-band)")
+	if s, _ := check(false, false); !s {
+		t.Error("unwatched turn missing its approval sink; it must always be recorded")
 	}
-	if !sinkPresence(true) {
-		t.Error("watched turn missing its approval sink; approvals could not surface attended")
+	if s, c := check(true, false); !s || !c {
+		t.Errorf("watched turn: sink=%v clients=%v; want both true", s, c)
+	}
+	if s, c := check(false, true); !s || c {
+		t.Errorf("tapped-only turn: sink=%v clients=%v; want sink true, clients false (a tap is not a client)", s, c)
+	}
+}
+
+// ClearPending drops a parked approval and announces it resolved — the path an out-of-band
+// answer takes (the runner's own Resolve never ran). A second call emits nothing (a client
+// that answered in-band already cleared it).
+func TestRunner_ClearPending_EmitsResolvedAndIdempotent(t *testing.T) {
+	r := session.NewRunner(&fakeTurns{})
+	sub, unsub := r.Subscribe()
+	t.Cleanup(unsub)
+
+	r.PresentApproval("Send email", []string{"Allow", "Deny"}, func(int) {})
+	appr, ok := recv(t, sub).(session.ApprovalEvent)
+	if !ok {
+		t.Fatalf("want ApprovalEvent, got %#v", appr)
+	}
+
+	r.ClearPending()
+	res, ok := recv(t, sub).(session.ApprovalResolvedEvent)
+	if !ok || res.ID != appr.ID {
+		t.Fatalf("want ApprovalResolvedEvent id=%q, got %#v", appr.ID, res)
+	}
+
+	r.ClearPending() // idempotent: nothing left to clear
+	select {
+	case ev := <-sub:
+		t.Fatalf("second ClearPending emitted %#v, want nothing", ev)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
