@@ -653,3 +653,51 @@ Spam-Schutz **uniform** zurück und macht den bestehenden Grant/Autonomy-Rate-Ca
 **Priorität:** eher hoch — es ist ein **fehlender Control**, kein Nice-to-have.
 
 </details>
+
+---
+
+### 20. Weitere Live-Sync-Domänen: `agents` + `settings` (PLAN, noch nicht gebaut)
+
+**Kontext:** Der coarse Live-Sync-Bus steht (`appserver.Sync{Domain,WS,Activity}`, ein `syncHub`,
+`WatchSync`) und trägt schon **chats** + **reminders**. Eine neue Domäne = **3 Touchpoints**
+(Konstante+`Workspaces.X(ws)`; Manager/Service-`OnChange`→`emitList(DomainX,ws)`; Server-`case
+DomainX`+`encodeX`) — kein neuer Hub, kein neuer Stream, kein Client-Protokoll-Umbau.
+
+**Offen — was als eigene Live-Domäne app-seitig:**
+- **`agents`** — heute liefert `Workspaces.Get()` nur eine STATISCHE `AgentInfo[]` (Name/Description)
+  im `WorkspaceState`. Fehlt: eine LIVE `DomainAgents` mit **Run-Status/-Historie**. Frage: reicht die
+  bestehende `origin=agent`-Chatliste (Cron-Runs sind schon Chats, live gepusht + filterbar), oder
+  braucht's ein eigenes `agents{ws,items}` mit Schedule/letzter-Run/„läuft-gerade"? Tendenz: die
+  Agent-*Deklaration* (statisch) + der Run als origin=agent-Chat reichen vermutlich — nur der
+  „nächste Cron-Termin / läuft gerade"-Status wäre neu.
+- **`settings`** — was ist app-seitig editierbar/anzeigbar? `persona` (schon: `setPersona`),
+  `plugins`/`accounts` (heute presence, read-only). `DomainSettings` würde die Workspace-Detail
+  (`WorkspaceState`) **live pushen** bei Änderung (statt nur Reply auf `getWorkspace`/`setPersona`).
+
+**Offen ist der Scope/Payload pro Domäne, NICHT die Mechanik** — das Muster ist bewiesen (chats,
+reminders). Priorität: nach dem Beta-Kern (Push/Pairing); pull-basiert (`getWorkspace`) tut's bis dahin.
+
+---
+
+### 21. Filesystem-Hot-Reload des Workspace-Control-Plane (PLAN, noch nicht gebaut)
+
+**Kontext:** Der Workspace lädt seinen Control-Plane **beim Boot**: `agent.Discover(agents/)`,
+`skill.Discover(skills/)`, Plugins (`plugin.json`), `PERSONA.md`, Reminder-Store. Editiert man eine
+`agent.md`, droppt einen Skill, oder ändert `PERSONA.md` **auf der Platte**, greift das erst beim
+**Neustart**.
+
+**Idee:** einen FS-Watcher auf den Control-Plane (`agents/`, `skills/`, `PERSONA.md`, `plugins/`),
+bei Änderung **re-discover** + **live an die App pushen** (via die Domänen aus #20 — `agents`/
+`settings`).
+
+**Haken (Sicherheit, load-bearing):** Ein Reload von `agent.md`/`plugin.json` ändert **Rechte**
+(Policy/Cage/Autonomy/Tools). Ein hot-reloaded Plugin/Agent mit **erweiterter** Cage darf NICHT still
+mehr Rechte bekommen — muss durch denselben Review-Gate (`approval`-Record, „schon reviewed") wie die
+Erstinstallation. → **Zweiklassig behandeln:** `PERSONA.md` + Skills = harmloser Kontext (frei
+hot-reloadbar); `agent.md` + `plugin.json` = rechte-tragend → Reload nur nach Re-Review, sonst bei
+Erweiterung fail-closed.
+
+**Deps:** `fsnotify` (neue Dep — TCB prüfen: pure-Go? klein?) vs. Polling (kein Dep, aber lag/CPU).
+
+**Priorität:** DevEx-Nice-to-have, **nach** dem Beta-Kern. Voraussetzung, um Reloads app-sichtbar zu
+machen, sind die Live-Domänen aus #20.
