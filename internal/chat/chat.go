@@ -79,6 +79,12 @@ type Chat struct {
 	approval   *pendingApproval
 	nextAppr   int
 	closed     bool // Close ran: quit is closed, subs/taps drained — makes Close idempotent
+
+	// forest accumulates every completed tool invocation (in stream order) so a reload
+	// rebuilds the full call tree — sub-calls and their errors included — that the message
+	// history alone cannot. forestIx maps an invocation ID to its slot for the End fill-in.
+	forest   []ToolFrame
+	forestIx map[uint64]int
 }
 
 // Option configures a Chat built with New.
@@ -89,6 +95,12 @@ type Option func(*Chat)
 // not re-seeded there.
 func WithHistory(msgs []brain.Message) Option {
 	return func(c *Chat) { c.history = msgs }
+}
+
+// WithForest seeds a REOPENED chat with its saved tool forest, so the first snapshot after
+// reload carries the same call tree the chat streamed live. Used once, at New.
+func WithForest(frames []ToolFrame) Option {
+	return func(c *Chat) { c.forest = frames }
 }
 
 // WithDecorator stamps decoration onto every turn's ctx — the seam a caller uses to
@@ -114,17 +126,18 @@ func WithAgents(resolve func(name string) (Charter, error)) Option {
 // prompt and any WithHistory turns. Call Start to spin the turn loop.
 func New(engine *brain.Brain, guard *gateway.Guard, meta Meta, ch Charter, opts ...Option) *Chat {
 	c := &Chat{
-		meta:    meta,
-		charter: ch,
-		engine:  engine,
-		guard:   guard,
-		scope:   guard.NewScope(ch.Authority),
-		skills:  skill.NewActive(),
-		cmds:    make(chan command, 8),
-		done:    make(chan turnResult, 1),
-		quit:    make(chan struct{}),
-		subs:    map[int]chan Event{},
-		taps:    map[int]chan Event{},
+		meta:     meta,
+		charter:  ch,
+		engine:   engine,
+		guard:    guard,
+		scope:    guard.NewScope(ch.Authority),
+		skills:   skill.NewActive(),
+		cmds:     make(chan command, 8),
+		done:     make(chan turnResult, 1),
+		quit:     make(chan struct{}),
+		subs:     map[int]chan Event{},
+		taps:     map[int]chan Event{},
+		forestIx: map[uint64]int{},
 	}
 	for _, o := range opts {
 		o(c)

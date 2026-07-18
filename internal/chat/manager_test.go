@@ -73,7 +73,7 @@ func TestManager_OpenPersistReopen(t *testing.T) {
 
 	// The persistence pump saves after the turn (async) — poll the store.
 	if !eventually(func() bool {
-		msgs, _, ok := store.Load(meta.ID)
+		msgs, _, _, ok := store.Load(meta.ID)
 		return ok && hasTurn(msgs, "user", "hi") && hasTurn(msgs, "assistant", "ok")
 	}) {
 		t.Fatal("the turn was not persisted to the chat store")
@@ -108,7 +108,7 @@ func TestManager_LazyPersist_EmptyChatNeverWritten(t *testing.T) {
 	}
 	m.CloseAll() // closing an empty chat must not persist it
 
-	if _, _, ok := store.Load(meta.ID); ok {
+	if _, _, _, ok := store.Load(meta.ID); ok {
 		t.Fatal("an empty chat was written to disk; lazy-persist must skip it")
 	}
 	if list := store.List(); len(list) != 0 {
@@ -223,7 +223,7 @@ func TestManager_Open_DeletedAgentRun_ViewableWithZeroAuthority(t *testing.T) {
 		{Role: "user", Content: "Run your scheduled task now."},
 		{Role: "assistant", Content: "did the thing"},
 	}
-	if err := store.Save(chat.Meta{ID: id, Name: "old run", Origin: chat.OriginAgent, Agent: "ghost"}, msgs); err != nil {
+	if err := store.Save(chat.Meta{ID: id, Name: "old run", Origin: chat.OriginAgent, Agent: "ghost"}, msgs, nil); err != nil {
 		t.Fatal(err)
 	}
 

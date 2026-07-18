@@ -116,7 +116,7 @@ func (m *Manager) New(name string, origin Origin) (Meta, error) {
 	meta := Meta{ID: m.deps.Store.NewID(), Name: name, Origin: origin, Created: now, Updated: now}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.spinLocked(meta, m.deps.Root(), nil)
+	m.spinLocked(meta, m.deps.Root(), nil, nil)
 	return meta, nil
 }
 
@@ -160,7 +160,7 @@ func (m *Manager) openLocked(id string) (*Chat, bool) {
 	if c := m.live[id]; c != nil {
 		return c, true
 	}
-	msgs, meta, ok := m.deps.Store.Load(id)
+	msgs, forest, meta, ok := m.deps.Store.Load(id)
 	if !ok {
 		return nil, false
 	}
@@ -176,17 +176,18 @@ func (m *Manager) openLocked(id string) (*Chat, bool) {
 			ch = Charter{Tools: tool.NewRegistry()}
 		}
 	}
-	return m.spinLocked(meta, ch, msgs), true
+	return m.spinLocked(meta, ch, msgs, forest), true
 }
 
 // spinLocked constructs a live chat under charter — seeded with history, its loop on
 // the manager's runtime ctx, plus a persistence pump — registers it, and returns it.
 // The caller holds m.mu. The chat's lifetime is the manager ctx (or its reap, for an
 // idle one-shot), so it keeps running across client disconnects.
-func (m *Manager) spinLocked(meta Meta, ch Charter, msgs []brain.Message) *Chat {
+func (m *Manager) spinLocked(meta Meta, ch Charter, msgs []brain.Message, forest []ToolFrame) *Chat {
 	id := meta.ID
 	c := New(m.deps.Engine, m.deps.Guard, meta, ch,
 		WithHistory(msgs),
+		WithForest(forest),
 		WithAgents(m.deps.Agent),
 		// Bind wake to THIS chat: a turn's ctx carries a resume that Delivers back to this
 		// id, so the workspace-shared wake tool resumes the chat that invoked it (not an
@@ -226,7 +227,7 @@ func (m *Manager) pump(c *Chat, sub <-chan Event) {
 			}
 			snap := c.Snapshot()
 			if len(snap.Messages) > 0 { // lazy-persist: never write an empty chat to disk
-				_ = m.deps.Store.Save(meta, snap.Messages)
+				_ = m.deps.Store.Save(meta, snap.Messages, snap.Forest)
 				m.signal(meta.ID, "turnEnd")
 			}
 			// Reap an agent one-shot that has gone idle. The idle check runs under m.mu,
@@ -306,7 +307,7 @@ func (m *Manager) FireAgent(ctx context.Context, name string, ch Charter) error 
 		Created: now,
 		Updated: now,
 	}
-	c := m.spinLocked(meta, ch, nil)
+	c := m.spinLocked(meta, ch, nil, nil)
 	// Tap BEFORE submitting so the TurnEnd cannot be missed; a tap never counts as
 	// attendance, so the run stays unattended (its Asks resolve per the charter's dial).
 	sub, unsub := c.Tap()
@@ -364,7 +365,7 @@ func (m *Manager) CloseAll() {
 	for _, c := range live {
 		snap := c.Snapshot()
 		if len(snap.Messages) > 0 { // lazy: don't persist an empty chat
-			_ = m.deps.Store.Save(c.Meta(), snap.Messages)
+			_ = m.deps.Store.Save(c.Meta(), snap.Messages, snap.Forest)
 		}
 		c.Close() // closes the pump's tap → the pump drains and exits
 	}

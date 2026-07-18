@@ -88,11 +88,26 @@ func EncodeEvent(e chat.Event) ([]byte, error) {
 // --- snapshot (server → client, on connect / reconnect) ----------------------
 
 type wireSnapshot struct {
-	Type     string        `json:"type"` // always "snapshot"
-	Running  bool          `json:"running"`
-	Queue    []wireQueued  `json:"queue"`
-	Messages []wireMessage `json:"messages"`
-	Pending  *wireEvent    `json:"pending,omitempty"` // an unanswered approval, or null
+	Type     string            `json:"type"` // always "snapshot"
+	Running  bool              `json:"running"`
+	Queue    []wireQueued      `json:"queue"`
+	Messages []wireMessage     `json:"messages"`
+	Forest   []wireForestFrame `json:"forest,omitempty"`  // the full completed tool tree (sub-calls + errors), in stream order
+	Pending  *wireEvent        `json:"pending,omitempty"` // an unanswered approval, or null
+}
+
+// wireForestFrame is one completed tool invocation from the persisted forest: id/parent give
+// the call tree (parent 0 = a model-issued top-level call; a nested effect carries its
+// enclosing call's id), result/err the outcome. Unlike the per-message `tools` (a flat
+// top-level view reconstructed from history for placement), the forest lets the client
+// rebuild the EXACT tree it saw live — sub-calls and their errors included.
+type wireForestFrame struct {
+	ID     uint64 `json:"id"`
+	Parent uint64 `json:"parent"`
+	Tool   string `json:"tool"`
+	Args   string `json:"args,omitempty"`
+	Result string `json:"result,omitempty"`
+	Err    string `json:"err,omitempty"`
 }
 
 type wireQueued struct {
@@ -145,6 +160,11 @@ func EncodeSnapshot(s chat.Snapshot) ([]byte, error) {
 			continue // an empty assistant turn with no calls carries nothing to render
 		}
 		w.Messages = append(w.Messages, wm)
+	}
+	// The full persisted tool forest — the client rebuilds the exact live tree (sub-calls +
+	// errors), which the flat per-message `tools` can't carry.
+	for _, f := range s.Forest {
+		w.Forest = append(w.Forest, wireForestFrame{ID: f.ID, Parent: f.Parent, Tool: f.Tool, Args: f.Args, Result: f.Result, Err: f.Err})
 	}
 	if s.Pending != nil {
 		w.Pending = &wireEvent{Type: "approval", ID: s.Pending.ID, Intent: s.Pending.Intent, Options: s.Pending.Options}

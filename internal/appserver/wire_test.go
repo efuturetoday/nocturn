@@ -67,3 +67,33 @@ func TestEncodeSnapshot_ReconstructsToolForest(t *testing.T) {
 		t.Fatalf("final message = %q, want the answer text", got.Messages[2].Content)
 	}
 }
+
+// The snapshot carries the full persisted tool forest (sub-calls + errors), so a reconnecting
+// client rebuilds the exact tree it saw live — not just the flat top-level calls.
+func TestEncodeSnapshot_IncludesForest(t *testing.T) {
+	snap := chat.Snapshot{Forest: []chat.ToolFrame{
+		{ID: 1, Tool: "code.run"},
+		{ID: 2, Parent: 1, Tool: "file.write", Err: "denied"}, // a nested sub-call that errored
+	}}
+	b, err := appserver.EncodeSnapshot(snap)
+	if err != nil {
+		t.Fatalf("EncodeSnapshot: %v", err)
+	}
+	var got struct {
+		Forest []struct {
+			ID     uint64 `json:"id"`
+			Parent uint64 `json:"parent"`
+			Tool   string `json:"tool"`
+			Err    string `json:"err"`
+		} `json:"forest"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Forest) != 2 {
+		t.Fatalf("forest = %d frames, want 2 (%s)", len(got.Forest), b)
+	}
+	if got.Forest[1].Parent != 1 || got.Forest[1].Err != "denied" {
+		t.Fatalf("nested error frame not carried: %+v", got.Forest[1])
+	}
+}

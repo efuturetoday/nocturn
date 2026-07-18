@@ -29,6 +29,27 @@ type ThinkingEvent struct{ Text string }
 // ToolEvent is a tool call's start or end (the observable forest).
 type ToolEvent struct{ Event activity.ToolEvent }
 
+// ToolFrame is one COMPLETED tool invocation, captured for persistence + reload — the
+// durable twin of the live activity.ToolEvent stream. ID/Parent give the call tree (Parent
+// 0 = a top-level, model-issued call; a nested effect carries its enclosing call's ID), so
+// a reconnecting client rebuilds the exact forest it saw live — including sub-calls and
+// their errors, which the message history alone does not hold.
+type ToolFrame struct {
+	ID     uint64 `json:"id"`
+	Parent uint64 `json:"parent"`
+	Tool   string `json:"tool"`
+	Args   string `json:"args,omitempty"`
+	Result string `json:"result,omitempty"`
+	Err    string `json:"err,omitempty"`
+}
+
+func errText(e error) string {
+	if e == nil {
+		return ""
+	}
+	return e.Error()
+}
+
 // TurnStartEvent marks a turn beginning: Display is the client-facing line to render
 // (a typed "/skill …" or "/agent task"), Input is what actually ran (an expanded skill
 // body). They differ only when a client submitted them apart; otherwise Display == Input.

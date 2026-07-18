@@ -47,10 +47,11 @@ type Meta struct {
 	Turns   int       `json:"turns"` // user messages, for a "N messages" hint
 }
 
-// record is the on-disk shape: metadata plus the full conversation.
+// record is the on-disk shape: metadata plus the full conversation and its tool forest.
 type record struct {
 	Meta
 	Messages []brain.Message `json:"messages"`
+	Forest   []ToolFrame     `json:"forest,omitempty"` // the completed tool call tree, for faithful reload
 }
 
 // Store owns one workspace's chats under dir. Safe for concurrent use (several app clients).
@@ -92,18 +93,19 @@ func (s *Store) List() []Meta {
 // turn leaves no empty file behind (lazy-persist).
 func (s *Store) NewID() string { return newID() }
 
-// Load returns a chat's messages + metadata. ok is false for an unknown or invalid id.
-func (s *Store) Load(id string) ([]brain.Message, Meta, bool) {
+// Load returns a chat's messages, tool forest, and metadata. ok is false for an unknown or
+// invalid id.
+func (s *Store) Load(id string) ([]brain.Message, []ToolFrame, Meta, bool) {
 	if !validID(id) {
-		return nil, Meta{}, false
+		return nil, nil, Meta{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.readLocked(id)
 	if !ok {
-		return nil, Meta{}, false
+		return nil, nil, Meta{}, false
 	}
-	return rec.Messages, rec.Meta, true
+	return rec.Messages, rec.Forest, rec.Meta, true
 }
 
 // Save persists a chat's current messages under its metadata (updating Updated and
@@ -111,7 +113,7 @@ func (s *Store) Load(id string) ([]brain.Message, Meta, bool) {
 // override only when non-empty. The first Save of a memory-minted chat creates its
 // file (lazy-persist). Returns ErrInvalidID for an id that isn't server-minted
 // lowercase-hex.
-func (s *Store) Save(meta Meta, msgs []brain.Message) error {
+func (s *Store) Save(meta Meta, msgs []brain.Message, forest []ToolFrame) error {
 	if !validID(meta.ID) {
 		return ErrInvalidID
 	}
@@ -132,6 +134,7 @@ func (s *Store) Save(meta Meta, msgs []brain.Message) error {
 	}
 	rec.Updated = time.Now()
 	rec.Messages = msgs
+	rec.Forest = forest
 	rec.Turns = countUserTurns(msgs)
 	return s.writeLocked(rec)
 }

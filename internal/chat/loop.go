@@ -132,7 +132,26 @@ func (c *Chat) onStreamEvent(e activity.Event) {
 	case activity.Thinking:
 		c.emit(ThinkingEvent{Text: ev.Text})
 	case activity.ToolEvent:
+		c.recordFrame(ev)
 		c.emit(ToolEvent{Event: ev})
+	}
+}
+
+// recordFrame accumulates the durable tool forest: a Start opens a frame (id/parent/tool/
+// args), the matching End fills its result/err. Guarded by mu (the turn goroutine calls
+// this concurrently with the loop). Runs BEFORE emit so a snapshot taken right after an End
+// already reflects the completed frame.
+func (c *Chat) recordFrame(ev activity.ToolEvent) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ev.Phase == activity.Start {
+		c.forestIx[ev.ID] = len(c.forest)
+		c.forest = append(c.forest, ToolFrame{ID: ev.ID, Parent: ev.Parent, Tool: ev.Tool, Args: ev.Args})
+		return
+	}
+	if i, ok := c.forestIx[ev.ID]; ok { // End: fill the outcome onto the opened frame
+		c.forest[i].Result = ev.Result
+		c.forest[i].Err = errText(ev.Err)
 	}
 }
 
@@ -224,6 +243,7 @@ type Snapshot struct {
 	Running  bool
 	Queue    []QueuedItem
 	Messages []brain.Message
+	Forest   []ToolFrame    // the completed tool call tree (sub-calls + errors), for reload
 	Pending  *ApprovalEvent // an approval awaiting an answer, or nil
 }
 
@@ -246,6 +266,7 @@ func (c *Chat) Snapshot() Snapshot {
 		ev := c.approval.event
 		s.Pending = &ev
 	}
+	s.Forest = append([]ToolFrame(nil), c.forest...) // copy under the lock
 	conv := c.conv
 	c.mu.Unlock()
 	s.Messages = conv.Messages()
