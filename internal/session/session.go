@@ -81,7 +81,7 @@ func New(b *brain.Brain, tools *tool.Registry, g *gateway.Guard, store capabilit
 		guard:  g,
 		tools:  tools,
 		store:  store,
-		scope:  g.NewScope(store),
+		scope:  g.NewScope(gateway.Authority{Grants: store}),
 		skills: skill.NewActive(),
 	}
 	for _, o := range opts {
@@ -115,7 +115,7 @@ func (s *Session) MarkSkill(name string) { s.skills.Mark(name) }
 // survive. The next Ask starts clean.
 func (s *Session) Reset() {
 	s.scope.Revoke()
-	s.scope = s.guard.NewScope(s.store)
+	s.scope = s.guard.NewScope(gateway.Authority{Grants: s.store})
 	s.conv = s.brain.NewConversation(s.tools, brain.WithSystem(s.persona))
 	s.skills = skill.NewActive() // a fresh conversation has no skills loaded
 }

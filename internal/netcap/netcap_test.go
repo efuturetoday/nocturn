@@ -173,7 +173,7 @@ func TestFetch_AllowThisSession_EpochBoundGrantAndRevocation(t *testing.T) {
 	g := netcap.New(guard)
 	// A revocable scope owns the session grant; the Guard owns its epoch, so the test
 	// never touches the registry — it binds the scope and later revokes it.
-	scope := guard.NewScope(nil)
+	scope := guard.NewScope(gateway.Authority{})
 	ctx := scope.Bind(context.Background())
 
 	// first call: asked, ApprovedSession recorded on the scope's grants for this host

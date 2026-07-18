@@ -74,7 +74,11 @@ func Run(ctx context.Context, d Deps, a Agent, task string) (Result, error) {
 	if d.Store != nil {
 		store = d.Store(a.Name)
 	}
-	scope := d.Guard.NewScope(store)
+	// The run's autonomy is set by its trigger (the scheduler stamps an unattended dial; a
+	// manual/attended spawn leaves it attended). Carry it into the Authority so the scope —
+	// the single permission source — stamps it definitively via Bind. (Turn's own policy/cage
+	// stamps stay for now; they fold into the Authority in a later redesign step.)
+	scope := d.Guard.NewScope(gateway.Authority{Grants: store, Autonomy: capability.AutonomyFrom(ctx)})
 	defer scope.Revoke()
 
 	// The agent's Instructions ARE its system prompt — its standing identity, seeded on

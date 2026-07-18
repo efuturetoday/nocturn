@@ -25,7 +25,7 @@ func TestScope_BindThenRevoke_RevokesSessionGrant(t *testing.T) {
 	notifier.resolve = engine.Resolve
 
 	g := &gateway.Guard{Policy: askRead, Approvals: engine, TTL: time.Second}
-	scope := g.NewScope(nil)
+	scope := g.NewScope(gateway.Authority{})
 	ctx := scope.Bind(context.Background())
 
 	call := capability.Call{Family: "http", Target: "example.com", Write: false}
@@ -65,14 +65,14 @@ func TestScope_FreshScope_DoesNotInheritGrant(t *testing.T) {
 	g := &gateway.Guard{Policy: askRead, Approvals: engine, TTL: time.Second}
 	call := capability.Call{Family: "http", Target: "example.com"}
 
-	s1 := g.NewScope(nil)
+	s1 := g.NewScope(gateway.Authority{})
 	if err := g.Authorize(s1.Bind(context.Background()), call, "read"); err != nil {
 		t.Fatalf("s1 authorize: %v", err)
 	}
 	s1.Revoke()
 
 	// A brand-new scope must ask again (it carries none of s1's grants).
-	s2 := g.NewScope(nil)
+	s2 := g.NewScope(gateway.Authority{})
 	if err := g.Authorize(s2.Bind(context.Background()), call, "read"); err != nil {
 		t.Fatalf("s2 authorize: %v", err)
 	}
