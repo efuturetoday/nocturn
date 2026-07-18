@@ -154,12 +154,16 @@ func (b *Brain) run(ctx context.Context, conv []Message, tools *tool.Registry) (
 
 // Conversation is a multi-turn exchange with a Brain: it carries the history
 // across turns so the model has the full context each time. It owns only the
-// message history — the session lifecycle (epoch, guard) lives one layer out in
-// internal/agent, which drives this.
+// message history — the chat lifecycle (epoch, guard) lives one layer out in
+// internal/chat, which drives this. Safe for a concurrent Messages snapshot while
+// a Send runs (a client reads history mid-turn); Sends themselves are serialized
+// by the caller (the chat's turn loop).
 type Conversation struct {
 	brain *Brain
-	tools *tool.Registry // the toolset this conversation runs against (the session's)
-	conv  []Message
+	tools *tool.Registry // the toolset this conversation runs against (the chat's)
+
+	mu   sync.Mutex // guards conv — Messages may be called while Send is mid-turn
+	conv []Message
 }
 
 // ConvOption configures a Conversation built with NewConversation.
@@ -203,16 +207,27 @@ func (b *Brain) NewConversation(tools *tool.Registry, opts ...ConvOption) *Conve
 }
 
 // Messages returns a copy of the conversation history so far — for a client snapshot
-// (a reconnecting/late-joining UI). It is a snapshot: call it between turns; the live
-// turn's tokens arrive via streaming, not here.
-func (c *Conversation) Messages() []Message { return append([]Message(nil), c.conv...) }
+// (a reconnecting/late-joining UI). It reflects completed turns plus the input of a
+// turn in flight; the live turn's tokens arrive via streaming, not here.
+func (c *Conversation) Messages() []Message {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]Message(nil), c.conv...)
+}
 
 // Send adds the user's input, runs the loop to a final answer, and keeps the
-// whole exchange in the conversation's history.
+// whole exchange in the conversation's history. The run works on its own copy of
+// the history and commits it back at the end, so a concurrent Messages snapshot
+// sees a consistent prefix, never a half-built turn.
 func (c *Conversation) Send(ctx context.Context, input string) (string, error) {
+	c.mu.Lock()
 	c.conv = append(c.conv, Message{Role: "user", Content: input})
-	ans, conv, err := c.brain.run(ctx, c.conv, c.tools)
+	conv := append([]Message(nil), c.conv...) // run on a copy; commit on completion
+	c.mu.Unlock()
+	ans, conv, err := c.brain.run(ctx, conv, c.tools)
+	c.mu.Lock()
 	c.conv = conv
+	c.mu.Unlock()
 	return ans, err
 }
 

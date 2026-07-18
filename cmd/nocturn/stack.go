@@ -115,10 +115,10 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		return res.Answer, err
 	}
 
-	// The chat manager owns this workspace's live chats — one serialized runner per chat, each
+	// The chat manager owns this workspace's live chats — one serialized loop per chat, each
 	// seeded from its saved history and kept alive on the process ctx. BOTH the TUI and the app
-	// open chats from here; there is no separate per-front-end runner. Each chat's runner binds
-	// wake to itself (its context decorator), so a wake resumes the chat that scheduled it.
+	// open chats from here; there is no separate per-front-end loop. Each chat binds wake to
+	// itself (its ctx decorator), so a wake resumes the chat that scheduled it.
 	chatStore := chat.LoadStore(filepath.Join(wsDir, "chats"))
 	// onActivity badges this workspace's background chats to any connected app; nil under the
 	// TUI (no hub), so the manager stays silent there.
@@ -127,12 +127,10 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		onActivity = func(chatID, kind string) { sh.activity.emit(wsName, chatID, kind) }
 	}
 	chatMgr := chat.NewManager(ctx, chat.Deps{
-		Brain:      w.Brain(),
-		Tools:      w.Tools(),
+		Engine:     w.Brain(),
 		Guard:      w.Guard(),
-		Grants:     w.Grants(),
-		Persona:    w.Persona,
 		Store:      chatStore,
+		Root:       w.RootCharter,
 		AgentRun:   agentRun,
 		OnActivity: onActivity,
 	})

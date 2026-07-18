@@ -206,7 +206,7 @@ func (e *queuedEntry) render(m *chatModel, width int) string {
 type chatModel struct {
 	bw         *bound            // the bound workspace this TUI is driving (its manager/ws/waker)
 	workspaces map[string]*bound // all built workspaces, for /ws switching
-	runner     *chat.Runner      // the OPEN chat's turn loop (from bw.chats), driven like the app drives it
+	runner     *chat.Chat        // the OPEN chat (from bw.chats), driven like the app drives it
 	chatID     string            // the open chat's id (in bw's manager)
 	openChats  map[string]string // workspace name → its currently-open chat id (remembered across /ws)
 	send       func(tea.Msg)     // p.Send — the event pump delivers runner events via this
@@ -295,10 +295,10 @@ func (m *chatModel) bindWorkspace(bw *bound) {
 	m.bindChat(id, r)
 }
 
-// bindChat attaches the model to a chat's runner: swap the event pump to it, remember it as
+// bindChat attaches the model to a chat: swap the event pump to it, remember it as
 // this workspace's open chat, and rebuild the transcript from its snapshot. Live
 // stream/tools/pending are dropped — a mid-turn (re)attach picks up subsequent events.
-func (m *chatModel) bindChat(id string, r *chat.Runner) {
+func (m *chatModel) bindChat(id string, r *chat.Chat) {
 	if m.unsub != nil {
 		m.unsub() // stop pumping the previously-open chat
 	}

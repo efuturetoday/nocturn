@@ -22,11 +22,10 @@ func (okModel) Next(context.Context, []brain.Message, []tool.Spec) (brain.Step, 
 
 func newManager(ctx context.Context, store *chat.Store) *chat.Manager {
 	return chat.NewManager(ctx, chat.Deps{
-		Brain:    brain.New(okModel{}),
-		Tools:    tool.NewRegistry(),
+		Engine:   brain.New(okModel{}),
 		Guard:    &gateway.Guard{},
-		Persona:  func() string { return "" },
 		Store:    store,
+		Root:     func() chat.Charter { return chat.Charter{Tools: tool.NewRegistry()} },
 		AgentRun: func(context.Context, string, string) (string, error) { return "", nil },
 	})
 }

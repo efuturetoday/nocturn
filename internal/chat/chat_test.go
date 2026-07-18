@@ -22,7 +22,7 @@ import (
 
 // scriptedModel returns a fixed sequence of steps and records every conversation
 // it was shown, so a test can assert what the model saw (e.g. that Reset cleared
-// the history).
+// the history). Turns are serialized by the loop, so no lock is needed.
 type scriptedModel struct {
 	steps []brain.Step
 	calls int
@@ -45,9 +45,41 @@ func convContains(conv []brain.Message, substr string) bool {
 	return false
 }
 
-// Ask threads the session's permission context (carrying its epoch) through ctx
+// startChatOn spins a chat over guard + tools with the scripted model and returns it
+// with a subscription — the fixture for turn-ceremony tests (permissions, skills).
+func startChatOn(t *testing.T, model brain.Model, guard *gateway.Guard, tools *tool.Registry) (*chat.Chat, <-chan chat.Event) {
+	t.Helper()
+	c := chat.New(brain.New(model), guard, chat.Meta{ID: "t0"}, chat.Charter{Tools: tools})
+	sub, unsub := c.Subscribe()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { unsub(); cancel() })
+	c.Start(ctx)
+	return c, sub
+}
+
+// turnOK submits input and waits for its TurnEnd, failing the test on a turn error.
+func turnOK(t *testing.T, c *chat.Chat, sub <-chan chat.Event, input string) {
+	t.Helper()
+	c.Submit(chat.SourceUser, input)
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case e := <-sub:
+			if te, ok := e.(chat.TurnEndEvent); ok {
+				if te.Err != nil {
+					t.Fatalf("turn %q: %v", input, te.Err)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for TurnEnd of %q", input)
+		}
+	}
+}
+
+// A turn threads the chat's permission context (carrying its epoch) through ctx
 // down to the tool, and Reset rotates it to a fresh, different epoch.
-func TestSession_ThreadsContext_ResetRotatesEpoch(t *testing.T) {
+func TestChat_ThreadsContext_ResetRotatesEpoch(t *testing.T) {
 	var seen []capability.EpochID
 	tools := []tool.Tool{{
 		Spec: tool.Spec{Name: "probe"},
@@ -65,29 +97,24 @@ func TestSession_ThreadsContext_ResetRotatesEpoch(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "two"},
 	}}
 
-	b := brain.New(model)
-	s := chat.New(b, tool.NewRegistry().AddMany(tools...), &gateway.Guard{}, nil)
+	c, sub := startChatOn(t, model, &gateway.Guard{}, tool.NewRegistry().AddMany(tools...))
 
-	if _, err := s.Ask(context.Background(), "first"); err != nil {
-		t.Fatalf("first ask: %v", err)
-	}
-	s.Reset()
-	if _, err := s.Ask(context.Background(), "second"); err != nil {
-		t.Fatalf("second ask: %v", err)
-	}
+	turnOK(t, c, sub, "first")
+	c.Reset() // ordered on the command loop: processed before the next Submit
+	turnOK(t, c, sub, "second")
 
 	if len(seen) != 2 {
 		t.Fatalf("tool saw %d epochs, want 2", len(seen))
 	}
 	if seen[0] == 0 {
-		t.Fatal("the tool saw the zero epoch — the session epoch was not threaded through ctx")
+		t.Fatal("the tool saw the zero epoch — the chat epoch was not threaded through ctx")
 	}
 	if seen[0] == seen[1] {
 		t.Fatalf("epoch did not rotate on Reset: both turns saw %d", seen[0])
 	}
 	// Revocation of the old epoch is behavioural and covered by
-	// TestSession_Reset_RevokesGrantsAndClearsHistory (a session grant no longer
-	// applies after Reset) — the registry is the Guard's private detail now.
+	// TestChat_Reset_RevokesGrantsAndClearsHistory (a session grant no longer
+	// applies after Reset) — the registry is the Guard's private detail.
 }
 
 // autoNotifier resolves the pending request immediately, picking the option that
@@ -111,7 +138,7 @@ func (n *autoNotifier) Notify(_ string, options []hitl.Option) error {
 // Reset revokes the "Allow this session" grants (so the same host is asked
 // again) and starts a fresh conversation (so the model no longer sees the old
 // history).
-func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
+func TestChat_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -145,21 +172,16 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "net.fetch"}}}, {Answer: "two"},
 	}}
 
-	b := brain.New(model)
-	s := chat.New(b, tool.NewRegistry().AddMany(tools...), guard, nil)
+	c, sub := startChatOn(t, model, guard, tool.NewRegistry().AddMany(tools...))
 
-	if _, err := s.Ask(context.Background(), "fetch it once"); err != nil {
-		t.Fatalf("first ask: %v", err)
-	}
+	turnOK(t, c, sub, "fetch it once")
 	if notifier.calls != 1 {
 		t.Fatalf("asked %d times on the first turn, want 1", notifier.calls)
 	}
 
-	s.Reset()
+	c.Reset()
 
-	if _, err := s.Ask(context.Background(), "fetch it again"); err != nil {
-		t.Fatalf("second ask: %v", err)
-	}
+	turnOK(t, c, sub, "fetch it again")
 	if notifier.calls != 2 {
 		t.Fatalf("asked %d times total, want 2 (Reset must revoke the session grant)", notifier.calls)
 	}
@@ -172,17 +194,17 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 	}
 }
 
-// The session owns the skill-activation set: it is threaded into every Ask (so
+// The chat owns the skill-activation set: it is threaded into every turn (so
 // skill.load deduplicates within a conversation) and Reset clears it (a fresh
 // conversation has no skills loaded).
-func TestSession_SkillActiveSet_ResetClears(t *testing.T) {
+func TestChat_SkillActiveSet_ResetClears(t *testing.T) {
 	var seen []bool
 	tools := []tool.Tool{{
 		Spec: tool.Spec{Name: "probe"},
 		Invoke: func(ctx context.Context, _ string) (string, error) {
 			act := skill.ActiveFrom(ctx)
 			if act == nil {
-				t.Error("Ask did not stamp a skill.Active set")
+				t.Error("the turn did not stamp a skill.Active set")
 				return "ok", nil
 			}
 			seen = append(seen, act.Has("x"))
@@ -195,15 +217,15 @@ func TestSession_SkillActiveSet_ResetClears(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "2"},
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "3"},
 	}}
-	s := chat.New(brain.New(model), tool.NewRegistry().AddMany(tools...), &gateway.Guard{}, nil)
+	c, sub := startChatOn(t, model, &gateway.Guard{}, tool.NewRegistry().AddMany(tools...))
 
-	s.Ask(context.Background(), "a") // marks x
-	s.Ask(context.Background(), "b") // x still active within the session
-	s.Reset()
-	s.Ask(context.Background(), "c") // fresh set — x gone
+	turnOK(t, c, sub, "a") // marks x
+	turnOK(t, c, sub, "b") // x still active within the chat
+	c.Reset()
+	turnOK(t, c, sub, "c") // fresh set — x gone
 
 	want := []bool{false, true, false}
 	if len(seen) != 3 || seen[0] != want[0] || seen[1] != want[1] || seen[2] != want[2] {
-		t.Fatalf("Has(x) across asks = %v, want %v (dedup within session, cleared on reset)", seen, want)
+		t.Fatalf("Has(x) across turns = %v, want %v (dedup within a chat, cleared on reset)", seen, want)
 	}
 }

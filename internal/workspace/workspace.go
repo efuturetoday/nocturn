@@ -17,6 +17,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
+	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/filecap"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/grantstore"
@@ -168,6 +169,19 @@ func (w *Workspace) Persona() string { return w.persona.Get() }
 // its own synchronization. Callers deal in state, never the file or a lock.
 func (w *Workspace) SetPersona(text string) error { return w.persona.Set(text) }
 
+// RootCharter mints the construction spec for this workspace's ROOT chat: the full
+// toolset, the current persona (read live, so a chat opened after a persona change
+// seeds the new one), and an unrestricted authority backed by the workspace's durable
+// grants. The workspace is the only Charter factory — a chat.Manager receives this as
+// its Root factory and stays agent-agnostic.
+func (w *Workspace) RootCharter() chat.Charter {
+	return chat.Charter{
+		Tools:     w.tools,
+		System:    w.Persona(),
+		Authority: gateway.Authority{Grants: w.grants},
+	}
+}
+
 // RunAgent runs the named child agent to completion over this workspace's tools + guard,
 // with the agent's OWN durable grants (per-agent file). An unknown name returns an error.
 func (w *Workspace) RunAgent(ctx context.Context, name, task string) (agent.Result, error) {
@@ -210,9 +224,6 @@ func (w *Workspace) Guard() *gateway.Guard { return w.guard }
 
 // Brain is the shared model loop (for the chat manager to open sessions).
 func (w *Workspace) Brain() *brain.Brain { return w.loop }
-
-// Grants is the workspace's durable "always" grant store (session backing for its chats).
-func (w *Workspace) Grants() capability.GrantStore { return w.grants }
 
 // Vault is the workspace's credentials vault (for plugin/MCP/OAuth wiring).
 func (w *Workspace) Vault() *secret.Vault { return w.secrets }
