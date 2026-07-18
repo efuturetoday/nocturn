@@ -97,6 +97,7 @@ export interface WorkspaceState {
 export interface ChatMeta {
   id: string;
   name: string;
+  origin: "user" | "agent"; // who created it — filter/group human chats vs agent activity
   updated: string; // RFC3339
   turns: number; // user messages, for an "N messages" hint
 }

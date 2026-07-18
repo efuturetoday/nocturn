@@ -10,7 +10,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/chat"
 )
 
-func TestStore_CreateSaveLoadListRenameDelete(t *testing.T) {
+func TestStore_SaveLoadListRenameDelete(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "chats")
 	s := chat.LoadStore(dir)
 
@@ -18,48 +18,45 @@ func TestStore_CreateSaveLoadListRenameDelete(t *testing.T) {
 		t.Fatal("fresh store must be empty")
 	}
 
-	a, err := s.Create("Trip planning")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := s.Create("") // default name
-	if err != nil {
-		t.Fatal(err)
-	}
-	if b.Name != "New chat" {
-		t.Fatalf("default name = %q, want 'New chat'", b.Name)
-	}
-
-	// Save messages into chat a.
+	// A chat exists on disk only once saved (lazy-persist): mint an id, then Save creates it.
+	a := s.NewID()
 	msgs := []brain.Message{
 		{Role: "system", Content: "persona"},
 		{Role: "user", Content: "where to?"},
 		{Role: "assistant", Content: "Lisbon"},
 	}
-	if err := s.Save(a.ID, "", msgs); err != nil {
+	if err := s.Save(a, "Trip planning", chat.OriginUser, msgs); err != nil {
 		t.Fatal(err)
 	}
 
-	// Load returns the messages + updated meta (2 turns... 1 user message here).
-	got, meta, ok := s.Load(a.ID)
-	if !ok || len(got) != 3 || meta.Turns != 1 {
-		t.Fatalf("load = ok:%v msgs:%d turns:%d, want ok/3/1", ok, len(got), meta.Turns)
+	// Load returns the messages + updated meta (1 user message here) and the origin.
+	got, meta, ok := s.Load(a)
+	if !ok || len(got) != 3 || meta.Turns != 1 || meta.Origin != chat.OriginUser {
+		t.Fatalf("load = ok:%v msgs:%d turns:%d origin:%q, want ok/3/1/user", ok, len(got), meta.Turns, meta.Origin)
 	}
 
-	// List: most-recently-updated first → a (just saved) before b.
+	b := s.NewID()
+	if err := s.Save(b, "Agent run", chat.OriginAgent, []brain.Message{{Role: "user", Content: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, m, _ := s.Load(b); m.Origin != chat.OriginAgent {
+		t.Fatalf("origin = %q, want agent", m.Origin)
+	}
+
+	// List: most-recently-updated first → b (saved last) before a.
 	list := s.List()
-	if len(list) != 2 || list[0].ID != a.ID {
-		t.Fatalf("list = %+v, want a first (most recent)", list)
+	if len(list) != 2 || list[0].ID != b {
+		t.Fatalf("list = %+v, want b first (most recent)", list)
 	}
 
-	if err := s.Rename(a.ID, "Lisbon trip"); err != nil {
+	if err := s.Rename(a, "Lisbon trip"); err != nil {
 		t.Fatal(err)
 	}
-	if _, meta, _ := s.Load(a.ID); meta.Name != "Lisbon trip" {
+	if _, meta, _ := s.Load(a); meta.Name != "Lisbon trip" {
 		t.Fatalf("rename not applied: %q", meta.Name)
 	}
 
-	if err := s.Delete(b.ID); err != nil {
+	if err := s.Delete(b); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.List()) != 1 {
@@ -84,7 +81,7 @@ func TestStore_RejectsUnsafeID(t *testing.T) {
 		if _, _, ok := s.Load(bad); ok {
 			t.Fatalf("Load(%q) succeeded — an unsafe id must be rejected", bad)
 		}
-		if err := s.Save(bad, "x", []brain.Message{{Role: "user", Content: "x"}}); !errors.Is(err, chat.ErrInvalidID) {
+		if err := s.Save(bad, "x", chat.OriginUser, []brain.Message{{Role: "user", Content: "x"}}); !errors.Is(err, chat.ErrInvalidID) {
 			t.Fatalf("Save(%q) = %v, want ErrInvalidID (rejected before the filesystem)", bad, err)
 		}
 	}

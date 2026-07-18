@@ -48,7 +48,7 @@ func TestManager_OpenPersistReopen(t *testing.T) {
 	store := chat.LoadStore(dir)
 	m := newManager(t.Context(), store)
 
-	meta, err := m.New("Chat 1")
+	meta, err := m.New("Chat 1", chat.OriginUser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +81,30 @@ func TestManager_OpenPersistReopen(t *testing.T) {
 	snap := r2.Snapshot()
 	if !hasTurn(snap.Messages, "user", "hi") || !hasTurn(snap.Messages, "assistant", "ok") {
 		t.Fatalf("reopened chat missing its history: %+v", snap.Messages)
+	}
+}
+
+// Lazy-persist: a chat that never takes a turn is never written to disk, so an untouched
+// New (a TUI launch the user closes without typing) leaves no empty file behind.
+func TestManager_LazyPersist_EmptyChatNeverWritten(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "chats")
+	store := chat.LoadStore(dir)
+	m := newManager(t.Context(), store)
+
+	meta, err := m.New("Untouched", chat.OriginUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.Open(meta.ID); !ok { // it is live (memory-minted), even with no file
+		t.Fatal("a memory-minted chat must be openable before it is saved")
+	}
+	m.CloseAll() // closing an empty chat must not persist it
+
+	if _, _, ok := store.Load(meta.ID); ok {
+		t.Fatal("an empty chat was written to disk; lazy-persist must skip it")
+	}
+	if list := store.List(); len(list) != 0 {
+		t.Fatalf("store has %d chats, want 0 (nothing took a turn)", len(list))
 	}
 }
 

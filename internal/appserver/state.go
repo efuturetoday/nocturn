@@ -53,6 +53,7 @@ const (
 type ChatMeta struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
+	Origin  string `json:"origin"` // "user" | "agent" — who created it, for filtering/grouping
 	Updated string `json:"updated"` // RFC3339
 	Turns   int    `json:"turns"`
 }

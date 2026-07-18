@@ -27,10 +27,22 @@ import (
 // rejected id from an unknown-but-valid one — the mutation never touches the filesystem.
 var ErrInvalidID = errors.New("chat: invalid id")
 
+// Origin is who created a chat — a one-time provenance marker, distinct from who drives a
+// given turn (that is session.Source). A client filters/groups by it.
+type Origin string
+
+const (
+	// OriginUser is a chat a human started (TUI launch, Ctrl+N, the app's "new chat").
+	OriginUser Origin = "user"
+	// OriginAgent is a chat a scheduled/child-agent run inhabits (grouped as "agent activity").
+	OriginAgent Origin = "agent"
+)
+
 // Meta is one chat's summary, for the picker (no messages).
 type Meta struct {
 	ID      string    `json:"id"`
 	Name    string    `json:"name"`
+	Origin  Origin    `json:"origin"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
 	Turns   int       `json:"turns"` // user messages, for a "N messages" hint
@@ -76,21 +88,10 @@ func (s *Store) List() []Meta {
 	return metas
 }
 
-// Create starts a new empty chat with the given display name (defaulted if blank) and
-// returns its metadata. The id is server-generated (safe by construction).
-func (s *Store) Create(name string) (Meta, error) {
-	if name == "" {
-		name = "New chat"
-	}
-	now := time.Now()
-	rec := record{Meta: Meta{ID: newID(), Name: name, Created: now, Updated: now}}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.writeLocked(rec); err != nil {
-		return Meta{}, err
-	}
-	return rec.Meta, nil
-}
+// NewID mints a fresh, filesystem-safe chat id WITHOUT writing anything. The Manager mints
+// a chat in memory and lets the first save create the file — so a chat that never takes a
+// turn leaves no empty file behind (lazy-persist).
+func (s *Store) NewID() string { return newID() }
 
 // Load returns a chat's messages + metadata. ok is false for an unknown or invalid id.
 func (s *Store) Load(id string) ([]brain.Message, Meta, bool) {
@@ -107,9 +108,10 @@ func (s *Store) Load(id string) ([]brain.Message, Meta, bool) {
 }
 
 // Save persists a chat's current messages (updating Updated and the turn count), preserving
-// its Created time and name (name overrides only when non-empty). Returns ErrInvalidID for
-// an id that isn't server-minted lowercase-hex.
-func (s *Store) Save(id, name string, msgs []brain.Message) error {
+// its Created time. name/origin override only when non-empty. The first Save of a
+// memory-minted chat creates its file (lazy-persist). Returns ErrInvalidID for an id that
+// isn't server-minted lowercase-hex.
+func (s *Store) Save(id, name string, origin Origin, msgs []brain.Message) error {
 	if !validID(id) {
 		return ErrInvalidID
 	}
@@ -121,6 +123,9 @@ func (s *Store) Save(id, name string, msgs []brain.Message) error {
 	}
 	if name != "" {
 		rec.Name = name
+	}
+	if origin != "" {
+		rec.Origin = origin
 	}
 	rec.Updated = time.Now()
 	rec.Messages = msgs

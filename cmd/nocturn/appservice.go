@@ -86,7 +86,7 @@ func (a *appWorkspaces) NewChat(ws, name string) (appserver.ChatMeta, bool) {
 	if !ok {
 		return appserver.ChatMeta{}, false
 	}
-	m, err := b.chats.New(name)
+	m, err := b.chats.New(name, chat.OriginUser) // an app-created chat is a human conversation
 	if err != nil {
 		return appserver.ChatMeta{}, false
 	}
@@ -131,6 +131,7 @@ func toChatMeta(m chat.Meta) appserver.ChatMeta {
 	return appserver.ChatMeta{
 		ID:      m.ID,
 		Name:    m.Name,
+		Origin:  string(m.Origin),
 		Updated: m.Updated.Format(time.RFC3339),
 		Turns:   m.Turns,
 	}

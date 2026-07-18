@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
@@ -55,6 +56,7 @@ type liveChat struct {
 	unsub   func()
 	id      string
 	name    string
+	origin  Origin
 }
 
 // NewManager builds a manager over deps whose runners live for as long as ctx.
@@ -65,8 +67,24 @@ func NewManager(ctx context.Context, deps Deps) *Manager {
 // List returns every chat's metadata (most recent first).
 func (m *Manager) List() []Meta { return m.deps.Store.List() }
 
-// New creates a new empty chat and returns its metadata; its runner spins on first Open.
-func (m *Manager) New(name string) (Meta, error) { return m.deps.Store.Create(name) }
+// New mints a fresh chat IN MEMORY (no file yet) and spins its runner immediately, so a
+// trigger (or the app) can drive it before it is ever saved. The first turn's save creates
+// the file — a chat that never takes a turn leaves nothing behind (lazy-persist). name and
+// origin default when blank.
+func (m *Manager) New(name string, origin Origin) (Meta, error) {
+	if name == "" {
+		name = "New chat"
+	}
+	if origin == "" {
+		origin = OriginUser
+	}
+	now := time.Now()
+	meta := Meta{ID: m.deps.Store.NewID(), Name: name, Origin: origin, Created: now, Updated: now}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.spinLocked(meta.ID, meta.Name, meta.Origin, nil)
+	return meta, nil
+}
 
 // Rename updates a chat's name (live and persisted).
 func (m *Manager) Rename(id, name string) error {
@@ -89,60 +107,75 @@ func (m *Manager) Delete(id string) error {
 	return m.deps.Store.Delete(id)
 }
 
-// Open returns the chat's live runner, lazily creating it: it loads the saved history, opens
-// a session seeded with it (and the current persona), starts the runner on the manager's
-// runtime ctx, and attaches a persistence pump that saves after every turn. A subsequent
-// Open returns the same running runner. ok is false for an unknown/invalid id.
+// Open returns the chat's live runner: the same one if it is already live, otherwise it
+// loads the saved history and spins a fresh runner seeded with it. ok is false for an
+// unknown/invalid id (a memory-minted chat is found via its live runner, not the store).
 func (m *Manager) Open(id string) (*session.Runner, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if lc := m.live[id]; lc != nil {
 		return lc.runner, true
 	}
-
 	msgs, meta, ok := m.deps.Store.Load(id)
 	if !ok {
 		return nil, false
 	}
+	return m.spinLocked(meta.ID, meta.Name, meta.Origin, msgs), true
+}
+
+// spinLocked creates a chat's live runner — a session seeded with history + the current
+// persona, the runner on the manager's runtime ctx, and a persistence pump — registers it,
+// and returns it. The caller holds m.mu. The runner's lifetime is the manager ctx, so the
+// chat keeps running across client disconnects.
+func (m *Manager) spinLocked(id, name string, origin Origin, msgs []brain.Message) *session.Runner {
 	sess := session.New(m.deps.Brain, m.deps.Tools, m.deps.Guard, m.deps.Grants,
 		session.WithPersona(m.deps.Persona()), session.WithHistory(msgs))
 	runner := session.NewRunner(sess, session.WithAgentRunner(m.deps.AgentRun))
 	runner.Start(m.ctx)
 
-	lc := &liveChat{runner: runner, session: sess, id: id, name: meta.Name}
-	// Persistence pump: a permanent TAP (not a Subscribe) that saves the conversation after
-	// every turn. A tap fans out the same events but does NOT count as a watching client, so
-	// an unwatched background chat stays "no live client" — its approval still records as
-	// pending (the sink is always stamped now) AND goes out-of-band to the phone.
+	lc := &liveChat{runner: runner, session: sess, id: id, name: name, origin: origin}
+	// Persistence pump: a permanent TAP (not a Subscribe) that saves after every turn. A tap
+	// fans out the same events but does NOT count as a watching client, so an unwatched
+	// background chat stays "no live client" — its approval records as pending (the sink is
+	// always stamped) AND goes out-of-band to the phone.
 	sub, unsub := runner.Tap()
 	lc.unsub = unsub
-	go func() {
-		for e := range sub {
-			switch e.(type) {
-			case session.TurnEndEvent:
-				// Copy the name WHILE holding the lock — Rename writes lc.name under m.mu,
-				// so reading it unlocked would race. A concurrent Delete drops it from the
-				// map → stillLive false → skip the stale save.
-				m.mu.Lock()
-				cur, stillLive := m.live[id]
-				var name string
-				if stillLive {
-					name = cur.name
-				}
-				m.mu.Unlock()
-				if stillLive {
-					_ = m.deps.Store.Save(id, name, runner.Snapshot().Messages)
-					m.signal(id, "turnEnd")
-				}
-			case session.ApprovalEvent:
-				// A background chat is waiting on an approval — actionable, not just a badge.
-				m.signal(id, "approvalPending")
-			}
-		}
-	}()
-
+	go m.pump(id, runner, sub)
 	m.live[id] = lc
-	return runner, true
+	return runner
+}
+
+// pump saves a chat's conversation after every turn and badges background activity. It runs
+// until the tap channel closes (on stop/Delete/CloseAll). Lazy-persist: a turn that
+// produced no messages is never written, so an untouched chat leaves no file.
+func (m *Manager) pump(id string, runner *session.Runner, sub <-chan session.Event) {
+	for e := range sub {
+		switch e.(type) {
+		case session.TurnEndEvent:
+			// Read name/origin WHILE holding the lock — Rename writes lc.name under m.mu. A
+			// concurrent Delete drops it from the map → stillLive false → skip the stale save.
+			m.mu.Lock()
+			cur, stillLive := m.live[id]
+			var name string
+			var origin Origin
+			if stillLive {
+				name, origin = cur.name, cur.origin
+			}
+			m.mu.Unlock()
+			if !stillLive {
+				continue
+			}
+			msgs := runner.Snapshot().Messages
+			if len(msgs) == 0 {
+				continue // lazy-persist: never write an empty chat to disk
+			}
+			_ = m.deps.Store.Save(id, name, origin, msgs)
+			m.signal(id, "turnEnd")
+		case session.ApprovalEvent:
+			// A background chat is waiting on an approval — actionable, not just a badge.
+			m.signal(id, "approvalPending")
+		}
+	}
 }
 
 // signal fires the optional activity hook (badge a background chat). Kinds are the two the
@@ -163,7 +196,9 @@ func (m *Manager) CloseAll() {
 	m.mu.Unlock()
 
 	for _, lc := range live {
-		_ = m.deps.Store.Save(lc.id, lc.name, lc.runner.Snapshot().Messages)
+		if msgs := lc.runner.Snapshot().Messages; len(msgs) > 0 {
+			_ = m.deps.Store.Save(lc.id, lc.name, lc.origin, msgs) // lazy: don't persist an empty chat
+		}
 		lc.stop()
 	}
 }
