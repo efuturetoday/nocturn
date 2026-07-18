@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/hitl"
-	"github.com/efuturetoday/nocturn/internal/session"
 )
 
 // fakeSink is a client that, on being shown an approval, immediately picks a chosen
@@ -28,7 +28,7 @@ func (s *fakeSink) PresentApproval(intent string, labels []string, apply func(ch
 func (s *fakeSink) HasClients() bool { return s.clients }
 func (s *fakeSink) ClearPending()    { s.cleared = true }
 
-// The attended pipe end to end: a turn that carries a session.ApprovalSink on its ctx
+// The attended pipe end to end: a turn that carries a chat.ApprovalSink on its ctx
 // has its approval routed to THAT sink (not the global inline prompt), and the sink's
 // chosen option flows back through apply → token → the parked Request, which returns
 // the picked outcome. This is the missing consumer that makes the two-pipes model real.
@@ -38,7 +38,7 @@ func TestAttendedPipe_RoutesApprovalToCtxSink(t *testing.T) {
 	var approvals *hitl.Engine
 	approvals = hitl.NewEngine([]byte("test-key"), &tuiNotifier{ /* default, unused here */ },
 		hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
-			if s := session.ApprovalSinkFrom(rctx); s != nil {
+			if s := chat.ApprovalSinkFrom(rctx); s != nil {
 				return attendedNotifier{sink: s, resolve: approvals.Resolve}
 			}
 			return nil
@@ -50,7 +50,7 @@ func TestAttendedPipe_RoutesApprovalToCtxSink(t *testing.T) {
 		{Label: "Deny", Outcome: hitl.Denied},
 	}
 
-	ctx := session.WithApprovalSink(context.Background(), sink)
+	ctx := chat.WithApprovalSink(context.Background(), sink)
 	out, err := approvals.Request(ctx, "Send email to x@a", choices, time.Second)
 	if err != nil {
 		t.Fatalf("request: %v", err)
@@ -74,7 +74,7 @@ func TestAttendedPipe_NoSinkFallsThrough(t *testing.T) {
 	var approvals *hitl.Engine
 	approvals = hitl.NewEngine([]byte("k"), notifierFunc(func(string, []hitl.Option) error { return nil }),
 		hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
-			if s := session.ApprovalSinkFrom(rctx); s != nil {
+			if s := chat.ApprovalSinkFrom(rctx); s != nil {
 				routedAttended = true
 				return attendedNotifier{sink: s, resolve: approvals.Resolve}
 			}
@@ -130,7 +130,7 @@ func TestRouteApproval_NoClient_RecordsInbandAndTeesToOob(t *testing.T) {
 	oob := &spyNotifier{}
 	eng := newRouterEngine(oob)
 
-	ctx := session.WithApprovalSink(context.Background(), sink)
+	ctx := chat.WithApprovalSink(context.Background(), sink)
 	out, err := eng.Request(ctx, "Send email", routeChoices, time.Second)
 	if err != nil {
 		t.Fatalf("request: %v", err)
@@ -155,7 +155,7 @@ func TestRouteApproval_WithClient_InbandOnly(t *testing.T) {
 	oob := &spyNotifier{}
 	eng := newRouterEngine(oob)
 
-	ctx := session.WithApprovalSink(context.Background(), sink)
+	ctx := chat.WithApprovalSink(context.Background(), sink)
 	if _, err := eng.Request(ctx, "x", routeChoices, time.Second); err != nil {
 		t.Fatalf("request: %v", err)
 	}

@@ -1,11 +1,9 @@
-// Package chat is the persistent store for a workspace's named chats — the "several chats
-// with saved history" the companion app shows. Each chat is one file under <ws>/chats/
+// store.go is the persistent store for a workspace's named chats — the "several chats with
+// saved history" the companion app shows. Each chat is one file under <ws>/chats/
 // (control-plane, outside mnt/): its metadata plus the conversation messages. The Store is a
 // self-contained STATE service (its own synchronization, atomic writes), like grantstore:
-// callers deal in metadata + messages, never the file layout.
-//
-// A chat carries no authority — it is a saved conversation. Every effect a reopened chat
-// performs still goes through the broker + HITL when its turn runs.
+// callers deal in metadata + messages, never the file layout. A saved chat carries no
+// authority; every effect a reopened chat performs still passes the broker + HITL.
 package chat
 
 import (

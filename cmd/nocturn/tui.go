@@ -27,22 +27,21 @@ import (
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/hitl"
-	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/skill"
 )
 
 // Messages sent to the program: runner events (via the subscription pump) plus a few
 // out-of-band lines (scheduler, notify) and the inline-approval fallback.
 type (
-	// runnerEventMsg carries one session.Event from the ACTIVE workspace's runner — the
+	// runnerEventMsg carries one chat.Event from the ACTIVE workspace's runner — the
 	// sole path turns, tokens, tool events and approvals reach the view.
-	runnerEventMsg struct{ e session.Event }
+	runnerEventMsg struct{ e chat.Event }
 	schedulerMsg   string // a scheduler firing/skip/result line (background cron runs)
 	notifyMsg      string // a notify() fallback line when no out-of-band channel is configured
 	pulseMsg       struct{}
 	// approvalMsg is the FALLBACK inline approval (tuiNotifier): used only for a run with
 	// no attended sink — a background scheduler run when no out-of-band channel is set.
-	// Interactive approvals arrive as a session.ApprovalEvent via runnerEventMsg.
+	// Interactive approvals arrive as a chat.ApprovalEvent via runnerEventMsg.
 	approvalMsg struct {
 		intent  string
 		options []hitl.Option
@@ -81,7 +80,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 }
 
 // approvalPrompt is the on-screen approval, uniform across its two sources: an
-// interactive session.ApprovalEvent (resolve → runner.Resolve) and the inline fallback
+// interactive chat.ApprovalEvent (resolve → runner.Resolve) and the inline fallback
 // (resolve → reply-token channel). labels are display-only; resolve(choice) enacts the
 // pick, choice<0 = deny (fail-closed).
 type approvalPrompt struct {
@@ -207,7 +206,7 @@ func (e *queuedEntry) render(m *chatModel, width int) string {
 type chatModel struct {
 	bw         *bound            // the bound workspace this TUI is driving (its manager/ws/waker)
 	workspaces map[string]*bound // all built workspaces, for /ws switching
-	runner     *session.Runner   // the OPEN chat's turn loop (from bw.chats), driven like the app drives it
+	runner     *chat.Runner      // the OPEN chat's turn loop (from bw.chats), driven like the app drives it
 	chatID     string            // the open chat's id (in bw's manager)
 	openChats  map[string]string // workspace name → its currently-open chat id (remembered across /ws)
 	send       func(tea.Msg)     // p.Send — the event pump delivers runner events via this
@@ -273,7 +272,7 @@ func newChatModel(active *bound, workspaces map[string]*bound, names []string, m
 
 // bindWorkspace points the model at bw, caches its skill catalog + agent list, and binds its
 // currently-open chat — remembered across /ws switches, or a fresh one the first time this
-// workspace is bound this session. Chats live in bw's manager on the process ctx, so
+// workspace is bound this chat. Chats live in bw's manager on the process ctx, so
 // switching away leaves the chat running (a background wake still fires); switching back
 // reattaches and re-syncs from its snapshot.
 func (m *chatModel) bindWorkspace(bw *bound) {
@@ -299,7 +298,7 @@ func (m *chatModel) bindWorkspace(bw *bound) {
 // bindChat attaches the model to a chat's runner: swap the event pump to it, remember it as
 // this workspace's open chat, and rebuild the transcript from its snapshot. Live
 // stream/tools/pending are dropped — a mid-turn (re)attach picks up subsequent events.
-func (m *chatModel) bindChat(id string, r *session.Runner) {
+func (m *chatModel) bindChat(id string, r *chat.Runner) {
 	if m.unsub != nil {
 		m.unsub() // stop pumping the previously-open chat
 	}
@@ -861,7 +860,7 @@ func (m chatModel) handleSlash(input string) (tea.Model, tea.Cmd) {
 	if req == "" {
 		req = "Follow the skill's instructions."
 	}
-	m.runner.SubmitInput(session.SourceUser, input, skill.WrapBody(cmd, body)+"\n\n<user_request>\n"+req+"\n</user_request>")
+	m.runner.SubmitInput(chat.SourceUser, input, skill.WrapBody(cmd, body)+"\n\n<user_request>\n"+req+"\n</user_request>")
 	return m, nil
 }
 
@@ -948,7 +947,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(input, "/") {
 				return m.handleSlash(input)
 			}
-			m.runner.Submit(session.SourceUser, input)
+			m.runner.Submit(chat.SourceUser, input)
 			return m, nil
 		}
 
@@ -1029,9 +1028,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // SEQUENCING (serialize + queue); the TUI owns only DISPLAY, driven from these events in
 // the runner's order (so no keystroke-vs-event race). User/agent turns append their
 // display line on TurnStart; a wake/remind is created here too (it has no keystroke).
-func (m chatModel) handleRunnerEvent(e session.Event) (tea.Model, tea.Cmd) {
+func (m chatModel) handleRunnerEvent(e chat.Event) (tea.Model, tea.Cmd) {
 	switch ev := e.(type) {
-	case session.TurnStartEvent:
+	case chat.TurnStartEvent:
 		m.running = true
 		m.resetStream()
 		m.active, m.roots = nil, nil
@@ -1048,7 +1047,7 @@ func (m chatModel) handleRunnerEvent(e session.Event) (tea.Model, tea.Cmd) {
 		m.syncViewport()
 		return m, tea.Batch(m.sw.Reset(), m.sw.Start())
 
-	case session.QueuedEvent:
+	case chat.QueuedEvent:
 		qe := &queuedEntry{text: ev.Display, pending: true, wake: isWakeSource(ev.Source)}
 		m.entries = append(m.entries, qe)
 		m.pending = append(m.pending, qe)
@@ -1056,23 +1055,23 @@ func (m chatModel) handleRunnerEvent(e session.Event) (tea.Model, tea.Cmd) {
 		m.syncViewport()
 		return m, nil
 
-	case session.TokenEvent:
+	case chat.TokenEvent:
 		m.stream += ev.Text
 		m.advanceStream()
 		m.syncViewport()
 		return m, nil
 
-	case session.ThinkingEvent:
+	case chat.ThinkingEvent:
 		m.thinking += ev.Text
 		m.syncViewport()
 		return m, nil
 
-	case session.ToolEvent:
+	case chat.ToolEvent:
 		m.handleToolEvent(ev.Event)
 		m.syncViewport()
 		return m, nil
 
-	case session.TurnEndEvent:
+	case chat.TurnEndEvent:
 		m.active, m.roots = nil, nil
 		if strings.TrimSpace(m.stream) != "" {
 			m.entries = append(m.entries, &assistantEntry{md: m.stream})
@@ -1091,12 +1090,12 @@ func (m chatModel) handleRunnerEvent(e session.Event) (tea.Model, tea.Cmd) {
 		// The runner auto-starts the next queued turn (another TurnStart) — no drain here.
 		return m, tea.Batch(m.ta.Focus(), m.sw.Stop())
 
-	case session.NoticeEvent:
+	case chat.NoticeEvent:
 		m.entries = append(m.entries, &noticeEntry{text: ev.Text, err: ev.Err})
 		m.syncViewport()
 		return m, nil
 
-	case session.ApprovalEvent:
+	case chat.ApprovalEvent:
 		// Interactive (attended) approval on this session's stream. resolve routes to the
 		// runner; a deny (choice<0, from Esc) also cancels the turn — Esc means "stop".
 		r, id := m.runner, ev.ID
@@ -1117,7 +1116,7 @@ func (m chatModel) handleRunnerEvent(e session.Event) (tea.Model, tea.Cmd) {
 		m.syncViewport()
 		return m, m.sw.Stop()
 
-	case session.ApprovalResolvedEvent:
+	case chat.ApprovalResolvedEvent:
 		// The pending approval was answered (possibly out of band, on another device) —
 		// clear the prompt if it is still up.
 		if m.approval != nil {
@@ -1134,15 +1133,15 @@ func (m chatModel) handleRunnerEvent(e session.Event) (tea.Model, tea.Cmd) {
 
 // liveEntry is the transcript line for a turn that starts immediately (not buffered): a
 // user/agent turn shows its typed line; a wake/remind shows a "⏰ resuming" line.
-func (m *chatModel) liveEntry(display string, src session.Source) entry {
+func (m *chatModel) liveEntry(display string, src chat.Source) entry {
 	if isWakeSource(src) {
 		return &queuedEntry{text: display, wake: true}
 	}
 	return &userEntry{text: display}
 }
 
-func isWakeSource(s session.Source) bool {
-	return s == session.SourceWake || s == session.SourceRemind
+func isWakeSource(s chat.Source) bool {
+	return s == chat.SourceWake || s == chat.SourceRemind
 }
 
 func (m chatModel) updateApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

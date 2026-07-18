@@ -1,4 +1,4 @@
-package session_test
+package chat_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/brain"
-	"github.com/efuturetoday/nocturn/internal/session"
+	"github.com/efuturetoday/nocturn/internal/chat"
 )
 
 // fakeTurns is a test double for the turns a Runner drives (Session in production):
@@ -35,7 +35,7 @@ func (f *fakeTurns) resetCount() int {
 }
 
 // recv reads one event with a timeout so a stuck runner fails instead of hanging.
-func recv(t *testing.T, sub <-chan session.Event) session.Event {
+func recv(t *testing.T, sub <-chan chat.Event) chat.Event {
 	t.Helper()
 	select {
 	case e := <-sub:
@@ -68,8 +68,8 @@ func (g *gatedRun) fn(ctx context.Context, input string) (string, error) {
 	}
 }
 
-func startRunner(t *testing.T, run func(context.Context, string) (string, error)) (*session.Runner, <-chan session.Event) {
-	r := session.NewRunner(&fakeTurns{ask: run})
+func startRunner(t *testing.T, run func(context.Context, string) (string, error)) (*chat.Runner, <-chan chat.Event) {
+	r := chat.NewRunner(&fakeTurns{ask: run})
 	sub, unsub := r.Subscribe()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() { unsub(); cancel() })
@@ -83,18 +83,18 @@ func TestRunner_BuffersAndDrainsFIFO(t *testing.T) {
 	g := newGatedRun()
 	r, sub := startRunner(t, g.fn)
 
-	r.Submit(session.SourceUser, "a")
-	if e, ok := recv(t, sub).(session.TurnStartEvent); !ok || e.Input != "a" {
+	r.Submit(chat.SourceUser, "a")
+	if e, ok := recv(t, sub).(chat.TurnStartEvent); !ok || e.Input != "a" {
 		t.Fatalf("want TurnStart(a), got %#v", e)
 	}
 
 	// b and c arrive while "a" runs → both buffered.
-	r.Submit(session.SourceUser, "b")
-	r.Submit(session.SourceWake, "c")
-	if e, ok := recv(t, sub).(session.QueuedEvent); !ok || e.Input != "b" {
+	r.Submit(chat.SourceUser, "b")
+	r.Submit(chat.SourceWake, "c")
+	if e, ok := recv(t, sub).(chat.QueuedEvent); !ok || e.Input != "b" {
 		t.Fatalf("want Queued(b), got %#v", e)
 	}
-	if e, ok := recv(t, sub).(session.QueuedEvent); !ok || e.Input != "c" || e.Source != session.SourceWake {
+	if e, ok := recv(t, sub).(chat.QueuedEvent); !ok || e.Input != "c" || e.Source != chat.SourceWake {
 		t.Fatalf("want Queued(c, wake), got %#v", e)
 	}
 
@@ -105,10 +105,10 @@ func TestRunner_BuffersAndDrainsFIFO(t *testing.T) {
 	// Release "a" → it ends, "b" starts; release "b" → "c" (a wake) starts.
 	g.release <- struct{}{}
 	mustTurnEnd(t, sub, "a")
-	mustTurnStart(t, sub, "b", session.SourceUser)
+	mustTurnStart(t, sub, "b", chat.SourceUser)
 	g.release <- struct{}{}
 	mustTurnEnd(t, sub, "b")
-	mustTurnStart(t, sub, "c", session.SourceWake)
+	mustTurnStart(t, sub, "c", chat.SourceWake)
 	g.release <- struct{}{}
 	mustTurnEnd(t, sub, "c")
 
@@ -124,11 +124,11 @@ func TestRunner_FanOut(t *testing.T) {
 	sub2, unsub2 := r.Subscribe()
 	defer unsub2()
 
-	r.Submit(session.SourceUser, "x")
-	if _, ok := recv(t, sub1).(session.TurnStartEvent); !ok {
+	r.Submit(chat.SourceUser, "x")
+	if _, ok := recv(t, sub1).(chat.TurnStartEvent); !ok {
 		t.Fatal("sub1 missed TurnStart")
 	}
-	if _, ok := recv(t, sub2).(session.TurnStartEvent); !ok {
+	if _, ok := recv(t, sub2).(chat.TurnStartEvent); !ok {
 		t.Fatal("sub2 missed TurnStart")
 	}
 }
@@ -141,13 +141,13 @@ func TestRunner_StreamsTokenFromTurn(t *testing.T) {
 		return "done", nil
 	}
 	r, sub := startRunner(t, run)
-	r.Submit(session.SourceUser, "go")
+	r.Submit(chat.SourceUser, "go")
 
 	// TurnStart, then the streamed token, then TurnEnd.
-	if _, ok := recv(t, sub).(session.TurnStartEvent); !ok {
+	if _, ok := recv(t, sub).(chat.TurnStartEvent); !ok {
 		t.Fatal("want TurnStart")
 	}
-	if e, ok := recv(t, sub).(session.TokenEvent); !ok || e.Text != "hello" {
+	if e, ok := recv(t, sub).(chat.TokenEvent); !ok || e.Text != "hello" {
 		t.Fatalf("want TokenEvent(hello), got %#v", e)
 	}
 }
@@ -159,16 +159,16 @@ func TestRunner_Reset(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		g := newGatedRun()
 		ft := &fakeTurns{ask: g.fn}
-		r := session.NewRunner(ft)
+		r := chat.NewRunner(ft)
 		sub, unsub := r.Subscribe()
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(func() { unsub(); cancel() })
 		r.Start(ctx)
 
-		r.Submit(session.SourceUser, "a")
-		mustTurnStart(t, sub, "a", session.SourceUser)
-		r.Submit(session.SourceUser, "queued")
-		if _, ok := recv(t, sub).(session.QueuedEvent); !ok {
+		r.Submit(chat.SourceUser, "a")
+		mustTurnStart(t, sub, "a", chat.SourceUser)
+		r.Submit(chat.SourceUser, "queued")
+		if _, ok := recv(t, sub).(chat.QueuedEvent); !ok {
 			t.Fatal("want Queued")
 		}
 
@@ -176,7 +176,7 @@ func TestRunner_Reset(t *testing.T) {
 
 		// Drain events until the notice (the cancelled turn may emit others first).
 		for {
-			if _, ok := recv(t, sub).(session.NoticeEvent); ok {
+			if _, ok := recv(t, sub).(chat.NoticeEvent); ok {
 				break
 			}
 		}
@@ -198,7 +198,7 @@ func TestRunner_Approval(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var mu sync.Mutex
 		var applied []int
-		r := session.NewRunner(&fakeTurns{ask: func(context.Context, string) (string, error) { return "", nil }})
+		r := chat.NewRunner(&fakeTurns{ask: func(context.Context, string) (string, error) { return "", nil }})
 		sub, unsub := r.Subscribe()
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(func() { unsub(); cancel() })
@@ -209,7 +209,7 @@ func TestRunner_Approval(t *testing.T) {
 		apply := func(choice int) { mu.Lock(); applied = append(applied, choice); mu.Unlock() }
 		r.PresentApproval("Send email to x@a", []string{"Allow once", "Deny"}, apply)
 
-		ev, ok := recv(t, sub).(session.ApprovalEvent)
+		ev, ok := recv(t, sub).(chat.ApprovalEvent)
 		if !ok || ev.Intent != "Send email to x@a" || len(ev.Options) != 2 || ev.Options[0] != "Allow once" {
 			t.Fatalf("want ApprovalEvent, got %#v", ev)
 		}
@@ -218,7 +218,7 @@ func TestRunner_Approval(t *testing.T) {
 		}
 
 		r.Resolve(ev.ID, 0) // "Allow once"
-		if e, ok := recv(t, sub).(session.ApprovalResolvedEvent); !ok || e.ID != ev.ID {
+		if e, ok := recv(t, sub).(chat.ApprovalResolvedEvent); !ok || e.ID != ev.ID {
 			t.Fatalf("want ApprovalResolvedEvent, got %#v", e)
 		}
 		mu.Lock()
@@ -249,9 +249,9 @@ func TestRunner_Approval(t *testing.T) {
 func TestRunner_SubmitAgent_RoutesToAgentRunner(t *testing.T) {
 	var mu sync.Mutex
 	var gotName, gotTask string
-	r := session.NewRunner(
+	r := chat.NewRunner(
 		&fakeTurns{ask: func(context.Context, string) (string, error) { return "session", nil }},
-		session.WithAgentRunner(func(_ context.Context, name, task string) (string, error) {
+		chat.WithAgentRunner(func(_ context.Context, name, task string) (string, error) {
 			mu.Lock()
 			gotName, gotTask = name, task
 			mu.Unlock()
@@ -264,8 +264,8 @@ func TestRunner_SubmitAgent_RoutesToAgentRunner(t *testing.T) {
 	r.Start(ctx)
 
 	r.SubmitAgent("/researcher dig in", "researcher", "dig in")
-	e, ok := recv(t, sub).(session.TurnStartEvent)
-	if !ok || e.Source != session.SourceAgent || e.Display != "/researcher dig in" || e.Input != "dig in" {
+	e, ok := recv(t, sub).(chat.TurnStartEvent)
+	if !ok || e.Source != chat.SourceAgent || e.Display != "/researcher dig in" || e.Input != "dig in" {
 		t.Fatalf("want TurnStart(agent, display, task), got %#v", e)
 	}
 	mustTurnEnd(t, sub, "agent-answer")
@@ -278,17 +278,17 @@ func TestRunner_SubmitAgent_RoutesToAgentRunner(t *testing.T) {
 
 // A SubmitAgent with no agent runner wired fails the turn (an error TurnEnd), never panics.
 func TestRunner_SubmitAgent_NoRunner_ErrorsTurn(t *testing.T) {
-	r := session.NewRunner(&fakeTurns{ask: func(context.Context, string) (string, error) { return "", nil }})
+	r := chat.NewRunner(&fakeTurns{ask: func(context.Context, string) (string, error) { return "", nil }})
 	sub, unsub := r.Subscribe()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() { unsub(); cancel() })
 	r.Start(ctx)
 
 	r.SubmitAgent("/x", "x", "go")
-	if _, ok := recv(t, sub).(session.TurnStartEvent); !ok {
+	if _, ok := recv(t, sub).(chat.TurnStartEvent); !ok {
 		t.Fatal("want TurnStart")
 	}
-	if e, ok := recv(t, sub).(session.TurnEndEvent); !ok || e.Err == nil {
+	if e, ok := recv(t, sub).(chat.TurnEndEvent); !ok || e.Err == nil {
 		t.Fatalf("want TurnEnd with an error, got %#v", e)
 	}
 }
@@ -303,12 +303,12 @@ func TestRunner_ApprovalSink_AlwaysStampedAndSeesRealClients(t *testing.T) {
 	check := func(subscribe, tap bool) (hasSink, hasClients bool) {
 		sinkCh, clientsCh := make(chan bool, 1), make(chan bool, 1)
 		run := func(ctx context.Context, _ string) (string, error) {
-			s := session.ApprovalSinkFrom(ctx)
+			s := chat.ApprovalSinkFrom(ctx)
 			sinkCh <- s != nil
 			clientsCh <- s != nil && s.HasClients()
 			return "", nil
 		}
-		r := session.NewRunner(&fakeTurns{ask: run})
+		r := chat.NewRunner(&fakeTurns{ask: run})
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		if subscribe {
@@ -320,7 +320,7 @@ func TestRunner_ApprovalSink_AlwaysStampedAndSeesRealClients(t *testing.T) {
 			t.Cleanup(unsub)
 		}
 		r.Start(ctx)
-		r.Submit(session.SourceUser, "go")
+		r.Submit(chat.SourceUser, "go")
 		select {
 		case <-time.After(2 * time.Second):
 			t.Fatal("turn did not run")
@@ -345,18 +345,18 @@ func TestRunner_ApprovalSink_AlwaysStampedAndSeesRealClients(t *testing.T) {
 // answer takes (the runner's own Resolve never ran). A second call emits nothing (a client
 // that answered in-band already cleared it).
 func TestRunner_ClearPending_EmitsResolvedAndIdempotent(t *testing.T) {
-	r := session.NewRunner(&fakeTurns{})
+	r := chat.NewRunner(&fakeTurns{})
 	sub, unsub := r.Subscribe()
 	t.Cleanup(unsub)
 
 	r.PresentApproval("Send email", []string{"Allow", "Deny"}, func(int) {})
-	appr, ok := recv(t, sub).(session.ApprovalEvent)
+	appr, ok := recv(t, sub).(chat.ApprovalEvent)
 	if !ok {
 		t.Fatalf("want ApprovalEvent, got %#v", appr)
 	}
 
 	r.ClearPending()
-	res, ok := recv(t, sub).(session.ApprovalResolvedEvent)
+	res, ok := recv(t, sub).(chat.ApprovalResolvedEvent)
 	if !ok || res.ID != appr.ID {
 		t.Fatalf("want ApprovalResolvedEvent id=%q, got %#v", appr.ID, res)
 	}
@@ -369,17 +369,17 @@ func TestRunner_ClearPending_EmitsResolvedAndIdempotent(t *testing.T) {
 	}
 }
 
-func mustTurnStart(t *testing.T, sub <-chan session.Event, input string, src session.Source) {
+func mustTurnStart(t *testing.T, sub <-chan chat.Event, input string, src chat.Source) {
 	t.Helper()
-	e, ok := recv(t, sub).(session.TurnStartEvent)
+	e, ok := recv(t, sub).(chat.TurnStartEvent)
 	if !ok || e.Input != input || e.Source != src {
 		t.Fatalf("want TurnStart(%s,%s), got %#v", input, src, e)
 	}
 }
 
-func mustTurnEnd(t *testing.T, sub <-chan session.Event, answer string) {
+func mustTurnEnd(t *testing.T, sub <-chan chat.Event, answer string) {
 	t.Helper()
-	e, ok := recv(t, sub).(session.TurnEndEvent)
+	e, ok := recv(t, sub).(chat.TurnEndEvent)
 	if !ok || e.Answer != answer {
 		t.Fatalf("want TurnEnd(%s), got %#v", answer, e)
 	}

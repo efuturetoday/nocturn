@@ -11,31 +11,31 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/appserver"
-	"github.com/efuturetoday/nocturn/internal/session"
+	"github.com/efuturetoday/nocturn/internal/chat"
 )
 
 // fakeRunner is a test double for a workspace's turn loop: a controllable event channel,
 // a fixed snapshot, and a record of the commands that reached it.
 type fakeRunner struct {
-	events chan session.Event
-	snap   session.Snapshot
+	events chan chat.Event
+	snap   chat.Snapshot
 
 	mu      sync.Mutex
 	submits []string
 }
 
-func (f *fakeRunner) Subscribe() (<-chan session.Event, func()) { return f.events, func() {} }
-func (f *fakeRunner) Snapshot() session.Snapshot                { return f.snap }
-func (f *fakeRunner) Submit(_ session.Source, input string) {
+func (f *fakeRunner) Subscribe() (<-chan chat.Event, func()) { return f.events, func() {} }
+func (f *fakeRunner) Snapshot() chat.Snapshot                { return f.snap }
+func (f *fakeRunner) Submit(_ chat.Source, input string) {
 	f.mu.Lock()
 	f.submits = append(f.submits, input)
 	f.mu.Unlock()
 }
-func (f *fakeRunner) SubmitInput(_ session.Source, _, _ string) {}
-func (f *fakeRunner) SubmitAgent(_, _, _ string)                {}
-func (f *fakeRunner) Cancel()                                   {}
-func (f *fakeRunner) Reset()                                    {}
-func (f *fakeRunner) Resolve(string, int)                       {}
+func (f *fakeRunner) SubmitInput(_ chat.Source, _, _ string) {}
+func (f *fakeRunner) SubmitAgent(_, _, _ string)             {}
+func (f *fakeRunner) Cancel()                                {}
+func (f *fakeRunner) Reset()                                 {}
+func (f *fakeRunner) Resolve(string, int)                    {}
 func (f *fakeRunner) gotSubmit(input string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -176,7 +176,7 @@ func eventually(t *testing.T, cond func() bool, msg string) {
 // The server multiplexes the control plane (list/get/setPersona) and one open chat
 // (snapshot + streamed events + routed commands) over one connection.
 func TestServer_ControlPlaneAndChat(t *testing.T) {
-	fr := &fakeRunner{events: make(chan session.Event, 8), snap: session.Snapshot{Running: true}}
+	fr := &fakeRunner{events: make(chan chat.Event, 8), snap: chat.Snapshot{Running: true}}
 	fw := &fakeWorkspaces{runner: fr, persona: "You are helpful."}
 	fc := newConn()
 	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
@@ -195,7 +195,7 @@ func TestServer_ControlPlaneAndChat(t *testing.T) {
 	}
 
 	// The open chat's events stream.
-	fr.events <- session.TokenEvent{Text: "hi"}
+	fr.events <- chat.TokenEvent{Text: "hi"}
 	if tok := recvUntil(t, fc.out, "token"); tok["text"] != "hi" {
 		t.Fatalf("event = %v, want token(hi)", tok)
 	}
@@ -224,7 +224,7 @@ func TestServer_ControlPlaneAndChat(t *testing.T) {
 // NOT opened) reaches the client as a lightweight chatActivity badge over the same conn.
 func TestServer_BackgroundChatActivity(t *testing.T) {
 	fw := &fakeWorkspaces{
-		runner: &fakeRunner{events: make(chan session.Event, 1)},
+		runner: &fakeRunner{events: make(chan chat.Event, 1)},
 		acts:   make(chan appserver.ChatActivity, 8),
 	}
 	fc := newConn()
@@ -242,7 +242,7 @@ func TestServer_BackgroundChatActivity(t *testing.T) {
 // Opening an unknown workspace replies with an error, not a snapshot — and keeps the
 // connection alive.
 func TestServer_UnknownWorkspaceErrors(t *testing.T) {
-	fw := &fakeWorkspaces{runner: &fakeRunner{events: make(chan session.Event, 1)}}
+	fw := &fakeWorkspaces{runner: &fakeRunner{events: make(chan chat.Event, 1)}}
 	fc := newConn()
 	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
 

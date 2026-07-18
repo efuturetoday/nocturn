@@ -20,11 +20,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joho/godotenv"
 
+	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/hitl/ntfy"
 	"github.com/efuturetoday/nocturn/internal/llm"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
-	"github.com/efuturetoday/nocturn/internal/session"
 )
 
 // consolePusher is the attended fallback for notify() when no out-of-band channel
@@ -57,7 +57,7 @@ func (n *tuiNotifier) Notify(intent string, options []hitl.Option) error {
 }
 
 // attendedNotifier is the ATTENDED pipe: it surfaces an approval on the specific
-// session's own event stream (the session.ApprovalSink the turn carried on its ctx),
+// session's own event stream (the chat.ApprovalSink the turn carried on its ctx),
 // instead of the single global inline prompt. This is what lets a multi-session
 // daemon ask on the right client, and lets an attached child agent's approval appear
 // in the parent chat where its activity already streams.
@@ -67,7 +67,7 @@ func (n *tuiNotifier) Notify(intent string, options []hitl.Option) error {
 // choice comes back through apply → resolve(token). The signed tokens stay host-side —
 // the sink only ever sees labels.
 type attendedNotifier struct {
-	sink    session.ApprovalSink
+	sink    chat.ApprovalSink
 	resolve func(token string) error
 }
 
@@ -121,7 +121,7 @@ func (n teeNotifier) Resolved() { n.inband.Resolved() }
 // resolve is the engine's own Resolve (the in-band notifier hands a chosen token back to
 // it). Extracted from the engine wiring so this decision is testable in isolation.
 func routeApproval(rctx context.Context, oob hitl.Notifier, resolve func(token string) error) hitl.Notifier {
-	sink := session.ApprovalSinkFrom(rctx)
+	sink := chat.ApprovalSinkFrom(rctx)
 	if sink == nil {
 		if oob != nil {
 			return oob

@@ -9,7 +9,6 @@ import (
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/gateway"
-	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
 
@@ -60,7 +59,7 @@ func TestManager_OpenPersistReopen(t *testing.T) {
 	// Run one turn through the live runner.
 	sub, unsub := r.Subscribe()
 	defer unsub()
-	r.Submit(session.SourceUser, "hi")
+	r.Submit(chat.SourceUser, "hi")
 	waitTurnEnd(t, sub)
 
 	// The persistence pump saves after the turn (async) — poll the store.
@@ -123,26 +122,26 @@ func TestManager_Deliver(t *testing.T) {
 	sub, unsub := r.Subscribe()
 	defer unsub()
 
-	m.Deliver(meta.ID, session.SourceWake, "resume me")
+	m.Deliver(meta.ID, chat.SourceWake, "resume me")
 	waitTurnEnd(t, sub)
 	if snap := r.Snapshot(); !hasTurn(snap.Messages, "user", "resume me") {
 		t.Fatalf("Deliver did not drive the chat's turn: %+v", snap.Messages)
 	}
 
 	// Unknown/deleted id: a no-op, not a panic and not a resurrection.
-	m.Deliver("deadbeef", session.SourceWake, "ghost")
+	m.Deliver("deadbeef", chat.SourceWake, "ghost")
 	if _, ok := m.Open("deadbeef"); ok {
 		t.Fatal("Deliver resurrected an unknown chat")
 	}
 }
 
-func waitTurnEnd(t *testing.T, sub <-chan session.Event) {
+func waitTurnEnd(t *testing.T, sub <-chan chat.Event) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case e := <-sub:
-			if _, ok := e.(session.TurnEndEvent); ok {
+			if _, ok := e.(chat.TurnEndEvent); ok {
 				return
 			}
 		case <-deadline:

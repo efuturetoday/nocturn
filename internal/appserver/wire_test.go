@@ -6,14 +6,14 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/appserver"
 	"github.com/efuturetoday/nocturn/internal/brain"
-	"github.com/efuturetoday/nocturn/internal/session"
+	"github.com/efuturetoday/nocturn/internal/chat"
 )
 
 // A saved conversation with a tool turn must round-trip its tool calls into the snapshot:
 // the assistant's call carries the tool name + args + the result matched by tool_call_id,
 // so a reconnecting client renders the tool forest, not just the final text.
 func TestEncodeSnapshot_ReconstructsToolForest(t *testing.T) {
-	snap := session.Snapshot{
+	snap := chat.Snapshot{
 		Running: false,
 		Messages: []brain.Message{
 			{Role: "user", Content: "list my files"},

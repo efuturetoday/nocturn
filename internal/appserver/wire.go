@@ -1,12 +1,12 @@
 // Package appserver is the server side of the companion-app protocol: it bridges one
-// session.Runner (the headless turn loop) to a remote client over a duplex byte stream,
+// chat.Runner (the headless turn loop) to a remote client over a duplex byte stream,
 // so a mobile/desktop app drives a workspace's chat exactly like the TUI does — Submit
 // in, events out, approvals answered in-app.
 //
 // It is transport-agnostic: the Bridge speaks to an abstract Conn (framed []byte
 // messages), so the WebSocket library lives only in the daemon entrypoint and a future
 // relay is just a different Conn. The wire format is JSON: a tagged event object per
-// session.Event out, a tagged command object in. Nothing here reaches an effect — every
+// chat.Event out, a tagged command object in. Nothing here reaches an effect — every
 // command routes through the Runner, so the broker + HITL still gate everything.
 package appserver
 
@@ -15,12 +15,12 @@ import (
 	"fmt"
 
 	"github.com/efuturetoday/nocturn/internal/activity"
-	"github.com/efuturetoday/nocturn/internal/session"
+	"github.com/efuturetoday/nocturn/internal/chat"
 )
 
 // --- events (server → client) ------------------------------------------------
 
-// wireEvent is the flat, tagged JSON shape for one session.Event. Type discriminates
+// wireEvent is the flat, tagged JSON shape for one chat.Event. Type discriminates
 // the union; only the fields relevant to that Type are set (omitempty keeps the wire
 // small). A TS client switches on `type`.
 type wireEvent struct {
@@ -49,28 +49,28 @@ type wireTool struct {
 	Err    string `json:"err,omitempty"`
 }
 
-// EncodeEvent renders a session.Event as a tagged JSON message. An unknown event type is
+// EncodeEvent renders a chat.Event as a tagged JSON message. An unknown event type is
 // an error (a new event must be added here deliberately — the client contract is explicit).
-func EncodeEvent(e session.Event) ([]byte, error) {
+func EncodeEvent(e chat.Event) ([]byte, error) {
 	var w wireEvent
 	switch ev := e.(type) {
-	case session.TokenEvent:
+	case chat.TokenEvent:
 		w = wireEvent{Type: "token", Text: ev.Text}
-	case session.ThinkingEvent:
+	case chat.ThinkingEvent:
 		w = wireEvent{Type: "thinking", Text: ev.Text}
-	case session.TurnStartEvent:
+	case chat.TurnStartEvent:
 		w = wireEvent{Type: "turnStart", Display: ev.Display, Input: ev.Input, Source: string(ev.Source)}
-	case session.TurnEndEvent:
+	case chat.TurnEndEvent:
 		w = wireEvent{Type: "turnEnd", Answer: ev.Answer, Err: errString(ev.Err)}
-	case session.QueuedEvent:
+	case chat.QueuedEvent:
 		w = wireEvent{Type: "queued", Display: ev.Display, Input: ev.Input, Source: string(ev.Source)}
-	case session.NoticeEvent:
+	case chat.NoticeEvent:
 		w = wireEvent{Type: "notice", Text: ev.Text, IsErr: ev.Err}
-	case session.ApprovalEvent:
+	case chat.ApprovalEvent:
 		w = wireEvent{Type: "approval", ID: ev.ID, Intent: ev.Intent, Options: ev.Options}
-	case session.ApprovalResolvedEvent:
+	case chat.ApprovalResolvedEvent:
 		w = wireEvent{Type: "approvalResolved", ID: ev.ID}
-	case session.ToolEvent:
+	case chat.ToolEvent:
 		phase := "start"
 		if ev.Event.Phase == activity.End {
 			phase = "end"
@@ -119,7 +119,7 @@ type wireSnapTool struct {
 // EncodeSnapshot renders a Runner snapshot — the state a joining or reconnecting client
 // needs to render the conversation, the running flag, the buffered queue, and any pending
 // approval — as one tagged message.
-func EncodeSnapshot(s session.Snapshot) ([]byte, error) {
+func EncodeSnapshot(s chat.Snapshot) ([]byte, error) {
 	w := wireSnapshot{Type: "snapshot", Running: s.Running}
 	for _, q := range s.Queue {
 		w.Queue = append(w.Queue, wireQueued{Display: q.Display, Input: q.Input, Source: string(q.Source)})
@@ -182,9 +182,9 @@ func decodeCommand(msg []byte) (wireCommand, error) {
 func routeChatCommand(r Runner, c wireCommand) {
 	switch c.Cmd {
 	case "submit":
-		r.Submit(session.SourceUser, c.Input)
+		r.Submit(chat.SourceUser, c.Input)
 	case "submitSkill":
-		r.SubmitInput(session.SourceUser, c.Display, c.Input)
+		r.SubmitInput(chat.SourceUser, c.Display, c.Input)
 	case "submitAgent":
 		r.SubmitAgent(c.Display, c.Agent, c.Task)
 	case "cancel":

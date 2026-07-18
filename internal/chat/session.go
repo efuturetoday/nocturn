@@ -1,4 +1,8 @@
-// Package session is one interactive chat's lifecycle and orchestration.
+// Package chat is the conversation unit and its runtime: a Chat is a live conversation
+// (history + permission scope + skills) driven by a serialized turn loop (Runner); the
+// Store persists chats and the Manager keeps N of them live per workspace. A user chat and
+// an agent run are the same machinery, differing only in the tools + permissions they are
+// constructed with. This file holds the interactive session's lifecycle and orchestration.
 //
 // A Session is the STATE unit: it bundles a conversation, its guard, its revocable
 // permission scope, and its loaded skills as one thing that resets and closes
@@ -21,7 +25,7 @@
 // queue — the headless heart a TUI, a REST/SSE server, or a mobile app all drive the
 // same way. It carries no transport and no approval-mechanism types; approvals
 // surface as events enacted through an opaque callback (see ApprovalSink).
-package session
+package chat
 
 import (
 	"context"

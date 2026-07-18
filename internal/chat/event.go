@@ -1,4 +1,4 @@
-package session
+package chat
 
 import "github.com/efuturetoday/nocturn/internal/activity"
 

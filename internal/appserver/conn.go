@@ -3,7 +3,7 @@ package appserver
 import (
 	"context"
 
-	"github.com/efuturetoday/nocturn/internal/session"
+	"github.com/efuturetoday/nocturn/internal/chat"
 )
 
 // Conn is one duplex message stream to a client — FRAMED []byte messages, not a raw byte
@@ -19,20 +19,20 @@ type Conn interface {
 	Close() error
 }
 
-// Runner is the subset of *session.Runner the chat pump drives — commands in, events +
-// snapshot out. *session.Runner satisfies it structurally (asserted below); the interface
+// Runner is the subset of *chat.Runner the chat pump drives — commands in, events +
+// snapshot out. *chat.Runner satisfies it structurally (asserted below); the interface
 // is here so the server is testable with a fake.
 type Runner interface {
-	Submit(source session.Source, input string)
-	SubmitInput(source session.Source, display, input string)
+	Submit(source chat.Source, input string)
+	SubmitInput(source chat.Source, display, input string)
 	SubmitAgent(display, name, task string)
 	Cancel()
 	Reset()
 	Resolve(id string, choice int)
-	Subscribe() (<-chan session.Event, func())
-	Snapshot() session.Snapshot
+	Subscribe() (<-chan chat.Event, func())
+	Snapshot() chat.Snapshot
 }
 
-// The production Runner is *session.Runner — proven here so the interface can never
+// The production Runner is *chat.Runner — proven here so the interface can never
 // drift from what the daemon actually wires.
-var _ Runner = (*session.Runner)(nil)
+var _ Runner = (*chat.Runner)(nil)

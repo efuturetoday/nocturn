@@ -15,7 +15,7 @@ import (
 // swapping how a workspace loads its state never touches this adapter's shape.
 type appWorkspaces struct {
 	bounds map[string]*bound
-	names  []string      // sorted, for a stable List order
+	names  []string     // sorted, for a stable List order
 	hub    *activityHub // background-chat badge fan-out (the managers' producer side)
 }
 

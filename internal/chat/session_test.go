@@ -1,4 +1,4 @@
-package session_test
+package chat_test
 
 import (
 	"context"
@@ -11,11 +11,11 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
+	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/netcap"
 	"github.com/efuturetoday/nocturn/internal/secret"
-	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
@@ -66,7 +66,7 @@ func TestSession_ThreadsContext_ResetRotatesEpoch(t *testing.T) {
 	}}
 
 	b := brain.New(model)
-	s := session.New(b, tool.NewRegistry().AddMany(tools...), &gateway.Guard{}, nil)
+	s := chat.New(b, tool.NewRegistry().AddMany(tools...), &gateway.Guard{}, nil)
 
 	if _, err := s.Ask(context.Background(), "first"); err != nil {
 		t.Fatalf("first ask: %v", err)
@@ -146,7 +146,7 @@ func TestSession_Reset_RevokesGrantsAndClearsHistory(t *testing.T) {
 	}}
 
 	b := brain.New(model)
-	s := session.New(b, tool.NewRegistry().AddMany(tools...), guard, nil)
+	s := chat.New(b, tool.NewRegistry().AddMany(tools...), guard, nil)
 
 	if _, err := s.Ask(context.Background(), "fetch it once"); err != nil {
 		t.Fatalf("first ask: %v", err)
@@ -195,7 +195,7 @@ func TestSession_SkillActiveSet_ResetClears(t *testing.T) {
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "2"},
 		{ToolCalls: []brain.ToolCall{{Tool: "probe"}}}, {Answer: "3"},
 	}}
-	s := session.New(brain.New(model), tool.NewRegistry().AddMany(tools...), &gateway.Guard{}, nil)
+	s := chat.New(brain.New(model), tool.NewRegistry().AddMany(tools...), &gateway.Guard{}, nil)
 
 	s.Ask(context.Background(), "a") // marks x
 	s.Ask(context.Background(), "b") // x still active within the session

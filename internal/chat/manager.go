@@ -8,13 +8,12 @@ import (
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/gateway"
-	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/tool"
 	"github.com/efuturetoday/nocturn/internal/wakecap"
 )
 
 // Manager is the runtime side of multi-chat: it turns the persistent Store into LIVE chats —
-// one session.Runner per open chat, seeded from its saved history and saving back on every
+// one Runner per open chat, seeded from its saved history and saving back on every
 // turn. Several chats in a workspace run concurrently and keep running across client
 // reconnects, so a background chat's wake/turn is not lost when the app disconnects.
 //
@@ -52,12 +51,12 @@ type Manager struct {
 }
 
 type liveChat struct {
-	runner  *session.Runner
-	session *session.Session
-	unsub   func()
-	id      string
-	name    string
-	origin  Origin
+	runner *Runner
+	sess   *Session
+	unsub  func()
+	id     string
+	name   string
+	origin Origin
 }
 
 // NewManager builds a manager over deps whose runners live for as long as ctx.
@@ -123,7 +122,7 @@ func (m *Manager) Delete(id string) error {
 // Open returns the chat's live runner: the same one if it is already live, otherwise it
 // loads the saved history and spins a fresh runner seeded with it. ok is false for an
 // unknown/invalid id (a memory-minted chat is found via its live runner, not the store).
-func (m *Manager) Open(id string) (*session.Runner, bool) {
+func (m *Manager) Open(id string) (*Runner, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if lc := m.live[id]; lc != nil {
@@ -140,19 +139,19 @@ func (m *Manager) Open(id string) (*session.Runner, bool) {
 // persona, the runner on the manager's runtime ctx, and a persistence pump — registers it,
 // and returns it. The caller holds m.mu. The runner's lifetime is the manager ctx, so the
 // chat keeps running across client disconnects.
-func (m *Manager) spinLocked(id, name string, origin Origin, msgs []brain.Message) *session.Runner {
-	sess := session.New(m.deps.Brain, m.deps.Tools, m.deps.Guard, m.deps.Grants,
-		session.WithPersona(m.deps.Persona()), session.WithHistory(msgs))
+func (m *Manager) spinLocked(id, name string, origin Origin, msgs []brain.Message) *Runner {
+	sess := New(m.deps.Brain, m.deps.Tools, m.deps.Guard, m.deps.Grants,
+		WithPersona(m.deps.Persona()), WithHistory(msgs))
 	// Bind wake to THIS chat: a turn's ctx carries a resume that Delivers back to this id, so
 	// the workspace-shared wake tool resumes the chat that invoked it (not an ambient runner).
-	runner := session.NewRunner(sess,
-		session.WithAgentRunner(m.deps.AgentRun),
-		session.WithContextDecorator(func(ctx context.Context) context.Context {
-			return wakecap.WithResume(ctx, func(note string) { m.Deliver(id, session.SourceWake, note) })
+	runner := NewRunner(sess,
+		WithAgentRunner(m.deps.AgentRun),
+		WithContextDecorator(func(ctx context.Context) context.Context {
+			return wakecap.WithResume(ctx, func(note string) { m.Deliver(id, SourceWake, note) })
 		}))
 	runner.Start(m.ctx)
 
-	lc := &liveChat{runner: runner, session: sess, id: id, name: name, origin: origin}
+	lc := &liveChat{runner: runner, sess: sess, id: id, name: name, origin: origin}
 	// Persistence pump: a permanent TAP (not a Subscribe) that saves after every turn. A tap
 	// fans out the same events but does NOT count as a watching client, so an unwatched
 	// background chat stays "no live client" — its approval records as pending (the sink is
@@ -167,10 +166,10 @@ func (m *Manager) spinLocked(id, name string, origin Origin, msgs []brain.Messag
 // pump saves a chat's conversation after every turn and badges background activity. It runs
 // until the tap channel closes (on stop/Delete/CloseAll). Lazy-persist: a turn that
 // produced no messages is never written, so an untouched chat leaves no file.
-func (m *Manager) pump(id string, runner *session.Runner, sub <-chan session.Event) {
+func (m *Manager) pump(id string, runner *Runner, sub <-chan Event) {
 	for e := range sub {
 		switch e.(type) {
-		case session.TurnEndEvent:
+		case TurnEndEvent:
 			// Read name/origin WHILE holding the lock — Rename writes lc.name under m.mu. A
 			// concurrent Delete drops it from the map → stillLive false → skip the stale save.
 			m.mu.Lock()
@@ -190,7 +189,7 @@ func (m *Manager) pump(id string, runner *session.Runner, sub <-chan session.Eve
 			}
 			_ = m.deps.Store.Save(id, name, origin, msgs)
 			m.signal(id, "turnEnd")
-		case session.ApprovalEvent:
+		case ApprovalEvent:
 			// A background chat is waiting on an approval — actionable, not just a badge.
 			m.signal(id, "approvalPending")
 		}
@@ -201,7 +200,7 @@ func (m *Manager) pump(id string, runner *session.Runner, sub <-chan session.Eve
 // already live. It is how a trigger with no client — a fired wake, later a cron agent —
 // resumes a specific chat. A deleted or unknown chat is a no-op: Open returns false, so a
 // stale wake never resurrects a chat the user removed.
-func (m *Manager) Deliver(id string, source session.Source, input string) {
+func (m *Manager) Deliver(id string, source Source, input string) {
 	if r, ok := m.Open(id); ok {
 		r.Submit(source, input)
 	}
@@ -214,7 +213,7 @@ func (m *Manager) MarkSkill(id, name string) {
 	lc := m.live[id]
 	m.mu.Unlock()
 	if lc != nil {
-		lc.session.MarkSkill(name)
+		lc.sess.MarkSkill(name)
 	}
 }
 
@@ -249,5 +248,5 @@ func (lc *liveChat) stop() {
 	if lc.unsub != nil {
 		lc.unsub()
 	}
-	lc.session.Close()
+	lc.sess.Close()
 }
