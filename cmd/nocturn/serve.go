@@ -18,11 +18,13 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl"
 )
 
-// serveDefaultAddr is the daemon's default listen address: loopback only. The MVP has no
-// authentication, so this default keeps it unreachable from the network — binding to a LAN
-// address is an explicit opt-in (NOCTURN_SERVE_ADDR) and is warned about. Auth (pairing)
-// comes before any non-dev network use.
-const serveDefaultAddr = "127.0.0.1:8765"
+// serveDefaultAddr is the daemon's default listen address: ALL interfaces, so a phone on
+// the same LAN reaches it out of the box (that is the point of the companion app). The MVP
+// has NO authentication, so this exposes an unauthenticated control channel to the whole
+// network — it is warned about loudly at startup, and pairing/auth is the next hardening
+// step before untrusted networks. Override with NOCTURN_SERVE_ADDR (e.g. "127.0.0.1:8765"
+// to force loopback-only).
+const serveDefaultAddr = ":8765"
 
 // serveCmd runs the companion-app daemon: the same workspace spine as the TUI, exposed over
 // a WebSocket the app drives (list/open workspaces, chat, answer approvals). It is NOT a
@@ -42,7 +44,8 @@ func serveCmd(_ []string) error {
 	// before using it on an untrusted network.
 	if !isLoopbackAddr(addr) {
 		fmt.Printf("\n⚠️  WARNING: serving on %s with NO authentication — any device on your\n"+
-			"    network can control this assistant and approve effects. Dev use only.\n\n", addr)
+			"    network can control this assistant and approve effects. Use only on a network\n"+
+			"    you trust; set NOCTURN_SERVE_ADDR=127.0.0.1:8765 to force loopback-only.\n\n", addr)
 		// Advertise on the LAN so the app finds the daemon without a typed IP. Only meaningful
 		// on a real network interface — loopback has nothing to discover.
 		if shutdown, err := advertiseMDNS(addr); err != nil {
