@@ -80,7 +80,9 @@ harmless reads. That balance is the point of Nocturn.
 - Every scheduled run leaves its full transcript behind as a chat, so you can open it later
   and see exactly what the agent read, did, and answered. Runs start fresh each time — an
   agent does not carry memory from one firing to the next — and only the newest 20 runs per
-  agent are kept, so a frequent schedule never floods your chat list.
+  agent are kept, so a frequent schedule never floods your chat list. Deleting an agent does
+  not take its saved runs with it: they stay readable, but a chat opened from one has no
+  tools and no permissions anymore — it can only talk.
 - Give an agent a time budget with `budget: 5m` so a runaway task stops on its own. Time
   spent waiting for your approval does not count against it.
 - The `model` setting is read but not yet applied. Every agent currently uses the model you

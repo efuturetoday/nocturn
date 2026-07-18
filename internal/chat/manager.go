@@ -8,6 +8,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/gateway"
+	"github.com/efuturetoday/nocturn/internal/tool"
 	"github.com/efuturetoday/nocturn/internal/wakecap"
 )
 
@@ -117,8 +118,10 @@ func (m *Manager) Delete(id string) error {
 // over both kinds: a root/user chat reopens under the Root charter, an agent run
 // (Meta.Agent set) under that agent's charter. Reopening is an ATTENDED act (a
 // client asked for it), so the agent factory's normal-HITL charter applies. ok is
-// false for an unknown/invalid id, or an agent record whose declaration no longer
-// exists (fail-closed: no charter, no authority, no chat).
+// false only for an unknown/invalid id. A run whose agent declaration no longer
+// exists still opens — the transcript is the USER'S data — but under a
+// zero-authority viewer charter (no tools, no grants): fail-closed applies to
+// effects, never to reading one's own history.
 func (m *Manager) Open(id string) (*Chat, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -137,7 +140,12 @@ func (m *Manager) openLocked(id string) (*Chat, bool) {
 	if meta.Agent != "" {
 		var err error
 		if ch, err = m.deps.Agent(meta.Agent); err != nil {
-			return nil, false
+			// The declaration is gone (agent deleted) but the record is the user's
+			// data: open it VIEWABLE under a zero-authority charter — an empty
+			// toolset and a zero Authority (no grants, attended). The history
+			// renders; a new turn is a bare model call with nothing to invoke, so
+			// every effect path is structurally absent, not merely denied.
+			ch = Charter{Tools: tool.NewRegistry()}
 		}
 	}
 	return m.spinLocked(meta, ch, msgs), true

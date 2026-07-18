@@ -210,6 +210,54 @@ func TestManager_FireAgent_PersistsRunAndReopensUnderAgentCharter(t *testing.T) 
 	}
 }
 
+// A saved run whose agent declaration was deleted still OPENS — the transcript is
+// the user's data — but under a zero-authority viewer charter: the history renders,
+// while the chat has no tools and no grants (fail-closed on effects, not on reading).
+func TestManager_Open_DeletedAgentRun_ViewableWithZeroAuthority(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "chats")
+	store := chat.LoadStore(dir)
+
+	// A persisted run of an agent that no longer exists.
+	id := store.NewID()
+	msgs := []brain.Message{
+		{Role: "user", Content: "Run your scheduled task now."},
+		{Role: "assistant", Content: "did the thing"},
+	}
+	if err := store.Save(chat.Meta{ID: id, Name: "old run", Origin: chat.OriginAgent, Agent: "ghost"}, msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	var specs []tool.Spec
+	m := newManager(t, chat.Deps{
+		Store: store,
+		Engine: brain.New(modelFunc(func(_ context.Context, _ []brain.Message, s []tool.Spec) (brain.Step, error) {
+			specs = s // capture what a NEW turn could reach
+			return brain.Step{Answer: "hello from nothing"}, nil
+		})),
+		Agent: func(name string) (chat.Charter, error) {
+			return chat.Charter{}, errors.New("unknown agent " + name)
+		},
+	})
+
+	c, ok := m.Open(id)
+	if !ok {
+		t.Fatal("a deleted agent's run must still open — the transcript is the user's data")
+	}
+	if snap := c.Snapshot(); !hasTurn(snap.Messages, "assistant", "did the thing") {
+		t.Fatalf("transcript not restored: %+v", snap.Messages)
+	}
+
+	// A new turn is a bare model call: the model sees ZERO tools — every effect path
+	// is structurally absent, not merely denied.
+	sub, unsub := c.Subscribe()
+	defer unsub()
+	c.Submit(chat.SourceUser, "and now?")
+	waitTurnEnd(t, sub)
+	if len(specs) != 0 {
+		t.Fatalf("viewer chat exposed %d tools, want 0: %+v", len(specs), specs)
+	}
+}
+
 // Overlap prevention lives in the Manager: while one run of an agent is mid-turn, a
 // second FireAgent is skipped with ErrAgentBusy (never queued, never parallel); once
 // the run completes, the next firing works again. The turn error propagates.
