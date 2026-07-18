@@ -30,18 +30,18 @@ import (
 	"github.com/efuturetoday/nocturn/internal/skill"
 )
 
-// Messages sent to the program: runner events (via the subscription pump) plus a few
+// Messages sent to the program: chat events (via the subscription pump) plus a few
 // out-of-band lines (scheduler, notify) and the inline-approval fallback.
 type (
-	// runnerEventMsg carries one chat.Event from the ACTIVE workspace's runner — the
+	// chatEventMsg carries one chat.Event from the OPEN chat — the
 	// sole path turns, tokens, tool events and approvals reach the view.
-	runnerEventMsg struct{ e chat.Event }
-	schedulerMsg   string // a scheduler firing/skip/result line (background cron runs)
-	notifyMsg      string // a notify() fallback line when no out-of-band channel is configured
-	pulseMsg       struct{}
+	chatEventMsg struct{ e chat.Event }
+	schedulerMsg string // a scheduler firing/skip/result line (background cron runs)
+	notifyMsg    string // a notify() fallback line when no out-of-band channel is configured
+	pulseMsg     struct{}
 	// approvalMsg is the FALLBACK inline approval (tuiNotifier): used only for a run with
 	// no attended sink — a background scheduler run when no out-of-band channel is set.
-	// Interactive approvals arrive as a chat.ApprovalEvent via runnerEventMsg.
+	// Interactive approvals arrive as a chat.ApprovalEvent via chatEventMsg.
 	approvalMsg struct {
 		intent  string
 		options []hitl.Option
@@ -80,7 +80,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 }
 
 // approvalPrompt is the on-screen approval, uniform across its two sources: an
-// interactive chat.ApprovalEvent (resolve → runner.Resolve) and the inline fallback
+// interactive chat.ApprovalEvent (resolve → chat.Resolve) and the inline fallback
 // (resolve → reply-token channel). labels are display-only; resolve(choice) enacts the
 // pick, choice<0 = deny (fail-closed).
 type approvalPrompt struct {
@@ -182,8 +182,8 @@ func (e *noticeEntry) render(m *chatModel, width int) string {
 
 // queuedEntry is an input that arrived while a turn was running (the user typed
 // ahead, or a wake fired). It renders DIM with a ⏳ while pending, and flips to a
-// normal input line once its turn actually starts (handleRunnerEvent flips it on the
-// runner's TurnStart). wake notes get a ⏰ instead of the ›-prefixed user bubble.
+// normal input line once its turn actually starts (handleChatEvent flips it on the
+// chat's TurnStart). wake notes get a ⏰ instead of the ›-prefixed user bubble.
 type queuedEntry struct {
 	text    string
 	pending bool
@@ -206,11 +206,11 @@ func (e *queuedEntry) render(m *chatModel, width int) string {
 type chatModel struct {
 	bw         *bound            // the bound workspace this TUI is driving (its manager/ws/waker)
 	workspaces map[string]*bound // all built workspaces, for /ws switching
-	runner     *chat.Chat        // the OPEN chat (from bw.chats), driven like the app drives it
+	chat       *chat.Chat        // the OPEN chat (from bw.chats), driven like the app drives it
 	chatID     string            // the open chat's id (in bw's manager)
 	openChats  map[string]string // workspace name → its currently-open chat id (remembered across /ws)
-	send       func(tea.Msg)     // p.Send — the event pump delivers runner events via this
-	unsub      func()            // unsubscribe from the open chat's runner (swapped on /ws + new chat)
+	send       func(tea.Msg)     // p.Send — the event pump delivers chat events via this
+	unsub      func()            // unsubscribe from the open chat (swapped on /ws + new chat)
 
 	agents []agent.Agent // active workspace's agents, cached on bind (for /agents + /<name>)
 	skills *skill.Index  // active workspace's skill catalog, cached on bind (never nil)
@@ -238,7 +238,7 @@ type chatModel struct {
 	inputH    int
 	pulse     int
 	pausedAt  time.Time      // when the current approval wait began; zero = not waiting
-	running   bool           // mirror of the runner: set on TurnStart, cleared on TurnEnd
+	running   bool           // mirror of the chat loop: set on TurnStart, cleared on TurnEnd
 	pending   []*queuedEntry // buffered display entries, FIFO; the front flips live on TurnStart
 	approval  *approvalPrompt
 	notice    string // transient one-line status (e.g. "new session"); cleared on next input
@@ -304,14 +304,14 @@ func (m *chatModel) bindChat(id string, r *chat.Chat) {
 	}
 	m.chatID = id
 	m.openChats[m.ws] = id
-	m.runner = r
+	m.chat = r
 
 	sub, unsub := r.Subscribe()
 	m.unsub = unsub
 	send := m.send
 	go func() {
 		for e := range sub { // exits when unsub closes the channel
-			send(runnerEventMsg{e})
+			send(chatEventMsg{e})
 		}
 	}()
 
@@ -325,7 +325,7 @@ func (m *chatModel) bindChat(id string, r *chat.Chat) {
 }
 
 // newChat starts a fresh conversation in the active workspace (Ctrl+N): a new chat id, its
-// own runner. The previous chat keeps living in the background (its wakes still fire); it is
+// own loop. The previous chat keeps living in the background (its wakes still fire); it is
 // abandoned, not reset — an empty one is never persisted (lazy-persist).
 func (m *chatModel) newChat() {
 	meta, err := m.bw.chats.New("", chat.OriginUser)
@@ -337,7 +337,7 @@ func (m *chatModel) newChat() {
 	m.bindChat(meta.ID, r)
 }
 
-// entriesFromMessages rebuilds a readable transcript from a runner snapshot's history.
+// entriesFromMessages rebuilds a readable transcript from a chat snapshot's history.
 // User turns render as input lines, assistant answers as assistant blocks; system (the
 // persona) and tool-plumbing messages are omitted — they are not user-facing. A skill's
 // user turn shows its expanded body (that is what the model saw), which is the one
@@ -783,7 +783,7 @@ func (m chatModel) renderMarkdown(s string) string {
 // --- update ------------------------------------------------------------------
 
 // handleSlash dispatches a /command: immediate UI listings (/skills, /agents, /ws),
-// a workspace switch, or a skill/agent activation that is SUBMITTED to the runner (so it
+// a workspace switch, or a skill/agent activation that is SUBMITTED to the chat (so it
 // streams + gates like a chat turn). Skill/agent submits carry the typed line as the
 // display and the expanded body/task as the payload — the transcript shows "/name …", the
 // model gets the real input. Called only when not mid-turn (Update guards that).
@@ -803,8 +803,8 @@ func (m chatModel) handleSlash(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ws":
 		// /ws lists workspaces; /ws <name> switches the active one — rebinds this model to
-		// that workspace's isolated stack (its runner/agents/skills) and rebuilds the visible
-		// transcript from that runner's snapshot (bindWorkspace).
+		// that workspace's isolated stack (its chats/agents/skills) and rebuilds the visible
+		// transcript from that chat's snapshot (bindWorkspace).
 		if target := strings.TrimSpace(rest); target == "" {
 			m.entries = append(m.entries, &noticeEntry{text: m.workspaceListing()})
 		} else if st, ok := m.workspaces[target]; ok {
@@ -824,7 +824,7 @@ func (m chatModel) handleSlash(input string) (tea.Model, tea.Cmd) {
 		if task == "" {
 			task = "Do your task."
 		}
-		m.runner.SubmitAgent(input, cmd, task)
+		m.chat.SubmitAgent(input, cmd, task)
 		return m, nil
 	}
 	// /<name> activates a skill: the harness injects its body (the model takes no
@@ -848,7 +848,7 @@ func (m chatModel) handleSlash(input string) (tea.Model, tea.Cmd) {
 	if req == "" {
 		req = "Follow the skill's instructions."
 	}
-	m.runner.SubmitInput(chat.SourceUser, input, skill.WrapBody(cmd, body)+"\n\n<user_request>\n"+req+"\n</user_request>")
+	m.chat.SubmitInput(chat.SourceUser, input, skill.WrapBody(cmd, body)+"\n\n<user_request>\n"+req+"\n</user_request>")
 	return m, nil
 }
 
@@ -913,7 +913,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncViewport()
 			return m, nil
 		case "esc":
-			m.runner.Cancel() // stops a running turn; a no-op when idle
+			m.chat.Cancel() // stops a running turn; a no-op when idle
 			return m, nil
 		case "enter":
 			input := strings.TrimSpace(m.ta.Value())
@@ -921,7 +921,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// Slash commands are immediate UI actions (or skill/agent submits) and are
-			// ignored mid-turn; a plain message is submitted to the runner, which serializes
+			// ignored mid-turn; a plain message is submitted to the chat, which serializes
 			// it — buffering behind a running turn itself — and streams back the events that
 			// drive the transcript. The TUI no longer sequences turns or holds a queue.
 			if m.running && strings.HasPrefix(input, "/") {
@@ -934,7 +934,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(input, "/") {
 				return m.handleSlash(input)
 			}
-			m.runner.Submit(chat.SourceUser, input)
+			m.chat.Submit(chat.SourceUser, input)
 			return m, nil
 		}
 
@@ -955,8 +955,8 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, pulseTick()
 
-	case runnerEventMsg:
-		return m.handleRunnerEvent(msg.e)
+	case chatEventMsg:
+		return m.handleChatEvent(msg.e)
 
 	case schedulerMsg:
 		// A background cron run announced itself (firing/skip/done). Show it as a
@@ -1010,12 +1010,12 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// handleRunnerEvent renders one event from the active workspace's runner — the sole
-// path turns, tokens, tool calls and approvals reach the view. The runner owns turn
+// handleChatEvent renders one event from the open chat — the sole
+// path turns, tokens, tool calls and approvals reach the view. The chat loop owns turn
 // SEQUENCING (serialize + queue); the TUI owns only DISPLAY, driven from these events in
-// the runner's order (so no keystroke-vs-event race). User/agent turns append their
+// the loop's order (so no keystroke-vs-event race). User/agent turns append their
 // display line on TurnStart; a wake/remind is created here too (it has no keystroke).
-func (m chatModel) handleRunnerEvent(e chat.Event) (tea.Model, tea.Cmd) {
+func (m chatModel) handleChatEvent(e chat.Event) (tea.Model, tea.Cmd) {
 	switch ev := e.(type) {
 	case chat.TurnStartEvent:
 		m.running = true
@@ -1023,7 +1023,7 @@ func (m chatModel) handleRunnerEvent(e chat.Event) (tea.Model, tea.Cmd) {
 		m.active, m.roots = nil, nil
 		if len(m.pending) > 0 {
 			// This turn was buffered: its pending display entry flips live (FIFO — the
-			// runner drains its queue front-first, in the same order these were emitted).
+			// loop drains its queue front-first, in the same order these were emitted).
 			p := m.pending[0]
 			m.pending = m.pending[1:]
 			p.pending = false
@@ -1074,7 +1074,7 @@ func (m chatModel) handleRunnerEvent(e chat.Event) (tea.Model, tea.Cmd) {
 		m.running = false
 		m.pausedAt = time.Time{}
 		m.syncViewport()
-		// The runner auto-starts the next queued turn (another TurnStart) — no drain here.
+		// The chat auto-starts the next queued turn (another TurnStart) — no drain here.
 		return m, tea.Batch(m.ta.Focus(), m.sw.Stop())
 
 	case chat.NoticeEvent:
@@ -1084,8 +1084,8 @@ func (m chatModel) handleRunnerEvent(e chat.Event) (tea.Model, tea.Cmd) {
 
 	case chat.ApprovalEvent:
 		// Interactive (attended) approval on this session's stream. resolve routes to the
-		// runner; a deny (choice<0, from Esc) also cancels the turn — Esc means "stop".
-		r, id := m.runner, ev.ID
+		// chat; a deny (choice<0, from Esc) also cancels the turn — Esc means "stop".
+		r, id := m.chat, ev.ID
 		m.approval = &approvalPrompt{
 			intent: ev.Intent,
 			labels: ev.Options,

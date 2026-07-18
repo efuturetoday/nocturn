@@ -36,7 +36,7 @@ type shared struct {
 
 // bound is one OPEN workspace: the workspace itself (which owns tools/skills/agents/guard/
 // grants) plus its multi-chat manager, self-waker, and scheduler. Both the TUI and the app
-// drive the SAME manager chats — there is no privileged per-front-end runner. The chatModel
+// drive the SAME manager chats — there is no privileged per-front-end loop. The chatModel
 // rebinds to another workspace on /ws switch. Isolation is structural: each workspace's guard
 // and injector hold only its own secrets/grants, so N run in one process without crossing.
 type bound struct {

@@ -11,7 +11,7 @@ import (
 
 // appWorkspaces adapts the built workspace registry (the bound-map) to the appserver
 // Workspaces STATE service. It reads state from each workspace's own services (persona,
-// agents, skills) and its runner — never the filesystem. So the app server stays FS-free:
+// agents, skills) and its chats — never the filesystem. So the app server stays FS-free:
 // swapping how a workspace loads its state never touches this adapter's shape.
 type appWorkspaces struct {
 	bounds map[string]*bound
@@ -64,7 +64,7 @@ func (a *appWorkspaces) SetPersona(name, text string) error {
 	return b.ws.SetPersona(text)
 }
 
-// --- chats: each workspace's chat.Manager owns the live runners + persistence ---
+// --- chats: each workspace's chat.Manager owns the live chats + persistence ---
 
 // Chats lists a workspace's chats (most recent first), read from its chat manager.
 func (a *appWorkspaces) Chats(ws string) ([]appserver.ChatMeta, bool) {
@@ -80,7 +80,7 @@ func (a *appWorkspaces) Chats(ws string) ([]appserver.ChatMeta, bool) {
 	return out, true
 }
 
-// NewChat creates an empty chat in the workspace; its runner spins on first OpenChat.
+// NewChat creates an empty chat in the workspace; its loop spins on first OpenChat.
 func (a *appWorkspaces) NewChat(ws, name string) (appserver.ChatMeta, bool) {
 	b, ok := a.bounds[ws]
 	if !ok {
@@ -111,7 +111,7 @@ func (a *appWorkspaces) RenameChat(ws, id, name string) bool {
 	return b.chats.Rename(id, name) == nil
 }
 
-// DeleteChat stops the chat's live runner and removes it; false for an unknown workspace.
+// DeleteChat stops the live chat and removes it; false for an unknown workspace.
 func (a *appWorkspaces) DeleteChat(ws, id string) bool {
 	b, ok := a.bounds[ws]
 	if !ok {

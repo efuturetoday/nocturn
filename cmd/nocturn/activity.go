@@ -39,7 +39,7 @@ func (h *activityHub) emit(ws, id, kind string) {
 }
 
 // Watch registers a subscriber and returns its stream plus an unsubscribe that closes it
-// (so the reader's range loop exits). It mirrors session.Runner.Subscribe's shape.
+// (so the reader's range loop exits). It mirrors chat.Chat.Subscribe's shape.
 func (h *activityHub) Watch() (<-chan appserver.ChatActivity, func()) {
 	ch := make(chan appserver.ChatActivity, 32)
 	h.mu.Lock()

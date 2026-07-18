@@ -87,7 +87,7 @@ func (n attendedNotifier) Notify(intent string, options []hitl.Option) error {
 }
 
 // Resolved clears the session's parked prompt once the engine's request ends on ANY
-// channel — crucial when the answer came out of band (the runner's own Resolve never
+// channel — crucial when the answer came out of band (the chat's own Resolve never
 // ran), so a reconnecting client's snapshot doesn't show a phantom approval. Idempotent:
 // an in-band answer already cleared it.
 func (n attendedNotifier) Resolved() { n.sink.ClearPending() }
@@ -104,7 +104,7 @@ type teeNotifier struct {
 }
 
 func (n teeNotifier) Notify(intent string, options []hitl.Option) error {
-	_ = n.inband.Notify(intent, options) // records the pending prompt on the runner; never errors
+	_ = n.inband.Notify(intent, options) // records the pending prompt on the chat; never errors
 	return n.oob.Notify(intent, options) // the reachable human; its error fails the request closed
 }
 
@@ -112,7 +112,7 @@ func (n teeNotifier) Notify(intent string, options []hitl.Option) error {
 func (n teeNotifier) Resolved() { n.inband.Resolved() }
 
 // routeApproval picks the HITL channel for one request from its ctx. The rule:
-//   - No approval sink on ctx (a direct background agent run, no runner): out-of-band if
+//   - No approval sink on ctx (a detached run with no chat loop): out-of-band if
 //     configured, else nil (the engine's front-end fallback).
 //   - A sink is present: ALWAYS record the request in-band on that chat's stream (so a
 //     reconnecting app answers it from the snapshot). Decide at Ask-time whether it must

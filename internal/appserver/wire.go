@@ -1,5 +1,5 @@
 // Package appserver is the server side of the companion-app protocol: it bridges one
-// chat.Runner (the headless turn loop) to a remote client over a duplex byte stream,
+// chat.Chat (the headless turn loop) to a remote client over a duplex byte stream,
 // so a mobile/desktop app drives a workspace's chat exactly like the TUI does — Submit
 // in, events out, approvals answered in-app.
 //
