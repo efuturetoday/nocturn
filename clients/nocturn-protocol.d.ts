@@ -35,10 +35,25 @@ export interface QueuedItem {
   source: Source;
 }
 
-/** One conversation message in a snapshot (user/assistant only). */
+/**
+ * One finished tool call reconstructed from history for a snapshot — no id/parent/phase
+ * (that's the live `ToolFrame`); just what ran and what it returned. Render as a static
+ * forest under the assistant bubble.
+ */
+export interface SnapshotTool {
+  tool: string;
+  args?: string; // JSON, as supplied
+  result?: string;
+}
+
+/**
+ * One conversation message in a snapshot (user/assistant only). An assistant turn that only
+ * called tools has empty `content` and a non-empty `tools` — render the forest, not a bubble.
+ */
 export interface Message {
   role: "user" | "assistant";
   content: string;
+  tools?: SnapshotTool[]; // assistant turn: the tool calls it made
 }
 
 /** A child agent, for the app's agent list. */

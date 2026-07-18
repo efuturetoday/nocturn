@@ -102,8 +102,18 @@ type wireQueued struct {
 }
 
 type wireMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string         `json:"role"`
+	Content string         `json:"content"`
+	Tools   []wireSnapTool `json:"tools,omitempty"` // assistant turn: the tool calls it made (static, from history)
+}
+
+// wireSnapTool is one tool call reconstructed from saved history for the snapshot — the
+// name, the arguments, and the result it got. Unlike the live ToolEvent it carries no
+// id/parent/phase: it is a finished call in the transcript, not a streaming frame.
+type wireSnapTool struct {
+	Tool   string `json:"tool"`
+	Args   string `json:"args,omitempty"`
+	Result string `json:"result,omitempty"`
 }
 
 // EncodeSnapshot renders a Runner snapshot — the state a joining or reconnecting client
@@ -114,10 +124,27 @@ func EncodeSnapshot(s session.Snapshot) ([]byte, error) {
 	for _, q := range s.Queue {
 		w.Queue = append(w.Queue, wireQueued{Display: q.Display, Input: q.Input, Source: string(q.Source)})
 	}
+	// Tool results live in role=tool messages, tied to their call by ToolCallID; index them
+	// so an assistant turn's calls can carry their result inline (the client renders a static
+	// tool forest under the bubble, matching what the live stream showed when it ran).
+	results := map[string]string{}
 	for _, m := range s.Messages {
-		if m.Role == "user" || m.Role == "assistant" { // system/tool plumbing is not client-facing
-			w.Messages = append(w.Messages, wireMessage{Role: m.Role, Content: m.Content})
+		if m.Role == "tool" {
+			results[m.ToolCallID] = m.Content
 		}
+	}
+	for _, m := range s.Messages {
+		if m.Role != "user" && m.Role != "assistant" { // system/tool plumbing is not a bubble
+			continue
+		}
+		wm := wireMessage{Role: m.Role, Content: m.Content}
+		for _, tc := range m.ToolCalls {
+			wm.Tools = append(wm.Tools, wireSnapTool{Tool: tc.Tool, Args: tc.Args, Result: results[tc.ID]})
+		}
+		if wm.Content == "" && len(wm.Tools) == 0 {
+			continue // an empty assistant turn with no calls carries nothing to render
+		}
+		w.Messages = append(w.Messages, wm)
 	}
 	if s.Pending != nil {
 		w.Pending = &wireEvent{Type: "approval", ID: s.Pending.ID, Intent: s.Pending.Intent, Options: s.Pending.Options}
