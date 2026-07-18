@@ -1,0 +1,3 @@
+# Ignored modernization suggestions
+# Format: <date> <category> <description>
+2026-07-18 testingcontext internal/hitl/ntfy/listener_test.go: t.Context() deadlocks — its cancel fires only after the test defers, but the deferred srv.Close() blocks until the listener ctx is cancelled (LIFO defer cancel() is load-bearing)

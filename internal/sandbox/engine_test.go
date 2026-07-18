@@ -28,7 +28,7 @@ func TestEngine_ConcurrentDispatchersNeverCross(t *testing.T) {
 	const n = 32
 	got := make([]string, n)
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -49,7 +49,7 @@ func TestEngine_ConcurrentDispatchersNeverCross(t *testing.T) {
 	}
 	wg.Wait()
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if want := fmt.Sprintf("token-%d", i); got[i] != want {
 			t.Errorf("run %d saw %q, want %q — a dispatcher crossed between calls", i, got[i], want)
 		}
@@ -122,7 +122,7 @@ func TestEngine_DeadlineTrapsRunawayGuest(t *testing.T) {
 	}
 	defer eng.Close(context.Background())
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		_, err := eng.Run(context.Background(), sandbox.Config{Timeout: 150 * time.Millisecond})
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("run %d: err = %v, want deadline exceeded", i, err)
@@ -146,7 +146,7 @@ func TestEngine_ReusedAcrossManyRuns(t *testing.T) {
 		return req, nil
 	}}
 	const m = 200
-	for i := 0; i < m; i++ {
+	for i := range m {
 		res, err := eng.Run(context.Background(), sandbox.Config{
 			Stdin: []byte("hello"),
 			Hosts: []sandbox.HostFunc{echo},

@@ -86,17 +86,15 @@ func TestSource_Concurrent(t *testing.T) {
 	const n = 20
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range n {
+		wg.Go(func() {
 			v, err := src.Value(context.Background())
 			if err != nil {
 				errs <- err
 			} else if string(v) != "fresh" {
 				errs <- context.DeadlineExceeded // placeholder non-nil
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

@@ -41,7 +41,7 @@ func TestEngine_Isolation_Concurrent(t *testing.T) {
 	outs := make([]string, n)
 	errs := make([]error, n)
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -51,7 +51,7 @@ func TestEngine_Isolation_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if errs[i] != nil {
 			t.Fatalf("run %d: %v", i, errs[i])
 		}

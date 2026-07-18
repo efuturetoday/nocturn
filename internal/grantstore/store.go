@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
@@ -61,12 +62,7 @@ func (s *Store) Allows(tool string, call capability.Call) bool {
 	rec := recordFor(tool, call)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, r := range s.recs {
-		if r == rec {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s.recs, rec)
 }
 
 // Record persists an "always" grant (idempotent), writing the file atomically.
@@ -74,10 +70,8 @@ func (s *Store) Record(tool string, call capability.Call) error {
 	rec := recordFor(tool, call)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, r := range s.recs {
-		if r == rec {
-			return nil
-		}
+	if slices.Contains(s.recs, rec) {
+		return nil
 	}
 	s.recs = append(s.recs, rec)
 	return s.persist()

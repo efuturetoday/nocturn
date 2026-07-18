@@ -175,7 +175,7 @@ func TestVault_ConcurrentSet(t *testing.T) {
 
 	const n = 8
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -187,7 +187,7 @@ func TestVault_ConcurrentSet(t *testing.T) {
 	wg.Wait()
 
 	re := openTestVault(t, path)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if got, ok := re.Get(fmt.Sprintf("k%d", i)); !ok || len(got) != i+1 {
 			t.Errorf("k%d = %q, %v after reload", i, got, ok)
 		}

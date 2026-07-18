@@ -63,8 +63,8 @@ func parseFrontmatter(src []byte) (meta, string, error) {
 
 // cutFirstLine drops the first line (the opening delimiter) and returns the rest.
 func cutFirstLine(b []byte) ([]byte, bool) {
-	if i := bytes.IndexByte(b, '\n'); i >= 0 {
-		return b[i+1:], true
+	if _, after, ok := bytes.Cut(b, []byte{'\n'}); ok {
+		return after, true
 	}
 	return nil, false
 }

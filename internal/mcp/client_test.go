@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,9 +24,7 @@ func httpTransport(url string) mcp.Transport {
 		if err != nil {
 			return nil, err
 		}
-		for k, v := range header {
-			rq.Header[k] = v
-		}
+		maps.Copy(rq.Header, header)
 		rp, err := http.DefaultClient.Do(rq)
 		if err != nil {
 			return nil, err

@@ -330,7 +330,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
 	var tools []ToolInfo
 	cursor := ""
-	for page := 0; page < maxToolPages; page++ {
+	for range maxToolPages {
 		params := map[string]any{}
 		if cursor != "" {
 			params["cursor"] = cursor
@@ -376,14 +376,14 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 	if err := json.Unmarshal(res, &out); err != nil {
 		return "", fmt.Errorf("mcp: bad tools/call result: %w", err)
 	}
-	text := ""
+	var text strings.Builder
 	for _, cnt := range out.Content {
 		if cnt.Type == "text" {
-			text += cnt.Text
+			text.WriteString(cnt.Text)
 		}
 	}
 	if out.IsError {
-		return "", fmt.Errorf("mcp tool %s failed: %s", name, text)
+		return "", fmt.Errorf("mcp tool %s failed: %s", name, text.String())
 	}
-	return text, nil
+	return text.String(), nil
 }

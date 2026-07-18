@@ -9,6 +9,8 @@
 // the in-memory surface; Vault (vault.go) is its encrypted persistence.
 package secret
 
+import "maps"
+
 import "sync"
 
 // Store holds secrets by name. It is host-trusted; never hand a *Store to a
@@ -56,9 +58,7 @@ func (s *Store) snapshot() map[string][]byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(map[string][]byte, len(s.secrets))
-	for k, v := range s.secrets {
-		out[k] = v
-	}
+	maps.Copy(out, s.secrets)
 	return out
 }
 

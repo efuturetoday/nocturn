@@ -1,12 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -438,13 +438,7 @@ func (m chatModel) approvalHeight() int {
 
 // growInput sizes the input area to its content (up to maxInputRows).
 func (m *chatModel) growInput() {
-	rows := strings.Count(m.ta.Value(), "\n") + 1
-	if rows < 1 {
-		rows = 1
-	}
-	if rows > maxInputRows {
-		rows = maxInputRows
-	}
+	rows := min(max(strings.Count(m.ta.Value(), "\n")+1, 1), maxInputRows)
 	if rows != m.inputH {
 		m.inputH = rows
 		m.ta.SetHeight(rows)
@@ -587,11 +581,12 @@ func (m *chatModel) renderFrame(f *toolFrame, width int) string {
 		tail = "  " + hintStyle.Render(fmtDuration(f.elapsed))
 	}
 	indent := strings.Repeat("  ", f.depth)
+	var out strings.Builder
 	// No Width() padding here: it would push the trailing reason/duration to the
 	// far right edge, away from the tool name. Headlines are already clipped short.
-	out := indent + "  " + lead + " " + toolStyle.Render(f.head) + tail + "\n"
+	out.WriteString(indent + "  " + lead + " " + toolStyle.Render(f.head) + tail + "\n")
 	if f.bodySrc != "" {
-		out += m.toolBody(f, width)
+		out.WriteString(m.toolBody(f, width))
 	}
 
 	kids := append([]*toolFrame(nil), f.children...)
@@ -600,11 +595,11 @@ func (m *chatModel) renderFrame(f *toolFrame, width int) string {
 			kids = append(kids, a)
 		}
 	}
-	sort.Slice(kids, func(i, j int) bool { return kids[i].id < kids[j].id })
+	slices.SortFunc(kids, func(a, b *toolFrame) int { return cmp.Compare(a.id, b.id) })
 	for _, c := range kids {
-		out += m.renderFrame(c, width)
+		out.WriteString(m.renderFrame(c, width))
 	}
-	return out
+	return out.String()
 }
 
 // renderActive renders the still-running forest live (roots in start order).
@@ -724,19 +719,12 @@ func (m chatModel) header() string {
 	default:
 		pill = okStyle.Render("● ") + hintStyle.Render("ready")
 	}
-	gap := m.width - visibleWidth(left) - visibleWidth(pill)
-	if gap < 1 {
-		gap = 1
-	}
+	gap := max(m.width-visibleWidth(left)-visibleWidth(pill), 1)
 	return left + strings.Repeat(" ", gap) + pill + "\n" + m.rule()
 }
 
 func (m chatModel) rule() string {
-	w := m.width
-	if w < 1 {
-		w = 1
-	}
-	return ruleStyle.Render(strings.Repeat("─", w))
+	return ruleStyle.Render(strings.Repeat("─", max(m.width, 1)))
 }
 
 func (m chatModel) statusLine() string {
@@ -878,10 +866,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp = viewport.New(msg.Width, 3)
 			m.ready = true
 		}
-		wrap := msg.Width - 2 // leave room for the 2-col assistant/tool gutter
-		if wrap < 20 {
-			wrap = 20
-		}
+		wrap := max(
+			// leave room for the 2-col assistant/tool gutter
+			msg.Width-2, 20)
 		m.md, _ = glamour.NewTermRenderer(glamour.WithStyles(glamourStyle(m.dark)), glamour.WithWordWrap(wrap))
 		m.help.Width = msg.Width
 		m.layout()

@@ -56,16 +56,16 @@ func ParseCron(expr string) (Schedule, error) {
 // parseCronField turns one field into a bitset over [spec.min, spec.max].
 func parseCronField(field string, spec fieldSpec) (uint64, error) {
 	var bits uint64
-	for _, term := range strings.Split(field, ",") {
+	for term := range strings.SplitSeq(field, ",") {
 		if term == "" {
 			return 0, fmt.Errorf("cron: empty term in %s field %q", spec.name, field)
 		}
 		// Optional /step suffix.
 		step := 1
 		base := term
-		if slash := strings.IndexByte(term, '/'); slash >= 0 {
-			base = term[:slash]
-			s, err := strconv.Atoi(term[slash+1:])
+		if before, after, ok := strings.Cut(term, "/"); ok {
+			base = before
+			s, err := strconv.Atoi(after)
 			if err != nil || s <= 0 {
 				return 0, fmt.Errorf("cron: bad step in %s field %q", spec.name, term)
 			}
@@ -73,10 +73,10 @@ func parseCronField(field string, spec fieldSpec) (uint64, error) {
 		}
 		lo, hi := spec.min, spec.max
 		if base != "*" {
-			if dash := strings.IndexByte(base, '-'); dash >= 0 {
+			if before, after, ok := strings.Cut(base, "-"); ok {
 				var err1, err2 error
-				lo, err1 = strconv.Atoi(base[:dash])
-				hi, err2 = strconv.Atoi(base[dash+1:])
+				lo, err1 = strconv.Atoi(before)
+				hi, err2 = strconv.Atoi(after)
 				if err1 != nil || err2 != nil {
 					return 0, fmt.Errorf("cron: bad range in %s field %q", spec.name, term)
 				}

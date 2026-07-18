@@ -95,7 +95,6 @@ func (p *Plugin) Close(ctx context.Context) error {
 func (p *Plugin) Tools() []tool.Tool {
 	tools := make([]tool.Tool, 0, len(p.Manifest.Tools))
 	for _, td := range p.Manifest.Tools {
-		td := td
 		tools = append(tools, tool.Tool{
 			Spec: tool.Spec{
 				Name:        p.Manifest.Name + "." + td.Name,
