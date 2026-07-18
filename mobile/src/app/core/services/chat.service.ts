@@ -1,6 +1,7 @@
 import { Injectable, inject, signal, computed, effect } from '@angular/core';
 import { ConnectionService } from './connection.service';
-import type { ChatMeta, ToolFrame, SnapshotTool, ApprovalEvent } from '../protocol/nocturn-protocol';
+import { WorkspaceService } from './workspace.service';
+import type { ChatMeta, ToolFrame, SnapshotTool, ForestFrame, Message, ApprovalEvent } from '../protocol/nocturn-protocol';
 
 /**
  * A rendered tool call — unifies the live `ToolFrame` (streamed, has phase/err) and the
@@ -13,6 +14,7 @@ export interface ToolView {
   result?: string;
   err?: string;
   running: boolean;
+  depth: number; // nesting: 0 = top-level model call, >0 = sub-call (indent)
 }
 
 /** A rendered conversation message: user text, or an assistant turn with reasoning + tools. */
@@ -40,11 +42,11 @@ export interface PendingApproval {
 @Injectable({ providedIn: 'root' })
 export class ChatService {
   private readonly conn = inject(ConnectionService);
+  private readonly ws = inject(WorkspaceService);
 
   private readonly _chats = signal<ChatMeta[]>([]);
   readonly chats = this._chats.asReadonly();
 
-  private readonly _activeWs = signal<string | null>(null);
   private readonly _activeChatId = signal<string | null>(null);
   readonly activeChatId = this._activeChatId.asReadonly();
 
@@ -60,6 +62,9 @@ export class ChatService {
   private readonly _notice = signal<string | null>(null);
   readonly notice = this._notice.asReadonly();
 
+  // First message to auto-send once a freshly-created chat opens (Gemini-style composer).
+  private readonly pendingFirst = signal<string | null>(null);
+
   // Badge signals for chats the client does NOT have open (server ChatActivity pushes).
   private readonly _unread = signal<ReadonlySet<string>>(new Set());
   readonly unread = this._unread.asReadonly();
@@ -69,34 +74,46 @@ export class ChatService {
   /** True once we've received a snapshot for the active chat. */
   readonly ready = computed(() => this._activeChatId() !== null);
 
+  /** Unread counts split by chat kind (agent runs badge the Agents tab, not Chat). */
+  private readonly agentChatIds = computed(() => new Set(this._chats().filter((c) => c.agent).map((c) => c.id)));
+  readonly unreadUserCount = computed(() => [...this._unread()].filter((id) => !this.agentChatIds().has(id)).length);
+  readonly unreadAgentCount = computed(() => [...this._unread()].filter((id) => this.agentChatIds().has(id)).length);
+
   constructor() {
     this.conn.onEvent((e) => this.reduce(e));
 
-    // Resync the active chat on (re)connect: re-list + re-open → fresh snapshot.
+    // Resync on (re)connect OR when the active workspace changes: re-list + re-open → fresh
+    // snapshot. Depends on WorkspaceService.active() so switching workspace reloads its chats.
     effect(() => {
       if (this.conn.state() !== 'connected') return;
-      const ws = this._activeWs();
+      const ws = this.ws.active();
       const id = this._activeChatId();
       if (ws) this.conn.send({ cmd: 'listChats', ws });
       if (ws && id) this.conn.send({ cmd: 'openChat', ws, id });
     });
   }
 
-  // ── commands ───────────────────────────────────────────────────────────────
+  // ── commands (ws is the app-wide active workspace) ───────────────────────────
 
-  listChats(ws: string): void {
-    this._activeWs.set(ws);
-    this.conn.send({ cmd: 'listChats', ws });
+  listChats(): void {
+    const ws = this.ws.active();
+    if (ws) this.conn.send({ cmd: 'listChats', ws });
   }
 
-  newChat(ws: string, name: string): void {
-    this._activeWs.set(ws);
-    this.conn.send({ cmd: 'newChat', ws, name });
+  newChat(name: string): void {
+    const ws = this.ws.active();
+    if (ws) this.conn.send({ cmd: 'newChat', ws, name });
+  }
+
+  /** Queue a first message to auto-send when the next freshly-opened (empty) chat snapshots. */
+  queueFirstMessage(text: string): void {
+    this.pendingFirst.set(text.trim() || null);
   }
 
   /** Open a chat: clears local state + its unread badges, and requests its snapshot. */
-  openChat(ws: string, id: string): void {
-    this._activeWs.set(ws);
+  openChat(id: string): void {
+    const ws = this.ws.active();
+    if (!ws) return;
     this._activeChatId.set(id);
     this.clearBadge(id);
     this.resetLocal();
@@ -104,12 +121,12 @@ export class ChatService {
   }
 
   renameChat(id: string, name: string): void {
-    const ws = this._activeWs();
+    const ws = this.ws.active();
     if (ws) this.conn.send({ cmd: 'renameChat', ws, id, name });
   }
 
   deleteChat(id: string): void {
-    const ws = this._activeWs();
+    const ws = this.ws.active();
     if (ws) this.conn.send({ cmd: 'deleteChat', ws, id });
   }
 
@@ -139,21 +156,19 @@ export class ChatService {
   private reduce(e: import('../protocol/nocturn-protocol').ServerEvent): void {
     switch (e.type) {
       case 'chats':
-        if (e.ws === this._activeWs()) this._chats.set(e.items);
+        if (e.ws === this.ws.active()) this._chats.set(e.items);
         break;
 
       case 'snapshot': {
         this._running.set(e.running);
-        this._messages.set(
-          e.messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-            thinking: '',
-            tools: (m.tools ?? []).map((t, i) => this.snapshotTool(t, i)),
-            pending: false,
-          })),
-        );
+        this._messages.set(this.buildSnapshotMessages(e.messages, e.forest));
         this._pendingApproval.set(e.pending ? this.toApproval(e.pending) : null);
+        // Fresh chat just opened — fire the queued first message (composer flow).
+        const first = this.pendingFirst();
+        if (first && e.messages.length === 0) {
+          this.pendingFirst.set(null);
+          this.submit(first);
+        }
         break;
       }
 
@@ -202,8 +217,9 @@ export class ChatService {
         break;
 
       case 'chatActivity':
-        // Badge a chat we don't have open; the open chat streams its full events already.
-        if (e.id !== this._activeChatId()) {
+        // Badge a chat in the active workspace we don't have open; the open chat streams its
+        // full events already.
+        if (e.ws === this.ws.active() && e.id !== this._activeChatId()) {
           this._unread.update((s) => new Set(s).add(e.id));
           if (e.kind === 'approvalPending') {
             this._approvalWaiting.update((s) => new Set(s).add(e.id));
@@ -264,19 +280,61 @@ export class ChatService {
 
   /** Match tool start/end by id on the active assistant turn; flip start→end in place. */
   private applyTool(frame: ToolFrame): void {
-    const view = this.liveTool(frame);
     this.appendAssistant((m) => {
+      // Depth from the parent already in this turn's tools (nested effects indent under it).
+      const parent = frame.parent ? m.tools.find((t) => t.key === `l${frame.parent}`) : undefined;
+      const view: ToolView = {
+        key: `l${frame.id}`,
+        tool: frame.tool,
+        args: frame.args,
+        result: frame.result,
+        err: frame.err,
+        running: frame.phase === 'start',
+        depth: parent ? parent.depth + 1 : 0,
+      };
       const idx = m.tools.findIndex((t) => t.key === view.key);
       const tools = idx >= 0 ? m.tools.map((t, i) => (i === idx ? view : t)) : [...m.tools, view];
       return { ...m, tools };
     });
   }
 
-  private liveTool(f: ToolFrame): ToolView {
-    return { key: `l${f.id}`, tool: f.tool, args: f.args, result: f.result, err: f.err, running: f.phase === 'start' };
+  /**
+   * Build snapshot messages, attaching each assistant turn its tool tree. Prefers the full
+   * `forest` (id/parent → sub-calls + errors); consumes its top-level frames in order, one
+   * group per top-level call recorded in that turn's `Message.tools`. Falls back to the flat
+   * `Message.tools` when no forest is present.
+   */
+  private buildSnapshotMessages(messages: Message[], forest?: ForestFrame[]): ChatMessageView[] {
+    const children = new Map<number, ForestFrame[]>();
+    const topLevel: ForestFrame[] = [];
+    for (const f of forest ?? []) {
+      if (f.parent === 0) topLevel.push(f);
+      else (children.get(f.parent) ?? children.set(f.parent, []).get(f.parent)!).push(f);
+    }
+    let ti = 0; // pointer into topLevel, consumed across assistant turns in stream order
+
+    const flatten = (f: ForestFrame, depth: number, out: ToolView[]): void => {
+      out.push({ key: `f${f.id}`, tool: f.tool, args: f.args, result: f.result, err: f.err, running: false, depth });
+      for (const c of children.get(f.id) ?? []) flatten(c, depth + 1, out);
+    };
+
+    return messages.map((m) => {
+      let tools: ToolView[] = [];
+      if (m.role === 'assistant') {
+        const k = m.tools?.length ?? 0;
+        if (forest && forest.length) {
+          const out: ToolView[] = [];
+          for (let n = 0; n < k && ti < topLevel.length; n++, ti++) flatten(topLevel[ti], 0, out);
+          tools = out;
+        } else {
+          tools = (m.tools ?? []).map((t, i) => this.snapshotTool(t, i));
+        }
+      }
+      return { role: m.role, content: m.content, thinking: '', tools, pending: false };
+    });
   }
 
   private snapshotTool(t: SnapshotTool, i: number): ToolView {
-    return { key: `s${i}`, tool: t.tool, args: t.args, result: t.result, running: false };
+    return { key: `s${i}`, tool: t.tool, args: t.args, result: t.result, running: false, depth: 0 };
   }
 }

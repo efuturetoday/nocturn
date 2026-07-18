@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "scripts": {
     "ng": "ng",
-    "start": "ng serve",
+    "start": "ng serve --host 0.0.0.0",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test"
@@ -19,9 +19,12 @@
     "@angular/router": "^22.0.0",
     "@capacitor/core": "^8.4.2",
     "@capacitor/ios": "^8.4.2",
+    "@capacitor/keyboard": "^8.0.5",
     "@capacitor/preferences": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.3",
     "@devioarts/capacitor-mdns": "^0.1.0",
     "@ionic/angular": "^8.8.14",
+    "marked": "^18.0.6",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },

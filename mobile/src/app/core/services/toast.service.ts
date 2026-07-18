@@ -1,4 +1,4 @@
-import { Injectable, inject, effect } from '@angular/core';
+import { Injectable, inject } from '@angular/core';
 import { ToastController } from '@ionic/angular/standalone';
 import { ConnectionService } from './connection.service';
 
@@ -14,17 +14,10 @@ export class ToastService {
   private readonly toasts = inject(ToastController);
 
   constructor() {
-    // Server-reported control errors → warning toast.
+    // Server-reported control errors → warning toast. Connection state is shown by the pill
+    // above the tab bar, not a toast.
     this.conn.onEvent((e) => {
       if (e.type === 'error') void this.show(e.text, 'danger');
-    });
-
-    // Connection loss → a brief notice (skip the initial 'disconnected').
-    let seen = false;
-    effect(() => {
-      const state = this.conn.state();
-      if (state === 'reconnecting' && seen) void this.show('Connection lost — reconnecting…', 'warning');
-      if (state === 'connected') seen = true;
     });
   }
 

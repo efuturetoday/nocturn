@@ -3,12 +3,13 @@ import {
 } from '@angular/core';
 import {
   IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonBackButton, IonButton, IonIcon,
-  IonFooter, IonTextarea, IonCard, IonCardHeader, IonCardTitle, IonCardContent, IonBadge,
+  IonFooter, IonTextarea, IonCard, IonCardHeader, IonCardTitle, IonCardContent,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { sendOutline, stopOutline, refreshOutline } from 'ionicons/icons';
 import { ChatService } from '../../core/services/chat.service';
 import { ConnectionService } from '../../core/services/connection.service';
+import { KeyboardService } from '../../core/services/keyboard.service';
 import { MessageBubbleComponent } from './components/message-bubble';
 
 @Component({
@@ -16,18 +17,15 @@ import { MessageBubbleComponent } from './components/message-bubble';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonBackButton, IonButton, IonIcon,
-    IonFooter, IonTextarea, IonCard, IonCardHeader, IonCardTitle, IonCardContent, IonBadge,
+    IonFooter, IonTextarea, IonCard, IonCardHeader, IonCardTitle, IonCardContent,
     MessageBubbleComponent,
   ],
   template: `
     <ion-header>
       <ion-toolbar>
-        <ion-buttons slot="start"><ion-back-button [defaultHref]="'/' + ws() + '/chats'" /></ion-buttons>
+        <ion-buttons slot="start"><ion-back-button defaultHref="/tabs/chat" /></ion-buttons>
         <ion-title>Chat</ion-title>
         <ion-buttons slot="end">
-          @if (connection.state() !== 'connected') {
-            <ion-badge color="warning">{{ connection.state() }}</ion-badge>
-          }
           <ion-button (click)="reset()" title="New session">
             <ion-icon slot="icon-only" name="refresh-outline" />
           </ion-button>
@@ -35,7 +33,7 @@ import { MessageBubbleComponent } from './components/message-bubble';
       </ion-toolbar>
     </ion-header>
 
-    <ion-content #content class="ion-padding">
+    <ion-content #content class="chat-content" [style.--padding-bottom.px]="kb.height()">
       @for (m of chat.messages(); track $index) {
         <app-message-bubble [message]="m" />
       }
@@ -55,9 +53,15 @@ import { MessageBubbleComponent } from './components/message-bubble';
       </ion-card>
     }
 
-    <ion-footer>
-      <ion-toolbar>
+    <ion-footer
+      class="kb-follow"
+      [style.transform]="'translateY(-' + kb.height() + 'px)'"
+      [style.--kb-fill.px]="kb.height()"
+    >
+      <ion-toolbar class="composer">
         <ion-textarea
+          class="composer-input"
+          fill="outline"
           [autoGrow]="true"
           [rows]="1"
           placeholder="Message…"
@@ -80,16 +84,39 @@ import { MessageBubbleComponent } from './components/message-bubble';
     </ion-footer>
   `,
   styles: `
+    .chat-content { --padding-start: 16px; --padding-end: 16px; --padding-top: 12px; --padding-bottom: 12px; }
+    /* Footer follows the keyboard: transform is set at keyboardWillShow (start of the iOS
+       animation) and this transition matches the ~0.25s iOS curve → slides in sync, no late snap. */
+    .kb-follow { position: relative; transition: transform 0.25s ease-out; will-change: transform; }
+    /* Fill the strip below the lifted footer (behind the keyboard + its rounded top corners) with
+       the toolbar colour, so chat content doesn't leak through. Height = keyboard height. */
+    .kb-follow::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      height: var(--kb-fill, 0);
+      background: var(--ion-toolbar-background, var(--ion-color-step-100));
+    }
     .approval-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .composer { --padding-start: 10px; --padding-end: 6px; --padding-top: 6px; --padding-bottom: 6px; }
+    .composer-input {
+      --background: var(--ion-color-step-100);
+      --border-radius: 20px;
+      --padding-start: 14px;
+      --padding-end: 14px;
+      margin: 0;
+    }
   `,
 })
 export class ChatPage {
-  /** Bound from `:ws` / `:id` route params via withComponentInputBinding(). */
-  readonly ws = input.required<string>();
+  /** Bound from the `:id` route param via withComponentInputBinding(). */
   readonly id = input.required<string>();
 
   protected readonly chat = inject(ChatService);
   protected readonly connection = inject(ConnectionService);
+  protected readonly kb = inject(KeyboardService);
   protected readonly draft = signal('');
 
   private readonly content = viewChild.required<IonContent>('content');
@@ -97,11 +124,10 @@ export class ChatPage {
   constructor() {
     addIcons({ sendOutline, stopOutline, refreshOutline });
 
-    // Open the chat when the route params resolve/change.
+    // Open the chat when the route param resolves/changes (ws = the active workspace).
     effect(() => {
-      const w = this.ws();
       const i = this.id();
-      if (w && i) this.chat.openChat(w, i);
+      if (i) this.chat.openChat(i);
     });
 
     // Auto-scroll to the newest content as the stream grows.

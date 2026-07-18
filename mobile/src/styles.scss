@@ -13,3 +13,12 @@
 :root {
   color-scheme: dark;
 }
+
+/* Safe areas: ion-header/ion-toolbar (top) and ion-footer (bottom) apply their insets
+   automatically once the viewport opts in with viewport-fit=cover (see index.html). The
+   landscape side-notch inset is added as MARGIN so it never clobbers a page's own
+   ion-padding / --padding-* (which live on ::part(scroll)). */
+ion-content {
+  margin-left: var(--ion-safe-area-left, 0);
+  margin-right: var(--ion-safe-area-right, 0);
+}

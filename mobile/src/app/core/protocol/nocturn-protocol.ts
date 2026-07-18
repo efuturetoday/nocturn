@@ -15,7 +15,9 @@
 // ── shared value types ───────────────────────────────────────────────────────
 
 /** Who originated a turn's input. */
-export type Source = "user" | "wake" | "remind" | "agent";
+export type Source = "user" | "wake" | "remind" | "schedule" | "spawn";
+// "schedule" = a cron firing delivered into a one-shot agent chat; "spawn" = an in-chat
+// /agent invocation. (These replace the former single "agent" source.)
 
 /** One tool call's start/end frame (the observable forest). */
 export interface ToolFrame {
@@ -97,6 +99,8 @@ export interface WorkspaceState {
 export interface ChatMeta {
   id: string;
   name: string;
+  origin: "user" | "agent"; // who created it — filter/group human chats vs agent activity
+  agent?: string; // the owning agent's name for an agent run ("" / absent = a user chat) — group runs per agent
   updated: string; // RFC3339
   turns: number; // user messages, for an "N messages" hint
 }
@@ -169,12 +173,29 @@ export interface ApprovalResolvedEvent {
   id: string;
 }
 
+/**
+ * One completed tool invocation from the persisted forest, for faithful reload. `id`/`parent`
+ * give the call tree — `parent === 0` is a top-level (model-issued) call; a nested effect
+ * (e.g. an http.write inside code.run) carries its enclosing call's `id`. Rebuild the tree by
+ * grouping on `parent`; this is the SAME data the live `ToolFrame` stream carried, so a reload
+ * shows sub-calls and their errors, not just the flat top-level calls in `Message.tools`.
+ */
+export interface ForestFrame {
+  id: number;
+  parent: number;
+  tool: string;
+  args?: string; // JSON, as supplied
+  result?: string;
+  err?: string; // a failed call (e.g. a denied effect)
+}
+
 /** Sent on connect and on every workspace switch — the state to render current. */
 export interface SnapshotEvent {
   type: "snapshot";
   running: boolean;
   queue: QueuedItem[];
   messages: Message[];
+  forest?: ForestFrame[]; // the full completed tool tree (sub-calls + errors), in stream order
   pending?: ApprovalEvent; // an unanswered approval, or absent
 }
 

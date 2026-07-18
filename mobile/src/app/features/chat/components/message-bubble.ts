@@ -1,13 +1,14 @@
 import { Component, ChangeDetectionStrategy, input, computed } from '@angular/core';
 import { IonNote, IonSpinner } from '@ionic/angular/standalone';
 import { ToolFrameComponent } from './tool-frame';
+import { MarkdownComponent } from '../../../shared/markdown';
 import type { ChatMessageView } from '../../../core/services/chat.service';
 
 /** One conversation message: user bubble, or assistant turn with dim reasoning + tool forest. */
 @Component({
   selector: 'app-message-bubble',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [IonNote, IonSpinner, ToolFrameComponent],
+  imports: [IonNote, IonSpinner, ToolFrameComponent, MarkdownComponent],
   host: {
     class: 'message-bubble',
     '[class.user]': 'isUser()',
@@ -20,12 +21,16 @@ import type { ChatMessageView } from '../../../core/services/chat.service';
     @if (message().tools.length) {
       <div class="tools">
         @for (t of message().tools; track t.key) {
-          <app-tool-frame [tool]="t" />
+          <app-tool-frame [tool]="t" [style.margin-left.px]="t.depth * 16" />
         }
       </div>
     }
     @if (message().content) {
-      <div class="content">{{ message().content }}</div>
+      @if (isUser()) {
+        <div class="plain">{{ message().content }}</div>
+      } @else {
+        <app-markdown [text]="message().content" />
+      }
     }
     @if (message().error; as err) {
       <ion-note color="danger">{{ err }}</ion-note>
@@ -41,9 +46,10 @@ import type { ChatMessageView } from '../../../core/services/chat.service';
       margin: 6px 0;
       padding: 10px 14px;
       border-radius: 16px;
-      white-space: pre-wrap;
       word-break: break-word;
     }
+    .plain { white-space: pre-wrap; }
+    .thinking { white-space: pre-wrap; }
     :host.user {
       margin-left: auto;
       background: var(--ion-color-primary);

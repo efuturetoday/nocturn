@@ -1,198 +1,149 @@
-import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, computed, DestroyRef } from '@angular/core';
 import { Router } from '@angular/router';
-import { Capacitor } from '@capacitor/core';
-import {
-  IonHeader, IonToolbar, IonTitle, IonContent, IonList, IonItem, IonLabel, IonInput,
-  IonButton, IonButtons, IonIcon, IonNote, IonListHeader, IonSpinner, IonText,
-} from '@ionic/angular/standalone';
+import { IonContent, IonSpinner, IonIcon, IonFooter, AlertController } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { wifiOutline, addCircleOutline, refreshOutline, radioOutline } from 'ionicons/icons';
+import { radioOutline } from 'ionicons/icons';
 import { DiscoveryService } from '../../core/services/discovery.service';
 import { ConnectionService } from '../../core/services/connection.service';
+
+const RESCAN_MS = 4000;
 
 @Component({
   selector: 'app-discover',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
-    IonHeader, IonToolbar, IonTitle, IonContent, IonList, IonItem, IonLabel, IonInput,
-    IonButton, IonButtons, IonIcon, IonNote, IonListHeader, IonSpinner, IonText,
-  ],
+  imports: [IonContent, IonSpinner, IonIcon, IonFooter],
+  template: `
+    <ion-content [fullscreen]="true">
+      <div class="nebula" aria-hidden="true"></div>
+      <div class="page">
+        <div class="hero">
+          <img src="/assets/brand/mascot.png" alt="Nocturn mascot" width="128" height="128" />
+          <h1>Nocturn</h1>
+          <p>Dein sicherer persönlicher Assistent</p>
+        </div>
+
+        @if (connecting()) {
+          <div class="searching"><ion-spinner name="crescent" /><span>Verbinde…</span></div>
+        } @else {
+          <!-- Perpetual: keeps listening on the LAN until a server is picked. -->
+          <div class="searching"><ion-spinner name="crescent" /><span>Suche…</span></div>
+
+          <div class="results">
+            @for (h of discovery.hosts(); track h.url) {
+              <button class="host" (click)="connect(h.url)">
+                <ion-icon name="radio-outline" aria-hidden="true" />
+                <span class="host-text"><b>{{ h.name }}</b><small>{{ h.url }}</small></span>
+              </button>
+            }
+          </div>
+        }
+      </div>
+    </ion-content>
+
+    <ion-footer class="manual-footer">
+      <button class="manual" (click)="manual()">Server manuell angeben</button>
+    </ion-footer>
+  `,
   styles: `
-    /* Nebula star-field behind the Discover page only — opaque (over the bg colour) so page
-       transitions stay correct. Fades into #0f071c at the bottom. */
-    ion-content {
-      --background:
-        linear-gradient(
-          to bottom,
-          rgba(15, 7, 28, 0.55),
-          rgba(15, 7, 28, 0.82) 55%,
-          var(--ion-background-color) 100%
-        ),
-        url('/assets/brand/nebula.jpg') center top / cover no-repeat,
-        var(--ion-background-color);
+    ion-content { --background: var(--ion-background-color); }
+    .nebula {
+      position: absolute; inset: 0; z-index: 0; pointer-events: none;
+      background:
+        linear-gradient(to bottom, rgba(15,7,28,0.5), rgba(15,7,28,0.8) 55%, var(--ion-background-color) 100%),
+        url('/assets/brand/nebula.jpg') center top / cover no-repeat;
     }
-    .hero {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-      padding: 12px 0 4px;
+    .page {
+      position: relative; z-index: 1; min-height: 100%;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 12vh 24px 24px; gap: 20px;
     }
+    .hero { display: flex; flex-direction: column; align-items: center; }
     .hero img {
       filter: drop-shadow(0 12px 34px hsl(266 65% 45% / 0.55));
       animation: mascot-float 6s ease-in-out infinite;
     }
-    .hero h1 {
-      margin: 12px 0 2px;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-    }
-    .hero p { margin: 0; color: var(--ion-color-medium); font-size: 0.9rem; }
+    .hero h1 { margin: 12px 0 0; font-weight: 700; letter-spacing: 0.02em; }
+    .hero p { margin: 6px 0 0; color: var(--ion-color-medium); font-size: 0.9rem; }
     @keyframes mascot-float {
       0%, 100% { transform: translateY(0) rotate(-0.6deg); }
       50% { transform: translateY(-9px) rotate(0.6deg); }
     }
-    @media (prefers-reduced-motion: reduce) {
-      .hero img { animation: none; }
+    @media (prefers-reduced-motion: reduce) { .hero img { animation: none; } }
+
+    .searching {
+      display: flex; align-items: center; gap: 10px;
+      margin-top: 6vh;
+      color: var(--ion-color-medium); font-size: 0.9rem;
     }
-  `,
-  template: `
-    <ion-header>
-      <ion-toolbar>
-        <ion-title>Connect to Nocturn</ion-title>
-        @if (isNative) {
-          <ion-buttons slot="end">
-            <ion-button (click)="scan()" [disabled]="discovery.scanning()">
-              <ion-icon slot="icon-only" name="refresh-outline" />
-            </ion-button>
-          </ion-buttons>
-        }
-      </ion-toolbar>
-    </ion-header>
+    .results { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 10px; }
+    .host {
+      display: flex; align-items: center; gap: 12px;
+      width: 100%; padding: 14px 16px;
+      background: var(--ion-color-step-100); color: var(--ion-text-color);
+      border: 1px solid var(--ion-color-step-150); border-radius: 14px;
+      font: inherit; text-align: left; cursor: pointer;
+    }
+    .host ion-icon { font-size: 1.3rem; color: var(--ion-color-primary); }
+    .host-text { display: flex; flex-direction: column; }
+    .host-text small { color: var(--ion-color-medium); font-size: 0.75rem; }
 
-    <ion-content class="ion-padding">
-      <div class="hero">
-        <img src="/assets/brand/mascot.png" alt="Nocturn mascot" width="128" height="128" />
-        <h1>Nocturn</h1>
-        <p>Your secure personal assistant</p>
-      </div>
-
-      @if (connecting()) {
-        <ion-item lines="none">
-          <ion-spinner slot="start" />
-          <ion-label>Connecting…</ion-label>
-        </ion-item>
-      }
-
-      <!-- Manual entry — always available, the only path in the browser. -->
-      <ion-list inset="true">
-        <ion-list-header><ion-label>Enter host</ion-label></ion-list-header>
-        <ion-item>
-          <ion-input
-            label="IP / host"
-            labelPlacement="stacked"
-            placeholder="192.168.1.20"
-            [value]="host()"
-            (ionInput)="host.set($any($event.target).value ?? '')"
-          />
-        </ion-item>
-        <ion-item>
-          <ion-input
-            label="Port"
-            labelPlacement="stacked"
-            type="number"
-            inputmode="numeric"
-            [value]="port()"
-            (ionInput)="port.set(+($any($event.target).value ?? 8765))"
-          />
-        </ion-item>
-        <ion-item button detail="false" [disabled]="!host()" (click)="connect(manualUrl())">
-          <ion-icon slot="start" name="add-circle-outline" />
-          <ion-label>Connect</ion-label>
-        </ion-item>
-      </ion-list>
-
-      @if (isNative) {
-        <ion-list inset="true">
-          <ion-list-header>
-            <ion-label>Discovered</ion-label>
-            @if (discovery.scanning()) { <ion-spinner slot="end" /> }
-          </ion-list-header>
-          @for (h of discovery.hosts(); track h.url) {
-            <ion-item button detail="true" (click)="connect(h.url)">
-              <ion-icon slot="start" name="radio-outline" />
-              <ion-label>
-                <h2>{{ h.name }}</h2>
-                <ion-note>{{ h.url }}</ion-note>
-              </ion-label>
-            </ion-item>
-          } @empty {
-            @if (!discovery.scanning()) {
-              <ion-item lines="none">
-                <ion-label color="medium">
-                  <ion-icon name="wifi-outline" /> No daemons found. Tap refresh or enter a host.
-                </ion-label>
-              </ion-item>
-            }
-          }
-        </ion-list>
-      } @else {
-        <ion-text color="medium">
-          <p class="ion-padding-horizontal">
-            Running in the browser — mDNS is unavailable here. Enter the daemon's IP:port above.
-          </p>
-        </ion-text>
-      }
-
-      @if (discovery.savedHosts().length) {
-        <ion-list inset="true">
-          <ion-list-header><ion-label>Recent</ion-label></ion-list-header>
-          @for (url of discovery.savedHosts(); track url) {
-            <ion-item button detail="true" (click)="connect(url)">
-              <ion-label>{{ url }}</ion-label>
-            </ion-item>
-          }
-        </ion-list>
-      }
-
-      @if (discovery.error(); as err) {
-        <ion-text color="warning"><p class="ion-padding-horizontal">{{ err }}</p></ion-text>
-      }
-    </ion-content>
+    .manual-footer { --background: transparent; background: transparent; text-align: center; }
+    .manual-footer::before { display: none; }
+    .manual {
+      background: none; border: none; cursor: pointer;
+      color: var(--ion-color-primary); font: inherit; font-size: 0.9rem;
+      text-decoration: underline;
+      padding: 12px; padding-bottom: calc(12px + var(--ion-safe-area-bottom, 0px));
+      width: 100%;
+    }
   `,
 })
 export class DiscoverPage {
   protected readonly discovery = inject(DiscoveryService);
   protected readonly connection = inject(ConnectionService);
   private readonly router = inject(Router);
+  private readonly alerts = inject(AlertController);
 
-  protected readonly isNative = Capacitor.isNativePlatform();
-  protected readonly host = signal(this.defaultHost());
-  protected readonly port = signal(8765);
   protected readonly connecting = computed(
     () => this.connection.state() === 'connecting' || this.connection.state() === 'reconnecting',
   );
 
   constructor() {
-    addIcons({ wifiOutline, addCircleOutline, refreshOutline, radioOutline });
-    if (this.isNative) void this.discovery.scan();
-  }
-
-  protected scan(): void {
+    addIcons({ radioOutline });
+    // Perpetual discovery: scan now, then re-scan on an interval so the spinner keeps listening
+    // and newly-appearing daemons show up. Cleaned up when the page is destroyed.
     void this.discovery.scan();
+    const timer = setInterval(() => void this.discovery.scan(), RESCAN_MS);
+    inject(DestroyRef).onDestroy(() => clearInterval(timer));
   }
 
-  protected manualUrl(): string {
-    return this.discovery.manualUrl(this.host(), this.port());
+  protected async manual(): Promise<void> {
+    const alert = await this.alerts.create({
+      header: 'Server manuell angeben',
+      inputs: [
+        { name: 'host', type: 'text', placeholder: 'IP / host (z. B. 192.168.1.20)' },
+        { name: 'port', type: 'number', placeholder: 'Port', value: '8765' },
+      ],
+      buttons: [
+        { text: 'Abbrechen', role: 'cancel' },
+        {
+          text: 'Verbinden',
+          handler: (v) => {
+            const host = (v.host ?? '').trim();
+            if (!host) return false;
+            void this.connect(this.discovery.manualUrl(host, +(v.port || 8765)));
+            return true;
+          },
+        },
+      ],
+    });
+    await alert.present();
   }
 
   protected async connect(url: string): Promise<void> {
     this.connection.connect(url);
     await this.discovery.remember(url);
-    await this.router.navigate(['/workspaces']);
-  }
-
-  private defaultHost(): string {
-    return this.isNative ? '' : '127.0.0.1';
+    // Root nav: replace history so you can't swipe/back into the discover screen from the app.
+    await this.router.navigate(['/tabs', 'chat'], { replaceUrl: true });
   }
 }
