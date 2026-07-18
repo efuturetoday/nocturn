@@ -28,7 +28,7 @@ func (a *appWorkspaces) List() []appserver.WorkspaceSummary {
 		b := a.bounds[name]
 		out = append(out, appserver.WorkspaceSummary{
 			Name:       name,
-			Running:    b.runner.Snapshot().Running,
+			Running:    b.chats.AnyRunning(),
 			Agents:     len(b.ws.Agents()),
 			Skills:     b.ws.Skills().Len(),
 			PersonaSet: b.ws.Persona() != persona.Default,

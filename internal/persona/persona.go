@@ -64,7 +64,7 @@ func (s *Store) Get() string {
 
 // Set persists text to the workspace's PERSONA.md and updates the in-memory value. It then
 // RE-RESOLVES, so writing a blank persona correctly falls back to the shared/default layer
-// rather than pinning an empty prompt. The next session (OpenSession / Reset) picks it up.
+// rather than pinning an empty prompt. The next chat session picks it up.
 func (s *Store) Set(text string) error {
 	if err := os.WriteFile(filepath.Join(s.dir, "PERSONA.md"), []byte(text), 0o644); err != nil {
 		return err

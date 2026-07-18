@@ -17,7 +17,6 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
 	"github.com/efuturetoday/nocturn/internal/secret"
-	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/wakecap"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
@@ -36,17 +35,14 @@ type shared struct {
 	activity  *activityHub // process-wide badge fan-out for background chats (nil = no app server)
 }
 
-// bound is the TUI's binding to one OPEN workspace: the workspace itself (which owns
-// tools/skills/agents/guard/grants) plus its interactive session, self-waker, and
-// scheduler. The chatModel drives these objects DIRECTLY — no closure adapter — and
-// rebinds to another on /ws switch. Isolation is structural: each workspace's guard and
-// injector hold only its own secrets/grants, so N run in one process without crossing.
+// bound is one OPEN workspace: the workspace itself (which owns tools/skills/agents/guard/
+// grants) plus its multi-chat manager, self-waker, and scheduler. Both the TUI and the app
+// drive the SAME manager chats — there is no privileged per-front-end runner. The chatModel
+// rebinds to another workspace on /ws switch. Isolation is structural: each workspace's guard
+// and injector hold only its own secrets/grants, so N run in one process without crossing.
 type bound struct {
 	ws        *workspace.Workspace
-	session   *session.Session // the TUI's single interactive session; Close() at shutdown, MarkSkill for /name
-	runner    *session.Runner  // the turn loop the TUI drives (Submit in, Subscribe out)
-	chats     *chat.Manager    // the app's multi-chat manager (N persistent named chats); TUI doesn't use it
-	waker     *wakecap.Waker
+	chats     *chat.Manager // the workspace's live chats (N persistent named), driven by TUI + app alike
 	scheduler *agent.Scheduler
 }
 
@@ -119,23 +115,10 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		return res.Answer, err
 	}
 
-	sess := w.OpenSession()
-
-	// The Runner is the single serialized turn loop for THIS workspace's TUI session: the
-	// TUI Submits inputs and Subscribes to its events; a self-wake and a scheduled agent run
-	// feed the same loop. Its context decorator binds wake to this runner, so a wake from the
-	// TUI session resumes IT (the shared wake tool reads its resume from the turn ctx).
-	var runner *session.Runner
-	runner = session.NewRunner(sess,
-		session.WithAgentRunner(agentRun),
-		session.WithContextDecorator(func(c context.Context) context.Context {
-			return wakecap.WithResume(c, func(note string) { runner.Submit(session.SourceWake, note) })
-		}))
-	runner.Start(ctx)
-
-	// The chat manager backs the companion app's several named, persisted chats — separate
-	// live sessions over the SAME workspace parts (guard/tools/brain/grants). The TUI stays
-	// on its single session above; the app browses/opens chats here.
+	// The chat manager owns this workspace's live chats — one serialized runner per chat, each
+	// seeded from its saved history and kept alive on the process ctx. BOTH the TUI and the app
+	// open chats from here; there is no separate per-front-end runner. Each chat's runner binds
+	// wake to itself (its context decorator), so a wake resumes the chat that scheduled it.
 	chatStore := chat.LoadStore(filepath.Join(wsDir, "chats"))
 	// onActivity badges this workspace's background chats to any connected app; nil under the
 	// TUI (no hub), so the manager stays silent there.
@@ -156,11 +139,11 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 
 	// wake: a running turn schedules its OWN resume after a delay (self-paced loops / polling);
 	// ungated, bounded (delay clamp + pending cap). One workspace-shared Waker serves every
-	// session here — each wake reads its resume from the calling turn's ctx (set by that
-	// runner's decorator above, and by each chat's decorator in the manager), so it resumes
-	// the chat that invoked it. Cancelled on Reset (via the chatModel).
-	waker := wakecap.New()
-	w.Tools().Add(waker.Tool())
+	// chat — each wake reads its resume from the calling turn's ctx (set by each chat's
+	// decorator in the manager), so it resumes the chat that invoked it, even in the
+	// background with no client attached. The Waker is reachable via the tool it registers
+	// (the tool closure captures it), so it needs no field on bound.
+	w.Tools().Add(wakecap.New().Tool())
 
 	sched, err := agent.NewScheduler(w.Agents(), func(runCtx context.Context, def agent.Agent) error {
 		// A background (unattended) run stamps NO activity sink → silent by construction.
@@ -173,5 +156,5 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		return nil, err
 	}
 
-	return &bound{ws: w, session: sess, runner: runner, chats: chatMgr, waker: waker, scheduler: sched}, nil
+	return &bound{ws: w, chats: chatMgr, scheduler: sched}, nil
 }

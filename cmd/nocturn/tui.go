@@ -25,6 +25,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/activity"
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/brain"
+	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/skill"
@@ -204,10 +205,13 @@ func (e *queuedEntry) render(m *chatModel, width int) string {
 }
 
 type chatModel struct {
-	bw         *bound            // the bound workspace this TUI is driving (its session/ws/waker)
+	bw         *bound            // the bound workspace this TUI is driving (its manager/ws/waker)
 	workspaces map[string]*bound // all built workspaces, for /ws switching
+	runner     *session.Runner   // the OPEN chat's turn loop (from bw.chats), driven like the app drives it
+	chatID     string            // the open chat's id (in bw's manager)
+	openChats  map[string]string // workspace name → its currently-open chat id (remembered across /ws)
 	send       func(tea.Msg)     // p.Send — the event pump delivers runner events via this
-	unsub      func()            // unsubscribe from the current workspace's runner (swapped on /ws)
+	unsub      func()            // unsubscribe from the open chat's runner (swapped on /ws + new chat)
 
 	agents []agent.Agent // active workspace's agents, cached on bind (for /agents + /<name>)
 	skills *skill.Index  // active workspace's skill catalog, cached on bind (never nil)
@@ -254,34 +258,56 @@ func newChatModel(active *bound, workspaces map[string]*bound, names []string, m
 	ta.Focus()
 	m := chatModel{
 		workspaces: workspaces, wsNames: names,
-		send:  send,
-		model: model, dark: dark, inputH: 1,
+		openChats: map[string]string{},
+		send:      send,
+		model:     model, dark: dark, inputH: 1,
 		ta:   ta,
 		spin: spinner.New(spinner.WithSpinner(spinner.Dot)),
 		sw:   stopwatch.NewWithInterval(100 * time.Millisecond),
 		help: help.New(),
 		keys: newKeyMap(),
 	}
-	m.bindWorkspace(active) // subscribes to the active workspace's runner
+	m.bindWorkspace(active) // opens the active workspace's first chat and subscribes to it
 	return m
 }
 
-// bindWorkspace points the model at bw and caches its skill catalog + agent list, swaps
-// the event subscription (stop pumping the previous runner, start pumping bw's), and
-// REBUILDS the visible transcript from bw's runner snapshot — so switching back to a
-// workspace shows its prior conversation again (and whether a background turn is still
-// running), not a blank screen. The runner keeps running while unsubscribed (a background
-// wake still executes); reattaching here re-syncs to it.
+// bindWorkspace points the model at bw, caches its skill catalog + agent list, and binds its
+// currently-open chat — remembered across /ws switches, or a fresh one the first time this
+// workspace is bound this session. Chats live in bw's manager on the process ctx, so
+// switching away leaves the chat running (a background wake still fires); switching back
+// reattaches and re-syncs from its snapshot.
 func (m *chatModel) bindWorkspace(bw *bound) {
-	if m.unsub != nil {
-		m.unsub() // stop pumping the previous workspace's runner
-	}
 	m.bw = bw
 	m.agents = bw.ws.Agents()
 	m.skills = bw.ws.Skills()
 	m.ws = bw.ws.Name()
 
-	sub, unsub := bw.runner.Subscribe()
+	id := m.openChats[m.ws]
+	r, ok := bw.chats.Open(id)
+	if !ok { // first bind this session, or the remembered chat was deleted → a fresh one
+		meta, err := bw.chats.New("", chat.OriginUser)
+		if err != nil {
+			m.notice = "could not open a chat: " + err.Error()
+			return
+		}
+		id = meta.ID
+		r, _ = bw.chats.Open(meta.ID)
+	}
+	m.bindChat(id, r)
+}
+
+// bindChat attaches the model to a chat's runner: swap the event pump to it, remember it as
+// this workspace's open chat, and rebuild the transcript from its snapshot. Live
+// stream/tools/pending are dropped — a mid-turn (re)attach picks up subsequent events.
+func (m *chatModel) bindChat(id string, r *session.Runner) {
+	if m.unsub != nil {
+		m.unsub() // stop pumping the previously-open chat
+	}
+	m.chatID = id
+	m.openChats[m.ws] = id
+	m.runner = r
+
+	sub, unsub := r.Subscribe()
 	m.unsub = unsub
 	send := m.send
 	go func() {
@@ -290,16 +316,26 @@ func (m *chatModel) bindWorkspace(bw *bound) {
 		}
 	}()
 
-	// Re-sync the view to this workspace's runner: its history becomes the transcript, its
-	// running flag the "thinking" state. Live stream/tools/pending are dropped — a mid-turn
-	// switch reattaches to the stream and picks up subsequent events.
-	snap := bw.runner.Snapshot()
+	snap := r.Snapshot()
 	m.entries = entriesFromMessages(snap.Messages)
 	m.pending = nil
 	m.approval = nil
 	m.resetStream()
 	m.active, m.roots = nil, nil
 	m.running = snap.Running
+}
+
+// newChat starts a fresh conversation in the active workspace (Ctrl+N): a new chat id, its
+// own runner. The previous chat keeps living in the background (its wakes still fire); it is
+// abandoned, not reset — an empty one is never persisted (lazy-persist).
+func (m *chatModel) newChat() {
+	meta, err := m.bw.chats.New("", chat.OriginUser)
+	if err != nil {
+		m.notice = "could not start a new chat: " + err.Error()
+		return
+	}
+	r, _ := m.bw.chats.Open(meta.ID)
+	m.bindChat(meta.ID, r)
 }
 
 // entriesFromMessages rebuilds a readable transcript from a runner snapshot's history.
@@ -324,16 +360,9 @@ func entriesFromMessages(msgs []brain.Message) []entry {
 	return es
 }
 
-// markSkill records a /name-activated skill as loaded so a later model skill.load dedups.
-func (m *chatModel) markSkill(name string) { m.bw.session.MarkSkill(name) }
-
-// reset starts a fresh session on the active workspace: drop its pending self-wakes, then
-// reset the runner (cancels a running turn, drops its queue, revokes session grants,
-// clears history). The runner emits a "new session" notice back onto the stream.
-func (m *chatModel) reset() {
-	m.bw.waker.Cancel()
-	m.bw.runner.Reset()
-}
+// markSkill records a /name-activated skill as loaded on the open chat's session so a later
+// model skill.load dedups.
+func (m *chatModel) markSkill(name string) { m.bw.chats.MarkSkill(m.chatID, name) }
 
 // workspaceListing renders /ws: every built workspace as an invocable /ws <name>,
 // the active one marked.
@@ -808,7 +837,7 @@ func (m chatModel) handleSlash(input string) (tea.Model, tea.Cmd) {
 		if task == "" {
 			task = "Do your task."
 		}
-		m.bw.runner.SubmitAgent(input, cmd, task)
+		m.runner.SubmitAgent(input, cmd, task)
 		return m, nil
 	}
 	// /<name> activates a skill: the harness injects its body (the model takes no
@@ -832,7 +861,7 @@ func (m chatModel) handleSlash(input string) (tea.Model, tea.Cmd) {
 	if req == "" {
 		req = "Follow the skill's instructions."
 	}
-	m.bw.runner.SubmitInput(session.SourceUser, input, skill.WrapBody(cmd, body)+"\n\n<user_request>\n"+req+"\n</user_request>")
+	m.runner.SubmitInput(session.SourceUser, input, skill.WrapBody(cmd, body)+"\n\n<user_request>\n"+req+"\n</user_request>")
 	return m, nil
 }
 
@@ -890,19 +919,15 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "ctrl+n":
-			if m.running {
-				return m, nil
-			}
-			m.reset() // waker.Cancel + runner.Reset (revokes session grants; emits a notice)
-			m.entries = nil
-			m.pending = nil
-			m.resetStream()
-			m.active, m.roots = nil, nil
-			m.notice = "new session — grants revoked"
+			// Start a fresh chat. The previous one keeps running in the background (its turn
+			// finishes, its wakes still fire) — it is abandoned, not reset, so this is allowed
+			// even mid-turn. bindChat rebuilds the view from the new (empty) chat.
+			m.newChat()
+			m.notice = "new chat"
 			m.syncViewport()
 			return m, nil
 		case "esc":
-			m.bw.runner.Cancel() // stops a running turn; a no-op when idle
+			m.runner.Cancel() // stops a running turn; a no-op when idle
 			return m, nil
 		case "enter":
 			input := strings.TrimSpace(m.ta.Value())
@@ -923,7 +948,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(input, "/") {
 				return m.handleSlash(input)
 			}
-			m.bw.runner.Submit(session.SourceUser, input)
+			m.runner.Submit(session.SourceUser, input)
 			return m, nil
 		}
 
@@ -1074,7 +1099,7 @@ func (m chatModel) handleRunnerEvent(e session.Event) (tea.Model, tea.Cmd) {
 	case session.ApprovalEvent:
 		// Interactive (attended) approval on this session's stream. resolve routes to the
 		// runner; a deny (choice<0, from Esc) also cancels the turn — Esc means "stop".
-		r, id := m.bw.runner, ev.ID
+		r, id := m.runner, ev.ID
 		m.approval = &approvalPrompt{
 			intent: ev.Intent,
 			labels: ev.Options,

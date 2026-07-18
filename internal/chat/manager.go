@@ -68,6 +68,18 @@ func NewManager(ctx context.Context, deps Deps) *Manager {
 // List returns every chat's metadata (most recent first).
 func (m *Manager) List() []Meta { return m.deps.Store.List() }
 
+// AnyRunning reports whether any live chat is mid-turn — the workspace picker's "busy" flag.
+func (m *Manager) AnyRunning() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, lc := range m.live {
+		if lc.runner.Snapshot().Running {
+			return true
+		}
+	}
+	return false
+}
+
 // New mints a fresh chat IN MEMORY (no file yet) and spins its runner immediately, so a
 // trigger (or the app) can drive it before it is ever saved. The first turn's save creates
 // the file — a chat that never takes a turn leaves nothing behind (lazy-persist). name and
@@ -192,6 +204,17 @@ func (m *Manager) pump(id string, runner *session.Runner, sub <-chan session.Eve
 func (m *Manager) Deliver(id string, source session.Source, input string) {
 	if r, ok := m.Open(id); ok {
 		r.Submit(source, input)
+	}
+}
+
+// MarkSkill records a /name-activated skill as loaded on a live chat's session, so a later
+// model skill.load dedups. A no-op for a chat that isn't live.
+func (m *Manager) MarkSkill(id, name string) {
+	m.mu.Lock()
+	lc := m.live[id]
+	m.mu.Unlock()
+	if lc != nil {
+		lc.session.MarkSkill(name)
 	}
 }
 

@@ -37,5 +37,5 @@ notes: >-
   effect performed in the *resumed* turn still passes the broker + approvals normally. The one risk
   is a runaway self-waking loop, so it is **bounded** instead: the delay is **clamped** (default 1 s
   … 1 h), the number of **pending wakes is capped**, and pending wakes are **ephemeral** — they live
-  only as long as the process and a new session (Ctrl+N) drops them, so a dead conversation is never
-  resumed.
+  only as long as the process. A wake resumes the exact conversation that scheduled it, even in the
+  background; deleting that chat drops its pending wakes, so a removed conversation is never resumed.

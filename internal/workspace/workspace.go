@@ -27,7 +27,6 @@ import (
 	"github.com/efuturetoday/nocturn/internal/remindcap"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
-	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/timecap"
 	"github.com/efuturetoday/nocturn/internal/tool"
@@ -160,13 +159,6 @@ func Open(h Host, base func() capability.Policy, unlock Vault, name, dir string)
 		leakScanner: leakScanner,
 		persona:     persona.Load(dir),
 	}, nil
-}
-
-// OpenSession opens an interactive session over this workspace's parts — concrete
-// references, no service-locator indirection. Its "Allow always" grants persist to the
-// workspace's own grants store; "Allow this session" grants die on Reset/Close.
-func (w *Workspace) OpenSession() *session.Session {
-	return session.New(w.loop, w.tools, w.guard, w.grants, session.WithPersona(w.persona.Get()))
 }
 
 // Persona returns the workspace's current system prompt (state, not the loader detail).

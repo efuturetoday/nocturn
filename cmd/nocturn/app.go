@@ -256,11 +256,10 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 	return &spine{sh: sh, approvals: approvals, workspaces: workspaces, names: names, activity: hub}, nil
 }
 
-// closeSessions closes every workspace's interactive session (revoking its session grants)
-// and stops its multi-chat runners (saving each chat's history).
+// closeSessions stops every workspace's live chats (saving each non-empty chat's history and
+// revoking its session grants).
 func (sp *spine) closeSessions() {
 	for _, bw := range sp.workspaces {
-		bw.session.Close()
 		bw.chats.CloseAll()
 	}
 }
