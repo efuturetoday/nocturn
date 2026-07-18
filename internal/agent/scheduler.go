@@ -4,31 +4,25 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/capability"
 )
 
-// Scheduler fires cron-triggered agents unattended. It grants NO authority — it only
-// picks the moment and stamps the run's autonomy level; every effect still goes
-// through the broker + HITL exactly as a manual run. Two guarantees matter:
+// Scheduler fires cron-triggered agents unattended. It grants NO authority and does ONE
+// thing: pick the moment. A firing runs as a fresh one-shot chat whose charter carries
+// the agent's declared autonomy dial, and every effect still goes through the broker +
+// HITL exactly as a manual run — the scheduler stamps nothing on the run.
 //
-//   - Overlap prevention: at most ONE run of a given agent at a time. A firing while
-//     that agent is still running (including one paused on a guarded out-of-band
-//     approval) is SKIPPED and logged — never queued, never run in parallel. Same-
-//     agent parallelism would race on its /work state and its per-owner grant store;
-//     different agents run concurrently (they are isolated).
-//   - Autonomy: each firing stamps the agent's declared level (capability.WithAutonomy)
-//     so an Ask with no human present resolves per the dial (guarded/strict/full).
+// Overlap prevention (at most ONE run of a given agent at a time — same-agent parallelism
+// would race on its per-owner grant store and working state) lives in the run target, not
+// here: a firing while that agent is still running returns an error, which the scheduler
+// logs and drops. Different agents run concurrently (they are isolated).
 type Scheduler struct {
-	run func(ctx context.Context, def Agent) error // runs one firing (caller wires Run)
+	run func(ctx context.Context, def Agent) error // runs one firing (caller wires the one-shot fire)
 	log func(string)
 
 	jobs []job
-
-	mu       sync.Mutex
-	inFlight map[string]bool
 }
 
 type job struct {
@@ -52,7 +46,7 @@ func WithLog(log func(string)) SchedulerOption {
 // fires wrong). run is how one firing executes (the caller wires Run + the
 // agent's own grant store + the scheduled task).
 func NewScheduler(defs []Agent, run func(ctx context.Context, def Agent) error, opts ...SchedulerOption) (*Scheduler, error) {
-	s := &Scheduler{run: run, log: func(string) {}, inFlight: map[string]bool{}}
+	s := &Scheduler{run: run, log: func(string) {}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -104,44 +98,25 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}()
 }
 
-// tick fires every job whose schedule matches the given minute, honoring overlap
-// prevention. It is pure w.r.t. time (the caller supplies now) so tests drive it
-// directly without real clocks.
+// tick fires every job whose schedule matches the given minute; overlap prevention is the
+// target's concern (a busy agent's firing returns an error, logged in fire). It is pure
+// w.r.t. time (the caller supplies now) so tests drive it directly without real clocks.
 func (s *Scheduler) tick(ctx context.Context, now time.Time) {
 	for _, j := range s.jobs {
-		if !j.schedule.Matches(now) {
-			continue
+		if j.schedule.Matches(now) {
+			s.log(fmt.Sprintf("scheduler: firing %s", j.def.Name))
+			go s.fire(ctx, j.def)
 		}
-		s.mu.Lock()
-		if s.inFlight[j.def.Name] {
-			s.mu.Unlock()
-			s.log(fmt.Sprintf("scheduler: %s still running — skipping this firing", j.def.Name))
-			continue
-		}
-		s.inFlight[j.def.Name] = true
-		s.mu.Unlock()
-		go s.fire(ctx, j.def)
 	}
 }
 
-// fire runs one firing to completion, then clears the in-flight mark so the next
-// scheduled minute can fire again. Autonomy is stamped here — this is the sole
-// unattended entry point. The in-flight mark is cleared BEFORE the result is logged,
-// so once "done"/"failed" is observed the agent is free to fire again (no race).
+// fire runs one firing via the wired target and logs a non-nil result — the target's own
+// error, or an overlap skip when that agent is already running. Autonomy and overlap both
+// belong to the target (the one-shot chat + its charter); the scheduler stamps nothing.
 func (s *Scheduler) fire(ctx context.Context, def Agent) {
-	runCtx := capability.WithAutonomy(ctx, def.Autonomy)
-	s.log(fmt.Sprintf("scheduler: firing %s (autonomy=%s)", def.Name, autonomyName(def.Autonomy)))
-	err := s.run(runCtx, def)
-
-	s.mu.Lock()
-	delete(s.inFlight, def.Name)
-	s.mu.Unlock()
-
-	if err != nil {
-		s.log(fmt.Sprintf("scheduler: %s failed: %v", def.Name, err))
-		return
+	if err := s.run(ctx, def); err != nil {
+		s.log(fmt.Sprintf("scheduler: %s: %v", def.Name, err))
 	}
-	s.log(fmt.Sprintf("scheduler: %s done", def.Name))
 }
 
 func autonomyName(a capability.Autonomy) string {

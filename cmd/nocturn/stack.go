@@ -148,8 +148,8 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		// charter carries the agent's declared autonomy dial (no human at this trigger)
 		// and its "<ws>/<agent>" provenance label, and the persisted record is the run's
 		// audit trail (Origin agent, visible in the picker). No activity sink is stamped
-		// → silent by construction. FireAgent blocks until the turn completes, so the
-		// scheduler's done/failed lines and overlap window reflect the real run.
+		// → silent by construction. FireAgent owns overlap (ErrAgentBusy while this agent is
+		// still running) and autonomy (via the charter) — the scheduler only picks the moment.
 		ch, err := w.AgentCharter(def.Name, def.Autonomy)
 		if err != nil {
 			return err
