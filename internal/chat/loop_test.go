@@ -271,7 +271,7 @@ func TestChat_SubmitAgent_ResolvesCharterAndRunsOnce(t *testing.T) {
 
 	c.SubmitAgent("/researcher dig in", "researcher", "dig in")
 	e, ok := recv(t, sub).(chat.TurnStartEvent)
-	if !ok || e.Source != chat.SourceAgent || e.Display != "/researcher dig in" || e.Input != "dig in" {
+	if !ok || e.Source != chat.SourceSpawn || e.Display != "/researcher dig in" || e.Input != "dig in" {
 		t.Fatalf("want TurnStart(agent, display, task), got %#v", e)
 	}
 	mustTurnEnd(t, sub, "dig in") // echoModel echoes the child's task back as its answer

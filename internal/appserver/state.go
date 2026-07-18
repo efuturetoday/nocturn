@@ -53,8 +53,9 @@ const (
 type ChatMeta struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
-	Origin  string `json:"origin"`  // "user" | "agent" — who created it, for filtering/grouping
-	Updated string `json:"updated"` // RFC3339
+	Origin  string `json:"origin"`          // "user" | "agent" — who created it, for filtering/grouping
+	Agent   string `json:"agent,omitempty"` // the owning agent of a scheduled run ("" = a user chat) — for grouping runs per agent
+	Updated string `json:"updated"`         // RFC3339
 	Turns   int    `json:"turns"`
 }
 

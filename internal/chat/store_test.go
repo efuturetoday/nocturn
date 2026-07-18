@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/chat"
@@ -25,7 +26,7 @@ func TestStore_SaveLoadListRenameDelete(t *testing.T) {
 		{Role: "user", Content: "where to?"},
 		{Role: "assistant", Content: "Lisbon"},
 	}
-	if err := s.Save(a, "Trip planning", chat.OriginUser, msgs); err != nil {
+	if err := s.Save(chat.Meta{ID: a, Name: "Trip planning", Origin: chat.OriginUser}, msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -36,7 +37,7 @@ func TestStore_SaveLoadListRenameDelete(t *testing.T) {
 	}
 
 	b := s.NewID()
-	if err := s.Save(b, "Agent run", chat.OriginAgent, []brain.Message{{Role: "user", Content: "x"}}); err != nil {
+	if err := s.Save(chat.Meta{ID: b, Name: "Agent run", Origin: chat.OriginAgent}, []brain.Message{{Role: "user", Content: "x"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, m, _ := s.Load(b); m.Origin != chat.OriginAgent {
@@ -64,6 +65,51 @@ func TestStore_SaveLoadListRenameDelete(t *testing.T) {
 	}
 }
 
+// Prune caps one agent's saved runs to the keepN most recent — other agents' runs
+// and user chats are never touched, so a frequent cron can't flood the picker while
+// a root conversation is never at risk.
+func TestStore_Prune_KeepsNewestRunsOfThatAgentOnly(t *testing.T) {
+	s := chat.LoadStore(filepath.Join(t.TempDir(), "chats"))
+	msg := []brain.Message{{Role: "user", Content: "x"}}
+
+	user := s.NewID()
+	if err := s.Save(chat.Meta{ID: user, Name: "mine", Origin: chat.OriginUser}, msg); err != nil {
+		t.Fatal(err)
+	}
+	other := s.NewID()
+	if err := s.Save(chat.Meta{ID: other, Name: "b run", Origin: chat.OriginAgent, Agent: "b"}, msg); err != nil {
+		t.Fatal(err)
+	}
+	var runs []string
+	for range 4 {
+		id := s.NewID()
+		if err := s.Save(chat.Meta{ID: id, Origin: chat.OriginAgent, Agent: "a"}, msg); err != nil {
+			t.Fatal(err)
+		}
+		runs = append(runs, id)
+		time.Sleep(2 * time.Millisecond) // distinct Updated stamps → deterministic recency order
+	}
+
+	s.Prune("a", 2)
+
+	kept := map[string]bool{}
+	for _, m := range s.List() {
+		kept[m.ID] = true
+	}
+	if !kept[user] || !kept[other] {
+		t.Fatalf("Prune touched foreign chats: kept=%v", kept)
+	}
+	if kept[runs[0]] || kept[runs[1]] || !kept[runs[2]] || !kept[runs[3]] {
+		t.Fatalf("Prune must keep the 2 NEWEST a-runs: kept=%v runs=%v", kept, runs)
+	}
+
+	// Pruning an empty agent name is a refusal, never a mass delete.
+	s.Prune("", 0)
+	if len(s.List()) != 4 {
+		t.Fatalf("Prune(\"\") deleted chats: %d left, want 4", len(s.List()))
+	}
+}
+
 // A malformed / traversal chat id is rejected before touching the filesystem — it can never
 // escape the chats directory.
 func TestStore_RejectsUnsafeID(t *testing.T) {
@@ -81,7 +127,7 @@ func TestStore_RejectsUnsafeID(t *testing.T) {
 		if _, _, ok := s.Load(bad); ok {
 			t.Fatalf("Load(%q) succeeded — an unsafe id must be rejected", bad)
 		}
-		if err := s.Save(bad, "x", chat.OriginUser, []brain.Message{{Role: "user", Content: "x"}}); !errors.Is(err, chat.ErrInvalidID) {
+		if err := s.Save(chat.Meta{ID: bad, Name: "x", Origin: chat.OriginUser}, []brain.Message{{Role: "user", Content: "x"}}); !errors.Is(err, chat.ErrInvalidID) {
 			t.Fatalf("Save(%q) = %v, want ErrInvalidID (rejected before the filesystem)", bad, err)
 		}
 	}

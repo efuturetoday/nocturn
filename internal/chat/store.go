@@ -41,6 +41,7 @@ type Meta struct {
 	ID      string    `json:"id"`
 	Name    string    `json:"name"`
 	Origin  Origin    `json:"origin"`
+	Agent   string    `json:"agent,omitempty"` // the agent that owns this run ("" = a root/user chat) — a saved record knows which charter rebuilds it
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
 	Turns   int       `json:"turns"` // user messages, for a "N messages" hint
@@ -105,30 +106,66 @@ func (s *Store) Load(id string) ([]brain.Message, Meta, bool) {
 	return rec.Messages, rec.Meta, true
 }
 
-// Save persists a chat's current messages (updating Updated and the turn count), preserving
-// its Created time. name/origin override only when non-empty. The first Save of a
-// memory-minted chat creates its file (lazy-persist). Returns ErrInvalidID for an id that
-// isn't server-minted lowercase-hex.
-func (s *Store) Save(id, name string, origin Origin, msgs []brain.Message) error {
-	if !validID(id) {
+// Save persists a chat's current messages under its metadata (updating Updated and
+// the turn count), preserving the on-disk Created time. meta's Name/Origin/Agent
+// override only when non-empty. The first Save of a memory-minted chat creates its
+// file (lazy-persist). Returns ErrInvalidID for an id that isn't server-minted
+// lowercase-hex.
+func (s *Store) Save(meta Meta, msgs []brain.Message) error {
+	if !validID(meta.ID) {
 		return ErrInvalidID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.readLocked(id)
+	rec, ok := s.readLocked(meta.ID)
 	if !ok {
-		rec = record{Meta: Meta{ID: id, Created: time.Now()}}
+		rec = record{Meta: Meta{ID: meta.ID, Created: time.Now()}}
 	}
-	if name != "" {
-		rec.Name = name
+	if meta.Name != "" {
+		rec.Name = meta.Name
 	}
-	if origin != "" {
-		rec.Origin = origin
+	if meta.Origin != "" {
+		rec.Origin = meta.Origin
+	}
+	if meta.Agent != "" {
+		rec.Agent = meta.Agent
 	}
 	rec.Updated = time.Now()
 	rec.Messages = msgs
 	rec.Turns = countUserTurns(msgs)
 	return s.writeLocked(rec)
+}
+
+// Prune enforces a retention cap on one agent's saved runs: it keeps the keepN
+// most-recently-updated records whose Meta.Agent == agent and deletes the rest,
+// so a frequent cron never floods the picker. Root/user chats (empty Agent) are
+// never touched. keepN <= 0 keeps nothing.
+func (s *Store) Prune(agent string, keepN int) {
+	if agent == "" {
+		return // never prune root/user chats
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return
+	}
+	var runs []Meta
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		if rec, ok := s.readLocked(chatIDFromFile(e.Name())); ok && rec.Agent == agent {
+			runs = append(runs, rec.Meta)
+		}
+	}
+	if len(runs) <= keepN {
+		return
+	}
+	slices.SortFunc(runs, func(a, b Meta) int { return b.Updated.Compare(a.Updated) })
+	for _, m := range runs[max(keepN, 0):] {
+		_ = os.Remove(s.path(m.ID))
+	}
 }
 
 // Rename changes a chat's display name.

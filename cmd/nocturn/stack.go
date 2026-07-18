@@ -144,16 +144,17 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 	w.Tools().Add(wakecap.New().Tool())
 
 	sched, err := agent.NewScheduler(w.Agents(), func(runCtx context.Context, def agent.Agent) error {
-		// A background (unattended) run stamps NO activity sink → silent by construction.
-		// Its charter carries the agent's declared autonomy dial and its provenance label
-		// ("<ws>/<agent>"), so an out-of-band ask names its origin. (Step 5 of the redesign
-		// moves this firing into Manager.FireAgent, giving the run a persisted transcript.)
+		// A cron firing runs UNATTENDED as a fresh one-shot chat in the manager: its
+		// charter carries the agent's declared autonomy dial (no human at this trigger)
+		// and its "<ws>/<agent>" provenance label, and the persisted record is the run's
+		// audit trail (Origin agent, visible in the picker). No activity sink is stamped
+		// → silent by construction. FireAgent blocks until the turn completes, so the
+		// scheduler's done/failed lines and overlap window reflect the real run.
 		ch, err := w.AgentCharter(def.Name, def.Autonomy)
 		if err != nil {
 			return err
 		}
-		_, err = chat.Once(runCtx, w.Brain(), w.Guard(), ch, "Run your scheduled task now.")
-		return err
+		return chatMgr.FireAgent(runCtx, def.Name, ch)
 	}, agent.WithLog(func(line string) { sh.send(schedulerMsg("[" + wsName + "] " + line)) }))
 	if err != nil {
 		return nil, err

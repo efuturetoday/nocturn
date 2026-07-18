@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -20,13 +21,23 @@ func (okModel) Next(context.Context, []brain.Message, []tool.Spec) (brain.Step, 
 	return brain.Step{Answer: "ok"}, nil
 }
 
-func newManager(ctx context.Context, store *chat.Store) *chat.Manager {
-	return chat.NewManager(ctx, chat.Deps{
-		Engine: brain.New(okModel{}),
-		Guard:  &gateway.Guard{},
-		Store:  store,
-		Root:   func() chat.Charter { return chat.Charter{Tools: tool.NewRegistry()} },
-	})
+// newManager builds a manager over store on the test's ctx and guarantees an
+// orderly shutdown: CloseAll runs before the test's TempDir is torn down, so no
+// pump save races the cleanup.
+func newManager(t *testing.T, deps chat.Deps) *chat.Manager {
+	t.Helper()
+	if deps.Engine == nil {
+		deps.Engine = brain.New(okModel{})
+	}
+	if deps.Guard == nil {
+		deps.Guard = &gateway.Guard{}
+	}
+	if deps.Root == nil {
+		deps.Root = func() chat.Charter { return chat.Charter{Tools: tool.NewRegistry()} }
+	}
+	m := chat.NewManager(t.Context(), deps)
+	t.Cleanup(m.CloseAll)
+	return m
 }
 
 func hasTurn(msgs []brain.Message, role, content string) bool {
@@ -43,7 +54,7 @@ func hasTurn(msgs []brain.Message, role, content string) bool {
 func TestManager_OpenPersistReopen(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "chats")
 	store := chat.LoadStore(dir)
-	m := newManager(t.Context(), store)
+	m := newManager(t, chat.Deps{Store: store})
 
 	meta, err := m.New("Chat 1", chat.OriginUser)
 	if err != nil {
@@ -70,7 +81,7 @@ func TestManager_OpenPersistReopen(t *testing.T) {
 	m.CloseAll()
 
 	// Reopen in a FRESH manager → the history is restored into the runner's snapshot.
-	m2 := newManager(t.Context(), chat.LoadStore(dir))
+	m2 := newManager(t, chat.Deps{Store: chat.LoadStore(dir)})
 	r2, ok := m2.Open(meta.ID)
 	if !ok {
 		t.Fatal("reopen the persisted chat")
@@ -86,7 +97,7 @@ func TestManager_OpenPersistReopen(t *testing.T) {
 func TestManager_LazyPersist_EmptyChatNeverWritten(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "chats")
 	store := chat.LoadStore(dir)
-	m := newManager(t.Context(), store)
+	m := newManager(t, chat.Deps{Store: store})
 
 	meta, err := m.New("Untouched", chat.OriginUser)
 	if err != nil {
@@ -110,7 +121,7 @@ func TestManager_LazyPersist_EmptyChatNeverWritten(t *testing.T) {
 func TestManager_Deliver(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "chats")
 	store := chat.LoadStore(dir)
-	m := newManager(t.Context(), store)
+	m := newManager(t, chat.Deps{Store: store})
 
 	meta, err := m.New("c", chat.OriginUser)
 	if err != nil {
@@ -130,6 +141,115 @@ func TestManager_Deliver(t *testing.T) {
 	m.Deliver("deadbeef", chat.SourceWake, "ghost")
 	if _, ok := m.Open("deadbeef"); ok {
 		t.Fatal("Deliver resurrected an unknown chat")
+	}
+}
+
+// A cron firing is a FRESH one-shot chat: FireAgent blocks until its turn completes,
+// the transcript persists as the run's audit trail (Origin agent, Meta.Agent set),
+// and the record reopens uniformly through Open — under the AGENT charter, which the
+// Agent factory resolves (attended: a client asked for it).
+func TestManager_FireAgent_PersistsRunAndReopensUnderAgentCharter(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "chats")
+	store := chat.LoadStore(dir)
+	var resolved []string
+	m := newManager(t, chat.Deps{
+		Store: store,
+		Agent: func(name string) (chat.Charter, error) {
+			resolved = append(resolved, name)
+			return chat.Charter{Tools: tool.NewRegistry(), System: "agent " + name}, nil
+		},
+	})
+
+	if err := m.FireAgent(t.Context(), "triage", chat.Charter{Tools: tool.NewRegistry()}); err != nil {
+		t.Fatalf("FireAgent: %v", err)
+	}
+	// FireAgent returns on its own tap's TurnEnd; the pump's save is a parallel tap → poll.
+	var run chat.Meta
+	if !eventually(func() bool {
+		for _, meta := range store.List() {
+			if meta.Agent == "triage" {
+				run = meta
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("the firing's transcript was not persisted")
+	}
+	if run.Origin != chat.OriginAgent || run.Turns != 1 {
+		t.Fatalf("run meta = %+v, want Origin=agent Turns=1", run)
+	}
+
+	// Uniform reopen: the saved record knows its charter — Open resolves it via the
+	// Agent factory (not Root) and restores the run's history.
+	c, ok := m.Open(run.ID)
+	if !ok {
+		t.Fatal("reopen the persisted run")
+	}
+	if len(resolved) == 0 || resolved[len(resolved)-1] != "triage" {
+		t.Fatalf("Open did not resolve the agent charter: resolved=%v", resolved)
+	}
+	if snap := c.Snapshot(); !hasTurn(snap.Messages, "assistant", "ok") {
+		t.Fatalf("reopened run missing its transcript: %+v", snap.Messages)
+	}
+
+	// A second firing mints a SECOND fresh record — no memory across firings.
+	if err := m.FireAgent(t.Context(), "triage", chat.Charter{Tools: tool.NewRegistry()}); err != nil {
+		t.Fatalf("second FireAgent: %v", err)
+	}
+	if !eventually(func() bool {
+		n := 0
+		for _, meta := range store.List() {
+			if meta.Agent == "triage" {
+				n++
+			}
+		}
+		return n == 2
+	}) {
+		t.Fatal("the second firing did not persist its own fresh record")
+	}
+}
+
+// Overlap prevention lives in the Manager: while one run of an agent is mid-turn, a
+// second FireAgent is skipped with ErrAgentBusy (never queued, never parallel); once
+// the run completes, the next firing works again. The turn error propagates.
+func TestManager_FireAgent_BusySkip_AndErrorPropagates(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "chats")
+	g := newGatedModel()
+	m := newManager(t, chat.Deps{
+		Engine: brain.New(g),
+		Store:  chat.LoadStore(dir),
+		Agent: func(name string) (chat.Charter, error) {
+			return chat.Charter{Tools: tool.NewRegistry()}, nil
+		},
+	})
+	ch := chat.Charter{Tools: tool.NewRegistry()}
+
+	done := make(chan error, 1)
+	go func() { done <- m.FireAgent(t.Context(), "x", ch) }()
+	if !eventually(m.AnyRunning) {
+		t.Fatal("the first firing never started its turn")
+	}
+
+	if err := m.FireAgent(t.Context(), "x", ch); !errors.Is(err, chat.ErrAgentBusy) {
+		t.Fatalf("overlapping firing = %v, want ErrAgentBusy", err)
+	}
+
+	g.release <- struct{}{}
+	if err := <-done; err != nil {
+		t.Fatalf("first firing: %v", err)
+	}
+
+	// The agent is free again — and a failing turn surfaces its error to the scheduler.
+	bad := errors.New("model down")
+	m2 := newManager(t, chat.Deps{
+		Engine: brain.New(modelFunc(func(context.Context, []brain.Message, []tool.Spec) (brain.Step, error) {
+			return brain.Step{}, bad
+		})),
+		Store: chat.LoadStore(filepath.Join(t.TempDir(), "chats")),
+	})
+	if err := m2.FireAgent(t.Context(), "x", ch); !errors.Is(err, bad) {
+		t.Fatalf("FireAgent = %v, want the turn's error", err)
 	}
 }
 

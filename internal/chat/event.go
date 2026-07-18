@@ -7,10 +7,11 @@ import "github.com/efuturetoday/nocturn/internal/activity"
 type Source string
 
 const (
-	SourceUser   Source = "user"
-	SourceWake   Source = "wake"
-	SourceRemind Source = "remind"
-	SourceAgent  Source = "agent" // a child-agent run submitted via SubmitAgent
+	SourceUser     Source = "user"
+	SourceWake     Source = "wake"
+	SourceRemind   Source = "remind"
+	SourceSchedule Source = "schedule" // a cron firing delivered into a one-shot agent chat (FireAgent)
+	SourceSpawn    Source = "spawn"    // an in-chat /agent spawn submitted via SubmitAgent
 )
 
 // Event is one thing that happened in a Runner, delivered to every subscriber. It

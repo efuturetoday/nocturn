@@ -63,18 +63,28 @@ func (c *Chat) Start(ctx context.Context) {
 
 // --- commands (the IN port; safe to call from any goroutine / client) ---
 
+// send hands a command to the loop, aborting instead of blocking when the chat is
+// closed (quit closed → the loop is gone; a late wake/submit against a reaped
+// chat must never wedge its caller).
+func (c *Chat) send(cmd command) {
+	select {
+	case c.cmds <- cmd:
+	case <-c.quit:
+	}
+}
+
 // Submit enqueues an input to run as a turn — from the user, or from a wake/remind
 // resumption. If a turn is running it is buffered (a QueuedEvent) and runs when the
 // current turn ends; otherwise it starts immediately. Display equals input.
 func (c *Chat) Submit(source Source, input string) {
-	c.cmds <- command{kind: cmdSubmit, source: source, display: input, input: input}
+	c.send(command{kind: cmdSubmit, source: source, display: input, input: input})
 }
 
 // SubmitInput is Submit with a distinct client-facing display line (input is what runs;
 // display is what a client shows) — for a slash-skill whose expanded body must not be
 // echoed into the transcript.
 func (c *Chat) SubmitInput(source Source, display, input string) {
-	c.cmds <- command{kind: cmdSubmit, source: source, display: display, input: input}
+	c.send(command{kind: cmdSubmit, source: source, display: display, input: input})
 }
 
 // SubmitAgent enqueues a named child-agent run (resolved via the WithAgents charter
@@ -82,20 +92,20 @@ func (c *Chat) SubmitInput(source Source, display, input string) {
 // streams and gates exactly like a chat turn. display is the client-facing line;
 // task is the agent's input.
 func (c *Chat) SubmitAgent(display, name, task string) {
-	c.cmds <- command{kind: cmdSubmit, source: SourceAgent, display: display, input: task, agent: name}
+	c.send(command{kind: cmdSubmit, source: SourceSpawn, display: display, input: task, agent: name})
 }
 
 // Cancel stops the running turn (if any). Buffered inputs remain.
-func (c *Chat) Cancel() { c.cmds <- command{kind: cmdCancel} }
+func (c *Chat) Cancel() { c.send(command{kind: cmdCancel}) }
 
 // Reset starts the chat over: cancels a running turn, drops the queue, revokes the
 // scope and clears the history (see resetState).
-func (c *Chat) Reset() { c.cmds <- command{kind: cmdReset} }
+func (c *Chat) Reset() { c.send(command{kind: cmdReset}) }
 
 // Resolve answers the pending approval `id` with option index `choice`. A no-op if
 // no such approval is pending (already answered, or answered out of band).
 func (c *Chat) Resolve(id string, choice int) {
-	c.cmds <- command{kind: cmdResolve, id: id, choice: choice}
+	c.send(command{kind: cmdResolve, id: id, choice: choice})
 }
 
 // PresentApproval surfaces an approval request on the event stream and remembers how
@@ -171,6 +181,16 @@ func (c *Chat) Tap() (<-chan Event, func()) {
 		}
 		c.mu.Unlock()
 	}
+}
+
+// idle reports whether the chat has nothing running, nothing queued, and no command
+// still buffered for the loop — the Manager's reap condition for a finished one-shot.
+// The buffered-command check matters: a Deliver serialized before the reap may have
+// handed the loop an input it has not yet dequeued.
+func (c *Chat) idle() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.running && len(c.queue) == 0 && len(c.cmds) == 0
 }
 
 // HasClients reports whether a REAL client is watching the stream right now (a tap does
@@ -250,6 +270,8 @@ func (c *Chat) loop(ctx context.Context) {
 			}
 		case res := <-c.done:
 			c.onTurnDone(res)
+		case <-c.quit: // Close ran (reap/Delete/CloseAll) — the loop must not outlive the chat
+			return
 		case <-ctx.Done():
 			return
 		}
@@ -321,13 +343,18 @@ func (c *Chat) runTurn(ctx context.Context, st turnState, qi queuedInput) (strin
 
 func (c *Chat) onTurnDone(res turnResult) {
 	c.mu.Lock()
-	c.running = false
 	c.cancelTurn = nil
 	var next *queuedInput
 	if len(c.queue) > 0 {
 		q := c.queue[0]
 		c.queue = c.queue[1:]
 		next = &q
+	}
+	// With a queued input the chat transitions DIRECTLY into the next turn: running
+	// stays true, so an observer (the reaping pump) never sees a false idle between
+	// TurnEnd and the next TurnStart.
+	if next == nil {
+		c.running = false
 	}
 	c.mu.Unlock()
 	c.emit(TurnEndEvent{Answer: res.answer, Err: res.err})

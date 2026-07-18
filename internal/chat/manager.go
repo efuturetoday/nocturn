@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -45,6 +46,8 @@ type Manager struct {
 	ctx  context.Context
 	deps Deps
 
+	pumps sync.WaitGroup // one per spun chat; CloseAll waits so no save outlives shutdown
+
 	mu   sync.Mutex
 	live map[string]*Chat
 }
@@ -84,7 +87,7 @@ func (m *Manager) New(name string, origin Origin) (Meta, error) {
 	meta := Meta{ID: m.deps.Store.NewID(), Name: name, Origin: origin, Created: now, Updated: now}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.spinLocked(meta, nil)
+	m.spinLocked(meta, m.deps.Root(), nil)
 	return meta, nil
 }
 
@@ -110,11 +113,19 @@ func (m *Manager) Delete(id string) error {
 }
 
 // Open returns the live chat: the same one if it is already live, otherwise it
-// loads the saved history and spins a fresh chat seeded with it. ok is false for an
-// unknown/invalid id (a memory-minted chat is found live, not in the store).
+// loads the saved record and spins a fresh chat seeded with its history — UNIFORM
+// over both kinds: a root/user chat reopens under the Root charter, an agent run
+// (Meta.Agent set) under that agent's charter. Reopening is an ATTENDED act (a
+// client asked for it), so the agent factory's normal-HITL charter applies. ok is
+// false for an unknown/invalid id, or an agent record whose declaration no longer
+// exists (fail-closed: no charter, no authority, no chat).
 func (m *Manager) Open(id string) (*Chat, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.openLocked(id)
+}
+
+func (m *Manager) openLocked(id string) (*Chat, bool) {
 	if c := m.live[id]; c != nil {
 		return c, true
 	}
@@ -122,16 +133,23 @@ func (m *Manager) Open(id string) (*Chat, bool) {
 	if !ok {
 		return nil, false
 	}
-	return m.spinLocked(meta, msgs), true
+	ch := m.deps.Root()
+	if meta.Agent != "" {
+		var err error
+		if ch, err = m.deps.Agent(meta.Agent); err != nil {
+			return nil, false
+		}
+	}
+	return m.spinLocked(meta, ch, msgs), true
 }
 
-// spinLocked constructs a live chat under the workspace's root charter — seeded with
-// history, its loop on the manager's runtime ctx, plus a persistence pump — registers
-// it, and returns it. The caller holds m.mu. The chat's lifetime is the manager ctx,
-// so it keeps running across client disconnects.
-func (m *Manager) spinLocked(meta Meta, msgs []brain.Message) *Chat {
+// spinLocked constructs a live chat under charter — seeded with history, its loop on
+// the manager's runtime ctx, plus a persistence pump — registers it, and returns it.
+// The caller holds m.mu. The chat's lifetime is the manager ctx (or its reap, for an
+// idle one-shot), so it keeps running across client disconnects.
+func (m *Manager) spinLocked(meta Meta, ch Charter, msgs []brain.Message) *Chat {
 	id := meta.ID
-	c := New(m.deps.Engine, m.deps.Guard, meta, m.deps.Root(),
+	c := New(m.deps.Engine, m.deps.Guard, meta, ch,
 		WithHistory(msgs),
 		WithAgents(m.deps.Agent),
 		// Bind wake to THIS chat: a turn's ctx carries a resume that Delivers back to this
@@ -148,14 +166,17 @@ func (m *Manager) spinLocked(meta Meta, msgs []brain.Message) *Chat {
 	// always stamped) AND goes out-of-band to the phone. Close closes the tap channel, so
 	// the pump exits with the chat.
 	sub, _ := c.Tap()
-	go m.pump(c, sub)
+	m.pumps.Go(func() { m.pump(c, sub) })
 	m.live[id] = c
 	return c
 }
 
-// pump saves a chat's conversation after every turn and badges background activity. It runs
-// until the tap channel closes (on Close/Delete/CloseAll). Lazy-persist: a turn that
-// produced no messages is never written, so an untouched chat leaves no file.
+// pump saves a chat's conversation after every turn, badges background activity, and
+// REAPS an idle one-shot agent chat (its record on disk is the run's audit trail; the
+// live instance has no reason to linger — a pending wake re-Delivers by id and Open
+// revives it from the record). It runs until the tap channel closes (on
+// reap/Delete/CloseAll). Lazy-persist: a turn that produced no messages is never
+// written, so an untouched chat leaves no file.
 func (m *Manager) pump(c *Chat, sub <-chan Event) {
 	for e := range sub {
 		switch e.(type) {
@@ -167,12 +188,28 @@ func (m *Manager) pump(c *Chat, sub <-chan Event) {
 			if !stillLive {
 				continue
 			}
-			msgs := c.Snapshot().Messages
-			if len(msgs) == 0 {
-				continue // lazy-persist: never write an empty chat to disk
+			snap := c.Snapshot()
+			if len(snap.Messages) > 0 { // lazy-persist: never write an empty chat to disk
+				_ = m.deps.Store.Save(meta, snap.Messages)
+				m.signal(meta.ID, "turnEnd")
 			}
-			_ = m.deps.Store.Save(meta.ID, meta.Name, meta.Origin, msgs)
-			m.signal(meta.ID, "turnEnd")
+			// Reap an agent one-shot that has gone idle. The idle check runs under m.mu,
+			// serialized with Deliver, so no delivery can land on the instance between
+			// the check and its removal; running stays true across a queued handoff (see
+			// onTurnDone), so idle really means "nothing left". Once removed from live,
+			// the id revives from its saved record (Open) — the run's transcript is the
+			// durable artifact, the live instance has no reason to linger.
+			if meta.Agent != "" {
+				m.mu.Lock()
+				reap := m.live[meta.ID] == c && c.idle()
+				if reap {
+					delete(m.live, meta.ID)
+				}
+				m.mu.Unlock()
+				if reap {
+					c.Close() // closes this tap too — the pump exits with the chat
+				}
+			}
 		case ApprovalEvent:
 			// A background chat is waiting on an approval — actionable, not just a badge.
 			m.signal(c.Meta().ID, "approvalPending")
@@ -181,12 +218,80 @@ func (m *Manager) pump(c *Chat, sub <-chan Event) {
 }
 
 // Deliver routes an input into a chat's turn loop, spinning the chat from disk if it isn't
-// already live. It is how a trigger with no client — a fired wake, later a cron agent —
-// resumes a specific chat. A deleted or unknown chat is a no-op: Open returns false, so a
-// stale wake never resurrects a chat the user removed.
+// already live. It is how a trigger with no client — a fired wake, a reminder — resumes a
+// specific chat. A deleted or unknown chat is a no-op: openLocked returns false, so a
+// stale wake never resurrects a chat the user removed. Open + Submit happen under m.mu,
+// serialized with the reap, so a delivery never lands on an instance being reaped (a
+// reaped id revives from its saved record instead).
 func (m *Manager) Deliver(id string, source Source, input string) {
-	if c, ok := m.Open(id); ok {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c, ok := m.openLocked(id); ok {
 		c.Submit(source, input)
+	}
+}
+
+// ErrAgentBusy reports a FireAgent skipped because a live chat of that agent is
+// still working — at most one run per agent at a time (same-agent parallelism
+// would race on its per-owner grant store and working state).
+var ErrAgentBusy = errors.New("chat: agent still running — firing skipped")
+
+// scheduledTask is the input a cron firing delivers to its one-shot agent chat.
+const scheduledTask = "Run your scheduled task now."
+
+// keepAgentRuns caps how many saved runs Prune retains per agent, so a frequent
+// cron never floods the picker; the newest records are the useful audit trail.
+const keepAgentRuns = 20
+
+// FireAgent runs one scheduled firing of the named agent as a FRESH one-shot chat
+// under charter (minted by the workspace with the agent's declared autonomy dial —
+// no human attends a cron firing): a new id, Origin agent, empty history — no
+// memory across firings; the persisted record is the run's audit trail, visible in
+// the picker. It returns ErrAgentBusy (without minting anything) while a live chat
+// of this agent is mid-work — at most one run per agent — and otherwise blocks
+// until the firing's turn completes, returning the turn's error, so the scheduler
+// can log a truthful done/failed and its own overlap window spans the real run.
+// Old records beyond keepAgentRuns are pruned. ctx bounds the wait (scheduler
+// shutdown), not the turn — the turn runs on the manager's runtime lifetime.
+func (m *Manager) FireAgent(ctx context.Context, name string, ch Charter) error {
+	m.mu.Lock()
+	for _, c := range m.live {
+		if c.Meta().Agent == name && !c.idle() {
+			m.mu.Unlock()
+			return ErrAgentBusy
+		}
+	}
+	now := time.Now()
+	meta := Meta{
+		ID:      m.deps.Store.NewID(),
+		Name:    name + " · " + now.Format("Jan 2 15:04"),
+		Origin:  OriginAgent,
+		Agent:   name,
+		Created: now,
+		Updated: now,
+	}
+	c := m.spinLocked(meta, ch, nil)
+	// Tap BEFORE submitting so the TurnEnd cannot be missed; a tap never counts as
+	// attendance, so the run stays unattended (its Asks resolve per the charter's dial).
+	sub, unsub := c.Tap()
+	defer unsub()
+	c.Submit(SourceSchedule, scheduledTask)
+	m.mu.Unlock()
+
+	m.deps.Store.Prune(name, keepAgentRuns)
+
+	for {
+		select {
+		case e, ok := <-sub:
+			if !ok {
+				return nil // the chat closed (reaped after its turn, or shutdown) — nothing left to wait for
+			}
+			if te, ok := e.(TurnEndEvent); ok {
+				return te.Err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
@@ -209,7 +314,9 @@ func (m *Manager) signal(chatID, kind string) {
 	}
 }
 
-// CloseAll saves and stops every live chat (on shutdown).
+// CloseAll saves and stops every live chat (on shutdown), then waits for every
+// persistence pump to finish — no save may still be in flight when the process
+// (or a test's temp dir) tears down.
 func (m *Manager) CloseAll() {
 	// Detach the live set under the lock, then Save (file I/O) + Close OUTSIDE it — keep the
 	// critical section short and never hold m.mu across a disk write.
@@ -221,9 +328,9 @@ func (m *Manager) CloseAll() {
 	for _, c := range live {
 		snap := c.Snapshot()
 		if len(snap.Messages) > 0 { // lazy: don't persist an empty chat
-			meta := c.Meta()
-			_ = m.deps.Store.Save(meta.ID, meta.Name, meta.Origin, snap.Messages)
+			_ = m.deps.Store.Save(c.Meta(), snap.Messages)
 		}
-		c.Close()
+		c.Close() // closes the pump's tap → the pump drains and exits
 	}
+	m.pumps.Wait()
 }

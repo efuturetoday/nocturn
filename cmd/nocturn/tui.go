@@ -1132,12 +1132,18 @@ func (m chatModel) handleRunnerEvent(e chat.Event) (tea.Model, tea.Cmd) {
 }
 
 // liveEntry is the transcript line for a turn that starts immediately (not buffered): a
-// user/agent turn shows its typed line; a wake/remind shows a "⏰ resuming" line.
+// user turn or in-chat agent spawn shows its typed line; a wake/remind shows a
+// "⏰ resuming" line; a cron firing (seen when watching a fired agent chat) shows a
+// dim scheduled-task line.
 func (m *chatModel) liveEntry(display string, src chat.Source) entry {
-	if isWakeSource(src) {
+	switch {
+	case isWakeSource(src):
 		return &queuedEntry{text: display, wake: true}
+	case src == chat.SourceSchedule:
+		return &noticeEntry{text: "⏱ " + display}
+	default:
+		return &userEntry{text: display}
 	}
-	return &userEntry{text: display}
 }
 
 func isWakeSource(s chat.Source) bool {

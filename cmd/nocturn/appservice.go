@@ -132,6 +132,7 @@ func toChatMeta(m chat.Meta) appserver.ChatMeta {
 		ID:      m.ID,
 		Name:    m.Name,
 		Origin:  string(m.Origin),
+		Agent:   m.Agent,
 		Updated: m.Updated.Format(time.RFC3339),
 		Turns:   m.Turns,
 	}

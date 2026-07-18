@@ -53,6 +53,7 @@ type Chat struct {
 	parent context.Context // the runtime lifetime the loop runs on (set by Start)
 	cmds   chan command
 	done   chan turnResult
+	quit   chan struct{} // closed by Close: the loop exits, pending senders abort
 
 	// mu guards BOTH field groups below as one invariant — Snapshot reads the loop
 	// state and the conv pointer under the same lock, Reset swaps conv/scope/skills
@@ -74,6 +75,7 @@ type Chat struct {
 	cancelTurn context.CancelFunc
 	approval   *pendingApproval
 	nextAppr   int
+	closed     bool // Close ran: quit is closed, subs/taps drained — makes Close idempotent
 }
 
 // Option configures a Chat built with New.
@@ -117,6 +119,7 @@ func New(engine *brain.Brain, guard *gateway.Guard, meta Meta, ch Charter, opts 
 		skills:  skill.NewActive(),
 		cmds:    make(chan command, 8),
 		done:    make(chan turnResult, 1),
+		quit:    make(chan struct{}),
 		subs:    map[int]chan Event{},
 		taps:    map[int]chan Event{},
 	}
@@ -195,16 +198,24 @@ func (c *Chat) MarkSkill(name string) {
 	skills.Mark(name)
 }
 
-// Close ends the chat: it revokes the scope (its session grants die at once) and
-// closes every subscriber and tap channel so their readers exit. The loop itself
-// ends when the runtime ctx is cancelled. Idempotent; a later unsubscribe of an
+// Close ends the chat: it revokes the scope (its session grants die at once),
+// stops the loop (via quit — so a reaped one-shot's goroutine does not linger
+// until process shutdown), and closes every subscriber and tap channel so their
+// readers exit. An in-flight turn keeps running on its own ctx and fails closed
+// against the revoked scope. Idempotent; a later unsubscribe of an
 // already-closed channel is a no-op.
 func (c *Chat) Close() {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.closed = true
 	subs, taps := c.subs, c.taps
 	c.subs, c.taps = map[int]chan Event{}, map[int]chan Event{}
 	scope := c.scope
 	c.mu.Unlock()
+	close(c.quit)
 	for _, ch := range subs {
 		close(ch)
 	}
