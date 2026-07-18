@@ -108,6 +108,34 @@ func TestManager_LazyPersist_EmptyChatNeverWritten(t *testing.T) {
 	}
 }
 
+// Deliver drives a specific chat's turn loop (how a fired wake resumes its chat), and is a
+// no-op for a deleted/unknown chat — a stale wake never resurrects a removed conversation.
+func TestManager_Deliver(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "chats")
+	store := chat.LoadStore(dir)
+	m := newManager(t.Context(), store)
+
+	meta, err := m.New("c", chat.OriginUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := m.Open(meta.ID)
+	sub, unsub := r.Subscribe()
+	defer unsub()
+
+	m.Deliver(meta.ID, session.SourceWake, "resume me")
+	waitTurnEnd(t, sub)
+	if snap := r.Snapshot(); !hasTurn(snap.Messages, "user", "resume me") {
+		t.Fatalf("Deliver did not drive the chat's turn: %+v", snap.Messages)
+	}
+
+	// Unknown/deleted id: a no-op, not a panic and not a resurrection.
+	m.Deliver("deadbeef", session.SourceWake, "ghost")
+	if _, ok := m.Open("deadbeef"); ok {
+		t.Fatal("Deliver resurrected an unknown chat")
+	}
+}
+
 func waitTurnEnd(t *testing.T, sub <-chan session.Event) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)

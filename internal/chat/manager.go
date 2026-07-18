@@ -10,6 +10,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/session"
 	"github.com/efuturetoday/nocturn/internal/tool"
+	"github.com/efuturetoday/nocturn/internal/wakecap"
 )
 
 // Manager is the runtime side of multi-chat: it turns the persistent Store into LIVE chats —
@@ -130,7 +131,13 @@ func (m *Manager) Open(id string) (*session.Runner, bool) {
 func (m *Manager) spinLocked(id, name string, origin Origin, msgs []brain.Message) *session.Runner {
 	sess := session.New(m.deps.Brain, m.deps.Tools, m.deps.Guard, m.deps.Grants,
 		session.WithPersona(m.deps.Persona()), session.WithHistory(msgs))
-	runner := session.NewRunner(sess, session.WithAgentRunner(m.deps.AgentRun))
+	// Bind wake to THIS chat: a turn's ctx carries a resume that Delivers back to this id, so
+	// the workspace-shared wake tool resumes the chat that invoked it (not an ambient runner).
+	runner := session.NewRunner(sess,
+		session.WithAgentRunner(m.deps.AgentRun),
+		session.WithContextDecorator(func(ctx context.Context) context.Context {
+			return wakecap.WithResume(ctx, func(note string) { m.Deliver(id, session.SourceWake, note) })
+		}))
 	runner.Start(m.ctx)
 
 	lc := &liveChat{runner: runner, session: sess, id: id, name: name, origin: origin}
@@ -175,6 +182,16 @@ func (m *Manager) pump(id string, runner *session.Runner, sub <-chan session.Eve
 			// A background chat is waiting on an approval — actionable, not just a badge.
 			m.signal(id, "approvalPending")
 		}
+	}
+}
+
+// Deliver routes an input into a chat's turn loop, spinning the chat from disk if it isn't
+// already live. It is how a trigger with no client — a fired wake, later a cron agent —
+// resumes a specific chat. A deleted or unknown chat is a no-op: Open returns false, so a
+// stale wake never resurrects a chat the user removed.
+func (m *Manager) Deliver(id string, source session.Source, input string) {
+	if r, ok := m.Open(id); ok {
+		r.Submit(source, input)
 	}
 }
 

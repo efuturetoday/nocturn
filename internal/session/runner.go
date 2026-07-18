@@ -22,6 +22,7 @@ import (
 type Runner struct {
 	sess     turns
 	runAgent func(ctx context.Context, name, task string) (string, error) // nil = agent runs unsupported
+	decorate func(context.Context) context.Context                        // per-turn ctx decoration (e.g. this chat's wake target); nil = identity
 
 	parent context.Context
 	cmds   chan command
@@ -97,6 +98,13 @@ type RunnerOption func(*Runner)
 // turn with an error — a session-only client simply never submits one.
 func WithAgentRunner(fn func(ctx context.Context, name, task string) (string, error)) RunnerOption {
 	return func(r *Runner) { r.runAgent = fn }
+}
+
+// WithContextDecorator stamps decoration onto every turn's ctx — the seam a caller uses to
+// bind runner-scoped identity a tool reads at call time (e.g. "wake resumes THIS chat", so
+// the workspace-shared wake tool resolves its target from ctx instead of a static wire).
+func WithContextDecorator(fn func(context.Context) context.Context) RunnerOption {
+	return func(r *Runner) { r.decorate = fn }
 }
 
 // NewRunner builds a Runner over sess. Call Start to spin the command/turn loop.
@@ -332,6 +340,9 @@ func (r *Runner) onSubmit(qi queuedInput) {
 func (r *Runner) begin(qi queuedInput) {
 	turnCtx, cancel := context.WithCancel(r.parent)
 	turnCtx = activity.WithSink(turnCtx, r.onStreamEvent) // tokens/thinking/tool events fan out to subscribers
+	if r.decorate != nil {
+		turnCtx = r.decorate(turnCtx) // runner-scoped identity (e.g. this chat's wake target)
+	}
 	// ALWAYS carry the approval sink: the approval is recorded on this runner (so a
 	// reconnecting client sees it in the snapshot) whether or not a client is watching now.
 	// Whether it ALSO goes out-of-band is decided at Ask-time by the router (HasClients) —

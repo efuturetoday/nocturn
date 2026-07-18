@@ -123,8 +123,14 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 
 	// The Runner is the single serialized turn loop for THIS workspace's TUI session: the
 	// TUI Submits inputs and Subscribes to its events; a self-wake and a scheduled agent run
-	// feed the same loop.
-	runner := session.NewRunner(sess, session.WithAgentRunner(agentRun))
+	// feed the same loop. Its context decorator binds wake to this runner, so a wake from the
+	// TUI session resumes IT (the shared wake tool reads its resume from the turn ctx).
+	var runner *session.Runner
+	runner = session.NewRunner(sess,
+		session.WithAgentRunner(agentRun),
+		session.WithContextDecorator(func(c context.Context) context.Context {
+			return wakecap.WithResume(c, func(note string) { runner.Submit(session.SourceWake, note) })
+		}))
 	runner.Start(ctx)
 
 	// The chat manager backs the companion app's several named, persisted chats — separate
@@ -148,12 +154,12 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		OnActivity: onActivity,
 	})
 
-	// wake: the running agent schedules its OWN resume after a delay (self-paced loops /
-	// polling); ungated, bounded (delay clamp + pending cap). The resume Submits to THIS
-	// workspace's runner, so it serializes with normal turns and resumes its own workspace
-	// even if the user switched away. The wake tool is wired here (not inside the workspace)
-	// because that transport is a runner concern. Cancelled on Reset (via the chatModel).
-	waker := wakecap.New(func(note string) { runner.Submit(session.SourceWake, note) })
+	// wake: a running turn schedules its OWN resume after a delay (self-paced loops / polling);
+	// ungated, bounded (delay clamp + pending cap). One workspace-shared Waker serves every
+	// session here — each wake reads its resume from the calling turn's ctx (set by that
+	// runner's decorator above, and by each chat's decorator in the manager), so it resumes
+	// the chat that invoked it. Cancelled on Reset (via the chatModel).
+	waker := wakecap.New()
 	w.Tools().Add(waker.Tool())
 
 	sched, err := agent.NewScheduler(w.Agents(), func(runCtx context.Context, def agent.Agent) error {
