@@ -15,7 +15,9 @@
 // ── shared value types ───────────────────────────────────────────────────────
 
 /** Who originated a turn's input. */
-export type Source = "user" | "wake" | "remind" | "agent";
+export type Source = "user" | "wake" | "remind" | "schedule" | "spawn";
+// "schedule" = a cron firing delivered into a one-shot agent chat; "spawn" = an in-chat
+// /agent invocation. (These replace the former single "agent" source.)
 
 /** One tool call's start/end frame (the observable forest). */
 export interface ToolFrame {
@@ -98,6 +100,7 @@ export interface ChatMeta {
   id: string;
   name: string;
   origin: "user" | "agent"; // who created it — filter/group human chats vs agent activity
+  agent?: string; // the owning agent's name for an agent run ("" / absent = a user chat) — group runs per agent
   updated: string; // RFC3339
   turns: number; // user messages, for an "N messages" hint
 }
