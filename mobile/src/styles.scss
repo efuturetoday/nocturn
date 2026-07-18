@@ -1,0 +1,15 @@
+/* Nocturn global styles. The theme (colors, stepped scale) lives in theme/variables.css,
+   generated from the docs brand palette. Dark-only brand — the vars sit on :root so the app
+   always wears the nocturnal look regardless of the system setting.
+
+   NOTE: pages keep their OPAQUE themed background (--ion-background-color) so Ionic's page
+   transitions work — a transparent ion-content lets the leaving + entering pages bleed
+   through mid-slide. The nebula backdrop is applied per-page (Discover), not globally.
+
+   The theme (theme/variables.css) is loaded LAST via angular.json's styles array — it must
+   come after Ionic's core.css so its :root brand colours override Ionic's defaults. */
+
+/* Force the dark colour scheme so native form controls / scrollbars match the theme. */
+:root {
+  color-scheme: dark;
+}
