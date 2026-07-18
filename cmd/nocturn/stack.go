@@ -13,7 +13,6 @@ import (
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"github.com/efuturetoday/nocturn/internal/chat"
-	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -109,10 +108,11 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		return nil, err
 	}
 
-	// A child-agent run routes through this, shared by the TUI runner and the app's chats.
-	agentRun := func(runCtx context.Context, name, task string) (string, error) {
-		res, err := w.RunAgent(runCtx, name, task)
-		return res.Answer, err
+	// An in-chat /agent spawn resolves its charter here — ATTENDED: a human is at the
+	// parent chat, so an Ask goes through normal HITL (the agent's autonomy dial is
+	// only for unattended scheduled firings).
+	agentCharter := func(name string) (chat.Charter, error) {
+		return w.AgentCharter(name, capability.AutonomyAttended)
 	}
 
 	// The chat manager owns this workspace's live chats — one serialized loop per chat, each
@@ -131,7 +131,7 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		Guard:      w.Guard(),
 		Store:      chatStore,
 		Root:       w.RootCharter,
-		AgentRun:   agentRun,
+		Agent:      agentCharter,
 		OnActivity: onActivity,
 	})
 
@@ -145,9 +145,14 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 
 	sched, err := agent.NewScheduler(w.Agents(), func(runCtx context.Context, def agent.Agent) error {
 		// A background (unattended) run stamps NO activity sink → silent by construction.
-		// Label it with its workspace so an out-of-band ask reads "[work] …".
-		runCtx = gateway.WithLabel(runCtx, wsName)
-		_, err := w.RunAgent(runCtx, def.Name, "Run your scheduled task now.")
+		// Its charter carries the agent's declared autonomy dial and its provenance label
+		// ("<ws>/<agent>"), so an out-of-band ask names its origin. (Step 5 of the redesign
+		// moves this firing into Manager.FireAgent, giving the run a persisted transcript.)
+		ch, err := w.AgentCharter(def.Name, def.Autonomy)
+		if err != nil {
+			return err
+		}
+		_, err = chat.Once(runCtx, w.Brain(), w.Guard(), ch, "Run your scheduled task now.")
 		return err
 	}, agent.WithLog(func(line string) { sh.send(schedulerMsg("[" + wsName + "] " + line)) }))
 	if err != nil {

@@ -44,9 +44,9 @@ type Chat struct {
 	engine  *brain.Brain
 	guard   *gateway.Guard
 
-	// runAgent wires a SubmitAgent command to the workspace's child-agent runner.
-	// Transitional: step 4 of the redesign absorbs agent runs into chat.Once.
-	runAgent func(ctx context.Context, name, task string) (string, error)
+	// agents resolves a named agent's charter for an in-chat spawn (SubmitAgent);
+	// the loop runs the spawn as a one-shot Once inside the parent turn.
+	agents   func(name string) (Charter, error)
 	decorate func(context.Context) context.Context // per-chat ctx decoration (the wake-binding seam)
 	history  []brain.Message                       // WithHistory seed; consumed at New, then dropped
 
@@ -94,11 +94,13 @@ func WithDecorator(fn func(context.Context) context.Context) Option {
 	return func(c *Chat) { c.decorate = fn }
 }
 
-// WithAgentRunner wires how a SubmitAgent command runs a named child agent to a
-// final answer (in production, the workspace's agent runner). Without it,
-// SubmitAgent fails the turn with an error — a chat-only client never submits one.
-func WithAgentRunner(fn func(ctx context.Context, name, task string) (string, error)) Option {
-	return func(c *Chat) { c.runAgent = fn }
+// WithAgents wires the charter resolver for in-chat agent spawns: a SubmitAgent
+// turn resolves the named agent's charter (in production, the workspace's
+// AgentCharter) and runs it as a one-shot Once inside the parent turn. Without
+// it, SubmitAgent fails the turn with an error — a chat-only client never
+// submits one.
+func WithAgents(resolve func(name string) (Charter, error)) Option {
+	return func(c *Chat) { c.agents = resolve }
 }
 
 // New builds a chat on engine under charter: it mints the chat's Scope from the

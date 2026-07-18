@@ -253,17 +253,20 @@ func TestChat_Approval(t *testing.T) {
 	})
 }
 
-// SubmitAgent runs the injected agent runner on the same serialized loop: its Display
-// is the client line, its Input is the task, and it streams/gates like a chat turn.
-func TestChat_SubmitAgent_RoutesToAgentRunner(t *testing.T) {
+// SubmitAgent resolves the named agent's charter (WithAgents) and runs it as a
+// one-shot Once on the same serialized loop: its Display is the client line, its
+// Input is the task, and the child's turn — over its OWN charter (here: its own
+// system prompt) — streams and gates like a chat turn. The parent's history is
+// untouched: the spawn ran in a throwaway conversation.
+func TestChat_SubmitAgent_ResolvesCharterAndRunsOnce(t *testing.T) {
 	var mu sync.Mutex
-	var gotName, gotTask string
+	var gotName string
 	c, sub := startChat(t, echoModel{},
-		chat.WithAgentRunner(func(_ context.Context, name, task string) (string, error) {
+		chat.WithAgents(func(name string) (chat.Charter, error) {
 			mu.Lock()
-			gotName, gotTask = name, task
+			gotName = name
 			mu.Unlock()
-			return "agent-answer", nil
+			return chat.Charter{Tools: tool.NewRegistry(), System: "You are researcher."}, nil
 		}))
 
 	c.SubmitAgent("/researcher dig in", "researcher", "dig in")
@@ -271,16 +274,20 @@ func TestChat_SubmitAgent_RoutesToAgentRunner(t *testing.T) {
 	if !ok || e.Source != chat.SourceAgent || e.Display != "/researcher dig in" || e.Input != "dig in" {
 		t.Fatalf("want TurnStart(agent, display, task), got %#v", e)
 	}
-	mustTurnEnd(t, sub, "agent-answer")
+	mustTurnEnd(t, sub, "dig in") // echoModel echoes the child's task back as its answer
 	mu.Lock()
-	defer mu.Unlock()
-	if gotName != "researcher" || gotTask != "dig in" {
-		t.Fatalf("agent runner saw (%q,%q), want (researcher,dig in)", gotName, gotTask)
+	if gotName != "researcher" {
+		t.Fatalf("charter resolver saw %q, want researcher", gotName)
+	}
+	mu.Unlock()
+	if msgs := c.Snapshot().Messages; len(msgs) != 0 {
+		t.Fatalf("spawn leaked into the parent conversation: %+v", msgs)
 	}
 }
 
-// A SubmitAgent with no agent runner wired fails the turn (an error TurnEnd), never panics.
-func TestChat_SubmitAgent_NoRunner_ErrorsTurn(t *testing.T) {
+// A SubmitAgent with no charter resolver wired, or an unknown agent, fails the turn
+// (an error TurnEnd), never panics.
+func TestChat_SubmitAgent_NoResolver_ErrorsTurn(t *testing.T) {
 	c, sub := startChat(t, echoModel{})
 
 	c.SubmitAgent("/x", "x", "go")

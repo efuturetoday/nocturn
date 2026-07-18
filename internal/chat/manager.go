@@ -25,13 +25,13 @@ import (
 // Deps is what the Manager needs to spin a chat — the workspace's shared parts plus
 // the chat Store. Root mints the charter a fresh/reopened chat is constructed under; it
 // is a factory (not a value) so a chat opened after a persona change seeds the current
-// one. AgentRun wires SubmitAgent to the workspace's child-agent runner.
+// one. Agent resolves a named agent's charter for in-chat spawns (SubmitAgent).
 type Deps struct {
-	Engine   *brain.Brain
-	Guard    *gateway.Guard
-	Store    *Store
-	Root     func() Charter
-	AgentRun func(ctx context.Context, name, task string) (string, error)
+	Engine *brain.Brain
+	Guard  *gateway.Guard
+	Store  *Store
+	Root   func() Charter
+	Agent  func(name string) (Charter, error)
 	// OnActivity, if set, is called from a chat's pump with the chat id and a kind
 	// ("turnEnd" | "approvalPending") so a host can badge background chats. Optional (nil =
 	// no signal); it must not block — the pump calls it inline.
@@ -133,7 +133,7 @@ func (m *Manager) spinLocked(meta Meta, msgs []brain.Message) *Chat {
 	id := meta.ID
 	c := New(m.deps.Engine, m.deps.Guard, meta, m.deps.Root(),
 		WithHistory(msgs),
-		WithAgentRunner(m.deps.AgentRun),
+		WithAgents(m.deps.Agent),
 		// Bind wake to THIS chat: a turn's ctx carries a resume that Delivers back to this
 		// id, so the workspace-shared wake tool resumes the chat that invoked it (not an
 		// ambient one).

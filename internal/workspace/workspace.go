@@ -10,7 +10,7 @@
 package workspace
 
 import (
-	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -182,29 +182,35 @@ func (w *Workspace) RootCharter() chat.Charter {
 	}
 }
 
-// RunAgent runs the named child agent to completion over this workspace's tools + guard,
-// with the agent's OWN durable grants (per-agent file). An unknown name returns an error.
-func (w *Workspace) RunAgent(ctx context.Context, name, task string) (agent.Result, error) {
-	var def agent.Agent
+// AgentCharter compiles the named agent's declaration into a chat.Charter: its
+// FILTERED tool subset (a tool outside its list is unreachable, not merely hidden),
+// its Instructions as the system prompt, and an Authority carrying its declared
+// policy/cage tightenings, its OWN durable grants (per-agent file — they never
+// cross-match another owner's), and a "<workspace>/<agent>" provenance label.
+//
+// autonomy is a property of the TRIGGER, not the declaration: pass
+// capability.AutonomyAttended when a human is at the triggering surface (an
+// in-chat /agent spawn, an app reopen — normal HITL applies), or the agent's
+// declared dial for an unattended cron firing. An unknown name returns an error.
+func (w *Workspace) AgentCharter(name string, autonomy capability.Autonomy) (chat.Charter, error) {
 	for _, a := range w.agents {
-		if a.Name == name {
-			def = a
-			break
+		if a.Name != name {
+			continue
 		}
+		return chat.Charter{
+			Tools:  w.tools.Select(a.Matches),
+			System: a.Instructions,
+			Authority: gateway.Authority{
+				Grants:   grantstore.Load(grantstore.Path(filepath.Join(w.dir, "agents"), name)),
+				Policy:   a.Policy,
+				Cage:     a.Cage,
+				Autonomy: autonomy,
+				Label:    w.name + "/" + name,
+			},
+			Budget: a.Budget,
+		}, nil
 	}
-	return agent.Run(ctx, w.deps(), def, task)
-}
-
-// deps bundles this workspace's parts for a child-agent run: the shared loop + tools +
-// guard, and a resolver for each agent's own durable "always" store.
-func (w *Workspace) deps() agent.Deps {
-	agentsDir := filepath.Join(w.dir, "agents")
-	return agent.Deps{
-		Brain: w.loop,
-		Tools: w.tools,
-		Guard: w.guard,
-		Store: func(name string) capability.GrantStore { return grantstore.Load(grantstore.Path(agentsDir, name)) },
-	}
+	return chat.Charter{}, fmt.Errorf("workspace %s: unknown agent %q", w.name, name)
 }
 
 // --- accessors the composition root uses to finish wiring (interactive extensions +

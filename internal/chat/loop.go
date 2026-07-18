@@ -19,7 +19,7 @@ type queuedInput struct {
 	source  Source
 	display string // client-facing line (typed "/skill …"); == input for a plain message
 	input   string // what actually runs (an expanded skill body)
-	agent   string // non-empty: run this named agent with input as its task (via runAgent)
+	agent   string // non-empty: spawn this named agent with input as its task (via the WithAgents resolver)
 }
 
 type turnResult struct {
@@ -77,9 +77,10 @@ func (c *Chat) SubmitInput(source Source, display, input string) {
 	c.cmds <- command{kind: cmdSubmit, source: source, display: display, input: input}
 }
 
-// SubmitAgent enqueues a named child-agent run (via the injected agent runner) as a turn
-// on this same serialized loop, so it streams and gates exactly like a chat turn.
-// display is the client-facing line; task is the agent's input.
+// SubmitAgent enqueues a named child-agent run (resolved via the WithAgents charter
+// resolver, run as a one-shot Once) as a turn on this same serialized loop, so it
+// streams and gates exactly like a chat turn. display is the client-facing line;
+// task is the agent's input.
 func (c *Chat) SubmitAgent(display, name, task string) {
 	c.cmds <- command{kind: cmdSubmit, source: SourceAgent, display: display, input: task, agent: name}
 }
@@ -299,15 +300,21 @@ func (c *Chat) begin(qi queuedInput) {
 	}()
 }
 
-// runTurn executes one queued item: a named agent run (via the injected runAgent) or,
-// by default, a chat turn against st. An agent submission with no runAgent wired is a
-// turn-level error, not a panic — the loop surfaces it as a TurnEndEvent.
+// runTurn executes one queued item: a named agent spawn (its charter resolved via
+// WithAgents, run as a throwaway Once under the parent turn's ctx — so it streams
+// and asks into this chat) or, by default, a chat turn against st. An agent
+// submission with no resolver wired, or an unknown agent name, is a turn-level
+// error, not a panic — the loop surfaces it as a TurnEndEvent.
 func (c *Chat) runTurn(ctx context.Context, st turnState, qi queuedInput) (string, error) {
 	if qi.agent != "" {
-		if c.runAgent == nil {
+		if c.agents == nil {
 			return "", fmt.Errorf("agent runs not supported by this chat")
 		}
-		return c.runAgent(ctx, qi.agent, qi.input)
+		ch, err := c.agents(qi.agent)
+		if err != nil {
+			return "", err
+		}
+		return Once(ctx, c.engine, c.guard, ch, qi.input)
 	}
 	return c.turn(ctx, st, qi.input)
 }

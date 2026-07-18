@@ -1,8 +1,9 @@
-// Package agent is the child-agent subsystem: a workspace Agent's declaration (its
-// config, loaded from <ws>/agents/<name>/agent.md), running one to completion with
-// its own permission scope and tool subset (Run → Result over Deps), and firing them
-// on a schedule (Scheduler). An Agent is spawned as a child of an interactive session
-// (see internal/session) or by the Scheduler; it is NOT the interactive chat itself.
+// Package agent is the child-agent DECLARATION subsystem: an Agent is a workspace
+// agent's config (loaded from <ws>/agents/<name>/agent.md — who a chat can be),
+// and the Scheduler picks the moments to fire one (cron). Execution lives
+// elsewhere: the workspace compiles a declaration into a chat.Charter
+// (AgentCharter) and a run is an ordinary chat turn (chat.Once, or a chat the
+// Manager fires) — this package grants no authority and runs nothing itself.
 package agent
 
 import (
@@ -23,8 +24,8 @@ import (
 // Agent is a workspace agent's DECLARATION — its config, not a running instance:
 // WHAT it does (Instructions = the markdown body), WHICH tools it may use (Tools,
 // by group name "gmail" or exact name "github.search"), and WHEN it runs (When).
-// Running one is a separate call (see Run); this type is only the declaration.
-// It is loaded from
+// Running one is the chat layer's job (the workspace compiles this declaration
+// into a charter); this type is only the declaration. It is loaded from
 // <ws>/agents/<name>/agent.md — control-plane (outside the model's mount, ADR-10),
 // so the model cannot author its own agents. Tools are the ONLY authority surface;
 // skills (context, zero authority) are opt-in via the tools list (add "skill") —
