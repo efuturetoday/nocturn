@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -59,7 +60,34 @@ func NewManager(ctx context.Context, deps Deps) *Manager {
 }
 
 // List returns every chat's metadata (most recent first).
-func (m *Manager) List() []Meta { return m.deps.Store.List() }
+func (m *Manager) List() []Meta {
+	saved := m.deps.Store.List() // persisted chats (disk)
+	// Include LIVE chats too — a freshly-created chat lives in memory with no file yet
+	// (lazy-persist), so a store-only listing would hide it until its first turn. Collect the
+	// live chats under the lock, then read each Meta outside it (Meta takes the chat's own
+	// lock — never nest the two).
+	m.mu.Lock()
+	liveChats := make([]*Chat, 0, len(m.live))
+	for _, c := range m.live {
+		liveChats = append(liveChats, c)
+	}
+	m.mu.Unlock()
+
+	out := make([]Meta, 0, len(liveChats)+len(saved))
+	seen := make(map[string]bool, len(liveChats))
+	for _, c := range liveChats {
+		meta := c.Meta()
+		out = append(out, meta)
+		seen[meta.ID] = true
+	}
+	for _, meta := range saved {
+		if !seen[meta.ID] { // live wins over its (possibly staler) saved copy
+			out = append(out, meta)
+		}
+	}
+	slices.SortFunc(out, func(a, b Meta) int { return b.Updated.Compare(a.Updated) })
+	return out
+}
 
 // AnyRunning reports whether any live chat is mid-turn — the workspace picker's "busy" flag.
 func (m *Manager) AnyRunning() bool {
