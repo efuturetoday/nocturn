@@ -33,6 +33,7 @@ type shared struct {
 	notify    notifycap.Pusher // out-of-band push (ntfy) or the attended TUI fallback
 	send      func(tea.Msg)    // p.Send, late-bound (p is created after the stacks)
 	modelName string
+	activity  *activityHub // process-wide badge fan-out for background chats (nil = no app server)
 }
 
 // bound is the TUI's binding to one OPEN workspace: the workspace itself (which owns
@@ -130,14 +131,21 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 	// live sessions over the SAME workspace parts (guard/tools/brain/grants). The TUI stays
 	// on its single session above; the app browses/opens chats here.
 	chatStore := chat.LoadStore(filepath.Join(wsDir, "chats"))
+	// onActivity badges this workspace's background chats to any connected app; nil under the
+	// TUI (no hub), so the manager stays silent there.
+	var onActivity func(chatID, kind string)
+	if sh.activity != nil {
+		onActivity = func(chatID, kind string) { sh.activity.emit(wsName, chatID, kind) }
+	}
 	chatMgr := chat.NewManager(ctx, chat.Deps{
-		Brain:    w.Brain(),
-		Tools:    w.Tools(),
-		Guard:    w.Guard(),
-		Grants:   w.Grants(),
-		Persona:  w.Persona,
-		Store:    chatStore,
-		AgentRun: agentRun,
+		Brain:      w.Brain(),
+		Tools:      w.Tools(),
+		Guard:      w.Guard(),
+		Grants:     w.Grants(),
+		Persona:    w.Persona,
+		Store:      chatStore,
+		AgentRun:   agentRun,
+		OnActivity: onActivity,
 	})
 
 	// wake: the running agent schedules its OWN resume after a delay (self-paced loops /

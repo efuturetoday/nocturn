@@ -52,6 +52,16 @@ func (s *Server) Handle(ctx context.Context, conn Conn) error {
 	h := &clientConn{workspaces: s.workspaces, out: out}
 	defer h.closeChat()
 
+	// Background-chat activity: badge signals for chats that aren't the open stream. Runs for
+	// the whole connection; unsub closes the channel so this goroutine exits on disconnect.
+	acts, unsubActs := s.workspaces.WatchActivity()
+	defer unsubActs()
+	go func() {
+		for a := range acts {
+			h.send(encodeChatActivity(a))
+		}
+	}()
+
 	// The ONLY reader: commands in.
 	go func() {
 		for {

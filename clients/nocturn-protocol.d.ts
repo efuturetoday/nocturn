@@ -196,6 +196,19 @@ export interface ChatsEvent {
   items: ChatMeta[];
 }
 
+/**
+ * A lightweight badge signal for a chat the client may NOT have open: it finished a turn
+ * (`turnEnd` — badge it) or is waiting on an approval (`approvalPending` — actionable). No
+ * conversation content; refresh the real state with `listChats` / `openChat`. The currently
+ * open chat also streams its full events, so ignore activity for the open chat's id.
+ */
+export interface ChatActivityEvent {
+  type: "chatActivity";
+  ws: string;
+  id: string;
+  kind: "turnEnd" | "approvalPending";
+}
+
 /** A control error (e.g. unknown workspace). */
 export interface ErrorEvent {
   type: "error";
@@ -217,6 +230,7 @@ export type ServerEvent =
   | WorkspacesEvent
   | WorkspaceEvent
   | ChatsEvent
+  | ChatActivityEvent
   | ErrorEvent;
 
 // ── client → server commands ─────────────────────────────────────────────────

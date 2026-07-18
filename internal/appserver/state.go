@@ -24,7 +24,30 @@ type Workspaces interface {
 	// RenameChat / DeleteChat mutate a chat; false for an unknown ws.
 	RenameChat(ws, id, name string) bool
 	DeleteChat(ws, id string) bool
+
+	// WatchActivity subscribes to background-chat activity across ALL workspaces, so the
+	// client can badge chats it hasn't opened without polling. The returned func closes the
+	// stream. A workspace's OPEN chat still streams its full events separately — activity is
+	// only the lightweight "something changed" signal for the others.
+	WatchActivity() (<-chan ChatActivity, func())
 }
+
+// ChatActivity is the lightweight badge signal for a chat the client may not have open:
+// which chat, and what happened. It carries no conversation content — the client refreshes
+// the real state (counts, messages) with listChats / openChat when it wants it.
+type ChatActivity struct {
+	WS   string `json:"ws"`
+	ID   string `json:"id"`
+	Kind string `json:"kind"` // one of the Activity* kinds below
+}
+
+// Activity kinds. A background chat finished a turn (badge it), or it is waiting on an
+// approval (actionable — surface it, not just a dot). Producers (the chat manager) must use
+// these exact strings.
+const (
+	ActivityTurnEnd         = "turnEnd"
+	ActivityApprovalPending = "approvalPending"
+)
 
 // ChatMeta is one chat's summary for the app's chat list.
 type ChatMeta struct {

@@ -227,6 +227,14 @@ func encodeChats(ws string, items []ChatMeta) []byte {
 	return b
 }
 
+func encodeChatActivity(a ChatActivity) []byte {
+	b, _ := json.Marshal(struct {
+		Type string `json:"type"`
+		ChatActivity
+	}{"chatActivity", a})
+	return b
+}
+
 func encodeError(text string) []byte {
 	b, _ := json.Marshal(struct {
 		Type string `json:"type"`

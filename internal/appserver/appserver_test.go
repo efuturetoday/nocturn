@@ -46,6 +46,7 @@ func (f *fakeRunner) gotSubmit(input string) bool {
 // exactly as the real one must not. It holds one workspace ("work") and records writes.
 type fakeWorkspaces struct {
 	runner *fakeRunner
+	acts   chan appserver.ChatActivity // background-chat activity the test can push onto
 
 	mu      sync.Mutex
 	persona string
@@ -97,6 +98,12 @@ func (w *fakeWorkspaces) OpenChat(ws, id string) (appserver.Runner, bool) {
 }
 func (w *fakeWorkspaces) RenameChat(ws, id, name string) bool { return ws == "work" }
 func (w *fakeWorkspaces) DeleteChat(ws, id string) bool       { return ws == "work" }
+func (w *fakeWorkspaces) WatchActivity() (<-chan appserver.ChatActivity, func()) {
+	if w.acts == nil {
+		w.acts = make(chan appserver.ChatActivity, 8)
+	}
+	return w.acts, func() {}
+}
 
 // fakeConn scripts client→server messages (in) and captures server→client messages (out).
 type fakeConn struct {
@@ -210,6 +217,25 @@ func TestServer_ControlPlaneAndChat(t *testing.T) {
 	}
 	if fw.getPersona() != "New persona." {
 		t.Fatalf("service persona = %q, want it persisted", fw.getPersona())
+	}
+}
+
+// Background-chat activity (a turn ended / an approval is pending in a chat the client has
+// NOT opened) reaches the client as a lightweight chatActivity badge over the same conn.
+func TestServer_BackgroundChatActivity(t *testing.T) {
+	fw := &fakeWorkspaces{
+		runner: &fakeRunner{events: make(chan session.Event, 1)},
+		acts:   make(chan appserver.ChatActivity, 8),
+	}
+	fc := newConn()
+	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
+
+	// A background chat in "work" finishes a turn — the manager would emit this.
+	fw.acts <- appserver.ChatActivity{WS: "work", ID: "c9", Kind: appserver.ActivityTurnEnd}
+
+	got := recvUntil(t, fc.out, "chatActivity")
+	if got["ws"] != "work" || got["id"] != "c9" || got["kind"] != appserver.ActivityTurnEnd {
+		t.Fatalf("chatActivity = %v, want ws=work id=c9 kind=turnEnd", got)
 	}
 }
 

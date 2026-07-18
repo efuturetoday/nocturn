@@ -67,10 +67,15 @@ func serveCmd(_ []string) error {
 	defer cancelSched()
 	startSchedulers(schedCtx, sp)
 
-	server := appserver.NewServer(&appWorkspaces{bounds: sp.workspaces, names: sp.names})
+	server := appserver.NewServer(&appWorkspaces{bounds: sp.workspaces, names: sp.names, hub: sp.activity})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, nil)
+		// InsecureSkipVerify: skip coder/websocket's same-origin check. A companion app
+		// connects from a foreign origin (a browser dev server, or a Capacitor webview whose
+		// origin is capacitor://localhost) to the daemon's own host:port — always cross-origin.
+		// This is consistent with the no-auth MVP posture: the bind-address warning, not an
+		// Origin header, is the trust boundary. Revisit when pairing/auth lands.
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 		if err != nil {
 			return
 		}

@@ -32,6 +32,10 @@ type Deps struct {
 	Persona  func() string
 	Store    *Store
 	AgentRun func(ctx context.Context, name, task string) (string, error)
+	// OnActivity, if set, is called from a chat's pump with the chat id and a kind
+	// ("turnEnd" | "approvalPending") so a host can badge background chats. Optional (nil =
+	// no signal); it must not block — the pump calls it inline.
+	OnActivity func(chatID, kind string)
 }
 
 // Manager owns a workspace's live chats. ctx is the RUNTIME lifetime (the daemon/session):
@@ -113,7 +117,8 @@ func (m *Manager) Open(id string) (*session.Runner, bool) {
 	lc.unsub = unsub
 	go func() {
 		for e := range sub {
-			if _, ok := e.(session.TurnEndEvent); ok {
+			switch e.(type) {
+			case session.TurnEndEvent:
 				// Copy the name WHILE holding the lock — Rename writes lc.name under m.mu,
 				// so reading it unlocked would race. A concurrent Delete drops it from the
 				// map → stillLive false → skip the stale save.
@@ -126,13 +131,25 @@ func (m *Manager) Open(id string) (*session.Runner, bool) {
 				m.mu.Unlock()
 				if stillLive {
 					_ = m.deps.Store.Save(id, name, runner.Snapshot().Messages)
+					m.signal(id, "turnEnd")
 				}
+			case session.ApprovalEvent:
+				// A background chat is waiting on an approval — actionable, not just a badge.
+				m.signal(id, "approvalPending")
 			}
 		}
 	}()
 
 	m.live[id] = lc
 	return runner, true
+}
+
+// signal fires the optional activity hook (badge a background chat). Kinds are the two the
+// host contract expects; see Deps.OnActivity.
+func (m *Manager) signal(chatID, kind string) {
+	if m.deps.OnActivity != nil {
+		m.deps.OnActivity(chatID, kind)
+	}
 }
 
 // CloseAll saves and stops every live chat (on shutdown).

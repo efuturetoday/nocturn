@@ -15,7 +15,8 @@ import (
 // swapping how a workspace loads its state never touches this adapter's shape.
 type appWorkspaces struct {
 	bounds map[string]*bound
-	names  []string // sorted, for a stable List order
+	names  []string      // sorted, for a stable List order
+	hub    *activityHub // background-chat badge fan-out (the managers' producer side)
 }
 
 var _ appserver.Workspaces = (*appWorkspaces)(nil)
@@ -117,6 +118,12 @@ func (a *appWorkspaces) DeleteChat(ws, id string) bool {
 		return false
 	}
 	return b.chats.Delete(id) == nil
+}
+
+// WatchActivity subscribes to the background-chat badge stream (all workspaces' managers
+// feed the one hub; the app server fans it to the client).
+func (a *appWorkspaces) WatchActivity() (<-chan appserver.ChatActivity, func()) {
+	return a.hub.Watch()
 }
 
 // toChatMeta maps a chat.Meta (domain) to the wire ChatMeta (RFC3339 timestamp).
