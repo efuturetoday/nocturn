@@ -732,3 +732,25 @@ sich die App durch Revoke des letzten Geräts aus, ist das der bewusst akzeptier
 **Recovery = `nocturn serve --reset-pairing`** an der Box + neu koppeln. Kein Aufwand jetzt.
 **Wenn später angefasst:** der Guard „letztes Gerät nicht revokebar" ist der billige erste Schritt,
 Master-Rolle (B) der natürliche zweite. **Priorität:** niedrig, nach allem anderen.
+
+---
+
+### 23. Discover-Hero — custom `<button>`s vs. vanilla Ionic (OFFEN, vertagt)
+
+**Kontext:** Beim App-weiten Normalize auf Ionic-CSS-Variablen + vanilla-Markup (mobile) bleibt der
+**Discover-Hero** (`features/discover/discover.page.ts`) der einzige Ort mit custom `<button>`s
+statt Ionic-Komponenten:
+- die **Server-Treffer-Karten** (`<button class="host">`, Icon + Name + URL)
+- der **„Enter server manually"**-Link (`<button class="manual">`, unterstrichener Text-Link)
+
+Beide sind bereits **über Theme-Vars + rem** gestylt (keine Hardcodes) — es geht rein um Markup.
+
+**Tradeoff:** Der Hero ist eine bewusste Bühne (Nebula-Bg, schwebender Mascot, zentriert). Custom
+buttons passen dort; `ion-button`/`ion-list` zwingen Ionic-Chrome rein. Umbau der `.host`-Treffer →
+`ion-list`/`ion-item`, `.manual` → `ion-button fill="clear"` wäre strikt-vanilla, **reshaped aber
+den Hero** und braucht **Live-Verify mit echtem mDNS-gefundenem Server** (im Dev gerade nicht
+triggerbar — nur der Skeleton-Scan-State ist sichtbar).
+
+**Entscheidung (offen):** vorerst **custom lassen**, in FRAGEN notiert. Wenn angefasst: erst einen
+echten Discovery-Treffer herstellbar machen (mDNS), dann `.host` → `ion-list`/`ion-item` + `.manual`
+→ `ion-button fill="clear"`, live gegen den Treffer-State verifizieren. **Priorität:** niedrig.

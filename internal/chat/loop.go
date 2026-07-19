@@ -17,9 +17,10 @@ import (
 
 type queuedInput struct {
 	source  Source
-	display string // client-facing line (typed "/skill …"); == input for a plain message
-	input   string // what actually runs (an expanded skill body)
-	agent   string // non-empty: spawn this named agent with input as its task (via the WithAgents resolver)
+	display string       // client-facing line (typed "/skill …"); == input for a plain message
+	input   string       // what actually runs (an expanded skill body)
+	agent   string       // non-empty: spawn this named agent with input as its task (via the WithAgents resolver)
+	effort  brain.Effort // per-message reasoning override for this turn; "" = the charter default
 }
 
 type turnResult struct {
@@ -42,8 +43,9 @@ type command struct {
 	display string
 	input   string
 	agent   string
-	id      string // cmdResolve: the approval id
-	choice  int    // cmdResolve: the chosen option index
+	effort  brain.Effort // cmdSubmit: per-message reasoning override
+	id      string       // cmdResolve: the approval id
+	choice  int          // cmdResolve: the chosen option index
 }
 
 // pendingApproval is the at-most-one approval a turn is parked on (turns are serial).
@@ -75,16 +77,17 @@ func (c *Chat) send(cmd command) {
 
 // Submit enqueues an input to run as a turn — from the user, or from a wake/remind
 // resumption. If a turn is running it is buffered (a QueuedEvent) and runs when the
-// current turn ends; otherwise it starts immediately. Display equals input.
-func (c *Chat) Submit(source Source, input string) {
-	c.send(command{kind: cmdSubmit, source: source, display: input, input: input})
+// current turn ends; otherwise it starts immediately. Display equals input. effort is a
+// per-message reasoning override for THIS turn ("" = the chat's charter default).
+func (c *Chat) Submit(source Source, input string, effort brain.Effort) {
+	c.send(command{kind: cmdSubmit, source: source, display: input, input: input, effort: effort})
 }
 
 // SubmitInput is Submit with a distinct client-facing display line (input is what runs;
 // display is what a client shows) — for a slash-skill whose expanded body must not be
-// echoed into the transcript.
-func (c *Chat) SubmitInput(source Source, display, input string) {
-	c.send(command{kind: cmdSubmit, source: source, display: display, input: input})
+// echoed into the transcript. effort is the per-message reasoning override.
+func (c *Chat) SubmitInput(source Source, display, input string, effort brain.Effort) {
+	c.send(command{kind: cmdSubmit, source: source, display: display, input: input, effort: effort})
 }
 
 // SubmitAgent enqueues a named child-agent run (resolved via the WithAgents charter
@@ -281,7 +284,7 @@ func (c *Chat) loop(ctx context.Context) {
 		case cmd := <-c.cmds:
 			switch cmd.kind {
 			case cmdSubmit:
-				c.onSubmit(queuedInput{source: cmd.source, display: cmd.display, input: cmd.input, agent: cmd.agent})
+				c.onSubmit(queuedInput{source: cmd.source, display: cmd.display, input: cmd.input, agent: cmd.agent, effort: cmd.effort})
 			case cmdCancel:
 				c.onCancel()
 			case cmdReset:
@@ -329,6 +332,16 @@ func (c *Chat) begin(qi queuedInput) {
 	// not latched here at turn start, because a long background turn can gain or lose a
 	// client between here and the Ask.
 	turnCtx = WithApprovalSink(turnCtx, c)
+	// Reasoning effort for THIS turn: the per-message override wins, else the chat's charter
+	// default (unset "" → the model adapter's global default). Survives scope.Bind to model.Next.
+	// NOTE: an in-chat /agent spawn (qi.agent != "") runs under its OWN charter via Once but
+	// inherits THIS chat's effort here — a per-spawn override is deferred (SubmitAgent takes none).
+	// A SCHEDULED agent run is unaffected: its chat's charter IS the agent charter.
+	eff := qi.effort
+	if eff == "" {
+		eff = c.charter.Effort
+	}
+	turnCtx = brain.WithEffort(turnCtx, eff)
 	c.mu.Lock()
 	c.running = true
 	c.cancelTurn = cancel

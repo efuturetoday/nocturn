@@ -214,6 +214,7 @@ func (w *Workspace) AgentCharter(name string, autonomy capability.Autonomy) (cha
 				Label:    w.name + "/" + name,
 			},
 			Budget: a.Budget,
+			Effort: a.Reasoning, // per-agent default reasoning effort
 		}, nil
 	}
 	return chat.Charter{}, fmt.Errorf("workspace %s: unknown agent %q", w.name, name)

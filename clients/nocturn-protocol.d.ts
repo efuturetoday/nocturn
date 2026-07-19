@@ -303,10 +303,19 @@ export type ServerEvent =
 
 // ── client → server commands ─────────────────────────────────────────────────
 
-/** Send a user message as a turn. */
+/**
+ * Reasoning effort for ONE turn. `low|medium|high` are the OpenAI-standard levels; `minimal`/
+ * `xhigh` are passed through if the endpoint accepts them. Omit to use the chat's default (a
+ * per-agent frontmatter value, else the daemon's global default). The FE can implement a sticky
+ * "always high for this chat" by remembering the choice and sending it on every submit.
+ */
+export type Effort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+/** Send a user message as a turn. `effort` overrides the reasoning level for this turn only. */
 export interface SubmitCommand {
   cmd: "submit";
   input: string;
+  effort?: Effort;
 }
 
 /** Activate a skill: `display` is the typed "/name" line, `input` is the expanded body. */
@@ -314,6 +323,7 @@ export interface SubmitSkillCommand {
   cmd: "submitSkill";
   display: string;
   input: string;
+  effort?: Effort;
 }
 
 /** Run a named child agent: `display` is the typed line, `task` is its input. */

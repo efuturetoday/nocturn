@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/appserver"
+	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/chat"
 )
 
@@ -26,16 +27,16 @@ type fakeRunner struct {
 
 func (f *fakeRunner) Subscribe() (<-chan chat.Event, func()) { return f.events, func() {} }
 func (f *fakeRunner) Snapshot() chat.Snapshot                { return f.snap }
-func (f *fakeRunner) Submit(_ chat.Source, input string) {
+func (f *fakeRunner) Submit(_ chat.Source, input string, _ brain.Effort) {
 	f.mu.Lock()
 	f.submits = append(f.submits, input)
 	f.mu.Unlock()
 }
-func (f *fakeRunner) SubmitInput(_ chat.Source, _, _ string) {}
-func (f *fakeRunner) SubmitAgent(_, _, _ string)             {}
-func (f *fakeRunner) Cancel()                                {}
-func (f *fakeRunner) Reset()                                 {}
-func (f *fakeRunner) Resolve(string, int)                    {}
+func (f *fakeRunner) SubmitInput(_ chat.Source, _, _ string, _ brain.Effort) {}
+func (f *fakeRunner) SubmitAgent(_, _, _ string)                             {}
+func (f *fakeRunner) Cancel()                                                {}
+func (f *fakeRunner) Reset()                                                 {}
+func (f *fakeRunner) Resolve(string, int)                                    {}
 func (f *fakeRunner) gotSubmit(input string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -48,9 +49,10 @@ type fakeWorkspaces struct {
 	runner *fakeRunner
 	syncs  chan appserver.Sync // client-sync signals the test can push onto
 
-	mu      sync.Mutex
-	persona string
-	revoked []string
+	mu       sync.Mutex
+	persona  string
+	revoked  []string
+	markRead []string // chat ids passed to MarkRead, for dispatch assertions
 }
 
 func (w *fakeWorkspaces) getPersona() string {
@@ -99,6 +101,15 @@ func (w *fakeWorkspaces) OpenChat(ws, id string) (appserver.Runner, bool) {
 }
 func (w *fakeWorkspaces) RenameChat(ws, id, name string) bool { return ws == "work" }
 func (w *fakeWorkspaces) DeleteChat(ws, id string) bool       { return ws == "work" }
+func (w *fakeWorkspaces) MarkRead(ws, id string) bool {
+	if ws != "work" {
+		return false
+	}
+	w.mu.Lock()
+	w.markRead = append(w.markRead, id)
+	w.mu.Unlock()
+	return true
+}
 func (w *fakeWorkspaces) Reminders(ws string) ([]appserver.ReminderMeta, bool) {
 	if ws != "work" {
 		return nil, false
@@ -394,6 +405,24 @@ func TestServer_DevicesAndRevoke(t *testing.T) {
 		defer fw.mu.Unlock()
 		return slices.Contains(fw.revoked, "d1")
 	}, "revokeDevice did not reach the state service")
+}
+
+// markRead routes to the state service — the mutation whose broadcast clears the unread dot on
+// every one of the owner's devices.
+func TestServer_MarkRead(t *testing.T) {
+	fw := &fakeWorkspaces{
+		runner: &fakeRunner{events: make(chan chat.Event, 1)},
+		syncs:  make(chan appserver.Sync, 8),
+	}
+	fc := newConn()
+	go func() { _ = appserver.NewServer(fw, appserver.NewPresence()).Handle(t.Context(), fc, "d1") }()
+
+	fc.in <- []byte(`{"cmd":"markRead","ws":"work","id":"c1"}`)
+	eventually(t, func() bool {
+		fw.mu.Lock()
+		defer fw.mu.Unlock()
+		return slices.Contains(fw.markRead, "c1")
+	}, "markRead did not reach the state service")
 }
 
 // Revoke closes the live connections of the revoked device (its bearer stops working at once,

@@ -92,14 +92,14 @@ func TestChat_BuffersAndDrainsFIFO(t *testing.T) {
 	g := newGatedModel()
 	c, sub := startChat(t, g)
 
-	c.Submit(chat.SourceUser, "a")
+	c.Submit(chat.SourceUser, "a", "")
 	if e, ok := recv(t, sub).(chat.TurnStartEvent); !ok || e.Input != "a" {
 		t.Fatalf("want TurnStart(a), got %#v", e)
 	}
 
 	// b and c arrive while "a" runs → both buffered.
-	c.Submit(chat.SourceUser, "b")
-	c.Submit(chat.SourceWake, "c")
+	c.Submit(chat.SourceUser, "b", "")
+	c.Submit(chat.SourceWake, "c", "")
 	if e, ok := recv(t, sub).(chat.QueuedEvent); !ok || e.Input != "b" {
 		t.Fatalf("want Queued(b), got %#v", e)
 	}
@@ -133,7 +133,7 @@ func TestChat_FanOut(t *testing.T) {
 	sub2, unsub2 := c.Subscribe()
 	defer unsub2()
 
-	c.Submit(chat.SourceUser, "x")
+	c.Submit(chat.SourceUser, "x", "")
 	if _, ok := recv(t, sub1).(chat.TurnStartEvent); !ok {
 		t.Fatal("sub1 missed TurnStart")
 	}
@@ -151,7 +151,7 @@ func TestChat_StreamsTokenFromTurn(t *testing.T) {
 		return brain.Step{Answer: "done"}, nil
 	})
 	c, sub := startChat(t, model)
-	c.Submit(chat.SourceUser, "go")
+	c.Submit(chat.SourceUser, "go", "")
 
 	// TurnStart, then the streamed token, then TurnEnd.
 	if _, ok := recv(t, sub).(chat.TurnStartEvent); !ok {
@@ -174,9 +174,9 @@ func TestChat_Reset(t *testing.T) {
 		t.Cleanup(func() { unsub(); cancel() })
 		c.Start(ctx)
 
-		c.Submit(chat.SourceUser, "a")
+		c.Submit(chat.SourceUser, "a", "")
 		mustTurnStart(t, sub, "a", chat.SourceUser)
-		c.Submit(chat.SourceUser, "queued")
+		c.Submit(chat.SourceUser, "queued", "")
 		if _, ok := recv(t, sub).(chat.QueuedEvent); !ok {
 			t.Fatal("want Queued")
 		}
@@ -325,7 +325,7 @@ func TestChat_ApprovalSink_AlwaysStampedAndSeesRealClients(t *testing.T) {
 			t.Cleanup(unsub)
 		}
 		c.Start(ctx)
-		c.Submit(chat.SourceUser, "go")
+		c.Submit(chat.SourceUser, "go", "")
 		select {
 		case <-time.After(2 * time.Second):
 			t.Fatal("turn did not run")

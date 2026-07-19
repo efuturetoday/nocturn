@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"github.com/efuturetoday/nocturn/internal/activity"
+	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/chat"
 )
 
@@ -186,6 +187,7 @@ type wireCommand struct {
 	Task    string `json:"task,omitempty"`    // submitAgent
 	Choice  int    `json:"choice,omitempty"`  // resolve
 	Active  bool   `json:"active"`            // setPresence (decode-only; no omitempty so false is explicit)
+	Effort  string `json:"effort,omitempty"`  // submit, submitSkill: per-message reasoning (low|medium|high)
 }
 
 // decodeCommand parses one client message into a command. The server switches on Cmd.
@@ -203,9 +205,9 @@ func decodeCommand(msg []byte) (wireCommand, error) {
 func routeChatCommand(r Runner, c wireCommand) {
 	switch c.Cmd {
 	case "submit":
-		r.Submit(chat.SourceUser, c.Input)
+		r.Submit(chat.SourceUser, c.Input, brain.ParseEffort(c.Effort))
 	case "submitSkill":
-		r.SubmitInput(chat.SourceUser, c.Display, c.Input)
+		r.SubmitInput(chat.SourceUser, c.Display, c.Input, brain.ParseEffort(c.Effort))
 	case "submitAgent":
 		r.SubmitAgent(c.Display, c.Agent, c.Task)
 	case "cancel":

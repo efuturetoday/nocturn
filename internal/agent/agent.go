@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 	"gopkg.in/yaml.v3"
 )
@@ -52,6 +53,9 @@ type Agent struct {
 	// (auto-allow within the cage, but consequential effects still ask). It is inert
 	// for a manual run (a human is present → normal HITL). See capability.Autonomy.
 	Autonomy capability.Autonomy
+	// Reasoning is this agent's default reasoning effort (low|medium|high|…). A per-message value
+	// overrides it; "" falls back to the global default. An invalid frontmatter value degrades to "".
+	Reasoning brain.Effort
 }
 
 // Matches reports whether a registry tool name is one this agent may use. A list
@@ -76,7 +80,8 @@ type frontmatter struct {
 	Budget      string         `yaml:"budget"` // Go duration, e.g. "5m"; "" = default
 	Policy      []policyRuleFM `yaml:"policy"`
 	Cage        []cageEntryFM  `yaml:"cage"`
-	Autonomy    string         `yaml:"autonomy"` // guarded (default) | strict | full — for unattended runs
+	Autonomy    string         `yaml:"autonomy"`  // guarded (default) | strict | full — for unattended runs
+	Reasoning   string         `yaml:"reasoning"` // low|medium|high|xhigh — default effort; "" = global default
 }
 
 // parseAutonomy maps the author's autonomy string to the dial level. Empty defaults
@@ -269,6 +274,7 @@ func loadAgent(path, defaultName string) (Agent, error) {
 		Name: name, Description: strings.TrimSpace(f.Description), Instructions: instructions,
 		Model: f.Model, Tools: f.Tools, When: when, Budget: budget,
 		Policy: policy, Cage: cage, Autonomy: autonomy,
+		Reasoning: brain.ParseEffort(f.Reasoning), // invalid → "" (global default)
 	}, nil
 }
 

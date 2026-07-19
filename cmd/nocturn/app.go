@@ -23,6 +23,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/efuturetoday/nocturn/internal/appserver"
+	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/device"
 	"github.com/efuturetoday/nocturn/internal/hitl"
@@ -205,6 +206,8 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 	if modelName == "" {
 		modelName = "auto"
 	}
+	// Global default reasoning effort (a per-agent frontmatter or a per-message value overrides it).
+	effort := brain.ParseEffort(os.Getenv("FREELLM_REASONING_EFFORT"))
 
 	// ONE master passphrase (asked once) derives every workspace's vault key (HKDF).
 	master, err := unlockMaster(filepath.Join("workspaces", "master.json"))
@@ -277,7 +280,7 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 	sh := shared{
 		master:    master,
 		approvals: approvals,
-		llmModel:  llm.New(baseURL, apiKey, modelName),
+		llmModel:  llm.New(baseURL, apiKey, modelName, effort),
 		notify:    notifyPush,
 		send:      send,
 		modelName: modelName,

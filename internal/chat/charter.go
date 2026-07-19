@@ -3,6 +3,7 @@ package chat
 import (
 	"time"
 
+	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/gateway"
 	"github.com/efuturetoday/nocturn/internal/tool"
 )
@@ -18,4 +19,5 @@ type Charter struct {
 	System    string            // system prompt: workspace persona, or the agent's Instructions
 	Authority gateway.Authority // what Scope.Bind enforces every turn
 	Budget    time.Duration     // wall-clock per turn (deadline.WithBudget); 0 = none
+	Effort    brain.Effort      // default reasoning effort per turn (a per-message value overrides); "" = global default
 }

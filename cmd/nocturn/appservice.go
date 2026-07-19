@@ -123,6 +123,16 @@ func (a *appWorkspaces) DeleteChat(ws, id string) bool {
 	return b.chats.Delete(id) == nil
 }
 
+// MarkRead advances a chat's shared read cursor; false for an unknown workspace. The manager's
+// OnChange then fans the fresh list (with the new read time) to every connected device.
+func (a *appWorkspaces) MarkRead(ws, id string) bool {
+	b, ok := a.bounds[ws]
+	if !ok {
+		return false
+	}
+	return b.chats.MarkRead(id) == nil
+}
+
 // Reminders lists a workspace's pending reminders (soonest first), read from its reminder
 // capability. Read-only for the app — reminders are set/cancelled by the model's gated tools.
 func (a *appWorkspaces) Reminders(ws string) ([]appserver.ReminderMeta, bool) {
@@ -186,7 +196,7 @@ func (a *appWorkspaces) RevokeDevice(id string) bool { return a.devices.Remove(i
 
 // toChatMeta maps a chat.Meta (domain) to the wire ChatMeta (RFC3339 timestamp).
 func toChatMeta(m chat.Meta) appserver.ChatMeta {
-	return appserver.ChatMeta{
+	cm := appserver.ChatMeta{
 		ID:      m.ID,
 		Name:    m.Name,
 		Origin:  string(m.Origin),
@@ -194,4 +204,8 @@ func toChatMeta(m chat.Meta) appserver.ChatMeta {
 		Updated: m.Updated.Format(time.RFC3339),
 		Turns:   m.Turns,
 	}
+	if !m.Read.IsZero() {
+		cm.Read = m.Read.Format(time.RFC3339)
+	}
+	return cm
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/agent"
+	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/capability"
 )
 
@@ -169,6 +170,31 @@ func TestLoadAgents_Autonomy(t *testing.T) {
 	}
 	if byName["s"] != capability.AutonomyStrict {
 		t.Errorf("strict autonomy = %v, want strict", byName["s"])
+	}
+}
+
+func TestLoadAgents_Reasoning(t *testing.T) {
+	dir := t.TempDir()
+	writeAgent(t, dir, "h", "---\nname: h\ntools: [file]\nreasoning: high\n---\nbody\n")
+	writeAgent(t, dir, "d", "---\nname: d\ntools: [file]\n---\nbody\n")                  // omitted → ""
+	writeAgent(t, dir, "b", "---\nname: b\ntools: [file]\nreasoning: yolo\n---\nbody\n") // invalid → "" (NOT an error)
+
+	defs, err := agent.Discover(dir)
+	if err != nil {
+		t.Fatalf("load: %v (an invalid reasoning must degrade, not fail)", err)
+	}
+	byName := map[string]brain.Effort{}
+	for _, d := range defs {
+		byName[d.Name] = d.Reasoning
+	}
+	if byName["h"] != brain.EffortHigh {
+		t.Errorf("reasoning:high = %q, want high", byName["h"])
+	}
+	if byName["d"] != "" {
+		t.Errorf("omitted reasoning = %q, want empty", byName["d"])
+	}
+	if byName["b"] != "" {
+		t.Errorf("invalid reasoning = %q, want empty (degraded)", byName["b"])
 	}
 }
 

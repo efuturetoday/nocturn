@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 
+	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/chat"
 )
 
@@ -23,8 +24,8 @@ type Conn interface {
 // snapshot out. *chat.Chat satisfies it structurally (asserted below); the interface
 // is here so the server is testable with a fake.
 type Runner interface {
-	Submit(source chat.Source, input string)
-	SubmitInput(source chat.Source, display, input string)
+	Submit(source chat.Source, input string, effort brain.Effort)
+	SubmitInput(source chat.Source, display, input string, effort brain.Effort)
 	SubmitAgent(display, name, task string)
 	Cancel()
 	Reset()

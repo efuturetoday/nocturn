@@ -85,6 +85,10 @@ harmless reads. That balance is the point of Nocturn.
   tools and no permissions anymore — it can only talk.
 - Give an agent a time budget with `budget: 5m` so a runaway task stops on its own. Time
   spent waiting for your approval does not count against it.
+- Set how hard the model thinks with `reasoning: high` (`low`, `medium`, `high`, and — where
+  your endpoint supports them — `minimal`/`xhigh`). It is this agent's default; a message can
+  override it for a single turn, and leaving it out uses the global default. An unknown value
+  is ignored rather than failing the run.
 - The `model` setting is read but not yet applied. Every agent currently uses the model you
   configured globally. The field is there for a future per-agent override.
 - An agent's settings can tighten its permissions but never loosen them past what you have

@@ -227,6 +227,9 @@ func (h *clientConn) dispatch(ctx context.Context, msg []byte) {
 		h.workspaces.RenameChat(c.WS, c.ID, c.Name)
 	case "deleteChat":
 		h.workspaces.DeleteChat(c.WS, c.ID)
+	case "markRead":
+		h.workspaces.MarkRead(c.WS, c.ID) // manager's onChange fans the fresh list (with new read) to every device
+
 	case "openChat":
 		h.openChat(ctx, c.WS, c.ID)
 	default:

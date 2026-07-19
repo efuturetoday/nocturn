@@ -11,7 +11,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/chat"
 )
 
-func TestStore_SaveLoadListRenameDelete(t *testing.T) {
+func TestStore_SaveLoadListDelete(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "chats")
 	s := chat.LoadStore(dir)
 
@@ -19,42 +19,39 @@ func TestStore_SaveLoadListRenameDelete(t *testing.T) {
 		t.Fatal("fresh store must be empty")
 	}
 
-	// A chat exists on disk only once saved (lazy-persist): mint an id, then Save creates it.
+	// The store is a pure serializer: it persists the Meta it is handed VERBATIM — it invents no
+	// Updated/Turns/Read (the domain owns those). Save round-trips every field.
+	t0 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	a := s.NewID()
 	msgs := []brain.Message{
 		{Role: "system", Content: "persona"},
 		{Role: "user", Content: "where to?"},
 		{Role: "assistant", Content: "Lisbon"},
 	}
-	if err := s.Save(chat.Meta{ID: a, Name: "Trip planning", Origin: chat.OriginUser}, msgs, nil); err != nil {
+	metaA := chat.Meta{ID: a, Name: "Trip planning", Origin: chat.OriginUser, Created: t0, Updated: t0, Read: t0, Turns: 1}
+	if err := s.Save(metaA, msgs, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	// Load returns the messages + updated meta (1 user message here) and the origin.
+	// Load returns exactly what was written — no field massaged by the store.
 	got, _, meta, ok := s.Load(a)
-	if !ok || len(got) != 3 || meta.Turns != 1 || meta.Origin != chat.OriginUser {
-		t.Fatalf("load = ok:%v msgs:%d turns:%d origin:%q, want ok/3/1/user", ok, len(got), meta.Turns, meta.Origin)
+	if !ok || len(got) != 3 || meta.Turns != 1 || meta.Origin != chat.OriginUser || !meta.Updated.Equal(t0) || !meta.Read.Equal(t0) {
+		t.Fatalf("load = ok:%v msgs:%d turns:%d origin:%q updated:%v read:%v", ok, len(got), meta.Turns, meta.Origin, meta.Updated, meta.Read)
 	}
 
 	b := s.NewID()
-	if err := s.Save(chat.Meta{ID: b, Name: "Agent run", Origin: chat.OriginAgent}, []brain.Message{{Role: "user", Content: "x"}}, nil); err != nil {
+	t1 := t0.Add(time.Hour)
+	if err := s.Save(chat.Meta{ID: b, Name: "Agent run", Origin: chat.OriginAgent, Created: t1, Updated: t1}, []brain.Message{{Role: "user", Content: "x"}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, m, _ := s.Load(b); m.Origin != chat.OriginAgent {
 		t.Fatalf("origin = %q, want agent", m.Origin)
 	}
 
-	// List: most-recently-updated first → b (saved last) before a.
+	// List sorts by the stored Updated → b (t1) is newer than a (t0).
 	list := s.List()
 	if len(list) != 2 || list[0].ID != b {
-		t.Fatalf("list = %+v, want b first (most recent)", list)
-	}
-
-	if err := s.Rename(a, "Lisbon trip"); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, meta, _ := s.Load(a); meta.Name != "Lisbon trip" {
-		t.Fatalf("rename not applied: %q", meta.Name)
+		t.Fatalf("list = %+v, want b first (newer Updated)", list)
 	}
 
 	if err := s.Delete(b); err != nil {
@@ -71,23 +68,25 @@ func TestStore_SaveLoadListRenameDelete(t *testing.T) {
 func TestStore_Prune_KeepsNewestRunsOfThatAgentOnly(t *testing.T) {
 	s := chat.LoadStore(filepath.Join(t.TempDir(), "chats"))
 	msg := []brain.Message{{Role: "user", Content: "x"}}
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	user := s.NewID()
-	if err := s.Save(chat.Meta{ID: user, Name: "mine", Origin: chat.OriginUser}, msg, nil); err != nil {
+	if err := s.Save(chat.Meta{ID: user, Name: "mine", Origin: chat.OriginUser, Updated: base}, msg, nil); err != nil {
 		t.Fatal(err)
 	}
 	other := s.NewID()
-	if err := s.Save(chat.Meta{ID: other, Name: "b run", Origin: chat.OriginAgent, Agent: "b"}, msg, nil); err != nil {
+	if err := s.Save(chat.Meta{ID: other, Name: "b run", Origin: chat.OriginAgent, Agent: "b", Updated: base}, msg, nil); err != nil {
 		t.Fatal(err)
 	}
 	var runs []string
-	for range 4 {
+	for i := range 4 {
 		id := s.NewID()
-		if err := s.Save(chat.Meta{ID: id, Origin: chat.OriginAgent, Agent: "a"}, msg, nil); err != nil {
+		// Explicit increasing Updated (the store no longer stamps it) → deterministic recency.
+		up := base.Add(time.Duration(i) * time.Minute)
+		if err := s.Save(chat.Meta{ID: id, Origin: chat.OriginAgent, Agent: "a", Updated: up}, msg, nil); err != nil {
 			t.Fatal(err)
 		}
 		runs = append(runs, id)
-		time.Sleep(2 * time.Millisecond) // distinct Updated stamps → deterministic recency order
 	}
 
 	s.Prune("a", 2)

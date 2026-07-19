@@ -31,6 +31,7 @@ package chat
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/efuturetoday/nocturn/internal/brain"
 	"github.com/efuturetoday/nocturn/internal/deadline"
@@ -154,11 +155,47 @@ func (c *Chat) Meta() Meta {
 	return c.meta
 }
 
-// rename updates the chat's display name (the Manager persists it separately).
-func (c *Chat) rename(name string) {
+// The chat's identity Meta (name + the store-owned timestamps Updated/Read + Turns) is OWNED
+// here, in the domain — the Store is a pure serializer that persists whatever Meta it is handed
+// and invents no values. These three methods advance the live Meta and return the fresh copy for
+// the Manager to hand to Store.Save; keeping the live Meta authoritative is what lets List show an
+// OPEN chat's new turns and read cursor (List trusts the live Meta over the disk copy).
+
+// touch advances Updated to now and recounts Turns to reflect a just-completed turn.
+func (c *Chat) touch(msgs []brain.Message) Meta {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.meta.Updated = time.Now()
+	c.meta.Turns = countUserTurns(msgs)
+	return c.meta
+}
+
+// markRead advances the read cursor to the current Updated ("read up to the latest turn").
+func (c *Chat) markRead() Meta {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.meta.Read = c.meta.Updated
+	return c.meta
+}
+
+// rename sets the display name and bumps Updated (a rename reorders the list).
+func (c *Chat) rename(name string) Meta {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.meta.Name = name
-	c.mu.Unlock()
+	c.meta.Updated = time.Now()
+	return c.meta
+}
+
+// countUserTurns is the "N messages" hint: how many user messages a transcript holds.
+func countUserTurns(msgs []brain.Message) int {
+	n := 0
+	for _, m := range msgs {
+		if m.Role == "user" {
+			n++
+		}
+	}
+	return n
 }
 
 // turnState is the conversation/scope/skills one turn executes against. It is

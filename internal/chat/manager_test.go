@@ -68,7 +68,7 @@ func TestManager_OpenPersistReopen(t *testing.T) {
 	// Run one turn through the live runner.
 	sub, unsub := r.Subscribe()
 	defer unsub()
-	r.Submit(chat.SourceUser, "hi")
+	r.Submit(chat.SourceUser, "hi", "")
 	waitTurnEnd(t, sub)
 
 	// The persistence pump saves after the turn (async) — poll the store.
@@ -113,6 +113,61 @@ func TestManager_LazyPersist_EmptyChatNeverWritten(t *testing.T) {
 	}
 	if list := store.List(); len(list) != 0 {
 		t.Fatalf("store has %d chats, want 0 (nothing took a turn)", len(list))
+	}
+}
+
+// The unread cursor tracks turns for a LIVE (open) chat: a completed turn advances Updated past
+// Read (unread), MarkRead catches Read up to it (read), and the next turn re-flags it. This is the
+// end-to-end guard for the cross-device dot — the domain owns Updated/Read on the live Meta, so an
+// OPEN chat's List entry reflects new turns (the store is a dumb serializer and never stamps them).
+func TestManager_MarkRead_UnreadTracksTurns(t *testing.T) {
+	m := newManager(t, chat.Deps{Store: chat.LoadStore(filepath.Join(t.TempDir(), "chats"))})
+
+	meta, err := m.New("c", chat.OriginUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m.Open(meta.ID)
+	if !ok {
+		t.Fatal("open the just-created chat")
+	}
+	sub, unsub := r.Subscribe()
+	defer unsub()
+
+	find := func() chat.Meta {
+		for _, mm := range m.List() {
+			if mm.ID == meta.ID {
+				return mm
+			}
+		}
+		t.Fatalf("chat %s missing from list", meta.ID)
+		return chat.Meta{}
+	}
+	unread := func(mm chat.Meta) bool { return mm.Read.IsZero() || mm.Updated.After(mm.Read) }
+
+	// A turn runs; the pump advances the live Updated/Turns (touch) → the chat reads as unread.
+	r.Submit(chat.SourceUser, "hi", "")
+	waitTurnEnd(t, sub)
+	if !eventually(func() bool { return find().Turns == 1 }) {
+		t.Fatal("the turn was not reflected in the live list Meta")
+	}
+	if !unread(find()) {
+		t.Fatalf("a chat with a turn and no read cursor must be unread: %+v", find())
+	}
+
+	// MarkRead catches the cursor up to the latest turn → read (Updated no longer after Read).
+	if err := m.MarkRead(meta.ID); err != nil {
+		t.Fatal(err)
+	}
+	if unread(find()) {
+		t.Fatalf("after MarkRead the chat must be read: %+v", find())
+	}
+
+	// A new turn moves Updated past the cursor → unread again (the dot returns).
+	r.Submit(chat.SourceUser, "again", "")
+	waitTurnEnd(t, sub)
+	if !eventually(func() bool { return unread(find()) }) {
+		t.Fatalf("a new turn after MarkRead must re-flag unread: %+v", find())
 	}
 }
 
@@ -251,7 +306,7 @@ func TestManager_Open_DeletedAgentRun_ViewableWithZeroAuthority(t *testing.T) {
 	// is structurally absent, not merely denied.
 	sub, unsub := c.Subscribe()
 	defer unsub()
-	c.Submit(chat.SourceUser, "and now?")
+	c.Submit(chat.SourceUser, "and now?", "")
 	waitTurnEnd(t, sub)
 	if len(specs) != 0 {
 		t.Fatalf("viewer chat exposed %d tools, want 0: %+v", len(specs), specs)

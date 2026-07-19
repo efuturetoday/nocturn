@@ -44,7 +44,8 @@ type Meta struct {
 	Agent   string    `json:"agent,omitempty"` // the agent that owns this run ("" = a root/user chat) — a saved record knows which charter rebuilds it
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
-	Turns   int       `json:"turns"` // user messages, for a "N messages" hint
+	Read    time.Time `json:"read,omitzero"` // read cursor: a chat is unread when Updated.After(Read) — one shared cursor across the owner's devices
+	Turns   int       `json:"turns"`         // user messages, for a "N messages" hint
 }
 
 // record is the on-disk shape: metadata plus the full conversation and its tool forest.
@@ -108,35 +109,19 @@ func (s *Store) Load(id string) ([]brain.Message, []ToolFrame, Meta, bool) {
 	return rec.Messages, rec.Forest, rec.Meta, true
 }
 
-// Save persists a chat's current messages under its metadata (updating Updated and
-// the turn count), preserving the on-disk Created time. meta's Name/Origin/Agent
-// override only when non-empty. The first Save of a memory-minted chat creates its
-// file (lazy-persist). Returns ErrInvalidID for an id that isn't server-minted
-// lowercase-hex.
+// Save persists a chat's messages and forest under the Meta it is handed — VERBATIM. The store is
+// a pure serializer: it invents no values (no Updated=now, no turn count, no read cursor). The
+// domain (chat.Chat / Manager) owns those fields and sets them before calling Save, so the live
+// in-memory Meta and the on-disk record never diverge. The first Save of a memory-minted chat
+// creates its file (lazy-persist — the caller skips Save for an empty chat). Returns ErrInvalidID
+// for an id that isn't server-minted lowercase-hex.
 func (s *Store) Save(meta Meta, msgs []brain.Message, forest []ToolFrame) error {
 	if !validID(meta.ID) {
 		return ErrInvalidID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.readLocked(meta.ID)
-	if !ok {
-		rec = record{Meta: Meta{ID: meta.ID, Created: time.Now()}}
-	}
-	if meta.Name != "" {
-		rec.Name = meta.Name
-	}
-	if meta.Origin != "" {
-		rec.Origin = meta.Origin
-	}
-	if meta.Agent != "" {
-		rec.Agent = meta.Agent
-	}
-	rec.Updated = time.Now()
-	rec.Messages = msgs
-	rec.Forest = forest
-	rec.Turns = countUserTurns(msgs)
-	return s.writeLocked(rec)
+	return s.writeLocked(record{Meta: meta, Messages: msgs, Forest: forest})
 }
 
 // Prune enforces a retention cap on one agent's saved runs: it keeps the keepN
@@ -169,25 +154,6 @@ func (s *Store) Prune(agent string, keepN int) {
 	for _, m := range runs[max(keepN, 0):] {
 		_ = os.Remove(s.path(m.ID))
 	}
-}
-
-// Rename changes a chat's display name.
-func (s *Store) Rename(id, name string) error {
-	if name == "" {
-		return nil // empty rename is a deliberate no-op, not a rejection
-	}
-	if !validID(id) {
-		return ErrInvalidID
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rec, ok := s.readLocked(id)
-	if !ok {
-		return nil
-	}
-	rec.Name = name
-	rec.Updated = time.Now()
-	return s.writeLocked(rec)
 }
 
 // Delete removes a chat. Returns ErrInvalidID for a malformed id; a no-op (nil) for a
@@ -259,14 +225,4 @@ func validID(id string) bool {
 
 func chatIDFromFile(name string) string {
 	return name[:len(name)-len(filepath.Ext(name))]
-}
-
-func countUserTurns(msgs []brain.Message) int {
-	n := 0
-	for _, m := range msgs {
-		if m.Role == "user" {
-			n++
-		}
-	}
-	return n
 }

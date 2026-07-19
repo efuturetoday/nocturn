@@ -60,7 +60,7 @@ func startChatOn(t *testing.T, model brain.Model, guard *gateway.Guard, tools *t
 // turnOK submits input and waits for its TurnEnd, failing the test on a turn error.
 func turnOK(t *testing.T, c *chat.Chat, sub <-chan chat.Event, input string) {
 	t.Helper()
-	c.Submit(chat.SourceUser, input)
+	c.Submit(chat.SourceUser, input, "")
 	deadline := time.After(2 * time.Second)
 	for {
 		select {

@@ -25,16 +25,20 @@ import (
 type Client struct {
 	api   *openai.Client
 	Model string
+	// effort is the GLOBAL default reasoning effort (from FREELLM_REASONING_EFFORT), set once in
+	// New. A per-turn effort on ctx (brain.EffortFrom) overrides it; "" leaves the request field
+	// unset. Unexported: the Client is shared across turn goroutines, so it is read-only after New.
+	effort brain.Effort
 }
 
-// New returns a Client for an OpenAI-compatible endpoint at baseURL (its /v1
-// path is appended), authenticating with apiKey and using modelName.
-func New(baseURL, apiKey, modelName string) *Client {
+// New returns a Client for an OpenAI-compatible endpoint at baseURL (its /v1 path is appended),
+// authenticating with apiKey, using modelName, and defaultEffort as the global reasoning level.
+func New(baseURL, apiKey, modelName string, defaultEffort brain.Effort) *Client {
 	cfg := openai.DefaultConfig(apiKey)
 	if baseURL != "" {
 		cfg.BaseURL = strings.TrimRight(baseURL, "/") + "/v1"
 	}
-	return &Client{api: openai.NewClientWithConfig(cfg), Model: modelName}
+	return &Client{api: openai.NewClientWithConfig(cfg), Model: modelName, effort: defaultEffort}
 }
 
 // compile-time proof the adapter is a brain.Model.
@@ -51,6 +55,13 @@ func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []tool.Sp
 		Messages: buildMessages(conv),
 		Stream:   true,
 	}
+	// Reasoning effort: a per-turn value on ctx wins, else the client's global default; "" leaves
+	// the field unset (omitempty) so the endpoint decides.
+	effort := brain.EffortFrom(ctx)
+	if effort == "" {
+		effort = c.effort
+	}
+	req.ReasoningEffort = string(effort)
 	for _, t := range tools {
 		req.Tools = append(req.Tools, openai.Tool{
 			Type: openai.ToolTypeFunction,
@@ -85,6 +96,11 @@ func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []tool.Sp
 		if delta.Content != "" {
 			content.WriteString(delta.Content)
 			activity.Emit(ctx, activity.Token{Text: delta.Content})
+		}
+		// Reasoning ("extended thinking") streams in its own field — surface it as Thinking so a
+		// client renders it dim. It is NOT accumulated into the answer.
+		if delta.ReasoningContent != "" {
+			activity.Emit(ctx, activity.Thinking{Text: delta.ReasoningContent})
 		}
 		// Tool calls stream in fragments keyed by index: the name arrives once, the
 		// arguments in pieces, and several calls interleave. Accumulate PER INDEX,

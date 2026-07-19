@@ -848,7 +848,7 @@ func (m chatModel) handleSlash(input string) (tea.Model, tea.Cmd) {
 	if req == "" {
 		req = "Follow the skill's instructions."
 	}
-	m.chat.SubmitInput(chat.SourceUser, input, skill.WrapBody(cmd, body)+"\n\n<user_request>\n"+req+"\n</user_request>")
+	m.chat.SubmitInput(chat.SourceUser, input, skill.WrapBody(cmd, body)+"\n\n<user_request>\n"+req+"\n</user_request>", "")
 	return m, nil
 }
 
@@ -934,7 +934,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(input, "/") {
 				return m.handleSlash(input)
 			}
-			m.chat.Submit(chat.SourceUser, input)
+			m.chat.Submit(chat.SourceUser, input, "")
 			return m, nil
 		}
 

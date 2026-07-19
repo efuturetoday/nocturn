@@ -24,6 +24,9 @@ type Workspaces interface {
 	// RenameChat / DeleteChat mutate a chat; false for an unknown ws.
 	RenameChat(ws, id, name string) bool
 	DeleteChat(ws, id string) bool
+	// MarkRead advances a chat's shared read cursor to its latest turn; false for an unknown ws.
+	// The mutation fans the fresh chat list to every device, so the unread dot clears everywhere.
+	MarkRead(ws, id string) bool
 
 	// Reminders lists a workspace's pending reminders (soonest first). ok is false for an
 	// unknown ws. Reminders are set/cancelled by the model via gated tools, not from here —
@@ -128,6 +131,7 @@ type ChatMeta struct {
 	Origin  string `json:"origin"`          // "user" | "agent" — who created it, for filtering/grouping
 	Agent   string `json:"agent,omitempty"` // the owning agent of a scheduled run ("" = a user chat) — for grouping runs per agent
 	Updated string `json:"updated"`         // RFC3339
+	Read    string `json:"read,omitempty"`  // RFC3339 read cursor; unread when updated > read. "" = never read
 	Turns   int    `json:"turns"`
 }
 

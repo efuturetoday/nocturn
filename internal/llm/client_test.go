@@ -39,7 +39,7 @@ func TestNext_StreamsAnswer(t *testing.T) {
 	)
 	defer srv.Close()
 
-	c := llm.New(srv.URL, "k", "auto")
+	c := llm.New(srv.URL, "k", "auto", "")
 	var streamed string
 	ctx := activity.WithSink(context.Background(), func(e activity.Event) {
 		if tok, ok := e.(activity.Token); ok {
@@ -65,7 +65,7 @@ func TestNext_AccumulatesStreamedToolCall(t *testing.T) {
 	)
 	defer srv.Close()
 
-	c := llm.New(srv.URL, "k", "auto")
+	c := llm.New(srv.URL, "k", "auto", "")
 	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "fetch"}}, nil)
 	if err != nil {
 		t.Fatalf("next: %v", err)
@@ -81,6 +81,78 @@ func TestNext_AccumulatesStreamedToolCall(t *testing.T) {
 	}
 }
 
+// Reasoning ("extended thinking") streams in delta.reasoning_content → surfaced as Thinking, not
+// folded into the answer.
+func TestNext_StreamsReasoning(t *testing.T) {
+	srv := mockStream(
+		`{"choices":[{"delta":{"reasoning_content":"let me think"}}]}`,
+		`{"choices":[{"delta":{"content":"42"}}]}`,
+	)
+	defer srv.Close()
+
+	c := llm.New(srv.URL, "k", "auto", "")
+	var thought, answer string
+	ctx := activity.WithSink(context.Background(), func(e activity.Event) {
+		switch ev := e.(type) {
+		case activity.Thinking:
+			thought += ev.Text
+		case activity.Token:
+			answer += ev.Text
+		}
+	})
+	step, err := c.Next(ctx, []brain.Message{{Role: "user", Content: "q"}}, nil)
+	if err != nil {
+		t.Fatalf("next: %v", err)
+	}
+	if thought != "let me think" {
+		t.Fatalf("thinking = %q, want the reasoning chunk", thought)
+	}
+	if answer != "42" || step.Answer != "42" {
+		t.Fatalf("answer = %q / step %q, want just 42 (reasoning not in the answer)", answer, step.Answer)
+	}
+}
+
+// reasoning_effort: a per-turn ctx value wins; else the client's global default; else unset.
+func TestNext_ReasoningEffort(t *testing.T) {
+	msg := []brain.Message{{Role: "user", Content: "q"}}
+	for _, tc := range []struct {
+		name          string
+		clientDefault brain.Effort
+		ctxEffort     brain.Effort // "" = no per-turn effort
+		want          string
+	}{
+		{"ctx wins over client default", brain.EffortMedium, brain.EffortHigh, "high"},
+		{"client default when no ctx", brain.EffortMedium, "", "medium"},
+		{"unset → omitted (endpoint default)", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				var req struct {
+					ReasoningEffort string `json:"reasoning_effort"`
+				}
+				_ = json.Unmarshal(body, &req)
+				got = req.ReasoningEffort
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+			}))
+			defer srv.Close()
+
+			ctx := context.Background()
+			if tc.ctxEffort != "" {
+				ctx = brain.WithEffort(ctx, tc.ctxEffort)
+			}
+			if _, err := llm.New(srv.URL, "k", "auto", tc.clientDefault).Next(ctx, msg, nil); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("reasoning_effort = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // When the endpoint omits tool_call ids, the adapter synthesizes stable ones so
 // the assistant call and its result can still be matched by id on the next turn.
 func TestNext_SynthesizesMissingToolCallID(t *testing.T) {
@@ -89,7 +161,7 @@ func TestNext_SynthesizesMissingToolCallID(t *testing.T) {
 	)
 	defer srv.Close()
 
-	c := llm.New(srv.URL, "k", "auto")
+	c := llm.New(srv.URL, "k", "auto", "")
 	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "go"}}, nil)
 	if err != nil {
 		t.Fatalf("next: %v", err)
@@ -116,7 +188,7 @@ func TestNext_BuildsNativeToolHistory(t *testing.T) {
 		{Role: "assistant", ToolCalls: []brain.ToolCall{{ID: "call_9", Tool: "dns.resolve", Args: `{"host":"example.com"}`}}},
 		{Role: "tool", ToolCallID: "call_9", Content: "93.184.216.34"},
 	}
-	c := llm.New(srv.URL, "test-key", "auto")
+	c := llm.New(srv.URL, "test-key", "auto", "")
 	if _, err := c.Next(context.Background(), conv, nil); err != nil {
 		t.Fatalf("next: %v", err)
 	}
@@ -177,7 +249,7 @@ func TestNext_MultipleToolCallsKeptSeparate(t *testing.T) {
 	)
 	defer srv.Close()
 
-	c := llm.New(srv.URL, "k", "auto")
+	c := llm.New(srv.URL, "k", "auto", "")
 	step, err := c.Next(context.Background(), []brain.Message{{Role: "user", Content: "do both"}}, nil)
 	if err != nil {
 		t.Fatalf("next: %v", err)
@@ -206,7 +278,7 @@ func TestNext_SendsToolSchemasAndAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := llm.New(srv.URL, "test-key", "test-model")
+	c := llm.New(srv.URL, "test-key", "test-model", "")
 	tools := []tool.Spec{{
 		Name:        "net.fetch",
 		Description: "Fetch a URL",

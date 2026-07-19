@@ -68,13 +68,14 @@ func NewManager(ctx context.Context, deps Deps) *Manager {
 	return &Manager{ctx: ctx, deps: deps, live: map[string]*Chat{}}
 }
 
-// List returns every chat's metadata (most recent first).
+// List returns every chat's metadata (most recent first). A live chat's in-memory Meta is
+// authoritative — the domain advances Updated/Read/Turns on it (touch/markRead/rename) before every
+// dumb Store.Save, so live and disk agree and the live copy is never staler. So live wins over the
+// saved copy, and a freshly-created chat (in memory, no file yet — lazy-persist) still lists.
 func (m *Manager) List() []Meta {
 	saved := m.deps.Store.List() // persisted chats (disk)
-	// Include LIVE chats too — a freshly-created chat lives in memory with no file yet
-	// (lazy-persist), so a store-only listing would hide it until its first turn. Collect the
-	// live chats under the lock, then read each Meta outside it (Meta takes the chat's own
-	// lock — never nest the two).
+	// Collect the live chats under the lock, then read each Meta outside it (Meta takes the chat's
+	// own lock — never nest the two).
 	m.mu.Lock()
 	liveChats := make([]*Chat, 0, len(m.live))
 	for _, c := range m.live {
@@ -90,7 +91,7 @@ func (m *Manager) List() []Meta {
 		seen[meta.ID] = true
 	}
 	for _, meta := range saved {
-		if !seen[meta.ID] { // live wins over its (possibly staler) saved copy
+		if !seen[meta.ID] { // a saved chat with no live instance (not currently open)
 			out = append(out, meta)
 		}
 	}
@@ -130,14 +131,52 @@ func (m *Manager) New(name string, origin Origin) (Meta, error) {
 	return meta, nil
 }
 
-// Rename updates a chat's name (live and persisted).
+// Rename updates a chat's name (live and persisted). An empty name is a deliberate no-op.
 func (m *Manager) Rename(id, name string) error {
-	m.mu.Lock()
-	if c := m.live[id]; c != nil {
-		c.rename(name)
+	if name == "" {
+		return nil
 	}
+	return m.mutate(id, func(c *Chat) Meta { return c.rename(name) }, func(meta *Meta) {
+		meta.Name = name
+		meta.Updated = time.Now()
+	})
+}
+
+// MarkRead advances a chat's shared read cursor to its latest turn (see Chat.markRead) and fires
+// the list-change hook so the host re-pushes the full chat list to EVERY connected device — that
+// broadcast is what makes "read on one device" clear the unread dot on the others.
+func (m *Manager) MarkRead(id string) error {
+	return m.mutate(id, (*Chat).markRead, func(meta *Meta) { meta.Read = meta.Updated })
+}
+
+// mutate applies a metadata change through the DUMB store (which invents no values, so the domain
+// must set them). For a LIVE chat it advances the in-memory Meta via onLive (keeping List's
+// authoritative live copy in step) and persists it; for a saved-but-not-live chat it loads,
+// applies onSaved, and writes back. A live chat with no messages yet is left unwritten
+// (lazy-persist) — its live Meta already carries the change and the first turn persists it. Either
+// way the list-change hook fires so clients re-pull the fresh list.
+func (m *Manager) mutate(id string, onLive func(*Chat) Meta, onSaved func(*Meta)) error {
+	m.mu.Lock()
+	c := m.live[id]
 	m.mu.Unlock()
-	err := m.deps.Store.Rename(id, name)
+
+	var err error
+	if c != nil {
+		meta := onLive(c)
+		if snap := c.Snapshot(); len(snap.Messages) > 0 { // lazy-persist: never write an empty chat
+			// Re-check under the lock that a concurrent Delete hasn't dropped this chat — else the
+			// Save below would resurrect the file Delete just removed (same guard the pump uses).
+			m.mu.Lock()
+			_, stillLive := m.live[id]
+			m.mu.Unlock()
+			if stillLive {
+				err = m.deps.Store.Save(meta, snap.Messages, snap.Forest)
+			}
+		}
+	} else if msgs, forest, meta, ok := m.deps.Store.Load(id); ok {
+		onSaved(&meta)
+		err = m.deps.Store.Save(meta, msgs, forest)
+	}
 	m.changed()
 	return err
 }
@@ -242,7 +281,8 @@ func (m *Manager) pump(c *Chat, sub <-chan Event) {
 			}
 			snap := c.Snapshot()
 			if len(snap.Messages) > 0 { // lazy-persist: never write an empty chat to disk
-				_ = m.deps.Store.Save(meta, snap.Messages, snap.Forest)
+				fresh := c.touch(snap.Messages) // domain advances Updated/Turns; the store writes it verbatim
+				_ = m.deps.Store.Save(fresh, snap.Messages, snap.Forest)
 				m.signal(meta.ID, "turnEnd", string(meta.Origin))
 				m.changed() // updated time / turn count reorder the list
 			}
@@ -281,7 +321,7 @@ func (m *Manager) Deliver(id string, source Source, input string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if c, ok := m.openLocked(id); ok {
-		c.Submit(source, input)
+		c.Submit(source, input, "")
 	}
 }
 
@@ -329,7 +369,7 @@ func (m *Manager) FireAgent(ctx context.Context, name string, ch Charter) error 
 	// attendance, so the run stays unattended (its Asks resolve per the charter's dial).
 	sub, unsub := c.Tap()
 	defer unsub()
-	c.Submit(SourceSchedule, scheduledTask)
+	c.Submit(SourceSchedule, scheduledTask, "")
 	m.mu.Unlock()
 	m.changed() // a fresh agent run appeared in the list
 
