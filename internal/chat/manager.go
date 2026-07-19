@@ -35,6 +35,9 @@ type Deps struct {
 	Store  *Store
 	Root   func() Charter
 	Agent  func(name string) (Charter, error)
+	// WS is the workspace name, stamped (with each chat's id) onto every turn's ctx as a
+	// ConvoRef — so an out-of-band push raised during a turn can deep-link back to this chat.
+	WS string
 	// OnActivity, if set, is called from a chat's pump with the chat id, a kind
 	// ("turnEnd" | "approvalPending"), and the chat's origin ("user" | "agent") so a host can
 	// badge background chats AND decide whether to wake a backgrounded user (a user chat's
@@ -204,6 +207,7 @@ func (m *Manager) spinLocked(meta Meta, ch Charter, msgs []brain.Message, forest
 		// id, so the workspace-shared wake tool resumes the chat that invoked it (not an
 		// ambient one).
 		WithDecorator(func(ctx context.Context) context.Context {
+			ctx = WithConvo(ctx, m.deps.WS, id) // deep-link ref for any out-of-band push this turn raises
 			return wakecap.WithResume(ctx, func(note string) { m.Deliver(id, SourceWake, note) })
 		}))
 	c.Start(m.ctx)

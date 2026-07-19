@@ -226,14 +226,12 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 	// an unattended run's approval. Configured via NOCTURN_APNS_* env; absent → push simply off
 	// (the front-end fallback applies). The push is only a WAKE — the approve/deny comes back
 	// in-app over the authenticated WebSocket, so no return channel is needed.
-	var oob hitl.Notifier
 	var notifyPush notifycap.Pusher
 	var pn *pushNotifier // the APNs channel, or nil when unconfigured
 	oobReady := func() bool { return false }
 	if sender := buildAPNS(devices); sender != nil {
 		pn = &pushNotifier{sender: sender, devices: devices, log: log.With(slog.String("component", "push"))}
-		oob = hitl.Serialize(pn)
-		notifyPush = pn
+		notifyPush = pn // the notify tool reaches the phone through the same channel
 		oobReady = pn.Available
 		fmt.Println("Out-of-band approvals via APNs push")
 	} else {
@@ -242,19 +240,26 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 
 	// onAnswer wakes a backgrounded user when their chat produces an answer: an alert push, but
 	// ONLY when a push device exists AND no app is foreground-active (a foreground app already
-	// gets the turnEnd over the WebSocket). A tap opens the app → reconnect → snapshot.
-	onAnswer := func() {
+	// gets the turnEnd over the WebSocket). It carries ws+chatId so a tap opens that chat.
+	onAnswer := func(ws, chatID string) {
 		if pn != nil && !presence.Active() && pn.Available() {
-			_ = pn.Push(context.Background(), "Nocturn", "Your answer is ready")
+			_ = pn.Answer(ws, chatID)
 		}
 	}
 
 	// One HITL engine for ALL workspaces. The router per request is routeApproval (extracted so
 	// it is unit-testable): in-band on the chat's own stream, additionally out-of-band (push) when
 	// a device can receive it AND no foreground app is watching, else the front-end's fallback.
+	// The push notifier is BOUND per request to the asking chat's ConvoRef (from rctx), so the
+	// approval push carries a deep-link.
 	var approvals *hitl.Engine
 	approvalLog := log.With(slog.String("component", "approval"))
 	approvals = hitl.NewEngine(key, fallback, hitl.WithLogger(approvalLog), hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
+		var oob hitl.Notifier
+		if pn != nil {
+			ref, _ := chat.ConvoFrom(rctx)
+			oob = pn.bound(ref)
+		}
 		n := routeApproval(rctx, oob, oobReady, presence.Active, approvals.Resolve)
 		// One line that explains every "why did (n't) it push": the inputs that decided the channel.
 		approvalLog.InfoContext(rctx, "approval route",

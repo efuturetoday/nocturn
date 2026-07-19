@@ -33,9 +33,9 @@ type shared struct {
 	notify    notifycap.Pusher // out-of-band push (ntfy) or the attended TUI fallback
 	send      func(tea.Msg)    // p.Send, late-bound (p is created after the stacks)
 	modelName string
-	sync      *syncHub     // process-wide client-sync fan-out (badges + chat-list changes); nil = no app server
-	log       *slog.Logger // diagnostic logger (stderr for serve, a file for the TUI)
-	onAnswer  func()       // wake a backgrounded user on a user chat's turnEnd (nil = no push channel)
+	sync      *syncHub                // process-wide client-sync fan-out (badges + chat-list changes); nil = no app server
+	log       *slog.Logger            // diagnostic logger (stderr for serve, a file for the TUI)
+	onAnswer  func(ws, chatID string) // wake a backgrounded user on a user chat's turnEnd (nil = no push channel)
 }
 
 // bound is one OPEN workspace: the workspace itself (which owns tools/skills/agents/guard/
@@ -135,7 +135,7 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 			// phone with an alert push ("your answer is ready"), analogous to the approval push.
 			// Only for user chats: an autonomous agent run's turnEnd is not the user's answer.
 			if kind == "turnEnd" && origin == string(chat.OriginUser) && sh.onAnswer != nil {
-				sh.onAnswer()
+				sh.onAnswer(wsName, chatID)
 			}
 		}
 		onChange = func() { sh.sync.emitList(appserver.DomainChats, wsName) }
@@ -148,6 +148,7 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 		Store:      chatStore,
 		Root:       w.RootCharter,
 		Agent:      agentCharter,
+		WS:         wsName,
 		OnActivity: onActivity,
 		OnChange:   onChange,
 	})

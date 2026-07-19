@@ -515,6 +515,22 @@ export interface RegisterRequest {
 }
 
 /**
+ * The custom `Data` a push notification carries (alongside the standard APNs `aps` alert). A push
+ * is only a WAKE — on receipt/tap the app should reconnect the WebSocket and re-snapshot; the real
+ * state always comes over the socket, never the push. Route on `type`; use `ws`/`chatId` to
+ * deep-link to the exact chat:
+ *   • approval — a chat is waiting on an Ask → open it and show Approve/Deny (also in the snapshot).
+ *   • answer   — a chat produced a reply while you were away → open it.
+ *   • notify   — a proactive message from the assistant (e.g. a reminder firing).
+ */
+export type PushType = "approval" | "answer" | "notify";
+export interface PushPayload {
+  type: PushType;
+  ws?: string; // the workspace to open
+  chatId?: string; // the chat to open / that holds the pending approval
+}
+
+/**
  * One pending device-join, carried by the `joins` WS event to already-paired ("admin") devices:
  * the code a human relays to the joining device. Never sent to the joining (unpaired) device.
  */
