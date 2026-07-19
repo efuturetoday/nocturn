@@ -280,7 +280,7 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 	sh := shared{
 		master:    master,
 		approvals: approvals,
-		llmModel:  llm.New(baseURL, apiKey, modelName, effort),
+		llmModel:  llm.New(baseURL, apiKey, modelName, effort, llm.WithLogger(log.With(slog.String("component", "llm")))),
 		notify:    notifyPush,
 		send:      send,
 		modelName: modelName,

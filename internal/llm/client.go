@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -29,16 +30,34 @@ type Client struct {
 	// New. A per-turn effort on ctx (brain.EffortFrom) overrides it; "" leaves the request field
 	// unset. Unexported: the Client is shared across turn goroutines, so it is read-only after New.
 	effort brain.Effort
+	log    *slog.Logger // diagnostic (tool-schema sanitization); no-op default
+}
+
+// Option configures a Client.
+type Option func(*Client)
+
+// WithLogger sets the diagnostic logger — it records any tool-schema sanitization (which tool,
+// what was rewritten to fit a strict provider). A nil logger is ignored (the no-op default stays).
+func WithLogger(l *slog.Logger) Option {
+	return func(c *Client) {
+		if l != nil {
+			c.log = l
+		}
+	}
 }
 
 // New returns a Client for an OpenAI-compatible endpoint at baseURL (its /v1 path is appended),
 // authenticating with apiKey, using modelName, and defaultEffort as the global reasoning level.
-func New(baseURL, apiKey, modelName string, defaultEffort brain.Effort) *Client {
+func New(baseURL, apiKey, modelName string, defaultEffort brain.Effort, opts ...Option) *Client {
 	cfg := openai.DefaultConfig(apiKey)
 	if baseURL != "" {
 		cfg.BaseURL = strings.TrimRight(baseURL, "/") + "/v1"
 	}
-	return &Client{api: openai.NewClientWithConfig(cfg), Model: modelName, effort: defaultEffort}
+	c := &Client{api: openai.NewClientWithConfig(cfg), Model: modelName, effort: defaultEffort, log: slog.New(slog.DiscardHandler)}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
 // compile-time proof the adapter is a brain.Model.
@@ -63,12 +82,19 @@ func (c *Client) Next(ctx context.Context, conv []brain.Message, tools []tool.Sp
 	}
 	req.ReasoningEffort = string(effort)
 	for _, t := range tools {
+		// Normalize the schema to the lowest-common-denominator a strict provider (e.g. Gemini via
+		// a proxy) accepts. A third-party MCP/plugin tool may ship JSON Schema OpenAI tolerates but
+		// Gemini rejects; the log names the tool + what was rewritten.
+		params, fixes := sanitizeSchema(json.RawMessage(t.Parameters))
+		if len(fixes) > 0 {
+			c.log.DebugContext(ctx, "sanitized tool schema", slog.String("tool", t.Name), slog.Any("fixes", fixes))
+		}
 		req.Tools = append(req.Tools, openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        t.Name,
 				Description: t.Description,
-				Parameters:  json.RawMessage(t.Parameters),
+				Parameters:  params,
 			},
 		})
 	}
