@@ -727,7 +727,8 @@ nur gegen **verlorenes Zweitgerät** (das dein Primär rauswirft) + **Fat-Finger
 Light-Master (isMaster=Bootstrap, Approvals flach, Master geschützt + kein Selbst-Löschen +
 `setMaster`-Transfer) · (C) Strikt-Master (nur Master revoked/approved).
 
-**Entscheidung (2026-07-19):** vorerst **so lassen** (flach, kein Guard) — hierher geparkt.
-**Wenn angefasst:** mindestens der **Lockout-Guard „letztes Gerät nicht revokebar"** ist der billige,
-klar sinnvolle erste Schritt (heute fehlt er → App kann sich total aussperren). Master-Rolle (B) ist
-der natürliche zweite. **Priorität:** nach dem Beta-Kern.
+**Entscheidung (2026-07-19):** vorerst **so lassen** (flach, **auch kein Lockout-Guard**). Sperrt
+sich die App durch Revoke des letzten Geräts aus, ist das der bewusst akzeptierte Notfall →
+**Recovery = `nocturn serve --reset-pairing`** an der Box + neu koppeln. Kein Aufwand jetzt.
+**Wenn später angefasst:** der Guard „letztes Gerät nicht revokebar" ist der billige erste Schritt,
+Master-Rolle (B) der natürliche zweite. **Priorität:** niedrig, nach allem anderen.
