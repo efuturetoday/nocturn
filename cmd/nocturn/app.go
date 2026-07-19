@@ -9,6 +9,8 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -123,6 +125,20 @@ func (n teeNotifier) Resolved() { n.inband.Resolved() }
 // oobReady reports whether any device can receive a push; active whether any app is foreground.
 // resolve is the engine's own Resolve (the in-band notifier hands a chosen token back to it).
 // Extracted from the engine wiring so this decision is testable in isolation.
+// channelName labels the routed notifier for a log line: which way an approval went.
+func channelName(n hitl.Notifier) string {
+	switch n.(type) {
+	case teeNotifier:
+		return "tee(inband+push)"
+	case attendedNotifier:
+		return "inband"
+	case nil:
+		return "none(fallback)"
+	default:
+		return "oob(push)"
+	}
+}
+
 func routeApproval(rctx context.Context, oob hitl.Notifier, oobReady, active func() bool, resolve func(token string) error) hitl.Notifier {
 	ready := oob != nil && oobReady() // a device is registered to receive a push
 	sink := chat.ApprovalSinkFrom(rctx)
@@ -179,7 +195,7 @@ type spine struct {
 // workspaces/ (plus `ensure`, e.g. the active/default one, created on first run). It is
 // front-end-agnostic: the caller supplies how lines are surfaced and how an unroutable
 // approval is answered.
-func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier, ensure string) (*spine, error) {
+func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier, log *slog.Logger, ensure string) (*spine, error) {
 	_ = godotenv.Load()
 	baseURL, apiKey := os.Getenv("FREELLM_BASE_URL"), os.Getenv("FREELLM_API_KEY")
 	modelName := os.Getenv("FREELLM_MODEL")
@@ -214,19 +230,29 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 	var notifyPush notifycap.Pusher
 	oobReady := func() bool { return false }
 	if sender := buildAPNS(devices); sender != nil {
-		pn := &pushNotifier{sender: sender, devices: devices}
+		pn := &pushNotifier{sender: sender, devices: devices, log: log.With(slog.String("component", "push"))}
 		oob = hitl.Serialize(pn)
 		notifyPush = pn
 		oobReady = pn.Available
 		fmt.Println("Out-of-band approvals via APNs push")
+	} else {
+		log.InfoContext(ctx, "out-of-band push disabled (NOCTURN_APNS_* not fully set)")
 	}
 
 	// One HITL engine for ALL workspaces. The router per request is routeApproval (extracted so
 	// it is unit-testable): in-band on the chat's own stream, additionally out-of-band (push) when
 	// a device can receive it AND no foreground app is watching, else the front-end's fallback.
 	var approvals *hitl.Engine
+	approvalLog := log.With(slog.String("component", "approval"))
 	approvals = hitl.NewEngine(key, fallback, hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
-		return routeApproval(rctx, oob, oobReady, presence.Active, approvals.Resolve)
+		n := routeApproval(rctx, oob, oobReady, presence.Active, approvals.Resolve)
+		// One line that explains every "why did (n't) it push": the inputs that decided the channel.
+		approvalLog.InfoContext(rctx, "approval route",
+			slog.Bool("hasSink", chat.ApprovalSinkFrom(rctx) != nil),
+			slog.Bool("active", presence.Active()),
+			slog.Bool("oobReady", oobReady()),
+			slog.String("channel", channelName(n)))
+		return n
 	}))
 
 	hub := newSyncHub()
@@ -241,6 +267,7 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 		send:      send,
 		modelName: modelName,
 		sync:      hub,
+		log:       log, // was missing → wake/gateway loggers were nil-silenced
 	}
 	if sh.notify == nil {
 		sh.notify = consolePusher{send: send} // no ntfy: notify() falls back to the send sink
@@ -295,11 +322,20 @@ func tuiCmd(args []string) error {
 		return err
 	}
 
+	// The TUI owns the terminal, so the diagnostic log goes to a FILE (nocturn.log, 0600), never
+	// the screen. A failure to open it degrades to a no-op logger — logging must never block the app.
+	logw := io.Discard
+	if f, ferr := os.OpenFile("nocturn.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); ferr == nil {
+		defer f.Close()
+		logw = f
+	}
+	log := newLogger(logw)
+
 	// The TUI's inline prompt is the approval fallback; `p` is bound after the spine, so
 	// send captures it late.
 	var p *tea.Program
 	notifier := &tuiNotifier{}
-	sp, err := buildSpine(ctx, func(m tea.Msg) { p.Send(m) }, hitl.Serialize(notifier), activeName)
+	sp, err := buildSpine(ctx, func(m tea.Msg) { p.Send(m) }, hitl.Serialize(notifier), log, activeName)
 	if err != nil {
 		return err
 	}

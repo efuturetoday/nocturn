@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -84,6 +85,11 @@ type Guard struct {
 	TTL       time.Duration
 	Now       func() time.Time
 
+	// Log records each Authorize verdict (family/write/target → allow|deny) — the core diagnostic
+	// + audit line. It logs identifiers, never secret values. A nil Log defaults to a no-op via
+	// logger(), so a zero-value Guard needs no special-casing at the call site.
+	Log *slog.Logger
+
 	// epochs is the guard's OWN revocation registry — the single source of truth for
 	// which permission scopes are alive. It is unexported so no caller can hand the
 	// Guard a different registry than the one its Scopes are minted on: the old
@@ -102,6 +108,18 @@ func (g *Guard) now() time.Time {
 		return g.Now()
 	}
 	return time.Now()
+}
+
+// discardLog is the shared no-op logger a Guard falls back to when Log is unset.
+var discardLog = slog.New(slog.DiscardHandler)
+
+// logger returns g.Log or the shared no-op — so every log site calls it unconditionally, with no
+// scattered nil checks.
+func (g *Guard) logger() *slog.Logger {
+	if g.Log != nil {
+		return g.Log
+	}
+	return discardLog
 }
 
 // epochRegistry returns the guard's revocation registry, creating it once on first
@@ -179,7 +197,22 @@ func opWord(write bool) string {
 //  4. On Ask with no standing grant, the autonomy dial (capability.AutonomyFrom)
 //     resolves an UNATTENDED run: strict → deny, full → auto-allow (non-consequential),
 //     attended/guarded → ask out of band. Inert for a normal (attended) run.
-func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent string) error {
+func (g *Guard) Authorize(ctx context.Context, call capability.Call, intent string) (err error) {
+	// One line per decision, capturing EVERY return path (allow / ask→outcome / deny / rate).
+	// Identifiers only (family/write/target), never the intent text or any value.
+	defer func() {
+		outcome := "allow"
+		if err != nil {
+			outcome = "deny"
+		}
+		g.logger().InfoContext(ctx, "authorize",
+			slog.String("family", call.Family),
+			slog.Bool("write", call.Write),
+			slog.String("target", call.Target),
+			slog.String("outcome", outcome),
+			slog.Any("err", err))
+	}()
+
 	if !capability.WithinCages(ctx, call) {
 		return ErrDenied
 	}

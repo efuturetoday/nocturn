@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -67,14 +68,34 @@ type Waker struct {
 	Min, Max   time.Duration
 	MaxPending int
 
+	log    *slog.Logger
 	mu     sync.Mutex
 	seq    uint64                 // next pending-timer id
 	timers map[uint64]*time.Timer // keyed by id, so a firing closure never self-references its own timer
 }
 
-// New builds a Waker. A wake's target comes from the calling turn's ctx (WithResume).
-func New() *Waker {
-	return &Waker{timers: map[uint64]*time.Timer{}}
+// Option configures a Waker.
+type Option func(*Waker)
+
+// WithLogger sets the diagnostic logger — a wake firing is otherwise invisible, so a "did the
+// self-wake resume the chat" question has no answer without it. A nil logger is ignored (the
+// no-op default stays), so callers never produce a nil logger.
+func WithLogger(l *slog.Logger) Option {
+	return func(w *Waker) {
+		if l != nil {
+			w.log = l
+		}
+	}
+}
+
+// New builds a Waker. A wake's target comes from the calling turn's ctx (WithResume). The logger
+// defaults to a no-op (never nil), so callers log unconditionally.
+func New(opts ...Option) *Waker {
+	w := &Waker{timers: map[uint64]*time.Timer{}, log: slog.New(slog.DiscardHandler)}
+	for _, o := range opts {
+		o(w)
+	}
+	return w
 }
 
 func (w *Waker) min() time.Duration {
@@ -163,14 +184,17 @@ func (w *Waker) schedule(delay time.Duration, note string, resume Resume) error 
 	id := w.seq // captured by the closure BEFORE AfterFunc — no self-reference to the timer var
 	w.timers[id] = time.AfterFunc(delay, func() { w.fired(id, note, resume) })
 	w.mu.Unlock()
+	w.log.Debug("wake scheduled", slog.Duration("delay", delay), slog.Int("noteLen", len(note)))
 	return nil
 }
 
-// fired removes the timer from the pending set and resumes.
+// fired removes the timer from the pending set and resumes. It runs detached (a timer callback,
+// no ctx), so it logs without one.
 func (w *Waker) fired(id uint64, note string, resume Resume) {
 	w.mu.Lock()
 	delete(w.timers, id)
 	w.mu.Unlock()
+	w.log.Info("wake fired", slog.Int("noteLen", len(note)))
 	resume(note)
 }
 

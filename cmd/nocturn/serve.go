@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -38,11 +39,16 @@ func serveCmd(args []string) error {
 	if addr == "" {
 		addr = serveDefaultAddr
 	}
+	// Diagnostic log → stdout (the daemon's event stream; systemd/launchd capture it). serve
+	// stdout carries no data pipe, so logs and the startup/QR lines share it.
+	log := newLogger(os.Stdout)
+	srvLog := log.With(slog.String("component", "server"))
+
 	// Build the process spine — it owns the device store (bearer hashes + push tokens), the
 	// in-flight pending pairings, the foreground/background presence tracker, and the HITL engine
 	// wired to APNs push. No TUI: notify()/scheduler lines go to stdout, and an approval that can
 	// reach neither a connected app nor a push device is DENIED (fail closed).
-	sp, err := buildSpine(ctx, logSend, denyNotifier{}, "default")
+	sp, err := buildSpine(ctx, logSend, denyNotifier{}, log, "default")
 	if err != nil {
 		return err
 	}
@@ -82,17 +88,22 @@ func serveCmd(args []string) error {
 	}
 
 	server := appserver.NewServer(&appWorkspaces{bounds: sp.workspaces, names: sp.names, sync: sp.sync, pairings: sp.pairings, devices: sp.devices}, sp.presence)
-	sp.devices.OnRevoke = server.Revoke // unpairing a device drops its live connection at once
+	sp.devices.OnRevoke = func(id string) { // unpairing a device drops its live connection at once
+		srvLog.InfoContext(ctx, "device revoked", slog.String("device", id))
+		server.Revoke(id)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		// The auth gate lives HERE, in cmd, before the upgrade — appserver stays pure (no auth
 		// hook). An unknown/absent bearer never reaches Handle.
 		dev, ok := sp.devices.Verify(bearerFrom(r))
 		if !ok {
+			srvLog.WarnContext(r.Context(), "ws rejected: unknown bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		sp.devices.Touch(dev.ID) // record last-used (coalesced to disk, not a write per connection)
+		srvLog.InfoContext(ctx, "ws connect", slog.String("device", dev.ID), slog.String("name", dev.Name))
 		// InsecureSkipVerify: skip coder/websocket's same-origin check. A companion app
 		// connects from a foreign origin (a browser dev server, or a Capacitor webview whose
 		// origin is capacitor://localhost) to the daemon's own host:port — always cross-origin.
@@ -107,10 +118,11 @@ func serveCmd(args []string) error {
 		c := newWSConn(conn)
 		_ = server.Handle(ctx, c, dev.ID)
 		_ = c.Close()
+		srvLog.InfoContext(ctx, "ws disconnect", slog.String("device", dev.ID))
 	})
 	// A minted join fans out to already-paired devices over the sync hub (DomainJoins), so an
 	// admin sees the code live without polling.
-	registerPairing(mux, sp.devices, sp.pairings, func() { sp.sync.emitList(appserver.DomainJoins, "") })
+	registerPairing(mux, sp.devices, sp.pairings, func() { sp.sync.emitList(appserver.DomainJoins, "") }, log.With(slog.String("component", "pairing")))
 	httpSrv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
 		<-ctx.Done()

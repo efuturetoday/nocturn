@@ -13,6 +13,7 @@ package workspace
 
 import (
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"time"
 
@@ -42,6 +43,7 @@ type Host struct {
 	Approvals *hitl.Engine     // the out-of-band approval engine (workspace-agnostic)
 	Model     brain.Model      // the shared LLM connection
 	Notify    notifycap.Pusher // out-of-band push, or an attended fallback
+	Log       *slog.Logger     // diagnostic logger (shared across workspaces), or nil
 }
 
 // Vault unlocks a workspace's credentials vault. The composition root supplies it (the
@@ -110,7 +112,7 @@ func Open(h Host, base func() capability.Policy, unlock Vault, name, dir string)
 		capability.WithLimit("notify", notifyRatePerMin, time.Minute),
 		capability.WithLimit("remind", remindRatePerMin, time.Minute),
 	)
-	guard := &gateway.Guard{Policy: base(), Approvals: h.Approvals, TTL: approvalTTL, Rate: rate}
+	guard := &gateway.Guard{Policy: base(), Approvals: h.Approvals, TTL: approvalTTL, Rate: rate, Log: h.Log}
 
 	net := netcap.New(guard, netcap.WithCredentials(credentials), netcap.WithScanner(leakScanner), netcap.WithTimeout(httpTimeout))
 	files := filecap.New(guard, filepath.Join(dir, "mnt"))

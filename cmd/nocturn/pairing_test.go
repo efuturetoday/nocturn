@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,7 +30,7 @@ func TestPairingEndpoints(t *testing.T) {
 	devices := device.Load("")
 	pairings := device.NewPairings(nil)
 	mux := http.NewServeMux()
-	registerPairing(mux, devices, pairings, nil)
+	registerPairing(mux, devices, pairings, nil, slog.New(slog.DiscardHandler))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -98,7 +99,7 @@ func TestRegisterEndpoint(t *testing.T) {
 	devices := device.Load("")
 	pairings := device.NewPairings(nil)
 	mux := http.NewServeMux()
-	registerPairing(mux, devices, pairings, nil)
+	registerPairing(mux, devices, pairings, nil, slog.New(slog.DiscardHandler))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -143,7 +144,7 @@ func TestRegisterEndpoint(t *testing.T) {
 
 func TestPairingCORSPreflight(t *testing.T) {
 	mux := http.NewServeMux()
-	registerPairing(mux, device.Load(""), device.NewPairings(nil), nil)
+	registerPairing(mux, device.Load(""), device.NewPairings(nil), nil, slog.New(slog.DiscardHandler))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 

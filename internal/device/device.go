@@ -25,6 +25,14 @@ import (
 	"time"
 )
 
+// Platform is a device's OS — it routes the push provider. Exported so callers use the constant,
+// not a magic string. Empty is treated as iOS for legacy devices paired before platform existed.
+const (
+	PlatformIOS     = "ios"     // Apple Push (APNs)
+	PlatformAndroid = "android" // Firebase Cloud Messaging (FCM) — sender not built yet
+	PlatformWeb     = "web"     // a browser; no native push token
+)
+
 // Device is one paired client: a stable id, a human name, when it was added, and (once the app
 // registers it) its APNs push token. The bearer itself is NOT stored — only its sha256 is (the
 // Store map key), so a leaked devices.json cannot impersonate a device. A non-empty PushToken

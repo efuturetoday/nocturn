@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -20,7 +21,7 @@ import (
 //	POST /join          {name,platform}            → {joinId}    a new device asks to join (no code)
 //	POST /join/confirm  {joinId,code}              → {bearer}    the code, typed off a trusted screen
 //	POST /register      {token,platform} (bearer)  → 204         the app's push token (OOB reach)
-func registerPairing(mux *http.ServeMux, devices *device.Store, pairings *device.Pairings, onJoinChange func()) {
+func registerPairing(mux *http.ServeMux, devices *device.Store, pairings *device.Pairings, onJoinChange func(), log *slog.Logger) {
 	// The app connects from a foreign origin (a Capacitor webview / dev server), so the browser
 	// sends a CORS preflight OPTIONS before each request. handle wraps every endpoint to answer
 	// the preflight and set the CORS headers — consistent with the WS's InsecureSkipVerify
@@ -79,6 +80,8 @@ func registerPairing(mux *http.ServeMux, devices *device.Store, pairings *device
 		}
 		// An empty token clears the registration (the user revoked push). Success is 204.
 		devices.SetPushToken(dev.ID, req.Token, resolvePlatform(req.Platform, r))
+		log.InfoContext(r.Context(), "push token registered",
+			slog.String("device", dev.ID), slog.Bool("cleared", req.Token == ""))
 		w.WriteHeader(http.StatusNoContent)
 	})
 }
@@ -134,21 +137,21 @@ func bearerFrom(r *http.Request) string {
 // from the UA, defaulting to "web" (a browser has no native push token anyway).
 func resolvePlatform(declared string, r *http.Request) string {
 	switch strings.ToLower(strings.TrimSpace(declared)) {
-	case "ios":
-		return "ios"
-	case "android":
-		return "android"
-	case "web":
-		return "web"
+	case device.PlatformIOS:
+		return device.PlatformIOS
+	case device.PlatformAndroid:
+		return device.PlatformAndroid
+	case device.PlatformWeb:
+		return device.PlatformWeb
 	}
 	ua := strings.ToLower(r.UserAgent())
 	switch {
 	case strings.Contains(ua, "iphone"), strings.Contains(ua, "ipad"), strings.Contains(ua, "ipod"):
-		return "ios"
+		return device.PlatformIOS
 	case strings.Contains(ua, "android"):
-		return "android"
+		return device.PlatformAndroid
 	default:
-		return "web"
+		return device.PlatformWeb
 	}
 }
 

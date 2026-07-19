@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,7 +33,8 @@ type shared struct {
 	notify    notifycap.Pusher // out-of-band push (ntfy) or the attended TUI fallback
 	send      func(tea.Msg)    // p.Send, late-bound (p is created after the stacks)
 	modelName string
-	sync      *syncHub // process-wide client-sync fan-out (badges + chat-list changes); nil = no app server
+	sync      *syncHub     // process-wide client-sync fan-out (badges + chat-list changes); nil = no app server
+	log       *slog.Logger // diagnostic logger (stderr for serve, a file for the TUI)
 }
 
 // bound is one OPEN workspace: the workspace itself (which owns tools/skills/agents/guard/
@@ -87,7 +89,7 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 	// provisioning (plugins/MCP/OAuth prompts) and the TUI transport (self-wake, scheduler
 	// log) — wired below over the workspace's exposed parts. (The activity sink now lives
 	// in the chatModel, stamped per turn there.)
-	host := workspace.Host{Master: sh.master, Approvals: sh.approvals, Model: sh.llmModel, Notify: sh.notify}
+	host := workspace.Host{Master: sh.master, Approvals: sh.approvals, Model: sh.llmModel, Notify: sh.notify, Log: sh.log.With(slog.String("component", "gateway"))}
 	unlock := func(dir, name string) (*secret.Vault, error) {
 		return unlockVault(sh.master, filepath.Join(dir, "secrets.vault"), name)
 	}
@@ -147,7 +149,7 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 	// decorator in the manager), so it resumes the chat that invoked it, even in the
 	// background with no client attached. The Waker is reachable via the tool it registers
 	// (the tool closure captures it), so it needs no field on bound.
-	w.Tools().Add(wakecap.New().Tool())
+	w.Tools().Add(wakecap.New(wakecap.WithLogger(sh.log.With(slog.String("component", "wake")))).Tool())
 
 	sched, err := agent.NewScheduler(w.Agents(), func(runCtx context.Context, def agent.Agent) error {
 		// A cron firing runs UNATTENDED as a fresh one-shot chat in the manager: its

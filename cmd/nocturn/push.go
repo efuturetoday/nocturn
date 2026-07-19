@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 type pushNotifier struct {
 	sender  push.Sender
 	devices *device.Store
+	log     *slog.Logger
 }
 
 // Notify wakes a phone about a pending approval. No reachable device → an error, so the engine
@@ -37,13 +39,21 @@ func (n *pushNotifier) Push(_ context.Context, title, message string) error {
 func (n *pushNotifier) send(title, body, kind string) error {
 	var tokens []string
 	for _, t := range n.devices.PushTargets() {
-		if t.Platform == "" || t.Platform == "ios" {
+		if t.Platform == "" || t.Platform == device.PlatformIOS { // empty = legacy iOS
 			tokens = append(tokens, t.Token)
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return n.sender.Send(ctx, push.Message{Title: title, Body: body, Data: map[string]string{"type": kind}}, tokens)
+	err := n.sender.Send(ctx, push.Message{Title: title, Body: body, Data: map[string]string{"type": kind}}, tokens)
+	// The one line that answers "did the push reach APNs, and if not why" — the APNs reason
+	// (BadDeviceToken, InvalidProviderToken, …) rides in err.
+	if err != nil {
+		n.log.ErrorContext(ctx, "push send failed", slog.String("kind", kind), slog.Int("tokens", len(tokens)), slog.Any("err", err))
+	} else {
+		n.log.InfoContext(ctx, "push sent", slog.String("kind", kind), slog.Int("tokens", len(tokens)))
+	}
+	return err
 }
 
 // Available reports whether any device can currently receive an out-of-band push — the router
