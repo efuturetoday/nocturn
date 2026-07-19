@@ -1,5 +1,5 @@
 // The composition root: assemble the shared spine (master, HITL engine, LLM client,
-// ntfy) and build ONE isolated stack per workspace, then run the bubbletea program.
+// APNs push) and build ONE isolated stack per workspace, then run the bubbletea program.
 // Kept out of tui.go so the view logic stays separate from the wiring; the
 // per-workspace stack construction itself lives in stack.go.
 package main
@@ -20,15 +20,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joho/godotenv"
 
+	"github.com/efuturetoday/nocturn/internal/appserver"
 	"github.com/efuturetoday/nocturn/internal/chat"
+	"github.com/efuturetoday/nocturn/internal/device"
 	"github.com/efuturetoday/nocturn/internal/hitl"
-	"github.com/efuturetoday/nocturn/internal/hitl/ntfy"
 	"github.com/efuturetoday/nocturn/internal/llm"
 	"github.com/efuturetoday/nocturn/internal/notifycap"
 )
 
 // consolePusher is the attended fallback for notify() when no out-of-band channel
-// (ntfy) is configured: it surfaces the notification as a dim inline TUI line
+// (APNs push) is configured: it surfaces the notification as a dim inline TUI line
 // instead of a phone push. It satisfies notifycap.Pusher.
 type consolePusher struct{ send func(tea.Msg) }
 
@@ -112,24 +113,30 @@ func (n teeNotifier) Notify(intent string, options []hitl.Option) error {
 func (n teeNotifier) Resolved() { n.inband.Resolved() }
 
 // routeApproval picks the HITL channel for one request from its ctx. The rule:
-//   - No approval sink on ctx (a detached run with no chat loop): out-of-band if
-//     configured, else nil (the engine's front-end fallback).
+//   - No approval sink on ctx (a detached run with no chat loop): out-of-band if a device can
+//     receive it (oobReady), else nil (the engine's front-end fallback).
 //   - A sink is present: ALWAYS record the request in-band on that chat's stream (so a
-//     reconnecting app answers it from the snapshot). Decide at Ask-time whether it must
-//     ALSO buzz the phone — only if no client is watching this chat right now.
+//     reconnecting app answers it from the snapshot). ALSO push out-of-band only when a device
+//     is registered (oobReady) AND no app is foreground-active — a foreground app is reachable
+//     over the WebSocket, so presence, not the per-chat client count, gates the push.
 //
-// resolve is the engine's own Resolve (the in-band notifier hands a chosen token back to
-// it). Extracted from the engine wiring so this decision is testable in isolation.
-func routeApproval(rctx context.Context, oob hitl.Notifier, resolve func(token string) error) hitl.Notifier {
+// oobReady reports whether any device can receive a push; active whether any app is foreground.
+// resolve is the engine's own Resolve (the in-band notifier hands a chosen token back to it).
+// Extracted from the engine wiring so this decision is testable in isolation.
+func routeApproval(rctx context.Context, oob hitl.Notifier, oobReady, active func() bool, resolve func(token string) error) hitl.Notifier {
+	ready := oob != nil && oobReady() // a device is registered to receive a push
 	sink := chat.ApprovalSinkFrom(rctx)
 	if sink == nil {
-		if oob != nil {
+		if ready {
 			return oob
 		}
 		return nil
 	}
 	inband := attendedNotifier{sink: sink, resolve: resolve}
-	if oob != nil && !sink.HasClients() {
+	// Push only when a device can receive it AND no app is foreground-active. A foreground app is
+	// reachable over the WebSocket for ANY chat (the open chat shows the prompt; another chat gets
+	// an approvalPending badge), so presence — not the per-chat client count — decides.
+	if ready && !active() {
 		return teeNotifier{inband: inband, oob: oob}
 	}
 	return inband
@@ -161,7 +168,10 @@ type spine struct {
 	approvals  *hitl.Engine
 	workspaces map[string]*bound
 	names      []string
-	sync       *syncHub // client-sync fan-out (badges + list changes); the app server subscribes, the TUI ignores it
+	sync       *syncHub            // client-sync fan-out (badges + list changes); the app server subscribes, the TUI ignores it
+	devices    *device.Store       // paired devices + their push tokens (the app-server auth root)
+	pairings   *device.Pairings    // in-flight pending pairings (bootstrap + joins)
+	presence   *appserver.Presence // foreground/background count → OOB routing (WS vs push)
 }
 
 // buildSpine unlocks the master, wires the shared HITL engine (attended → out-of-band →
@@ -190,40 +200,39 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 		return nil, err
 	}
 
-	// Out-of-band channel (optional): an ntfy topic pair pushes an unattended run's
-	// approval to the phone. Topics are public — the HMAC single-use token is the integrity.
-	ntfyBase := os.Getenv("NTFY_BASE_URL")
-	if ntfyBase == "" {
-		ntfyBase = "https://ntfy.sh"
-	}
-	reqTopic, respTopic := os.Getenv("NTFY_REQ_TOPIC"), os.Getenv("NTFY_RESP_TOPIC")
-	var pubOpts []ntfy.Option
-	var lisOpts []ntfy.ListenerOption
-	if tok := os.Getenv("NTFY_TOKEN"); tok != "" {
-		pubOpts = append(pubOpts, ntfy.WithAuth(tok))
-		lisOpts = append(lisOpts, ntfy.ListenerWithAuth(tok))
-	}
+	// The app-server auth root: paired devices (bearer hashes + push tokens) on disk, the
+	// in-flight pending pairings in memory, and the foreground/background presence tracker.
+	devices := device.Load(filepath.Join("workspaces", "devices.json"))
+	pairings := device.NewPairings(nil)
+	presence := appserver.NewPresence()
+
+	// Out-of-band channel (optional): native mobile push (APNs) wakes a paired device's phone for
+	// an unattended run's approval. Configured via NOCTURN_APNS_* env; absent → push simply off
+	// (the front-end fallback applies). The push is only a WAKE — the approve/deny comes back
+	// in-app over the authenticated WebSocket, so no return channel is needed.
 	var oob hitl.Notifier
 	var notifyPush notifycap.Pusher
-	if reqTopic != "" && respTopic != "" {
-		pub := ntfy.New(ntfyBase, reqTopic, ntfyBase+"/"+respTopic, pubOpts...)
-		oob = hitl.Serialize(pub)
-		notifyPush = pub
+	oobReady := func() bool { return false }
+	if sender := buildAPNS(devices); sender != nil {
+		pn := &pushNotifier{sender: sender, devices: devices}
+		oob = hitl.Serialize(pn)
+		notifyPush = pn
+		oobReady = pn.Available
+		fmt.Println("Out-of-band approvals via APNs push")
 	}
 
-	// One HITL engine for ALL workspaces. The router per request is routeApproval (extracted
-	// so it is unit-testable): in-band on the chat's own stream, additionally out-of-band
-	// when no client is watching, else the front-end's fallback (TUI prompt, or serve's deny).
+	// One HITL engine for ALL workspaces. The router per request is routeApproval (extracted so
+	// it is unit-testable): in-band on the chat's own stream, additionally out-of-band (push) when
+	// a device can receive it AND no foreground app is watching, else the front-end's fallback.
 	var approvals *hitl.Engine
 	approvals = hitl.NewEngine(key, fallback, hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
-		return routeApproval(rctx, oob, approvals.Resolve)
+		return routeApproval(rctx, oob, oobReady, presence.Active, approvals.Resolve)
 	}))
-	if oob != nil {
-		go func() { _ = ntfy.NewListener(ntfyBase, respTopic, approvals.Resolve, lisOpts...).Run(ctx) }()
-		fmt.Printf("Out-of-band approvals via ntfy %s (req=%s, resp=%s)\n", ntfyBase, reqTopic, respTopic)
-	}
 
 	hub := newSyncHub()
+	// A device membership/token change (pair/revoke/register) pushes the fresh device list to
+	// every connected app over the sync hub (DomainDevices).
+	devices.OnChange = func() { hub.emitList(appserver.DomainDevices, "") }
 	sh := shared{
 		master:    master,
 		approvals: approvals,
@@ -253,7 +262,7 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 		}
 		workspaces[name] = bw
 	}
-	return &spine{sh: sh, approvals: approvals, workspaces: workspaces, names: names, sync: hub}, nil
+	return &spine{sh: sh, approvals: approvals, workspaces: workspaces, names: names, sync: hub, devices: devices, pairings: pairings, presence: presence}, nil
 }
 
 // closeSessions stops every workspace's live chats (saving each non-empty chat's history and

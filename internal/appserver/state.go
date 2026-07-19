@@ -30,6 +30,18 @@ type Workspaces interface {
 	// the app only VIEWS them (a read-only list), pushed live on change (DomainReminders).
 	Reminders(ws string) ([]ReminderMeta, bool)
 
+	// OpenJoins lists the pending device-join requests with their codes — the reveal surface
+	// for already-paired ("admin") devices, so a human can relay a code to a joining device.
+	// Not workspace-scoped (a join is daemon-wide); pushed live on change (DomainJoins).
+	OpenJoins() []JoinMeta
+
+	// Devices lists the PAIRED devices (no secrets — never the bearer/hash), for the app's
+	// device-management view. Daemon-wide; pushed live on change (DomainDevices).
+	Devices() []DeviceMeta
+	// RevokeDevice unpairs the device with the given id (its bearer stops working on the next
+	// connection). It reports whether the id existed. Any paired device may revoke another.
+	RevokeDevice(id string) bool
+
 	// WatchSync subscribes to the ONE server-push stream across ALL workspaces: each Sync is a
 	// per-chat activity badge, a coarse "this workspace's chat list changed" marker, or both (a
 	// turn end is both). The server turns it into a chatActivity push and/or a full chats-list
@@ -56,7 +68,9 @@ type Domain string
 
 const (
 	DomainChats     Domain = "chats"
-	DomainReminders Domain = "reminders" // later: DomainAgents, DomainSettings, DomainJobs, …
+	DomainReminders Domain = "reminders"
+	DomainJoins     Domain = "joins"
+	DomainDevices   Domain = "devices" // later: DomainAgents, DomainSettings, DomainJobs, …
 )
 
 // ChatActivity is the lightweight badge signal for a chat the client may not have open:
@@ -83,6 +97,28 @@ type ReminderMeta struct {
 	FireAt  string `json:"fireAt"` // RFC3339
 	Message string `json:"message"`
 	Title   string `json:"title,omitempty"`
+}
+
+// JoinMeta is one pending device-join for the reveal surface on already-paired devices: the
+// joinId the new device confirms with, the name it gave, and the code a human reads off this
+// trusted screen and types into the joining device.
+type JoinMeta struct {
+	JoinID   string `json:"joinId"`
+	Name     string `json:"name"`
+	Code     string `json:"code"`
+	Platform string `json:"platform,omitempty"` // "ios" | "android" — the joining device's OS
+}
+
+// DeviceMeta is one paired device for the app's device-management view. It carries NO secret —
+// never the bearer or its hash; `hasPush` is presence only (whether a push token is registered).
+type DeviceMeta struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform,omitempty"`
+	Added    string `json:"added"`              // RFC3339
+	LastUsed string `json:"lastUsed,omitempty"` // RFC3339, "" if never used since it was added
+	HasPush  bool   `json:"hasPush"`            // an out-of-band-reachable device
+	Self     bool   `json:"self,omitempty"`     // this is the requesting connection's own device
 }
 
 // ChatMeta is one chat's summary for the app's chat list.

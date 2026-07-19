@@ -50,6 +50,7 @@ type fakeWorkspaces struct {
 
 	mu      sync.Mutex
 	persona string
+	revoked []string
 }
 
 func (w *fakeWorkspaces) getPersona() string {
@@ -109,6 +110,20 @@ func (w *fakeWorkspaces) WatchSync() (<-chan appserver.Sync, func()) {
 		w.syncs = make(chan appserver.Sync, 8)
 	}
 	return w.syncs, func() {}
+}
+func (w *fakeWorkspaces) OpenJoins() []appserver.JoinMeta {
+	return []appserver.JoinMeta{{JoinID: "j1", Name: "iPad", Code: "4821", Platform: "ios"}}
+}
+
+func (w *fakeWorkspaces) Devices() []appserver.DeviceMeta {
+	return []appserver.DeviceMeta{{ID: "d1", Name: "iPhone", Platform: "ios", Added: "2026-07-19T00:00:00Z", HasPush: true}}
+}
+
+func (w *fakeWorkspaces) RevokeDevice(id string) bool {
+	w.mu.Lock()
+	w.revoked = append(w.revoked, id)
+	w.mu.Unlock()
+	return id == "d1"
 }
 
 // fakeConn scripts client→server messages (in) and captures server→client messages (out).
@@ -185,7 +200,7 @@ func TestServer_ControlPlaneAndChat(t *testing.T) {
 	fr := &fakeRunner{events: make(chan chat.Event, 8), snap: chat.Snapshot{Running: true}}
 	fw := &fakeWorkspaces{runner: fr, persona: "You are helpful."}
 	fc := newConn()
-	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
+	go func() { _ = appserver.NewServer(fw, appserver.NewPresence()).Handle(t.Context(), fc, "") }()
 
 	// Control: list workspaces.
 	fc.in <- []byte(`{"cmd":"listWorkspaces"}`)
@@ -234,7 +249,7 @@ func TestServer_BackgroundChatActivity(t *testing.T) {
 		syncs:  make(chan appserver.Sync, 8),
 	}
 	fc := newConn()
-	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
+	go func() { _ = appserver.NewServer(fw, appserver.NewPresence()).Handle(t.Context(), fc, "") }()
 
 	// A background chat in "work" finishes a turn — the manager would emit this badge.
 	fw.syncs <- appserver.Sync{Activity: &appserver.ChatActivity{WS: "work", ID: "c9", Kind: appserver.ActivityTurnEnd}}
@@ -253,7 +268,7 @@ func TestServer_ChatsListPush(t *testing.T) {
 		syncs:  make(chan appserver.Sync, 8),
 	}
 	fc := newConn()
-	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
+	go func() { _ = appserver.NewServer(fw, appserver.NewPresence()).Handle(t.Context(), fc, "") }()
 
 	// A chat was created/renamed/deleted in "work" — the manager would emit this.
 	fw.syncs <- appserver.Sync{Domain: appserver.DomainChats, WS: "work"}
@@ -275,7 +290,7 @@ func TestServer_RemindersListPush(t *testing.T) {
 		syncs:  make(chan appserver.Sync, 8),
 	}
 	fc := newConn()
-	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
+	go func() { _ = appserver.NewServer(fw, appserver.NewPresence()).Handle(t.Context(), fc, "") }()
 
 	fw.syncs <- appserver.Sync{Domain: appserver.DomainReminders, WS: "work"}
 
@@ -293,7 +308,7 @@ func TestServer_RemindersListPush(t *testing.T) {
 func TestServer_UnknownWorkspaceErrors(t *testing.T) {
 	fw := &fakeWorkspaces{runner: &fakeRunner{events: make(chan chat.Event, 1)}}
 	fc := newConn()
-	go func() { _ = appserver.NewServer(fw).Handle(t.Context(), fc) }()
+	go func() { _ = appserver.NewServer(fw, appserver.NewPresence()).Handle(t.Context(), fc, "") }()
 
 	fc.in <- []byte(`{"cmd":"getWorkspace","ws":"nope"}`)
 	if e := recvUntil(t, fc.out, "error"); !strings.Contains(e["text"].(string), "unknown workspace") {
@@ -303,4 +318,101 @@ func TestServer_UnknownWorkspaceErrors(t *testing.T) {
 	// still alive: a following list works.
 	fc.in <- []byte(`{"cmd":"listWorkspaces"}`)
 	recvUntil(t, fc.out, "workspaces")
+}
+
+// A connection is foreground-active on connect; setPresence toggles it in the shared tracker
+// (which the approval router reads to choose WebSocket vs push), and a disconnect leaves the set.
+func TestServer_Presence(t *testing.T) {
+	fw := &fakeWorkspaces{runner: &fakeRunner{events: make(chan chat.Event, 1)}}
+	fc := newConn()
+	p := appserver.NewPresence()
+	go func() { _ = appserver.NewServer(fw, p).Handle(t.Context(), fc, "") }()
+
+	eventually(t, p.Active, "a fresh connection should be foreground-active")
+
+	fc.in <- []byte(`{"cmd":"setPresence","active":false}`)
+	eventually(t, func() bool { return !p.Active() }, "setPresence:false should clear active")
+
+	fc.in <- []byte(`{"cmd":"setPresence","active":true}`)
+	eventually(t, p.Active, "setPresence:true should restore active")
+
+	fc.Close()
+	eventually(t, func() bool { return !p.Active() }, "disconnect should leave the active set")
+}
+
+// A join change (Sync with DomainJoins) pushes the pending-join list (with codes) to the client
+// unsolicited; listJoins is the explicit pull. Same coarse bus as chats/reminders.
+func TestServer_JoinsPush(t *testing.T) {
+	fw := &fakeWorkspaces{
+		runner: &fakeRunner{events: make(chan chat.Event, 1)},
+		syncs:  make(chan appserver.Sync, 8),
+	}
+	fc := newConn()
+	go func() { _ = appserver.NewServer(fw, appserver.NewPresence()).Handle(t.Context(), fc, "") }()
+
+	fw.syncs <- appserver.Sync{Domain: appserver.DomainJoins}
+	got := recvUntil(t, fc.out, "joins")
+	if items, _ := got["items"].([]any); len(items) != 1 {
+		t.Fatalf("joins push items = %v, want one", got["items"])
+	}
+
+	fc.in <- []byte(`{"cmd":"listJoins"}`)
+	recvUntil(t, fc.out, "joins")
+}
+
+// The paired-device list is pushed on a DomainDevices change and pulled via listDevices; a
+// revokeDevice command routes to the state service. No secret ever crosses the wire.
+func TestServer_DevicesAndRevoke(t *testing.T) {
+	fw := &fakeWorkspaces{
+		runner: &fakeRunner{events: make(chan chat.Event, 1)},
+		syncs:  make(chan appserver.Sync, 8),
+	}
+	fc := newConn()
+	// This connection authenticated as device "d1", so its own device is flagged self.
+	go func() { _ = appserver.NewServer(fw, appserver.NewPresence()).Handle(t.Context(), fc, "d1") }()
+
+	fw.syncs <- appserver.Sync{Domain: appserver.DomainDevices}
+	got := recvUntil(t, fc.out, "devices")
+	items, _ := got["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("devices push items = %v, want one", got["items"])
+	}
+	d0, _ := items[0].(map[string]any)
+	if d0["bearer"] != nil || d0["id"] != "d1" {
+		t.Fatalf("device meta = %v, want id=d1 and no bearer", items[0])
+	}
+	if d0["self"] != true {
+		t.Fatalf("device meta self = %v, want true (the connection's own device)", d0["self"])
+	}
+
+	fc.in <- []byte(`{"cmd":"listDevices"}`)
+	recvUntil(t, fc.out, "devices")
+
+	fc.in <- []byte(`{"cmd":"revokeDevice","id":"d1"}`)
+	eventually(t, func() bool {
+		fw.mu.Lock()
+		defer fw.mu.Unlock()
+		return slices.Contains(fw.revoked, "d1")
+	}, "revokeDevice did not reach the state service")
+}
+
+// Revoke closes the live connections of the revoked device (its bearer stops working at once,
+// not just on the next reconnect).
+func TestServer_RevokeDropsConnection(t *testing.T) {
+	fw := &fakeWorkspaces{runner: &fakeRunner{events: make(chan chat.Event, 1)}}
+	fc := newConn()
+	srv := appserver.NewServer(fw, appserver.NewPresence())
+	done := make(chan struct{})
+	go func() { _ = srv.Handle(t.Context(), fc, "d1"); close(done) }()
+
+	// Let the connection register, then revoke its device.
+	fc.in <- []byte(`{"cmd":"listWorkspaces"}`)
+	recvUntil(t, fc.out, "workspaces")
+	srv.Revoke("d1")
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Revoke did not end the revoked device's connection")
+	}
 }

@@ -185,6 +185,7 @@ type wireCommand struct {
 	Agent   string `json:"agent,omitempty"`   // submitAgent
 	Task    string `json:"task,omitempty"`    // submitAgent
 	Choice  int    `json:"choice,omitempty"`  // resolve
+	Active  bool   `json:"active"`            // setPresence (decode-only; no omitempty so false is explicit)
 }
 
 // decodeCommand parses one client message into a command. The server switches on Cmd.
@@ -253,6 +254,28 @@ func encodeReminders(ws string, items []ReminderMeta) []byte {
 		WS    string         `json:"ws"`
 		Items []ReminderMeta `json:"items"`
 	}{"reminders", ws, items})
+	return b
+}
+
+func encodeJoins(items []JoinMeta) []byte {
+	if items == nil {
+		items = []JoinMeta{}
+	}
+	b, _ := json.Marshal(struct {
+		Type  string     `json:"type"`
+		Items []JoinMeta `json:"items"`
+	}{"joins", items})
+	return b
+}
+
+func encodeDevices(items []DeviceMeta) []byte {
+	if items == nil {
+		items = []DeviceMeta{}
+	}
+	b, _ := json.Marshal(struct {
+		Type  string       `json:"type"`
+		Items []DeviceMeta `json:"items"`
+	}{"devices", items})
 	return b
 }
 

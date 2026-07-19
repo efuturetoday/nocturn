@@ -16,19 +16,74 @@ import (
 // the out-of-band review — they are not raw commands here.
 type Server struct {
 	workspaces Workspaces
+	presence   *Presence
+
+	mu         sync.Mutex
+	nextConnID uint64
+	conns      map[string]map[uint64]context.CancelFunc // deviceID → live connections' cancels
 }
 
-// NewServer builds a server over the workspace state service. Call Handle per connection.
-func NewServer(ws Workspaces) *Server { return &Server{workspaces: ws} }
+// NewServer builds a server over the workspace state service and a shared presence tracker (the
+// approval router reads the same tracker to choose WebSocket vs push). A nil presence is
+// tolerated (a fresh one is used). Call Handle per connection.
+func NewServer(ws Workspaces, presence *Presence) *Server {
+	if presence == nil {
+		presence = NewPresence()
+	}
+	return &Server{workspaces: ws, presence: presence, conns: map[string]map[uint64]context.CancelFunc{}}
+}
+
+// Revoke closes every live connection belonging to deviceID — called when that device is unpaired,
+// so a revoked bearer stops working immediately, not just on the next reconnect.
+func (s *Server) Revoke(deviceID string) {
+	s.mu.Lock()
+	set := s.conns[deviceID]
+	cancels := make([]context.CancelFunc, 0, len(set))
+	for _, cancel := range set {
+		cancels = append(cancels, cancel)
+	}
+	s.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+// addConn registers a connection's cancel under its device id and returns a remove func to call
+// on disconnect. deviceID "" (e.g. a test) is not tracked (nothing to revoke).
+func (s *Server) addConn(deviceID string, cancel context.CancelFunc) func() {
+	if deviceID == "" {
+		return func() {}
+	}
+	s.mu.Lock()
+	id := s.nextConnID
+	s.nextConnID++
+	if s.conns[deviceID] == nil {
+		s.conns[deviceID] = map[uint64]context.CancelFunc{}
+	}
+	s.conns[deviceID][id] = cancel
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		delete(s.conns[deviceID], id)
+		if len(s.conns[deviceID]) == 0 {
+			delete(s.conns, deviceID)
+		}
+		s.mu.Unlock()
+	}
+}
 
 // Handle serves one client connection until ctx is cancelled, the client disconnects, or
 // a write fails. It runs a single writer (all outbound funnels through one channel, so the
 // Conn only ever sees one concurrent writer), a single reader (commands), and — while a
 // workspace is open — one chat pump streaming that workspace's Runner. The caller closes
-// the conn.
-func (s *Server) Handle(ctx context.Context, conn Conn) error {
+// the conn. deviceID is the paired device this connection authenticated as (from the auth
+// gate); it lets a revoke of that device drop this connection and marks "self" in the device list.
+func (s *Server) Handle(ctx context.Context, conn Conn, deviceID string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// Register so a revoke of this device cancels the connection; unregister on return.
+	defer s.addConn(deviceID, cancel)()
 
 	out := make(chan []byte, 64)
 	errc := make(chan error, 2)
@@ -49,8 +104,13 @@ func (s *Server) Handle(ctx context.Context, conn Conn) error {
 		}
 	}()
 
-	h := &clientConn{workspaces: s.workspaces, out: out}
+	h := &clientConn{workspaces: s.workspaces, out: out, presence: s.presence, deviceID: deviceID}
 	defer h.closeChat()
+
+	// A fresh connection is a foreground app (the user just opened it) → active. It reports
+	// background/foreground with setPresence; on disconnect it leaves the active set.
+	h.setActive(true)
+	defer h.setActive(false)
 
 	// The ONE server-push stream: per-chat activity badges and coarse chat-list changes for
 	// every workspace. A badge → chatActivity; a list change → the workspace's full chats list
@@ -67,6 +127,10 @@ func (s *Server) Handle(ctx context.Context, conn Conn) error {
 				h.sendChats(sig.WS)
 			case DomainReminders:
 				h.sendReminders(sig.WS)
+			case DomainJoins:
+				h.sendJoins()
+			case DomainDevices:
+				h.sendDevices()
 				// future domains (agents, settings, jobs) add a case + a sendX here
 			}
 		}
@@ -92,10 +156,29 @@ func (s *Server) Handle(ctx context.Context, conn Conn) error {
 type clientConn struct {
 	workspaces Workspaces
 	out        chan []byte
+	presence   *Presence
+	deviceID   string // the paired device this connection authenticated as ("" in tests)
 
 	mu         sync.Mutex
 	runner     Runner             // the open workspace's turn loop, or nil
 	chatCancel context.CancelFunc // stops the current chat pump, or nil
+	active     bool               // foreground (true) vs background (false); drives push routing
+}
+
+// setActive toggles this connection's foreground/background presence and reflects the change in
+// the shared tracker exactly once (idempotent — a repeat of the same state is a no-op).
+func (h *clientConn) setActive(active bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if active == h.active {
+		return
+	}
+	h.active = active
+	if active {
+		h.presence.enter()
+	} else {
+		h.presence.leave()
+	}
 }
 
 // dispatch routes one client command: control commands act on the Workspaces service and
@@ -127,6 +210,14 @@ func (h *clientConn) dispatch(ctx context.Context, msg []byte) {
 		h.sendChats(c.WS) // an explicit pull — mutations below rely on the WatchSync broadcast
 	case "listReminders":
 		h.sendReminders(c.WS) // an explicit pull; changes arrive live via DomainReminders
+	case "listJoins":
+		h.sendJoins() // an explicit pull; changes arrive live via DomainJoins
+	case "listDevices":
+		h.sendDevices() // an explicit pull; changes arrive live via DomainDevices
+	case "revokeDevice":
+		h.workspaces.RevokeDevice(c.ID) // the store's OnChange fans the fresh list to every conn
+	case "setPresence":
+		h.setActive(c.Active) // foreground/background — drives push-vs-WS routing
 	case "newChat":
 		if _, ok := h.workspaces.NewChat(c.WS, c.Name); !ok {
 			h.send(encodeError("unknown workspace: " + c.WS))
@@ -165,6 +256,26 @@ func (h *clientConn) sendReminders(ws string) {
 	} else {
 		h.send(encodeError("unknown workspace: " + ws))
 	}
+}
+
+// sendJoins pushes the pending device-join list (with codes) to this connection. It is not
+// workspace-scoped; only already-authed connections ever reach the server, so revealing the
+// codes here is safe.
+func (h *clientConn) sendJoins() {
+	h.send(encodeJoins(h.workspaces.OpenJoins()))
+}
+
+// sendDevices pushes the paired-device list (no secrets) to this connection. Daemon-wide. The
+// device this connection authenticated as is flagged self=true, so the app can render "this
+// device" (e.g. a sign-out) without knowing its own id otherwise.
+func (h *clientConn) sendDevices() {
+	list := h.workspaces.Devices()
+	for i := range list {
+		if list[i].ID == h.deviceID {
+			list[i].Self = true
+		}
+	}
+	h.send(encodeDevices(list))
 }
 
 // openChat makes a chat the active stream: it stops the current pump, resolves the chat's

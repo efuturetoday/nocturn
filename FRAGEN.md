@@ -701,3 +701,33 @@ Erweiterung fail-closed.
 
 **Priorität:** DevEx-Nice-to-have, **nach** dem Beta-Kern. Voraussetzung, um Reloads app-sichtbar zu
 machen, sind die Live-Domänen aus #20.
+
+---
+
+### 22. Device-Authority-Modell — Master-Rolle? (OFFEN, bewusst NICHT gebaut)
+
+**Kontext:** Gepairte Geräte sind heute **flach/gleichberechtigt**. Jedes darf approven, jedes darf
+via `revokeDevice` **jedes** andere entfernen — **auch das letzte** (dann App-seitig ausgesperrt;
+Recovery nur `nocturn serve --reset-pairing` an der Box). Kein `isMaster`, kein Lockout-Guard.
+
+**Kern-Einsicht:** Alle gepairten Geräte sind eh **vertraut** (nur der Owner kommt durch Pairing
+rein). Eine Master-Rolle schützt also **nicht** gegen einen Angreifer *unter* den Geräten, sondern
+nur gegen **verlorenes Zweitgerät** (das dein Primär rauswirft) + **Fat-Finger-Lockout**.
+
+**Die vier Teilfragen + Tendenz:**
+- **`isMaster` merken?** Billig — Master = das zuerst gepairte (Bootstrap-)Gerät.
+- **Nur Master darf approven?** **Nein** — killt den Kern-Vorteil „von JEDEM Gerät freigeben".
+  Approvals flach lassen.
+- **Master darf sich nicht selbst löschen + letztes Gerät nicht revokebar?** **Ja** (Lockout-Guards)
+  — das ist der **eigentlich wertvolle** Teil, unabhängig von einer Rolle.
+- **Nur Master darf löschen?** Tradeoff: schützt Primär vor verlorenem Zweit, aber Master-Verlust =
+  gar kein Management mehr.
+
+**Drei Level (falls wir's bauen):** (A) flach + „letztes Gerät nicht revokebar"-Guard · (B)
+Light-Master (isMaster=Bootstrap, Approvals flach, Master geschützt + kein Selbst-Löschen +
+`setMaster`-Transfer) · (C) Strikt-Master (nur Master revoked/approved).
+
+**Entscheidung (2026-07-19):** vorerst **so lassen** (flach, kein Guard) — hierher geparkt.
+**Wenn angefasst:** mindestens der **Lockout-Guard „letztes Gerät nicht revokebar"** ist der billige,
+klar sinnvolle erste Schritt (heute fehlt er → App kann sich total aussperren). Master-Rolle (B) ist
+der natürliche zweite. **Priorität:** nach dem Beta-Kern.

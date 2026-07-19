@@ -68,9 +68,10 @@ If you ignore a prompt, nothing happens. Silence is always a no.
 
 ## Approve from your phone
 
-You do not have to be at the keyboard. Nocturn can send an approval request to your phone
-as a push notification with **Approve** and **Deny** buttons. Tap one and the assistant
-continues. While it waits, it simply pauses, so a slow answer never causes a timeout.
+You do not have to be at the keyboard. Nocturn reaches the **companion app** on your phone
+with a push notification when it needs a yes; you open it and tap **Approve** or **Deny**,
+and the assistant continues. While it waits, it simply pauses, so a slow answer never causes
+a timeout.
 
 This is the recommended way to run it. Approving on a separate device means that even if
 something hijacks the chat, it cannot approve its own actions. The decision lives somewhere
@@ -78,30 +79,33 @@ it cannot reach.
 
 ### Setting it up
 
-Nocturn uses the free [ntfy](https://ntfy.sh) app for this.
+The companion app pairs to your daemon, and Nocturn pushes to it over Apple Push (APNs).
 
-1. Install **ntfy** on your phone, on iOS or Android.
-2. In the app, subscribe to two topic names of your choosing, one for requests and one for
-   replies. Pick names that are long and hard to guess.
-3. Add them to your `.env` next to Nocturn:
+1. Start the daemon with `nocturn serve`. On first run — when no device is paired yet — it
+   prints a **pairing QR** and a short code to the terminal.
+2. Open the companion app and scan the QR (or type the code) to pair. The app stores a
+   per-device key; you can revoke it later from any paired device. Pair a second device from
+   the first: it shows a code the new device types in.
+3. Give Nocturn Apple Push credentials so it can reach the phone, in your `.env`:
 
    ```ini
-   NTFY_REQ_TOPIC=your-requests-topic-name
-   NTFY_RESP_TOPIC=your-replies-topic-name
+   NOCTURN_APNS_KEY=/path/to/AuthKey_XXXXXXXXXX.p8
+   NOCTURN_APNS_KEY_ID=XXXXXXXXXX
+   NOCTURN_APNS_TEAM_ID=YYYYYYYYYY
+   NOCTURN_APNS_BUNDLE_ID=me.itexpert.nocturn
    ```
 
-4. Restart Nocturn. It prints a line confirming phone approvals are on.
+4. Restart Nocturn. From now on, when it needs a yes and no device is watching in the
+   foreground, your phone gets a push.
 
-That is it. From now on, when Nocturn needs a yes and you are not at the terminal, your
-phone buzzes.
-
-:::note[Self-hosting ntfy]
-If you run your own ntfy server, point Nocturn at it with `NTFY_BASE_URL`, and add
-`NTFY_TOKEN` if your server requires a login. The public server works fine to start.
+:::note[On your network vs away]
+On the same network as the daemon, answering is instant. Answering while away from home
+needs a relay, which is on the roadmap; until then, an approval is answered once you are
+reachable on the LAN (otherwise it times out — and a timeout is a no).
 :::
 
-:::tip[Is it safe over a public service?]
-Yes. The security does not depend on the topic names being secret. Every reply carries a
-signed, single-use code that cannot be forged or reused, so a stranger who guessed your
-topic still could not approve anything.
+:::tip[Is the push safe?]
+Yes. The push carries no decision and no secret — it is only a nudge. The approve/deny is
+sent back over the app's own bearer-authenticated connection, so even someone who intercepted
+the push notification could not approve anything.
 :::

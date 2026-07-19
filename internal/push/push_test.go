@@ -2,52 +2,127 @@ package push_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
-	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/efuturetoday/nocturn/internal/push"
 )
 
-func TestRegistry_RegisterPersistDedupUnregister(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "devices.json")
+// writeTestKey generates a P-256 key and writes it as a PKCS#8 PEM (.p8), as Apple issues.
+func writeTestKey(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "AuthKey.p8")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	return path
+}
 
-	r := push.LoadRegistry(path)
-	if len(r.Tokens()) != 0 {
-		t.Fatal("fresh registry must be empty")
+func TestAPNS_Send(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]http.Header{} // token -> the headers its request arrived with
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimPrefix(r.URL.Path, "/3/device/")
+		mu.Lock()
+		seen[token] = r.Header.Clone()
+		mu.Unlock()
+
+		if token == "deadtoken" {
+			w.WriteHeader(http.StatusGone)
+			_, _ = w.Write([]byte(`{"reason":"Unregistered"}`))
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if _, ok := body["aps"]; !ok {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	var pruned []string
+	a, err := push.NewAPNS(push.APNSConfig{
+		KeyPath:    writeTestKey(t),
+		KeyID:      "KEY123",
+		TeamID:     "TEAM123",
+		BundleID:   "me.itexpert.nocturn",
+		Host:       strings.TrimPrefix(srv.URL, "https://"),
+		HTTPClient: srv.Client(),
+		OnBadToken: func(tok string) { pruned = append(pruned, tok) },
+	})
+	if err != nil {
+		t.Fatalf("NewAPNS: %v", err)
 	}
 
-	if err := r.Register("tok-a", "phone"); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Register("tok-a", "phone-renamed"); err != nil { // repeat token → no duplicate
-		t.Fatal(err)
-	}
-	if err := r.Register("tok-b", "tablet"); err != nil {
-		t.Fatal(err)
-	}
-	if got := r.Tokens(); len(got) != 2 || !slices.Contains(got, "tok-a") || !slices.Contains(got, "tok-b") {
-		t.Fatalf("tokens = %v, want exactly [tok-a tok-b]", got)
+	msg := push.Message{Title: "Approval needed", Body: "send email", Data: map[string]string{"type": "approval"}}
+	if err := a.Send(context.Background(), msg, []string{"goodtoken", "deadtoken"}); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
 
-	// Persisted: a fresh Load sees the same devices.
-	if got := push.LoadRegistry(path).Tokens(); len(got) != 2 {
-		t.Fatalf("reloaded tokens = %v, want 2 persisted", got)
+	mu.Lock()
+	h := seen["goodtoken"]
+	mu.Unlock()
+	if got := h.Get("authorization"); !strings.HasPrefix(got, "bearer ") {
+		t.Fatalf("authorization = %q, want a bearer JWT", got)
 	}
-
-	if err := r.Unregister("tok-a"); err != nil {
-		t.Fatal(err)
+	if got := h.Get("apns-topic"); got != "me.itexpert.nocturn" {
+		t.Fatalf("apns-topic = %q, want the bundle id", got)
 	}
-	if got := r.Tokens(); len(got) != 1 || got[0] != "tok-b" {
-		t.Fatalf("after unregister: %v, want [tok-b]", got)
+	if got := h.Get("apns-push-type"); got != "alert" {
+		t.Fatalf("apns-push-type = %q, want alert", got)
 	}
-	if got := push.LoadRegistry(path).Tokens(); len(got) != 1 {
-		t.Fatalf("unregister not persisted: %v", got)
+	if len(pruned) != 1 || pruned[0] != "deadtoken" {
+		t.Fatalf("pruned = %v, want [deadtoken]", pruned)
 	}
 }
 
-// fakeSender records the messages/tokens it was asked to deliver — the double a serve test
-// (3b) drives to prove an approval fires a wake push.
+func TestAPNS_Send_NoTokens(t *testing.T) {
+	a, err := push.NewAPNS(push.APNSConfig{KeyPath: writeTestKey(t), KeyID: "k", TeamID: "t", BundleID: "b"})
+	if err != nil {
+		t.Fatalf("NewAPNS: %v", err)
+	}
+	if err := a.Send(context.Background(), push.Message{}, nil); err == nil {
+		t.Fatal("Send(no tokens) = nil, want an error (nobody reachable)")
+	}
+}
+
+func TestNewAPNS_BadKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.p8")
+	if err := os.WriteFile(path, []byte("not a pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := push.NewAPNS(push.APNSConfig{KeyPath: path}); err == nil {
+		t.Fatal("NewAPNS(non-pem) = nil error, want a parse failure")
+	}
+}
+
+// fakeSender records what it was asked to deliver — the double higher layers drive to prove an
+// approval fires a wake push without a real provider.
 type fakeSender struct {
 	msgs   []push.Message
 	tokens [][]string
@@ -59,7 +134,6 @@ func (f *fakeSender) Send(_ context.Context, m push.Message, tokens []string) er
 	return nil
 }
 
-// Sender is a port: a fake satisfies it, so higher layers are testable without a provider.
 var _ push.Sender = (*fakeSender)(nil)
 
 func TestFakeSender_Delivers(t *testing.T) {

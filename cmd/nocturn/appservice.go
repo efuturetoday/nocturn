@@ -6,6 +6,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/appserver"
 	"github.com/efuturetoday/nocturn/internal/chat"
+	"github.com/efuturetoday/nocturn/internal/device"
 	"github.com/efuturetoday/nocturn/internal/persona"
 )
 
@@ -14,9 +15,11 @@ import (
 // agents, skills) and its chats — never the filesystem. So the app server stays FS-free:
 // swapping how a workspace loads its state never touches this adapter's shape.
 type appWorkspaces struct {
-	bounds map[string]*bound
-	names  []string // sorted, for a stable List order
-	sync   *syncHub // client-sync fan-out (badges + list changes) — the managers' producer side
+	bounds   map[string]*bound
+	names    []string         // sorted, for a stable List order
+	sync     *syncHub         // client-sync fan-out (badges + list changes) — the managers' producer side
+	pairings *device.Pairings // pending device-joins — surfaced to already-paired devices (OpenJoins)
+	devices  *device.Store    // paired devices — the management view (list/revoke)
 }
 
 var _ appserver.Workspaces = (*appWorkspaces)(nil)
@@ -145,6 +148,41 @@ func (a *appWorkspaces) Reminders(ws string) ([]appserver.ReminderMeta, bool) {
 func (a *appWorkspaces) WatchSync() (<-chan appserver.Sync, func()) {
 	return a.sync.Watch()
 }
+
+// OpenJoins lists the pending device-joins (with codes) for the reveal surface on already-paired
+// devices. Not workspace-scoped — a join is daemon-wide.
+func (a *appWorkspaces) OpenJoins() []appserver.JoinMeta {
+	pending := a.pairings.OpenJoins()
+	out := make([]appserver.JoinMeta, 0, len(pending))
+	for _, p := range pending {
+		out = append(out, appserver.JoinMeta{JoinID: p.ID, Name: p.Name, Code: p.Code, Platform: p.Platform})
+	}
+	return out
+}
+
+// Devices lists the paired devices for the app's management view — no secrets (never the bearer
+// or its hash), only presence of a push token.
+func (a *appWorkspaces) Devices() []appserver.DeviceMeta {
+	list := a.devices.List()
+	out := make([]appserver.DeviceMeta, 0, len(list))
+	for _, d := range list {
+		m := appserver.DeviceMeta{
+			ID:       d.ID,
+			Name:     d.Name,
+			Platform: d.Platform,
+			Added:    d.Added.Format(time.RFC3339),
+			HasPush:  d.PushToken != "",
+		}
+		if !d.LastUsed.IsZero() {
+			m.LastUsed = d.LastUsed.Format(time.RFC3339)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// RevokeDevice unpairs a device by id (its OnChange hook then pushes the fresh list to all conns).
+func (a *appWorkspaces) RevokeDevice(id string) bool { return a.devices.Remove(id) }
 
 // toChatMeta maps a chat.Meta (domain) to the wire ChatMeta (RFC3339 timestamp).
 func toChatMeta(m chat.Meta) appserver.ChatMeta {

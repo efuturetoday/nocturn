@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,7 +30,7 @@ const serveDefaultAddr = ":8765"
 // serveCmd runs the companion-app daemon: the same workspace spine as the TUI, exposed over
 // a WebSocket the app drives (list/open workspaces, chat, answer approvals). It is NOT a
 // second binary — `nocturn serve` is a mode of the one binary.
-func serveCmd(_ []string) error {
+func serveCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -37,17 +38,30 @@ func serveCmd(_ []string) error {
 	if addr == "" {
 		addr = serveDefaultAddr
 	}
-	// MVP has NO authentication. Loopback is safe (only local processes reach it). Binding
-	// to a non-loopback address exposes an UNAUTHENTICATED control channel to the whole
-	// network — any device could drive the assistant and approve effects. Allowed for
-	// development (a real phone needs the LAN address), but warned loudly; add pairing/auth
-	// before using it on an untrusted network.
+	// Build the process spine — it owns the device store (bearer hashes + push tokens), the
+	// in-flight pending pairings, the foreground/background presence tracker, and the HITL engine
+	// wired to APNs push. No TUI: notify()/scheduler lines go to stdout, and an approval that can
+	// reach neither a connected app nor a push device is DENIED (fail closed).
+	sp, err := buildSpine(ctx, logSend, denyNotifier{}, "default")
+	if err != nil {
+		return err
+	}
+	defer sp.closeSessions()
+	defer func() { _ = sp.devices.Flush() }() // persist any LastUsed timestamps coalesced by Touch
+
+	// --reset-pairing is the operator's recovery path — empty the device store so the daemon
+	// re-opens the bootstrap pairing below (used when every paired device is lost).
+	if slices.Contains(args, "--reset-pairing") {
+		if err := sp.devices.Reset(); err != nil {
+			return fmt.Errorf("reset pairing: %w", err)
+		}
+		fmt.Println("device pairings reset — all devices removed.")
+	}
+
+	// Advertise on the LAN so the app finds the daemon without a typed IP. Only meaningful on a
+	// real interface — loopback has nothing to discover. The channel is bearer-authenticated
+	// (below), but still PLAINTEXT: use a trusted LAN until TLS lands (see the pairing plan).
 	if !isLoopbackAddr(addr) {
-		fmt.Printf("\n⚠️  WARNING: serving on %s with NO authentication — any device on your\n"+
-			"    network can control this assistant and approve effects. Use only on a network\n"+
-			"    you trust; set NOCTURN_SERVE_ADDR=127.0.0.1:8765 to force loopback-only.\n\n", addr)
-		// Advertise on the LAN so the app finds the daemon without a typed IP. Only meaningful
-		// on a real network interface — loopback has nothing to discover.
 		if shutdown, err := advertiseMDNS(addr); err != nil {
 			fmt.Printf("mDNS advertise failed (the app must connect by IP): %v\n", err)
 		} else {
@@ -56,36 +70,47 @@ func serveCmd(_ []string) error {
 		}
 	}
 
-	// No TUI: notify()/scheduler lines go to stdout, and an approval that can reach neither
-	// a connected app (attended sink) nor an out-of-band channel is DENIED (fail closed).
-	// When push/ntfy IS configured, the router reaches the phone before this fallback — so
-	// an approval still works with no app connected.
-	sp, err := buildSpine(ctx, logSend, denyNotifier{}, "default")
-	if err != nil {
-		return err
-	}
-	defer sp.closeSessions()
-
 	schedCtx, cancelSched := context.WithCancel(ctx)
 	defer cancelSched()
 	startSchedulers(schedCtx, sp)
 
-	server := appserver.NewServer(&appWorkspaces{bounds: sp.workspaces, names: sp.names, sync: sp.sync})
+	// Bootstrap: with no paired device, the operator is the trust root. Mint a pending pairing
+	// and print its QR + typed OTP to stdout — whoever started this process (and sees this
+	// terminal) pairs the first phone. Once a device exists this branch is silent.
+	if len(sp.devices.List()) == 0 {
+		printBootstrap(addr, sp.pairings.MintBootstrap())
+	}
+
+	server := appserver.NewServer(&appWorkspaces{bounds: sp.workspaces, names: sp.names, sync: sp.sync, pairings: sp.pairings, devices: sp.devices}, sp.presence)
+	sp.devices.OnRevoke = server.Revoke // unpairing a device drops its live connection at once
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		// The auth gate lives HERE, in cmd, before the upgrade — appserver stays pure (no auth
+		// hook). An unknown/absent bearer never reaches Handle.
+		dev, ok := sp.devices.Verify(bearerFrom(r))
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		sp.devices.Touch(dev.ID) // record last-used (coalesced to disk, not a write per connection)
 		// InsecureSkipVerify: skip coder/websocket's same-origin check. A companion app
 		// connects from a foreign origin (a browser dev server, or a Capacitor webview whose
 		// origin is capacitor://localhost) to the daemon's own host:port — always cross-origin.
-		// This is consistent with the no-auth MVP posture: the bind-address warning, not an
-		// Origin header, is the trust boundary. Revisit when pairing/auth lands.
+		// The bearer, not an Origin header, is the trust boundary.
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 		if err != nil {
 			return
 		}
 		// Derive from the SERVER ctx (not the request's), so a daemon shutdown cancels every
-		// live connection; a single client disconnect ends its Handle via a read error.
-		_ = server.Handle(ctx, newWSConn(conn))
+		// live connection; a single client disconnect ends its Handle via a read error. Handle
+		// carries dev.ID so a revoke of this device can drop the connection; close on return.
+		c := newWSConn(conn)
+		_ = server.Handle(ctx, c, dev.ID)
+		_ = c.Close()
 	})
+	// A minted join fans out to already-paired devices over the sync hub (DomainJoins), so an
+	// admin sees the code live without polling.
+	registerPairing(mux, sp.devices, sp.pairings, func() { sp.sync.emitList(appserver.DomainJoins, "") })
 	httpSrv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
 		<-ctx.Done()

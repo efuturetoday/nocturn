@@ -63,6 +63,6 @@ sections:
       want every notification approved.
   - title: Channel
     body: >-
-      Notifications are delivered over the same out-of-band channel as approvals (ntfy — see
-      [getting set up](/guides/getting-started/)). When no channel is configured, a notification falls
-      back to a dim inline line in the TUI (the attended case).
+      Notifications are delivered over the same out-of-band channel as approvals (a native push to the
+      paired companion app — see [approve from your phone](/guides/approvals/)). When no push channel is
+      configured, a notification falls back to a dim inline line in the TUI (the attended case).
