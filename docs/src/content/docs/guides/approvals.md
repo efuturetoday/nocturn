@@ -70,8 +70,9 @@ If you ignore a prompt, nothing happens. Silence is always a no.
 
 You do not have to be at the keyboard. Nocturn reaches the **companion app** on your phone
 with a push notification when it needs a yes; you open it and tap **Approve** or **Deny**,
-and the assistant continues. While it waits, it simply pauses, so a slow answer never causes
-a timeout.
+and the assistant continues. While it waits, the task itself is paused — a slow answer never
+fails the run for taking too long. The request does stay answerable for a few minutes; if
+nobody answers in that window it fail-closes to a no (silence is always a no).
 
 This is the recommended way to run it. Approving on a separate device means that even if
 something hijacks the chat, it cannot approve its own actions. The decision lives somewhere

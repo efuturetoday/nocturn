@@ -78,8 +78,10 @@ const scriptTimeout = 60 * time.Second
 // httpTimeout bounds a single outbound HTTP effect.
 const httpTimeout = 15 * time.Second
 
-// approvalTTL is how long an out-of-band approval stays answerable.
-const approvalTTL = 2 * time.Minute
+// approvalTTL is how long an out-of-band approval stays answerable. It is generous because an
+// out-of-band request travels to a phone the human may not check immediately — 2 minutes timed
+// out genuine-but-late taps. The single-use HMAC token bounds the risk, not a short window.
+const approvalTTL = 5 * time.Minute
 
 // notifyRatePerMin / remindRatePerMin bound how often the assistant may reach the user's
 // device per minute — anti-spam for the silent, base-Allow families (a runaway loop can't

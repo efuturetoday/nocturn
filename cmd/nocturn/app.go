@@ -254,7 +254,7 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 	// a device can receive it AND no foreground app is watching, else the front-end's fallback.
 	var approvals *hitl.Engine
 	approvalLog := log.With(slog.String("component", "approval"))
-	approvals = hitl.NewEngine(key, fallback, hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
+	approvals = hitl.NewEngine(key, fallback, hitl.WithLogger(approvalLog), hitl.WithRouter(func(rctx context.Context) hitl.Notifier {
 		n := routeApproval(rctx, oob, oobReady, presence.Active, approvals.Resolve)
 		// One line that explains every "why did (n't) it push": the inputs that decided the channel.
 		approvalLog.InfoContext(rctx, "approval route",

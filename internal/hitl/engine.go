@@ -15,6 +15,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -90,6 +91,7 @@ type Engine struct {
 	key      []byte
 	notifier Notifier
 	route    func(ctx context.Context) Notifier
+	log      *slog.Logger
 
 	mu      sync.Mutex
 	pending map[string]*pending
@@ -97,6 +99,17 @@ type Engine struct {
 
 // EngineOption configures an Engine.
 type EngineOption func(*Engine)
+
+// WithLogger sets the diagnostic logger — it records each request's outcome (approved /
+// denied / timeout), which distinguishes a genuine deny from a slow-answer timeout. A nil
+// logger is ignored (the no-op default stays).
+func WithLogger(l *slog.Logger) EngineOption {
+	return func(e *Engine) {
+		if l != nil {
+			e.log = l
+		}
+	}
+}
 
 // WithRouter picks the Notifier for each request from its context — e.g. an
 // interactive channel for an attended run and an out-of-band channel (phone) for an
@@ -112,7 +125,7 @@ func WithRouter(route func(ctx context.Context) Notifier) EngineOption {
 // NewEngine returns an engine that signs tokens with key and notifies via n (the
 // default channel; WithRouter can override it per request).
 func NewEngine(key []byte, n Notifier, opts ...EngineOption) *Engine {
-	e := &Engine{key: key, notifier: n, pending: make(map[string]*pending)}
+	e := &Engine{key: key, notifier: n, pending: make(map[string]*pending), log: slog.New(slog.DiscardHandler)}
 	for _, o := range opts {
 		o(e)
 	}
@@ -176,10 +189,14 @@ func (e *Engine) Request(ctx context.Context, intent string, choices []Choice, t
 	defer cancel()
 	select {
 	case out := <-p.resolved:
+		e.log.InfoContext(ctx, "approval resolved", slog.String("outcome", out.String()))
 		return out, nil
 	case <-ctx.Done():
 		e.discard(id)
-		return Denied, nil // timeout / cancellation denies, fail closed
+		// A timeout is NOT the same as a human deny — it is the "you never answered in time"
+		// case that a short TTL causes. Logging it distinctly is how a silent no-op is diagnosed.
+		e.log.WarnContext(ctx, "approval timed out (fail-closed deny)")
+		return Denied, nil
 	}
 }
 
