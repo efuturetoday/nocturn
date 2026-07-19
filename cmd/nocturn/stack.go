@@ -35,6 +35,7 @@ type shared struct {
 	modelName string
 	sync      *syncHub     // process-wide client-sync fan-out (badges + chat-list changes); nil = no app server
 	log       *slog.Logger // diagnostic logger (stderr for serve, a file for the TUI)
+	onAnswer  func()       // wake a backgrounded user on a user chat's turnEnd (nil = no push channel)
 }
 
 // bound is one OPEN workspace: the workspace itself (which owns tools/skills/agents/guard/
@@ -125,10 +126,18 @@ func buildStack(ctx context.Context, sh shared, wsName, wsDir string) (*bound, e
 	chatStore := chat.LoadStore(filepath.Join(wsDir, "chats"))
 	// onActivity badges this workspace's background chats; onChange pushes the full chat list
 	// on any list change. Both nil under the TUI (no hubs), so the manager stays silent there.
-	var onActivity func(chatID, kind string)
+	var onActivity func(chatID, kind, origin string)
 	var onChange func()
 	if sh.sync != nil {
-		onActivity = func(chatID, kind string) { sh.sync.emitActivity(wsName, chatID, kind) }
+		onActivity = func(chatID, kind, origin string) {
+			sh.sync.emitActivity(wsName, chatID, kind)
+			// A user chat finished a turn and no device is watching in the foreground → wake the
+			// phone with an alert push ("your answer is ready"), analogous to the approval push.
+			// Only for user chats: an autonomous agent run's turnEnd is not the user's answer.
+			if kind == "turnEnd" && origin == string(chat.OriginUser) && sh.onAnswer != nil {
+				sh.onAnswer()
+			}
+		}
 		onChange = func() { sh.sync.emitList(appserver.DomainChats, wsName) }
 		// reminders live-sync: a create/fire/cancel pushes the full reminder list to clients.
 		w.Reminders().OnChange = func() { sh.sync.emitList(appserver.DomainReminders, wsName) }

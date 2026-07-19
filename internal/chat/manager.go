@@ -35,10 +35,12 @@ type Deps struct {
 	Store  *Store
 	Root   func() Charter
 	Agent  func(name string) (Charter, error)
-	// OnActivity, if set, is called from a chat's pump with the chat id and a kind
-	// ("turnEnd" | "approvalPending") so a host can badge background chats. Optional (nil =
-	// no signal); it must not block — the pump calls it inline.
-	OnActivity func(chatID, kind string)
+	// OnActivity, if set, is called from a chat's pump with the chat id, a kind
+	// ("turnEnd" | "approvalPending"), and the chat's origin ("user" | "agent") so a host can
+	// badge background chats AND decide whether to wake a backgrounded user (a user chat's
+	// turnEnd), not an autonomous agent run. Optional (nil = no signal); it must not block —
+	// the pump calls it inline.
+	OnActivity func(chatID, kind, origin string)
 	// OnChange, if set, fires on any change to THIS workspace's chat LIST (a chat created,
 	// deleted, renamed, or completing a turn) so a host can push the full list to clients —
 	// coarse list-sync, distinct from the per-chat OnActivity badge. Optional; must not block.
@@ -237,7 +239,7 @@ func (m *Manager) pump(c *Chat, sub <-chan Event) {
 			snap := c.Snapshot()
 			if len(snap.Messages) > 0 { // lazy-persist: never write an empty chat to disk
 				_ = m.deps.Store.Save(meta, snap.Messages, snap.Forest)
-				m.signal(meta.ID, "turnEnd")
+				m.signal(meta.ID, "turnEnd", string(meta.Origin))
 				m.changed() // updated time / turn count reorder the list
 			}
 			// Reap an agent one-shot that has gone idle. The idle check runs under m.mu,
@@ -259,7 +261,8 @@ func (m *Manager) pump(c *Chat, sub <-chan Event) {
 			}
 		case ApprovalEvent:
 			// A background chat is waiting on an approval — actionable, not just a badge.
-			m.signal(c.Meta().ID, "approvalPending")
+			meta := c.Meta()
+			m.signal(meta.ID, "approvalPending", string(meta.Origin))
 		}
 	}
 }
@@ -356,9 +359,9 @@ func (m *Manager) MarkSkill(id, name string) {
 
 // signal fires the optional activity hook (badge a background chat). Kinds are the two the
 // host contract expects; see Deps.OnActivity.
-func (m *Manager) signal(chatID, kind string) {
+func (m *Manager) signal(chatID, kind, origin string) {
 	if m.deps.OnActivity != nil {
-		m.deps.OnActivity(chatID, kind)
+		m.deps.OnActivity(chatID, kind, origin)
 	}
 }
 

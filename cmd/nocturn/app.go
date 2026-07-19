@@ -228,15 +228,25 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 	// in-app over the authenticated WebSocket, so no return channel is needed.
 	var oob hitl.Notifier
 	var notifyPush notifycap.Pusher
+	var pn *pushNotifier // the APNs channel, or nil when unconfigured
 	oobReady := func() bool { return false }
 	if sender := buildAPNS(devices); sender != nil {
-		pn := &pushNotifier{sender: sender, devices: devices, log: log.With(slog.String("component", "push"))}
+		pn = &pushNotifier{sender: sender, devices: devices, log: log.With(slog.String("component", "push"))}
 		oob = hitl.Serialize(pn)
 		notifyPush = pn
 		oobReady = pn.Available
 		fmt.Println("Out-of-band approvals via APNs push")
 	} else {
 		log.InfoContext(ctx, "out-of-band push disabled (NOCTURN_APNS_* not fully set)")
+	}
+
+	// onAnswer wakes a backgrounded user when their chat produces an answer: an alert push, but
+	// ONLY when a push device exists AND no app is foreground-active (a foreground app already
+	// gets the turnEnd over the WebSocket). A tap opens the app → reconnect → snapshot.
+	onAnswer := func() {
+		if pn != nil && !presence.Active() && pn.Available() {
+			_ = pn.Push(context.Background(), "Nocturn", "Your answer is ready")
+		}
 	}
 
 	// One HITL engine for ALL workspaces. The router per request is routeApproval (extracted so
@@ -268,6 +278,7 @@ func buildSpine(ctx context.Context, send func(tea.Msg), fallback hitl.Notifier,
 		modelName: modelName,
 		sync:      hub,
 		log:       log, // was missing → wake/gateway loggers were nil-silenced
+		onAnswer:  onAnswer,
 	}
 	if sh.notify == nil {
 		sh.notify = consolePusher{send: send} // no ntfy: notify() falls back to the send sink
