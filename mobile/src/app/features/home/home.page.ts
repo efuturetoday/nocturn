@@ -1,23 +1,23 @@
 import { Component, ChangeDetectionStrategy, inject, computed } from '@angular/core';
 import { Router } from '@angular/router';
-import { DatePipe } from '@angular/common';
 import {
-  IonContent, IonCard, IonCardContent, IonList, IonItem, IonLabel, IonIcon, IonNote, IonBadge,
+  IonContent, IonCard, IonCardContent, IonList, IonItem, IonLabel, IonIcon,
   IonButton, IonChip, IonListHeader,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { ellipse, chatbubbleOutline, addOutline } from 'ionicons/icons';
+import { addOutline } from 'ionicons/icons';
 import { WorkspaceService } from '../../core/services/workspace.service';
 import { ChatService } from '../../core/services/chat.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
+import { ChatRowComponent } from '../chat/components/chat-row';
 import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
 
 @Component({
   selector: 'app-home',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    DatePipe, WorkspaceHeaderComponent, IonContent, IonCard, IonCardContent, IonList, IonItem,
-    IonLabel, IonIcon, IonNote, IonBadge, IonButton, IonChip, IonListHeader,
+    WorkspaceHeaderComponent, ChatRowComponent, IonContent, IonCard, IonCardContent, IonList,
+    IonItem, IonLabel, IonIcon, IonButton, IonChip, IonListHeader,
   ],
   template: `
     <app-workspace-header />
@@ -41,22 +41,12 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
       <ion-list>
         <ion-list-header><ion-label>Recent chats</ion-label></ion-list-header>
         @for (c of recent(); track c.id) {
-          <ion-item button detail="true" (click)="openChat(c)">
-            <ion-icon
-              slot="start"
-              name="chatbubble-outline"
-              [color]="chat.unread().has(c.id) ? 'primary' : 'medium'"
-              aria-hidden="true"
+          <ion-item button detail="false" (click)="openChat(c)">
+            <app-chat-row
+              [chat]="c"
+              [unread]="chat.unread().has(c.id)"
+              [approval]="chat.approvalWaiting().has(c.id)"
             />
-            <ion-label>
-              <h2>{{ c.name || 'Untitled chat' }}</h2>
-              <ion-note>{{ c.turns }} msg · {{ c.updated | date: 'short' }}</ion-note>
-            </ion-label>
-            @if (chat.approvalWaiting().has(c.id)) {
-              <ion-badge slot="end" color="warning">approval</ion-badge>
-            } @else if (chat.unread().has(c.id)) {
-              <ion-badge slot="end" color="primary">●</ion-badge>
-            }
           </ion-item>
         } @empty {
           <ion-item lines="none"><ion-label color="medium">No chats yet.</ion-label></ion-item>
@@ -85,7 +75,7 @@ export class HomePage {
   );
 
   constructor() {
-    addIcons({ ellipse, chatbubbleOutline, addOutline });
+    addIcons({ addOutline });
   }
 
   protected openChat(c: ChatMeta): void {

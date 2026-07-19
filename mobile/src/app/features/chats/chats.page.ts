@@ -1,23 +1,23 @@
 import { Component, ChangeDetectionStrategy, inject, effect, signal, computed } from '@angular/core';
 import { Router } from '@angular/router';
-import { DatePipe } from '@angular/common';
 import {
-  IonContent, IonList, IonItem, IonLabel, IonIcon, IonNote, IonBadge, IonTextarea, IonButton,
+  IonContent, IonList, IonItem, IonLabel, IonIcon, IonTextarea, IonButton,
   IonItemSliding, IonItemOptions, IonItemOption, AlertController,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { arrowUpOutline, createOutline, trashOutline, chatbubbleOutline } from 'ionicons/icons';
+import { arrowUpOutline, createOutline, trashOutline } from 'ionicons/icons';
 import { ChatService } from '../../core/services/chat.service';
 import { WorkspaceService } from '../../core/services/workspace.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
+import { ChatRowComponent } from '../chat/components/chat-row';
 import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
 
 @Component({
   selector: 'app-chats',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    DatePipe, WorkspaceHeaderComponent, IonContent, IonList, IonItem, IonLabel, IonIcon, IonNote,
-    IonBadge, IonTextarea, IonButton, IonItemSliding, IonItemOptions, IonItemOption,
+    WorkspaceHeaderComponent, ChatRowComponent, IonContent, IonList, IonItem, IonLabel, IonIcon,
+    IonTextarea, IonButton, IonItemSliding, IonItemOptions, IonItemOption,
   ],
   template: `
     <app-workspace-header />
@@ -45,22 +45,12 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
       <ion-list inset="true">
         @for (c of sorted(); track c.id) {
           <ion-item-sliding>
-            <ion-item button detail="true" (click)="openChat(c)">
-              <ion-icon
-                slot="start"
-                name="chatbubble-outline"
-                [color]="chat.unread().has(c.id) ? 'primary' : 'medium'"
-                aria-hidden="true"
+            <ion-item button detail="false" (click)="openChat(c)">
+              <app-chat-row
+                [chat]="c"
+                [unread]="chat.unread().has(c.id)"
+                [approval]="chat.approvalWaiting().has(c.id)"
               />
-              <ion-label>
-                <h2>{{ c.name || 'Untitled chat' }}</h2>
-                <ion-note>{{ c.turns }} msg · {{ c.updated | date: 'short' }}</ion-note>
-              </ion-label>
-              @if (chat.approvalWaiting().has(c.id)) {
-                <ion-badge slot="end" color="warning">approval</ion-badge>
-              } @else if (chat.unread().has(c.id)) {
-                <ion-badge slot="end" color="primary" aria-label="unread">●</ion-badge>
-              }
             </ion-item>
             <ion-item-options side="end">
               <ion-item-option (click)="rename(c)">
@@ -116,7 +106,7 @@ export class ChatsPage {
   );
 
   constructor() {
-    addIcons({ arrowUpOutline, createOutline, trashOutline, chatbubbleOutline });
+    addIcons({ arrowUpOutline, createOutline, trashOutline });
     // Load the active workspace's chats whenever it resolves/changes.
     effect(() => {
       if (this.workspaces.active()) this.chat.listChats();

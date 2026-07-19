@@ -41,12 +41,32 @@ export class ConnectionService {
     return () => this.listeners.delete(fn);
   }
 
-  /** Connect to `ws://host:port/ws`. Replaces any existing connection. */
-  connect(url: string): void {
+  private token = '';
+
+  /**
+   * Connect to `ws://host:port/ws` with the pairing bearer. The bearer rides as `?token=` because
+   * browsers/Capacitor can't set an Authorization header on the ws handshake (the daemon reads
+   * either). Replaces any existing connection.
+   */
+  connect(url: string, token: string): void {
     this.disconnect();
     this.manualClose = false;
     this.url = url;
+    this.token = token;
     this._currentUrl.set(url);
+    this.attempt = 0;
+    this.open();
+  }
+
+  /**
+   * Force an immediate reconnect attempt if we have a target and aren't already connected/opening
+   * — used when the app returns to the foreground (iOS suspends the socket in the background and
+   * the backoff timer may be paused/long). No-op if never connected or already live.
+   */
+  reconnectNow(): void {
+    if (!this.url || this.manualClose) return;
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
+    this.clearTimer();
     this.attempt = 0;
     this.open();
   }
@@ -78,7 +98,9 @@ export class ConnectionService {
     this._state.set(this.attempt === 0 ? 'connecting' : 'reconnecting');
     let ws: WebSocket;
     try {
-      ws = new WebSocket(this.url);
+      const u = new URL(this.url);
+      if (this.token) u.searchParams.set('token', this.token);
+      ws = new WebSocket(u.toString());
     } catch {
       this.scheduleReconnect();
       return;

@@ -9,6 +9,9 @@
  * so the broker + human-in-the-loop still gate every effect. A remote client is no more
  * powerful than the local TUI.
  *
+ * Before the WebSocket, a client must PAIR to obtain a bearer (see "Pairing & Auth" at the
+ * bottom): every `/ws` connection carries `Authorization: Bearer <token>`.
+ *
  * Generated from the Go source — keep in sync when the wire changes.
  */
 
@@ -93,6 +96,17 @@ export interface WorkspaceState {
   skills: SkillInfo[];
   plugins: PluginInfo[];
   accounts: string[];
+}
+
+/**
+ * One pending reminder in a workspace's reminder list. Read-only for the app — the model
+ * sets/cancels reminders via its gated tools; the app only views them (pushed live on change).
+ */
+export interface ReminderMeta {
+  id: string;
+  fireAt: string; // RFC3339 — when it fires
+  message: string;
+  title?: string;
 }
 
 /** One chat's summary in a workspace's chat list. A workspace holds several named chats. */
@@ -218,6 +232,17 @@ export interface ChatsEvent {
 }
 
 /**
+ * A workspace's pending-reminder list. Sent as a reply to `listReminders` and pushed
+ * unsolicited whenever the list changes (a reminder set / fired / cancelled). Full list —
+ * just `set(items)`.
+ */
+export interface RemindersEvent {
+  type: "reminders";
+  ws: string;
+  items: ReminderMeta[];
+}
+
+/**
  * A lightweight badge signal for a chat the client may NOT have open: it finished a turn
  * (`turnEnd` — badge it) or is waiting on an approval (`approvalPending` — actionable). No
  * conversation content; refresh the real state with `listChats` / `openChat`. The currently
@@ -228,6 +253,25 @@ export interface ChatActivityEvent {
   ws: string;
   id: string;
   kind: "turnEnd" | "approvalPending";
+}
+
+/**
+ * The pending device-joins (with codes), for already-paired ("admin") devices. Sent as a reply
+ * to `listJoins` and pushed unsolicited whenever a join is created/redeemed/expires. Full list —
+ * just `set(items)`. Only paired (authed) connections ever receive it, so the codes are safe here.
+ */
+export interface JoinsEvent {
+  type: "joins";
+  items: PendingJoin[];
+}
+
+/**
+ * The paired-device list, for device management. Reply to `listDevices` and pushed unsolicited
+ * whenever the set changes (pair / revoke / push-token register). Full list — just `set(items)`.
+ */
+export interface DevicesEvent {
+  type: "devices";
+  items: DeviceMeta[];
 }
 
 /** A control error (e.g. unknown workspace). */
@@ -251,6 +295,9 @@ export type ServerEvent =
   | WorkspacesEvent
   | WorkspaceEvent
   | ChatsEvent
+  | RemindersEvent
+  | JoinsEvent
+  | DevicesEvent
   | ChatActivityEvent
   | ErrorEvent;
 
@@ -318,6 +365,12 @@ export interface ListChatsCommand {
   ws: string;
 }
 
+/** List a workspace's pending reminders (→ RemindersEvent; changes then arrive live). */
+export interface ListRemindersCommand {
+  cmd: "listReminders";
+  ws: string;
+}
+
 /** Create a new empty chat in a workspace (→ ChatsEvent with the updated list). */
 export interface NewChatCommand {
   cmd: "newChat";
@@ -347,6 +400,34 @@ export interface DeleteChatCommand {
   id: string;
 }
 
+/**
+ * Report the app's foreground/background state. Send `active:true` when the app comes to the
+ * foreground, `active:false` when it backgrounds. It drives out-of-band routing: while ANY
+ * connection is active the daemon answers approvals over the WebSocket (in-band prompt or an
+ * `approvalPending` badge); when none is active a background approval is pushed to the phone.
+ * A fresh connection is assumed active until it says otherwise.
+ */
+export interface SetPresenceCommand {
+  cmd: "setPresence";
+  active: boolean;
+}
+
+/** List the pending device-joins (→ JoinsEvent; changes then arrive live). Bearer-implied. */
+export interface ListJoinsCommand {
+  cmd: "listJoins";
+}
+
+/** List the paired devices (→ DevicesEvent; changes then arrive live). */
+export interface ListDevicesCommand {
+  cmd: "listDevices";
+}
+
+/** Unpair a device by id (→ a fresh DevicesEvent is pushed). Its bearer stops working next connect. */
+export interface RevokeDeviceCommand {
+  cmd: "revokeDevice";
+  id: string;
+}
+
 /** The closed union of everything the client sends. */
 export type ClientCommand =
   | SubmitCommand
@@ -359,7 +440,102 @@ export type ClientCommand =
   | GetWorkspaceCommand
   | SetPersonaCommand
   | ListChatsCommand
+  | ListRemindersCommand
   | NewChatCommand
   | OpenChatCommand
   | RenameChatCommand
-  | DeleteChatCommand;
+  | DeleteChatCommand
+  | SetPresenceCommand
+  | ListJoinsCommand
+  | ListDevicesCommand
+  | RevokeDeviceCommand;
+
+// ── Pairing & Auth (HTTP, NOT the WebSocket) ─────────────────────────────────
+//
+// A device must pair before it can open `/ws`. Pairing yields a bearer; the app stores it
+// (secure storage) and sends it on EVERY WebSocket connection as `Authorization: Bearer
+// <token>` (or, where a header can't be set on the handshake, `?token=<bearer>` on the ws URL).
+// An unknown/absent bearer → the `/ws` upgrade is refused with HTTP 401.
+//
+// The daemon runs headless (the TUI may not exist), so the trust root is out-of-band:
+//   • Bootstrap (first device): `nocturn serve` with zero paired devices prints a QR + a
+//     6-digit OTP to its stdout. The QR encodes `nocturn://pair?host=<ip>&port=<p>&secret=<32B>`.
+//     Scan it (→ POST /pair with the secret) or type the OTP (→ POST /pair with the OTP).
+//   • Second+ device: the new device calls POST /join{name,platform} and gets a joinId (NO
+//     code). The code is revealed only to already-paired devices via the `joins` WS event
+//     (below). A human reads it off a trusted (already-paired) screen and TYPES it into the new
+//     device → POST /join/confirm.
+//
+// All endpoints answer a CORS preflight (OPTIONS → 204). Bodies are JSON. Errors are plain-text
+// HTTP 4xx (401 for a bad/expired/exhausted credential, 400 for malformed input).
+
+/**
+ * A device platform, selecting the push provider (ios→APNs, android→FCM). The app SHOULD send it
+ * (e.g. Capacitor.getPlatform()); if omitted, the daemon infers it from the User-Agent, defaulting
+ * to "web". So sending it is optional but recommended — a wrong/absent value degrades push routing.
+ */
+export type Platform = "ios" | "android" | "web";
+
+/** POST /pair — redeem the bootstrap QR secret OR the typed OTP. `name` labels the device. */
+export interface PairRequest {
+  credential: string; // the QR's `secret`, or the 6-digit OTP
+  name: string;
+  platform?: Platform; // the device's OS — recorded now so push registration only needs the token
+}
+export interface PairResponse {
+  bearer: string; // store securely; send on every /ws connection
+}
+
+/** POST /join — a new (unpaired) device asks to join. The response carries NO code. */
+export interface JoinRequest {
+  name: string;
+  platform?: Platform;
+}
+export interface JoinResponse {
+  joinId: string; // confirm with this; the code arrives on a paired device via the `joins` event
+}
+
+/** POST /join/confirm — submit the code the user read off an already-paired device. */
+export interface JoinConfirmRequest {
+  joinId: string;
+  code: string; // the 6-digit code shown by the `joins` event on a paired device
+}
+export interface JoinConfirmResponse {
+  bearer: string;
+}
+
+/**
+ * POST /register — bearer-gated. The app registers its native push token (from the OS, after the
+ * user grants push permission) so the daemon can wake it out-of-band for a background approval.
+ * An empty token clears it (the user revoked push). Responds 204.
+ */
+export interface RegisterRequest {
+  token: string; // APNs/FCM device token; "" to unregister
+  platform?: Platform;
+}
+
+/**
+ * One pending device-join, carried by the `joins` WS event to already-paired ("admin") devices:
+ * the code a human relays to the joining device. Never sent to the joining (unpaired) device.
+ */
+export interface PendingJoin {
+  joinId: string;
+  name: string;
+  code: string; // show this so the user can type it into the joining device
+  platform?: Platform;
+}
+
+/**
+ * One PAIRED device for the device-management view. Carries NO secret — never the bearer or its
+ * hash. `hasPush` is whether a push token is registered (out-of-band reachable). Fetch with
+ * `listDevices`; pushed live via the `devices` event; unpair with `revokeDevice`.
+ */
+export interface DeviceMeta {
+  id: string; // the stable handle used by revokeDevice
+  name: string;
+  platform?: Platform;
+  added: string; // RFC3339
+  lastUsed?: string; // RFC3339 — absent if never used since pairing
+  hasPush: boolean;
+  self?: boolean; // true for the requesting connection's OWN device — render "this device" / sign-out
+}

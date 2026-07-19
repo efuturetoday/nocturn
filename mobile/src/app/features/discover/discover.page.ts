@@ -1,39 +1,47 @@
 import { Component, ChangeDetectionStrategy, inject, computed, DestroyRef } from '@angular/core';
 import { Router } from '@angular/router';
-import { IonContent, IonSpinner, IonIcon, IonFooter, AlertController } from '@ionic/angular/standalone';
+import { IonContent, IonSpinner, IonIcon, IonFooter, IonSkeletonText, AlertController, ModalController } from '@ionic/angular/standalone';
+import { PairPage } from '../pair/pair.page';
 import { addIcons } from 'ionicons';
 import { radioOutline } from 'ionicons/icons';
 import { DiscoveryService } from '../../core/services/discovery.service';
 import { ConnectionService } from '../../core/services/connection.service';
+import { AuthService } from '../../core/services/auth.service';
 
 const RESCAN_MS = 4000;
 
 @Component({
   selector: 'app-discover',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [IonContent, IonSpinner, IonIcon, IonFooter],
+  imports: [IonContent, IonSpinner, IonIcon, IonFooter, IonSkeletonText],
   template: `
     <ion-content [fullscreen]="true">
       <div class="nebula" aria-hidden="true"></div>
       <div class="page">
         <div class="hero">
-          <img src="/assets/brand/mascot.png" alt="Nocturn mascot" width="128" height="128" />
+          <img src="/assets/brand/mascot.png" alt="Nocturn mascot" width="200" height="200" />
           <h1>Nocturn</h1>
-          <p>Dein sicherer persönlicher Assistent</p>
+          <p>Your secure personal assistant</p>
         </div>
 
         @if (connecting()) {
-          <div class="searching"><ion-spinner name="crescent" /><span>Verbinde…</span></div>
+          <div class="searching"><ion-spinner name="crescent" /><span>Connecting…</span></div>
         } @else {
-          <!-- Perpetual: keeps listening on the LAN until a server is picked. -->
-          <div class="searching"><ion-spinner name="crescent" /><span>Suche…</span></div>
-
           <div class="results">
             @for (h of discovery.hosts(); track h.url) {
               <button class="host" (click)="connect(h.url)">
                 <ion-icon name="radio-outline" aria-hidden="true" />
                 <span class="host-text"><b>{{ h.name }}</b><small>{{ h.url }}</small></span>
               </button>
+            } @empty {
+              <!-- Perpetual scan: skeleton placeholder while listening on the LAN. -->
+              <div class="host skeleton">
+                <ion-skeleton-text [animated]="true" class="dot" />
+                <span class="host-text">
+                  <ion-skeleton-text [animated]="true" style="width: 45%" />
+                  <ion-skeleton-text [animated]="true" style="width: 75%" />
+                </span>
+              </div>
             }
           </div>
         }
@@ -41,7 +49,7 @@ const RESCAN_MS = 4000;
     </ion-content>
 
     <ion-footer class="manual-footer">
-      <button class="manual" (click)="manual()">Server manuell angeben</button>
+      <button class="manual" (click)="manual()">Enter server manually</button>
     </ion-footer>
   `,
   styles: `
@@ -71,7 +79,7 @@ const RESCAN_MS = 4000;
     @media (prefers-reduced-motion: reduce) { .hero img { animation: none; } }
 
     .searching {
-      display: flex; align-items: center; gap: 10px;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
       margin-top: 6vh;
       color: var(--ion-color-medium); font-size: 0.9rem;
     }
@@ -86,6 +94,9 @@ const RESCAN_MS = 4000;
     .host ion-icon { font-size: 1.3rem; color: var(--ion-color-primary); }
     .host-text { display: flex; flex-direction: column; }
     .host-text small { color: var(--ion-color-medium); font-size: 0.75rem; }
+    .host.skeleton { cursor: default; }
+    .host.skeleton .dot { width: 1.3rem; height: 1.3rem; border-radius: 50%; }
+    .host.skeleton .host-text { flex: 1; gap: 6px; }
 
     .manual-footer { --background: transparent; background: transparent; text-align: center; }
     .manual-footer::before { display: none; }
@@ -101,8 +112,10 @@ const RESCAN_MS = 4000;
 export class DiscoverPage {
   protected readonly discovery = inject(DiscoveryService);
   protected readonly connection = inject(ConnectionService);
+  private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
   private readonly alerts = inject(AlertController);
+  private readonly modalCtrl = inject(ModalController);
 
   protected readonly connecting = computed(
     () => this.connection.state() === 'connecting' || this.connection.state() === 'reconnecting',
@@ -119,15 +132,15 @@ export class DiscoverPage {
 
   protected async manual(): Promise<void> {
     const alert = await this.alerts.create({
-      header: 'Server manuell angeben',
+      header: 'Enter server',
       inputs: [
-        { name: 'host', type: 'text', placeholder: 'IP / host (z. B. 192.168.1.20)' },
+        { name: 'host', type: 'text', placeholder: 'IP / host (e.g. 192.168.1.20)' },
         { name: 'port', type: 'number', placeholder: 'Port', value: '8765' },
       ],
       buttons: [
-        { text: 'Abbrechen', role: 'cancel' },
+        { text: 'Cancel', role: 'cancel' },
         {
-          text: 'Verbinden',
+          text: 'Connect',
           handler: (v) => {
             const host = (v.host ?? '').trim();
             if (!host) return false;
@@ -141,8 +154,23 @@ export class DiscoverPage {
   }
 
   protected async connect(url: string): Promise<void> {
-    this.connection.connect(url);
     await this.discovery.remember(url);
+    let bearer = await this.auth.bearerFor(url);
+    if (!bearer) {
+      // Not paired to this daemon yet → pairing overlay; it dismisses with the bearer.
+      const modal = await this.modalCtrl.create({
+        component: PairPage,
+        componentProps: { url },
+        breakpoints: [0, 0.5, 0.9],
+        initialBreakpoint: 0.5,
+        handle: true,
+      });
+      await modal.present();
+      const { data } = await modal.onDidDismiss<string>();
+      if (!data) return; // cancelled
+      bearer = data;
+    }
+    this.connection.connect(url, bearer);
     // Root nav: replace history so you can't swipe/back into the discover screen from the app.
     await this.router.navigate(['/tabs', 'chat'], { replaceUrl: true });
   }
