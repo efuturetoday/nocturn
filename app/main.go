@@ -1,7 +1,7 @@
 // Command app is nocturn rebuilt on agentkit: a terminal chat driven by agentkit Sessions, their
 // tools gated by agentkit/gate with human approval on the terminal, and conversations persisted and
-// multiplexed by app/chat. This is the greenfield root — the new world grows here while the old
-// cmd/nocturn still stands.
+// multiplexed by app/chat — all composed per workspace by app/workspace. This is the greenfield
+// root; the old cmd/nocturn still stands.
 //
 // Reads FREELLM_BASE_URL / FREELLM_API_KEY / FREELLM_MODEL (loads .env). Run: go run ./app
 package main
@@ -14,19 +14,17 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/joho/godotenv"
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/agentkit/openai"
-	"github.com/efuturetoday/nocturn/agentkit/runtime"
 	"github.com/efuturetoday/nocturn/app/chat"
-	"github.com/efuturetoday/nocturn/app/net"
+	"github.com/efuturetoday/nocturn/app/workspace"
 )
 
-const chatDir = "./nocturn-data/chats"
+const wsDir = "./nocturn-data/workspaces/main"
 
 func main() {
 	_ = godotenv.Load()
@@ -49,56 +47,18 @@ func main() {
 	// loop, so stdin is free while the approver asks.
 	stdin := bufio.NewReader(os.Stdin)
 
-	rt, err := buildRuntime(baseURL, apiKey, model, stdin)
+	llm := openai.New(baseURL, apiKey, model,
+		openai.WithEffort(agentkit.Effort(os.Getenv("FREELLM_REASONING_EFFORT"))),
+	)
+	host := workspace.Host{LLM: llm, Approver: &terminalApprover{in: stdin}}
+
+	ws, err := workspace.Open(host, "main", wsDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	store, err := chat.NewStore(chatDir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "store:", err)
-		os.Exit(1)
-	}
-	mgr := chat.NewManager(rt, store)
-
-	run(ctx, mgr, stdin, model)
-}
-
-// buildRuntime wires the LLM, the gated toolset and session defaults into a Runtime shared by every
-// chat.
-func buildRuntime(baseURL, apiKey, model string, stdin *bufio.Reader) (*runtime.Runtime, error) {
-	llm := openai.New(baseURL, apiKey, model,
-		openai.WithEffort(agentkit.Effort(os.Getenv("FREELLM_REASONING_EFFORT"))),
-	)
-
-	httpTool, err := net.New().Tool()
-	if err != nil {
-		return nil, fmt.Errorf("net tool: %w", err)
-	}
-	tools, err := agentkit.NewToolSet(httpTool)
-	if err != nil {
-		return nil, fmt.Errorf("toolset: %w", err)
-	}
-
-	// The net axis asks the human (remembered for the session); every other Kind runs free.
-	policy := gate.PolicyFunc(func(a gate.Action) gate.Ruling {
-		switch a.Kind {
-		case net.Axis:
-			return gate.AskWith(gate.RecallSession)
-		default:
-			return gate.Allowed()
-		}
-	})
-
-	return runtime.New(llm,
-		runtime.WithTools(tools),
-		runtime.WithGate(policy, gate.NewMemGrants(), &terminalApprover{in: stdin}),
-		runtime.WithSession(
-			agentkit.WithSystem("You are nocturn, a concise, helpful assistant. Use http_get when a URL is useful."),
-			agentkit.WithTimeout(2*time.Minute),
-		),
-	), nil
+	run(ctx, ws.Chats(), stdin, model)
 }
 
 // run is the terminal loop: the first message (or one after /new) starts a chat; /chats lists,
