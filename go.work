@@ -5,4 +5,5 @@ use (
 	./agentkit
 	./agentkit-openai
 	./agentkit-example
+	./agentkit-gate
 )
