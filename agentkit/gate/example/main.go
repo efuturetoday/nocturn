@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/efuturetoday/nocturn/agentkit"
-	"github.com/efuturetoday/nocturn/agentkit-gate"
+	"github.com/efuturetoday/nocturn/agentkit/gate"
 )
 
 type scriptApprover struct {

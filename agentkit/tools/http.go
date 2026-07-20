@@ -13,7 +13,7 @@ import (
 	"net/url"
 
 	"github.com/efuturetoday/nocturn/agentkit"
-	"github.com/efuturetoday/nocturn/agentkit-gate"
+	"github.com/efuturetoday/nocturn/agentkit/gate"
 )
 
 // NetAxis is the shared gate axis for every network tool. Gating on this one name (instead of each

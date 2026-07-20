@@ -3,7 +3,7 @@ package tools
 import (
 	"strings"
 
-	"github.com/efuturetoday/nocturn/agentkit-gate"
+	"github.com/efuturetoday/nocturn/agentkit/gate"
 )
 
 // HostMatch is a gate.Matcher for host targets: a grant pattern "*.example.com" covers example.com

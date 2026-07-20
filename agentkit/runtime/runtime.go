@@ -8,7 +8,7 @@ import (
 	"context"
 
 	"github.com/efuturetoday/nocturn/agentkit"
-	"github.com/efuturetoday/nocturn/agentkit-gate"
+	"github.com/efuturetoday/nocturn/agentkit/gate"
 )
 
 // Runtime holds the shared configuration for a set of sessions.

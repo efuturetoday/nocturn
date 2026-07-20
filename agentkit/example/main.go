@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
-	"github.com/efuturetoday/nocturn/agentkit-gate"
-	"github.com/efuturetoday/nocturn/agentkit-openai"
-	"github.com/efuturetoday/nocturn/agentkit-runtime"
-	"github.com/efuturetoday/nocturn/agentkit-tools"
+	"github.com/efuturetoday/nocturn/agentkit/gate"
+	"github.com/efuturetoday/nocturn/agentkit/openai"
+	"github.com/efuturetoday/nocturn/agentkit/runtime"
+	"github.com/efuturetoday/nocturn/agentkit/tools"
 )
 
 func main() {

@@ -3,9 +3,9 @@ go 1.26.1
 use (
 	.
 	./agentkit
-	./agentkit-openai
-	./agentkit-example
-	./agentkit-gate
-	./agentkit-runtime
-	./agentkit-tools
+	./agentkit/gate
+	./agentkit/openai
+	./agentkit/tools
+	./agentkit/runtime
+	./agentkit/example
 )
