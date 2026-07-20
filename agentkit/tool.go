@@ -169,7 +169,7 @@ func (t ToolSet) Specs() []ToolSpec {
 func (t ToolSet) Call(ctx context.Context, name, args string) (string, error) {
 	tool, ok := t[name]
 	if !ok {
-		return "", fmt.Errorf("unknown tool %q", name)
+		return "", fmt.Errorf("agentkit: unknown tool %q", name)
 	}
 	parent := frameFrom(ctx)
 	id := nextCallID(ctx)
@@ -212,13 +212,13 @@ func withFrame(ctx context.Context, id uint64) context.Context {
 	return context.WithValue(ctx, frameKey{}, id)
 }
 
-func truncateChars(s string, max int) string {
-	if max <= 0 {
+func truncateChars(s string, limit int) string {
+	if limit <= 0 {
 		return s
 	}
 	r := []rune(s)
-	if len(r) <= max {
+	if len(r) <= limit {
 		return s
 	}
-	return string(r[:max])
+	return string(r[:limit])
 }
