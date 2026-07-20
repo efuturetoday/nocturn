@@ -65,12 +65,53 @@ func (TurnEnd) isEvent()   {}
 
 type sinkKey struct{}
 
-// WithSink attaches a sink to ctx. Emit sends events to it.
-func WithSink(ctx context.Context, sink func(Event)) context.Context { panic("TODO") }
+// WithSink attaches a sink to ctx. Emit sends events to it. A nil sink leaves ctx unchanged.
+func WithSink(ctx context.Context, sink func(Event)) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, sinkKey{}, sink)
+}
 
 // SinkFrom returns the sink attached to ctx, or nil.
-func SinkFrom(ctx context.Context) func(Event) { panic("TODO") }
+func SinkFrom(ctx context.Context) func(Event) {
+	sink, _ := ctx.Value(sinkKey{}).(func(Event))
+	return sink
+}
 
 // Emit delivers e to the ctx sink, first stamping its Frame from the ctx call-frame; no-op if no
 // sink (fail-open). Adapters call it to stream answer/reasoning tokens without knowing the frame.
-func Emit(ctx context.Context, e Event) { /* TODO */ }
+func Emit(ctx context.Context, e Event) {
+	sink := SinkFrom(ctx)
+	if sink == nil {
+		return
+	}
+	sink(stampFrame(e, frameFrom(ctx)))
+}
+
+// stampFrame sets the enclosing-frame id on an event so a consumer can attribute it to the main
+// agent (0) or a nested call. Emit is authoritative — emitters need not set Frame themselves.
+func stampFrame(e Event, frame uint64) Event {
+	switch ev := e.(type) {
+	case Token:
+		ev.Frame = frame
+		return ev
+	case Thinking:
+		ev.Frame = frame
+		return ev
+	case ToolStart:
+		ev.Frame = frame
+		return ev
+	case ToolEnd:
+		ev.Frame = frame
+		return ev
+	case TurnStart:
+		ev.Frame = frame
+		return ev
+	case TurnEnd:
+		ev.Frame = frame
+		return ev
+	default:
+		return e
+	}
+}

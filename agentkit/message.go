@@ -42,3 +42,10 @@ type TokenCount struct {
 	Completion int
 	Total      int
 }
+
+// add accumulates o into t (used to sum a turn's round-trips).
+func (t *TokenCount) add(o TokenCount) {
+	t.Prompt += o.Prompt
+	t.Completion += o.Completion
+	t.Total += o.Total
+}
