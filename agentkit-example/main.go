@@ -62,8 +62,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// notify_user (name) and the "net" host axis are guarded → ask the human; everything else free.
-	policy := gate.Classify([]string{"notify_user", tools.NetAxis}, nil)
+	// notify_user (name) and the "net" host axis ask the human, remembered for the session; every
+	// other tool runs free. Each Ask states its Recall explicitly — that is the whole point of the gate.
+	policy := gate.PolicyFunc(func(a gate.Action) gate.Ruling {
+		switch a.Kind {
+		case "notify_user", tools.NetAxis:
+			return gate.AskWith(gate.RecallSession)
+		default:
+			return gate.Allowed()
+		}
+	})
 
 	rt := runtime.New(llm,
 		runtime.WithTools(toolset),

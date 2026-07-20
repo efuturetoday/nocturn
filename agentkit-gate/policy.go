@@ -59,29 +59,3 @@ type Policy interface {
 type PolicyFunc func(Action) Ruling
 
 func (f PolicyFunc) Decide(a Action) Ruling { return f(a) }
-
-// Classify builds a Policy from Kind lists: a Kind in denied is Denied, a Kind in guarded is
-// AskWith(RecallAlways) (ask once, then remember), and every other Kind is Allowed. Kinds are tool
-// names and/or shared axes (e.g. "net"). For per-Kind Recall limits, write a PolicyFunc.
-func Classify(guarded, denied []string) Policy {
-	guardedSet := toSet(guarded)
-	deniedSet := toSet(denied)
-	return PolicyFunc(func(a Action) Ruling {
-		switch {
-		case deniedSet[a.Kind]:
-			return Denied()
-		case guardedSet[a.Kind]:
-			return AskWith(RecallAlways)
-		default:
-			return Allowed()
-		}
-	})
-}
-
-func toSet(names []string) map[string]bool {
-	set := make(map[string]bool, len(names))
-	for _, n := range names {
-		set[n] = true
-	}
-	return set
-}

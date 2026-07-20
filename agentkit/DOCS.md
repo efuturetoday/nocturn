@@ -159,7 +159,14 @@ scales it: an attended agent runs loose with HITL; an unattended one is caged ti
 ```go
 llm := openai.New(baseURL, apiKey, model)
 tools, _ := agentkit.NewToolSet(myTools...)          // the cage
-policy := gate.Classify([]string{"notify", "net"}, nil)
+policy := gate.PolicyFunc(func(a gate.Action) gate.Ruling {
+    switch a.Kind {
+    case "notify", "net":
+        return gate.AskWith(gate.RecallSession) // ask, remember for the session
+    default:
+        return gate.Allowed()
+    }
+})
 
 rt := runtime.New(llm,
     runtime.WithTools(tools),
