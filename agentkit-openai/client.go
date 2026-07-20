@@ -71,7 +71,7 @@ func (c *Client) Next(ctx context.Context, conv []agentkit.Message, tools []agen
 		Model:         c.model,
 		Messages:      buildMessages(conv),
 		Stream:        true,
-		StreamOptions: &goopenai.StreamOptions{IncludeUsage: true},
+		StreamOptions: &goopenai.StreamOptions{IncludeUsage: true}, // final chunk carries token usage
 	}
 	effort := agentkit.EffortFrom(ctx)
 	if effort == "" {
