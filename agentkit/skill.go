@@ -105,12 +105,11 @@ func (s SkillSet) Specs() []Skill {
 // body into the conversation (progressive disclosure), backed by THIS set. Like any tool it is just
 // a Tool value — no authority, only context.
 func (s SkillSet) LoadTool() Tool {
-	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"the skill to load"}},"required":["name"]}`)
 	return funcTool{
 		spec: ToolSpec{
 			Name:        loadSkillToolName,
 			Description: "Load a skill's full instructions into context by name.",
-			Parameters:  schema,
+			Parameters:  Object(Prop("name", String("the skill to load"))).Require("name"),
 		},
 		fn: func(_ context.Context, args string) (string, error) {
 			var in struct {

@@ -143,8 +143,10 @@ func buildTools(llm agentkit.LLM) (agentkit.ToolSet, error) {
 			}
 			return strconv.FormatFloat(in.A+in.B, 'f', -1, 64), nil
 		},
-		agentkit.WithSchema(json.RawMessage(
-			`{"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}},"required":["a","b"]}`)),
+		agentkit.WithSchema(agentkit.Object(
+			agentkit.Prop("a", agentkit.Number("first addend")),
+			agentkit.Prop("b", agentkit.Number("second addend")),
+		).Require("a", "b")),
 	)
 	if err != nil {
 		return nil, err

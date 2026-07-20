@@ -1,75 +1,38 @@
 package openai
 
-import "encoding/json"
+import "github.com/efuturetoday/agentkit"
 
-// strictDrop lists JSON Schema keywords that strict providers (e.g. Gemini behind a proxy) reject.
-// They are stripped from every schema-object position — but never from property NAMES (a property
-// may legitimately be named "default" or "title"; see sanitizeSchema's handling of "properties").
-var strictDrop = map[string]bool{
-	"$schema":              true,
-	"$id":                  true,
-	"$defs":                true,
-	"definitions":          true,
-	"additionalProperties": true,
-	"title":                true,
-	"default":              true,
-	"examples":             true,
-}
-
-// sanitizeSchema normalizes a tool's JSON Schema to the strict lowest-common-denominator subset some
-// providers accept, returning the cleaned schema and whether anything changed. An empty schema
-// becomes a bare object; malformed JSON is passed through unchanged (Validate already rejects it).
-func sanitizeSchema(raw json.RawMessage) (json.RawMessage, bool) {
-	if len(raw) == 0 {
-		return json.RawMessage(`{"type":"object","properties":{}}`), false
+// renderSchema maps agentkit's canonical Schema to the JSON Schema the endpoint accepts. Because the
+// Schema model only holds the portable subset (type/description/properties/required/items/enum) —
+// the intersection supported by OpenAI, Anthropic and Gemini — the output is inherently the safe
+// lowest-common-denominator: there is nothing to strip. Types stay lowercase (an OpenAI-compatible
+// endpoint expects that; a proxy fronting Gemini uppercases them). A nil schema is a bare object.
+func renderSchema(s *agentkit.Schema) map[string]any {
+	if s == nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
 	}
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return raw, false
+	m := map[string]any{}
+	if s.Type != "" {
+		m["type"] = string(s.Type)
 	}
-	changed := false
-	cleaned := scrub(v, &changed)
-	if !changed {
-		return raw, false
+	if s.Description != "" {
+		m["description"] = s.Description
 	}
-	out, err := json.Marshal(cleaned)
-	if err != nil {
-		return raw, false
-	}
-	return out, true
-}
-
-// scrub recursively drops strictDrop keywords. Under a "properties" object it treats keys as
-// property names (not keywords) and only scrubs their schema values.
-func scrub(v any, changed *bool) any {
-	switch t := v.(type) {
-	case map[string]any:
-		m := make(map[string]any, len(t))
-		for k, val := range t {
-			if strictDrop[k] {
-				*changed = true
-				continue
-			}
-			if k == "properties" {
-				if props, ok := val.(map[string]any); ok {
-					np := make(map[string]any, len(props))
-					for name, schema := range props {
-						np[name] = scrub(schema, changed)
-					}
-					m[k] = np
-					continue
-				}
-			}
-			m[k] = scrub(val, changed)
+	if len(s.Properties) > 0 {
+		props := make(map[string]any, len(s.Properties))
+		for name, p := range s.Properties {
+			props[name] = renderSchema(p)
 		}
-		return m
-	case []any:
-		out := make([]any, len(t))
-		for i, e := range t {
-			out[i] = scrub(e, changed)
-		}
-		return out
-	default:
-		return v
+		m["properties"] = props
 	}
+	if len(s.Required) > 0 {
+		m["required"] = s.Required
+	}
+	if s.Items != nil {
+		m["items"] = renderSchema(s.Items)
+	}
+	if len(s.Enum) > 0 {
+		m["enum"] = s.Enum
+	}
+	return m
 }

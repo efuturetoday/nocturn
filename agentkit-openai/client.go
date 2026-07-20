@@ -64,8 +64,8 @@ func New(baseURL, apiKey, model string, opts ...Option) *Client {
 
 // Next streams one model step: it accumulates tool_calls per index, synthesizes ids when the
 // endpoint omits them, emits Token/Thinking on the ctx sink, fills Step.Tokens from the response
-// usage, and returns a final answer or a batch of tool calls. Tool schemas are run through
-// sanitizeSchema first.
+// usage, and returns a final answer or a batch of tool calls. Tool schemas are rendered from the
+// canonical *Schema via renderSchema.
 func (c *Client) Next(ctx context.Context, conv []agentkit.Message, tools []agentkit.ToolSpec) (agentkit.Step, error) {
 	req := goopenai.ChatCompletionRequest{
 		Model:         c.model,
@@ -82,16 +82,12 @@ func (c *Client) Next(ctx context.Context, conv []agentkit.Message, tools []agen
 		req.MaxTokens = c.maxTokens
 	}
 	for _, t := range tools {
-		params, changed := sanitizeSchema(t.Parameters)
-		if changed {
-			c.log.WithContext(ctx).Debug("openai: sanitized tool schema", "tool", t.Name)
-		}
 		req.Tools = append(req.Tools, goopenai.Tool{
 			Type: goopenai.ToolTypeFunction,
 			Function: &goopenai.FunctionDefinition{
 				Name:        t.Name,
 				Description: t.Description,
-				Parameters:  params,
+				Parameters:  renderSchema(t.Parameters),
 			},
 		})
 	}

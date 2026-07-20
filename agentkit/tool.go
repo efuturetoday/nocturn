@@ -2,7 +2,6 @@ package agentkit
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -27,21 +26,16 @@ var toolNameRe = regexp.MustCompile(ToolNamePattern)
 type ToolSpec struct {
 	Name        string
 	Description string
-	Parameters  json.RawMessage // JSON Schema for args; nil = no-arg tool
+	Parameters  *Schema // argument schema; nil = no-arg tool
 }
 
-// Validate enforces only the HARD rules — the ones a provider rejects with a 400: Name matches
-// ToolNamePattern, and Parameters (if set) is well-formed JSON. Description LENGTH is NOT enforced
-// here: an over-long description is a Warn diagnostic (OpenAI rejects above MaxToolDescLen, Anthropic
-// tolerates it), not a hard deny. Validate does NOT check the schema semantically nor validate call
-// arguments — argument validation is the tool's OWN job inside Call. The schema is otherwise
-// pass-through: it goes to the provider to constrain generation.
+// Validate enforces the hard rule a provider rejects with a 400: Name matches ToolNamePattern.
+// Description LENGTH is NOT enforced here (an over-long description is a Warn diagnostic). Parameters
+// need no check: a *Schema is valid by construction and the adapter renders it to the provider's
+// dialect. Call-argument validation is the tool's OWN job inside Call.
 func (s ToolSpec) Validate() error {
 	if !toolNameRe.MatchString(s.Name) {
 		return fmt.Errorf("agentkit: invalid tool name %q: must match %s", s.Name, ToolNamePattern)
-	}
-	if len(s.Parameters) > 0 && !json.Valid(s.Parameters) {
-		return fmt.Errorf("agentkit: tool %q: malformed parameter schema", s.Name)
 	}
 	return nil
 }
@@ -60,17 +54,18 @@ type ToolFunc func(ctx context.Context, args string) (string, error)
 
 // toolOptions collects the optional behavior a func-backed Tool can carry.
 type toolOptions struct {
-	parameters json.RawMessage
+	parameters *Schema
 	maxChars   int
 }
 
 // ToolOption configures a Tool built by NewTool.
 type ToolOption func(*toolOptions)
 
-// WithSchema sets the JSON Schema for the tool's arguments (omit for a no-arg tool). It is passed
-// through to the provider verbatim; only well-formedness is checked, not schema semantics.
-func WithSchema(params json.RawMessage) ToolOption {
-	return func(o *toolOptions) { o.parameters = params }
+// WithSchema sets the tool's argument schema (omit for a no-arg tool). Build it with Object / Prop /
+// String / Number / … or ParseSchema a foreign JSON Schema; an adapter renders it to the provider's
+// accepted dialect.
+func WithSchema(schema *Schema) ToolOption {
+	return func(o *toolOptions) { o.parameters = schema }
 }
 
 // WithMaxChars truncates the tool's result to n characters (0 = unbounded). The library enforces it

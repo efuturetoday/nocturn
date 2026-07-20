@@ -37,7 +37,8 @@ core imports nothing outside the standard library.
 | `Session` | The conversation unit. Serialized turn loop, `Submit(input)` in / `Subscribe() <-chan Event` out; holds history. Built with `NewSession(ctx, llm, opts...)` — ctx is its lifecycle; `Close()` (or cancelling ctx) stops the loop, aborts any in-flight turn, and closes the stream. |
 | `Once(ctx, llm, input, opts...)` | Synchronous one-shot: run a throwaway session to its final answer. The primitive under agent firing and sub-agents. |
 | `Tool` | The effect port: `Spec() ToolSpec` + `Call(ctx, args) (string, error)`. Args are raw JSON; the tool validates them itself. Any gating lives in `Call`. |
-| `NewTool(name, description, fn, opts...)` | Build a tool from a closure. Options: `WithSchema(json)`, `WithMaxChars(n)`. Returns an error if the spec is invalid. |
+| `NewTool(name, description, fn, opts...)` | Build a tool from a closure. Options: `WithSchema(*Schema)`, `WithMaxChars(n)`. Returns an error if the spec is invalid. |
+| `Schema` + `Object`/`Prop`/`String`/… + `ParseSchema` | Canonical, provider-agnostic argument schema (the portable subset all providers accept); adapters render it per provider. |
 | `ToolSet` | `map[string]Tool` (named map): `Select`, `Specs`, `Call(ctx, name, args)`. Immutable by convention. |
 | `Skill` / `SkillSet` | Context, zero authority. Immutable set with `Select`, `Specs` (catalog) and `LoadTool()` (the progressive-disclosure `skill.load` tool). |
 | `Agent` | A declaration: name, instructions, a tool filter, effort. No authority, no schedule. |
@@ -186,9 +187,14 @@ Two separate mechanisms:
   corners — e.g. a description longer than 1024 chars (rejected by some providers, tolerated by
   others). Non-fatal; the consumer drains `All()` / checks `HasErrors()` and logs.
 
-**JSON Schema is pass-through.** A tool's `Parameters` is raw JSON forwarded to the provider to
-constrain generation; the library only checks that it is well-formed JSON (no schema-validator
-dependency). Validating call **arguments** against the schema is the **tool's** job inside `Call`
+**Schema is a canonical model, not raw JSON.** A tool's `Parameters` is a `*Schema` — build it with
+`Object` / `Prop` / `String` / `Number` / `Integer` / `Bool` / `Array` / `.Require` / `.WithEnum`, or
+map a foreign JSON Schema into it with `ParseSchema`. The model holds only the **portable subset**
+(`type`, `description`, `properties`, `required`, `items`, `enum`, plus nested objects/arrays) — the
+intersection every provider accepts (OpenAI, Anthropic, Gemini). Each adapter **renders** it to that
+provider's dialect (e.g. Gemini uppercases types and forbids `additionalProperties`). Because the
+model can't even express unsupported constructs, there is nothing to strip — no blocklist, no
+sanitizer. Validating call **arguments** against the schema is still the **tool's** job inside `Call`
 (unmarshal, check, return the error to the model, let it retry).
 
 ---
@@ -236,7 +242,9 @@ reach the core:
 weather, _ := agentkit.NewTool(
     "get_weather", "Current weather for a city.",
     func(ctx context.Context, args string) (string, error) { /* ... */ return "sunny", nil },
-    agentkit.WithSchema(json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`)),
+    agentkit.WithSchema(agentkit.Object(
+        agentkit.Prop("city", agentkit.String("the city name")),
+    ).Require("city")),
 )
 tools, _ := agentkit.NewToolSet(weather)
 

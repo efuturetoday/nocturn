@@ -30,12 +30,11 @@ type Agent struct {
 // subagent can spawn its OWN subagents is decided by whether any AgentTools are in tools — omit them
 // and it is a leaf.
 func AgentTool(a Agent, llm LLM, tools ToolSet, opts ...Option) Tool {
-	schema := json.RawMessage(`{"type":"object","properties":{"input":{"type":"string","description":"the task for the sub-agent"}},"required":["input"]}`)
 	return funcTool{
 		spec: ToolSpec{
 			Name:        a.Name,
 			Description: fmt.Sprintf("Delegate a task to the %s sub-agent.", a.Name),
-			Parameters:  schema,
+			Parameters:  Object(Prop("input", String("the task for the sub-agent"))).Require("input"),
 		},
 		fn: func(ctx context.Context, args string) (string, error) {
 			ctx, err := enterSpawn(ctx)
