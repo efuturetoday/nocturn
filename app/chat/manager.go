@@ -26,7 +26,7 @@ func NewManager(rt *runtime.Runtime, store *Store) *Manager {
 // Start begins a new chat from its first message: it mints an id, builds a session bound to that id,
 // and submits the text. The chat's file and name appear when the turn saves.
 func (m *Manager) Start(ctx context.Context, text string) (string, *agentkit.Session) {
-	id := newID()
+	id := NewID()
 	sess := m.session(ctx, id)
 	sess.Submit(text)
 	return id, sess
@@ -47,8 +47,8 @@ func (m *Manager) List() ([]Meta, error) { return m.store.Metas() }
 // Delete removes a chat's transcript.
 func (m *Manager) Delete(id string) error { return m.store.Delete(id) }
 
-// newID mints a short random chat id.
-func newID() string {
+// NewID mints a short random chat id.
+func NewID() string {
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)

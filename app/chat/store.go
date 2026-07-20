@@ -1,7 +1,7 @@
 // Package chat persists conversations and multiplexes them — the layer agentkit deliberately leaves
 // to the consumer. agentkit.Session already loads and saves its transcript through an agentkit.Store
 // (WithStore); this package supplies a file-backed one that also carries chat metadata (name, turns,
-// timestamps), and a Manager that starts and resumes sessions over it.
+// timestamps, source), and a Manager that starts and resumes sessions over it.
 package chat
 
 import (
@@ -22,11 +22,22 @@ const (
 	nameLimit = 40      // max runes of the first message kept as a chat name
 )
 
+// Source is who a store's chats belong to. It is a property of the store instance (set once with
+// WithSource), stamped into each chat's Meta — so a merged listing across stores is self-describing
+// without any per-chat plumbing.
+type Source string
+
+const (
+	SourceUser  Source = "user"
+	SourceAgent Source = "agent"
+)
+
 // Meta is a chat's metadata, kept alongside its transcript. The Name is derived from the first user
 // message (chats are message-first: born from what you say, never created empty).
 type Meta struct {
 	ID      string    `json:"id"`
 	Name    string    `json:"name"`
+	Source  Source    `json:"source"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
 	Turns   int       `json:"turns"`
@@ -39,25 +50,37 @@ type record struct {
 }
 
 // Store is a file-backed agentkit.Store: one JSON file per chat under dir. A chat's file appears on
-// its first save, never before.
+// its first save, never before. Every chat it saves is stamped with the store's Source.
 type Store struct {
-	dir string
-	mu  sync.Mutex
+	dir    string
+	source Source
+	mu     sync.Mutex
 }
 
+// Option configures a Store.
+type Option func(*Store)
+
+// WithSource sets the source stamped into every chat this store saves (default SourceUser). A
+// workspace opens one store per source — user chats and agent runs live in separate dirs.
+func WithSource(s Source) Option { return func(st *Store) { st.source = s } }
+
 // NewStore opens (creating if needed) a chat store rooted at dir.
-func NewStore(dir string) (*Store, error) {
+func NewStore(dir string, opts ...Option) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &Store{dir: dir}, nil
+	s := &Store{dir: dir, source: SourceUser}
+	for _, o := range opts {
+		o(s)
+	}
+	return s, nil
 }
 
 func (s *Store) path(id string) string { return filepath.Join(s.dir, id+ext) }
 
-// Save persists the transcript for id. On the first save (new record) it stamps Created and derives
-// the Name from the first user message; every save bumps Updated and Turns. agentkit calls this once
-// per turn, so it is the per-turn metadata hook.
+// Save persists the transcript for id. On the first save (new record) it stamps Created, the store's
+// Source, and the Name derived from the first user message; every save bumps Updated and Turns.
+// agentkit calls this once per turn, so it is the per-turn metadata hook.
 func (s *Store) Save(id string, msgs []agentkit.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,7 +90,7 @@ func (s *Store) Save(id string, msgs []agentkit.Message) error {
 	}
 	now := time.Now()
 	if rec == nil {
-		rec = &record{Meta: Meta{ID: id, Name: nameFrom(msgs), Created: now}}
+		rec = &record{Meta: Meta{ID: id, Name: nameFrom(msgs), Source: s.source, Created: now}}
 	}
 	rec.Messages = msgs
 	rec.Meta.Updated = now
@@ -161,7 +184,7 @@ func (s *Store) read(id string) (*record, error) {
 	return &rec, nil
 }
 
-// write persists a chat record atomically-ish (write then rename). Callers hold s.mu.
+// write persists a chat record (write then rename). Callers hold s.mu.
 func (s *Store) write(rec *record) error {
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {

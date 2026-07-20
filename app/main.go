@@ -57,14 +57,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	go ws.StartAgents(ctx) // cron scheduler for declared agents
 
-	run(ctx, ws.Chats(), stdin, model)
+	run(ctx, ws, stdin, model)
 }
 
 // run is the terminal loop: the first message (or one after /new) starts a chat; /chats lists,
 // /open resumes, /quit exits. One chat is active at a time — switching closes the previous session
 // (its transcript is already persisted and reloads on resume).
-func run(ctx context.Context, mgr *chat.Manager, stdin *bufio.Reader, model string) {
+func run(ctx context.Context, ws *workspace.Workspace, stdin *bufio.Reader, model string) {
+	mgr := ws.Chats()
 	turnDone := make(chan struct{}, 1)
 	var active *agentkit.Session
 
@@ -81,7 +83,7 @@ func run(ctx context.Context, mgr *chat.Manager, stdin *bufio.Reader, model stri
 		}
 	}()
 
-	fmt.Printf("nocturn (model %q) — /chats · /open <id> · /new · /quit · tool: http_get\n", model)
+	fmt.Printf("nocturn (model %q) — /chats · /open <id> · /new · /agents · /fire <name> <task> · /quit\n", model)
 	fmt.Print("\ntype a message to start a chat.\n")
 	for {
 		fmt.Print("\n> ")
@@ -99,6 +101,12 @@ func run(ctx context.Context, mgr *chat.Manager, stdin *bufio.Reader, model stri
 			return
 		case line == "/chats":
 			listChats(mgr)
+			continue
+		case line == "/agents":
+			listAgents(ws)
+			continue
+		case strings.HasPrefix(line, "/fire "):
+			fireAgent(ctx, ws, strings.TrimPrefix(line, "/fire "))
 			continue
 		case line == "/new":
 			if active != nil {
@@ -141,6 +149,37 @@ func listChats(mgr *chat.Manager) {
 	}
 	for _, m := range metas {
 		fmt.Printf("  %s  %-42s  %d turns  %s\n", m.ID, m.Name, m.Turns, m.Updated.Format("Jan 2 15:04"))
+	}
+}
+
+func listAgents(ws *workspace.Workspace) {
+	agents := ws.Agents()
+	if len(agents) == 0 {
+		fmt.Println("(no agents — add one at agents/<name>/agent.md)")
+		return
+	}
+	for _, a := range agents {
+		when := a.When
+		if when == "" {
+			when = "manual"
+		}
+		fmt.Printf("  %-16s tools:%v  when:%s\n", a.Name, a.Tools, when)
+	}
+}
+
+func fireAgent(ctx context.Context, ws *workspace.Workspace, rest string) {
+	name, task, _ := strings.Cut(strings.TrimSpace(rest), " ")
+	if name == "" {
+		fmt.Println("usage: /fire <name> <task>")
+		return
+	}
+	fmt.Printf("firing %s (unattended)…\n", name)
+	answer, err := ws.FireAgent(ctx, name, strings.TrimSpace(task))
+	if err != nil {
+		fmt.Println("agent:", err)
+	}
+	if answer != "" {
+		fmt.Println(answer)
 	}
 }
 
