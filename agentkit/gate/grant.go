@@ -6,8 +6,8 @@ import "sync"
 // pattern MEANS is decided by a Matcher supplied at Check time, not by this library; "*" for any is
 // the only structure gate itself knows.
 type Grant struct {
-	Kind   string
-	Target string
+	Kind   string `json:"kind"`
+	Target string `json:"target"`
 }
 
 // Matcher reports whether a grant's target PATTERN covers an action's Target. This is where target
