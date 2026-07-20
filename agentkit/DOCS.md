@@ -1,269 +1,175 @@
-# agentkit
+# agentkit — ecosystem design
 
-A small, **zero-dependency** Go library for building AI agents and chat sessions: it drives an
-LLM through an agentic tool-calling loop, streams the output, and lets you compose tools, skills,
-sub-agents and guards. Everything external is a **port** (interface) you plug an adapter into — the
-core imports nothing outside the standard library.
+A small family of Go modules for building AI agents and chat sessions: a zero-dependency engine, a
+provider adapter, a permission layer, ready effect tools, and a composition root. This document is
+the **cross-cutting design and mental model** — the stuff that spans modules. For the reference of
+any type or function, read the package's doc comments: **`go doc ./<module>`** (they are the source
+of truth and never drift).
 
-> Module: `github.com/efuturetoday/agentkit`. Single flat package `agentkit`, one file per concept.
-> Provider adapters (e.g. OpenAI) live in separate modules so the core stays dependency-free.
+---
+
+## The modules
+
+```
+agentkit          engine (zero third-party deps): Session/Once, the LLM & Tool & Store & Logger
+                  ports, ToolSet/SkillSet, Agent/AgentTool, the Event stream, turn guards, Schema
+agentkit-openai   LLM adapter over go-openai: streaming SSE, native tool calls, usage
+agentkit-gate     permission layer: Policy/Ruling/Recall, Grant/Matcher, Approver, Check/Wrap
+agentkit-tools    ready-made effect tools that gate their own effect (http_get + the host axis)
+agentkit-runtime  composition root: New(llm, WithTools/WithGate/WithSession) → ready Sessions
+```
+
+Dependency direction (each depends only on what it must):
+
+```
+runtime ─┬─▶ agentkit          agentkit → stdlib only
+         └─▶ gate ──▶ agentkit  openai   → agentkit (+ go-openai)
+tools ─┬─▶ agentkit             gate     → agentkit
+       └─▶ gate
+```
+
+The engine stays dependency-free by pushing every external thing behind a **port** (interface) and
+every provider/effect into a **separate module**. A consumer picks the modules it needs; `runtime`
+wires them.
 
 ---
 
 ## Design principles
 
-1. **Zero third-party dependencies in the core.** The whole engine is stdlib-only. Anything that
-   would pull a dependency (an LLM SDK, a tokenizer, a YAML parser) is a port with the
-   implementation in a separate adapter module.
-2. **Ports & adapters.** Every boundary is an interface: `LLM` (the model), `Tool` (an effect),
-   `Logger`, `Store`. The core depends on the interface; you supply the adapter.
-3. **Policy-blind.** The library has no concept of permissions, approval, or safety policy. A tool
-   carries its own gating **inside its `Call`** — the library just dispatches. What a tool is
-   allowed to do is entirely the tool author's business.
-4. **Immutable tool/skill sets.** `ToolSet` and `SkillSet` are named maps; a subset (`Select`) is a
-   new copy, never a mutation. Handing a restricted subset to a sub-agent is a hard bound.
-5. **Observability is a one-way event stream.** The loop emits raw, time-ordered events; a UI
-   renders them and any aggregation (token totals, latency, cost) is built by the consumer.
-6. **Name things what they are.** No ambiguous names described by a comment — `TokenCount` not
-   "usage", `WithTimeout` not "budget", `ToolSpec` not "spec".
+1. **Zero third-party deps in the engine.** Anything that would pull a dependency (an LLM SDK, a
+   tokenizer, a YAML parser, a permission model) is a port with the implementation in another module.
+2. **Ports & adapters.** Every boundary is an interface — `LLM`, `Tool`, `Logger`, `Store`,
+   `gate.Policy`, `gate.Approver`. The core depends on the interface; you supply the adapter.
+3. **The engine is policy-blind.** It has no notion of permission or safety. A tool carries its own
+   gating **inside `Call`**; `agentkit-gate` is one way to add that, layered on top — never baked in.
+4. **Name things what they are.** No ambiguous name explained by a comment (`TokenCount` not "usage",
+   `WithTimeout` not "budget"). Opaque types with constructors where a zero value would be unsafe.
+5. **Fail closed.** A forgotten field must never silently mean allow-all / permanent / any-host.
+   Zero values are the safest option (`gate.RecallNever`, deny-by-default).
 
 ---
 
-## The pieces
+## The two axes of control
 
-| Type / func | Role |
-| --- | --- |
-| `LLM` | The model port: `Next(ctx, conv, tools) (Step, error)`. An adapter streams token/reasoning deltas to the ctx event sink and fills `Step.Tokens`. |
-| `Session` | The conversation unit. Serialized turn loop, `Submit(input)` in / `Subscribe() <-chan Event` out; holds history. Built with `NewSession(ctx, llm, opts...)` — ctx is its lifecycle; `Close()` (or cancelling ctx) stops the loop, aborts any in-flight turn, and closes the stream. |
-| `Once(ctx, llm, input, opts...)` | Synchronous one-shot: run a throwaway session to its final answer. The primitive under agent firing and sub-agents. |
-| `Tool` | The effect port: `Spec() ToolSpec` + `Call(ctx, args) (string, error)`. Args are raw JSON; the tool validates them itself. Any gating lives in `Call`. |
-| `NewTool(name, description, fn, opts...)` | Build a tool from a closure. Options: `WithSchema(*Schema)`, `WithMaxChars(n)`. Returns an error if the spec is invalid. |
-| `Schema` + `Object`/`Prop`/`String`/… + `ParseSchema` | Canonical, provider-agnostic argument schema (the portable subset all providers accept); adapters render it per provider. |
-| `ToolSet` | `map[string]Tool` (named map): `Select`, `Specs`, `Call(ctx, name, args)`. Immutable by convention. |
-| `Skill` / `SkillSet` | Context, zero authority. Immutable set with `Select`, `Specs` (catalog) and `LoadTool()` (the progressive-disclosure `skill.load` tool). |
-| `Agent` | A declaration: name, instructions, a tool filter, effort. No authority, no schedule. |
-| `AgentTool(a, llm, tools, opts...)` | Expose an agent as a callable `Tool` — a sub-agent is just a tool. |
-| `Message` / `ToolCall` / `Step` / `TokenCount` | The conversation model and one model round-trip's output + token count. |
-| `Event` and variants | The output stream (see below). |
-| `Logger` | Leveled key/value port with `WithContext`. `NopLogger()` default, `SlogLogger(*slog.Logger)` adapter. |
-| `Store` / `MemStore` | Transcript persistence port + in-memory default. Attached per session with `WithStore(store, id)`. |
-| `Diagnostics` | A passive collector fed advisory findings from across the pipeline. |
+Two orthogonal questions, two mechanisms — keep them separate:
+
+- **Cage — which tools an agent HAS at all.** This is `agentkit.ToolSet` + `Select`: a static,
+  set-once bound. A tool outside the set is *unreachable* (the model never sees it). Bounded, known,
+  chosen up front (a checklist / template), never asked at runtime.
+- **Gate — what a tool may DO.** This is `agentkit-gate`: a per-action allow / ask / deny, with a
+  human prompted out-of-band on the risky ones and the answer remembered. For runtime, unbounded,
+  discovered targets (which host, which path) — deny-by-default, ask-on-new, remember.
+
+Hosts are *unbounded* (discovered at runtime) → deny + ask-on-new. Tools are a *bounded* known set →
+pick up front. That difference is why they are different mechanisms.
 
 ---
 
-## Turn loop
+## The turn loop and the frame model
 
-A **turn** is one user input driven to a final answer. Internally the loop repeats: ask the `LLM`
-for the next `Step`; if it returns tool calls, run them **in parallel** through the `ToolSet` and
-feed the results back; stop when the model returns a final answer or a guard trips.
+A **turn** drives one user input to a final answer: ask the model for the next step; while it returns
+tool calls, run them **in parallel** through the tool set and feed the results back; stop on a final
+answer or when a guard trips. Results match their calls by **native id**, never positionally — this
+is what makes parallel execution safe.
 
-Tool results are matched to their calls by **native id** (`ToolCall.ID` / `Message.ToolCallID`),
-never positionally — this is what makes parallel tool execution safe.
+The output is a one-way **event stream** (`Subscribe()`), a sealed union the consumer type-switches
+over. Every event carries a **`Frame`**: the id of the enclosing call (`0` = the top-level agent). A
+tool call opens a frame whose id is its `ToolStart.ID`; everything emitted inside carries it. Because
+a **sub-agent runs inside an `AgentTool` call**, all of its events carry that call's id as `Frame` —
+so the main and sub-agent streams are **fully differentiable**: group by `Frame`, render each
+non-zero frame as a nested (collapsible/hideable) card, nest to any depth. Ids are call-instance
+identity (a counter in ctx), not tool identity (the name is that) — the same tool called twice, or
+nested, each gets a fresh id. Nesting works because ctx flows into every `Call`.
 
 ---
 
-## Events and the frame model
+## Guards and budget inheritance
 
-`Subscribe()` yields a channel of `Event`. The set is a sealed interface (unexported marker), so a
-consumer type-switches exhaustively:
+Every turn is bounded on independent stop dimensions — round-trips (`WithMaxSteps`), pausable
+wall-clock (`WithTimeout`; time spent waiting on a human doesn't count), and cumulative billed tokens
+(`WithTokenLimit`, from the provider's usage — no tokenizer). A turn ends on whichever trips first.
 
-```go
-for ev := range sess.Subscribe() {
-    switch e := ev.(type) {
-    case agentkit.Token:     ui.append(e.Frame, e.Text)
-    case agentkit.Thinking:  ui.reason(e.Frame, e.Text)
-    case agentkit.ToolStart: ui.openTool(e.Frame, e.ID, e.Tool)
-    case agentkit.ToolEnd:   ui.closeTool(e.ID, e.Result, e.Duration)
-    case agentkit.TurnEnd:   ui.total(e.Frame, e.Tokens)
-    }
-}
-```
+Time and token spend are **depletable, global** resources carried in ctx and **shared across
+nesting**: a session installs its budget only if none is present, so a sub-agent **inherits** the
+outer pool. A parent's limits therefore cap the parent *and all its sub-agents together*; a
+sub-agent's own budget applies only standalone. `maxSteps` is the exception — a per-run valve, never
+inherited (a step count is not a depletable pool).
 
-Every event carries **`Frame`**: the id of the enclosing call. `Frame == 0` is the top-level
-(main) agent. A tool call opens a new frame whose id is its `ToolStart.ID`; everything emitted
-inside that call carries it. Because a **sub-agent runs inside an `AgentTool` call**, all of its
-events (its tokens, its own tool calls, its `TurnEnd`) carry that call's id as `Frame`.
-
-This makes the main and sub-agent streams **fully differentiable**:
-- group events by `Frame`;
-- render each non-zero `Frame` as a nested, collapsible/**hideable** card under its tool call;
-- nest to any depth — a sub-agent's sub-agent gets its own frame.
-
-`Emit` stamps `Frame` from ctx; emitters (adapters, tools) never set it.
-
-### Call-instance ids
-
-Ids are **call-instance** identity, not tool identity (the name is that). The same tool called
-twice in a turn, or a nested call, each gets a fresh id from a counter carried in ctx. The
-`Frame`/`ID` pairing forms the parent/child forest a UI renders. Nesting works because ctx flows
-into every `Call`.
+A sub-agent **tree** is bounded on four axes, because a depth cap alone lets a tree fan out wide:
+(1) the shared tree-global budget (primary — caps total cost regardless of shape); (2) `WithMaxDepth`
+(refused with `ErrMaxDepth`); (3) `WithMaxSpawns` (a shared population counter — the fan-out guard
+depth can't provide); (4) the per-agent toolset (an agent can only spawn the `AgentTool`s in its set;
+omit them and it's a leaf, which also prevents A→B→A cycles). Depth and population inherit like the
+budget, so a sub-agent can't reset them.
 
 ---
 
 ## Sub-agents
 
-A **sub-agent is a tool.** `AgentTool(a, llm, tools)` wraps an `Agent` (name + instructions +
-effort) as a `Tool` whose `Call` runs the agent to a final answer (`Once`) over the input argument,
-with the agent's instructions as system prompt and `tools` as its toolset. The caller scopes the
-sub-agent by what it passes — `nil` for a leaf, `tools.Select(keep)` for a subset, the full set
-otherwise (the same immutable-subset mechanism as everywhere else). Add the result to a parent's
-`ToolSet` and the parent delegates to it like any tool. Nesting, event differentiation and budget
-inheritance all follow from ctx propagation — no separate sub-agent subsystem exists.
+A **sub-agent is just a tool.** `AgentTool` wraps an `Agent` (name + instructions + effort) as a
+`Tool` whose `Call` runs the agent to a final answer over the input, scoped by the `ToolSet` the
+caller passes (`nil` = leaf, `Select(keep)` = subset). Nesting, event differentiation, budget
+inheritance and spawn guards all fall out of ctx propagation — there is no separate sub-agent
+subsystem. Contrast **multiplexing** (many independent top-level conversations) which is *horizontal*
+and the consumer's job (a `map[id]*Session`, its own eviction policy) with sub-agents which are
+*vertical* and the library's.
 
 ---
 
-## Guards (stop conditions)
+## Schema portability
 
-Three independent per-turn stop dimensions, named unambiguously:
-
-```go
-WithMaxSteps(n)    // model round-trips
-WithTimeout(d)     // wall-clock (pausable — see below)
-WithTokenLimit(n)  // cumulative billed tokens
-```
-
-A turn ends on whichever trips first; the reason is on `TurnEnd.Err` (`ErrMaxSteps`,
-`ErrTokenLimit`, or a context deadline).
-
-- **Wall-clock is pausable:** time spent waiting on a blocking out-of-band step does not count, so a
-  human deciding never trips the timeout.
-- **Token limit is reactive:** the loop sums each round-trip's `Step.Tokens` and stops before the
-  next round-trip once the running total reaches the limit. The count comes from the provider
-  response — **no tokenizer needed**.
-
-### Budget inheritance across sub-agents
-
-Time and token spend are **depletable, global** resources carried in ctx and **shared across
-nesting**. A session installs its own budget into ctx **only when none is present** (it is the
-top-level run); an embedded run (a sub-agent) **inherits** the outer session's remaining pool. So a
-parent's `WithTimeout` / `WithTokenLimit` cap the parent **and all its sub-agents together**; a
-sub-agent's own budget applies only when it runs standalone.
-
-`maxSteps` is the exception — a per-run round-trip valve, counted fresh by each loop, never
-inherited (a step count is not a depletable pool).
-
-### Guarding nested sub-agent spawns
-
-A sub-agent tree is bounded on four axes — because a depth cap alone is not enough (a depth-capped
-tree can still fan out to a huge descendant count and pin CPU):
-
-1. **Shared tree-global budget (primary).** The inherited token/time pool above caps the entire
-   tree's cost and wall-clock regardless of depth or breadth. This is the strongest guard and it
-   propagates automatically through ctx.
-2. **Depth cap — `WithMaxDepth(n)`.** A per-branch counter; a spawn past it is refused with
-   `ErrMaxDepth` (returned to the model as the tool result, so it finishes directly).
-3. **Population cap — `WithMaxSpawns(n)`.** A counter shared across the whole tree, capping the
-   total number of sub-agents — the runaway-fan-out guard depth cannot provide.
-4. **Per-agent tool allowlist.** An agent can only spawn the `AgentTool`s present in its `ToolSet`.
-   Omit them (or don't include an agent's tool in another's set) and it is a leaf — this both makes
-   a node non-spawning and prevents A→B→A cycles by construction.
-
-Depth and population are set at the top level and **inherited** by nested runs (like the budget), so
-a sub-agent cannot reset them. `maxSteps` still bounds each individual agent's own loop.
-
----
-
-## Token accounting
-
-`TokenCount{Prompt, Completion, Total}`. `Step.Tokens` is one round-trip (the adapter fills it from
-the provider response). `TurnEnd.Tokens` is the turn total — the **sum** of every round-trip, which
-is what you are **billed** (history is re-sent each call). To gauge context-window fill instead,
-read the **last** round-trip's `Prompt`, not the sum. Session-level totals are the consumer's job,
-built by draining `TurnEnd` events. A `Tokenizer` port would only be needed for **proactive**
-pre-send estimation (an optional adapter), never for reporting.
-
----
-
-## Validation vs diagnostics
-
-Two separate mechanisms:
-
-- **`Validate()` — hard.** `ToolSpec.Validate` / `Skill.Validate` enforce only the rules a provider
-  rejects outright: tool name `^[a-zA-Z0-9_-]{1,64}$`, skill name `^[a-z0-9-]{1,64}$` (lowercase,
-  no underscore, no reserved words), well-formed parameter JSON. Enforced at construction —
-  `NewTool` / `NewToolSet` / `NewSkillSet` return an error, so an invalid tool or skill never
-  exists.
-- **`Diagnostics` — soft.** A passive collector fed advisory findings (`Warn`/`Info`) from various
-  corners — e.g. a description longer than 1024 chars (rejected by some providers, tolerated by
-  others). Non-fatal; the consumer drains `All()` / checks `HasErrors()` and logs.
-
-**Schema is a canonical model, not raw JSON.** A tool's `Parameters` is a `*Schema` — build it with
-`Object` / `Prop` / `String` / `Number` / `Integer` / `Bool` / `Array` / `.Require` / `.WithEnum`, or
-map a foreign JSON Schema into it with `ParseSchema`. The model holds only the **portable subset**
-(`type`, `description`, `properties`, `required`, `items`, `enum`, plus nested objects/arrays) — the
-intersection every provider accepts (OpenAI, Anthropic, Gemini). Each adapter **renders** it to that
+A tool's parameter schema is a **canonical `*Schema`**, not raw JSON — built with `Object`/`Prop`/
+`String`/… or mapped from a foreign JSON Schema with `ParseSchema`. The model holds only the
+**portable subset every provider accepts** (type, description, properties, required, items, enum, and
+nesting — the OpenAI ∩ Anthropic ∩ Gemini intersection). Each adapter **renders** it to that
 provider's dialect (e.g. Gemini uppercases types and forbids `additionalProperties`). Because the
-model can't even express unsupported constructs, there is nothing to strip — no blocklist, no
-sanitizer. Validating call **arguments** against the schema is still the **tool's** job inside `Call`
-(unmarshal, check, return the error to the model, let it retry).
+model can't even express an unsupported construct, there is **nothing to strip** — no blocklist, no
+sanitizer. Validating call *arguments* against the schema stays the tool's own job inside `Call`.
 
 ---
 
-## Persistence and multiplexing
+## The permission model (agentkit-gate)
 
-A `Session` is self-contained. `WithStore(store, id)` loads its history on build and saves it after
-each turn; `MemStore` is the in-memory default and any durable `Store` is a consumer adapter.
+The engine is policy-blind; `agentkit-gate` adds human-approved, remembered permission by wrapping
+tools and reading a `ctx`-installed policy. The shape:
 
-Running **many** concurrent conversations (**multiplexing**) is the consumer's job: keep a
-`map[id]*Session`, create on first message, route input to the right session and fan its
-`Subscribe()` stream out to that conversation's UI. Eviction and lifecycle are app policy, so the
-library owns no live-session manager. (Contrast: multiplexing is *horizontal* — independent
-top-level conversations the app routes; sub-agents are *vertical* — nested inside one conversation,
-handled by the library via ctx.)
+- An **`Action{Kind, Target}`** is what's gated — `Kind` is a tool name *or* a shared axis like
+  `"net"` (so one host allowlist covers every network tool); `Target` is the runtime host/path.
+- A **`Policy`** returns a `Ruling` — `Allowed()`, `Denied()`, or `AskWith(recall)`. The `Ruling` is
+  opaque and built only through those constructors, so an ask can never silently default its recall.
+- **`Recall`** (`Never` < `Session` < `Always`, zero = `Never`) caps, per Kind, how long an approval
+  may be remembered. An irreversible Kind uses `RecallNever` → asked every time. `Check` remembers at
+  the **more restrictive** of the policy's cap and the human's choice (`min`).
+- A **`Grant{Kind, Target}`** is a remembered approval — covering both the tool-action axis and a
+  host allowlist. Whether a stored pattern covers an action is decided by a **`Matcher`** the *tool*
+  passes to `Check` (`"*.example.com"` over subdomains for hosts, a glob for paths). Target semantics
+  live in the tool, never in the general library.
+- An **`Approver`** presents the action out-of-band, receives the tool's **suggested widenings**, and
+  returns approve/deny plus the grant to remember and its recall. A nil Approver = unattended = deny.
 
----
-
-## Logging
-
-`Logger` is a small leveled key/value port (`Debug/Info/Warn/Error`, plus `WithContext(ctx)` for
-request/trace scoping). Plug in anything; `NopLogger()` is the silent default and `SlogLogger`
-wraps the standard library's `slog`. It is never a hard-typed `*slog.Logger`, so it stays
-dependency-free.
-
----
-
-## Adapters
-
-The core defines ports; adapters implement them in their own modules so their dependencies never
-reach the core:
-
-- **`agentkit-openai`** — implements `LLM` against an OpenAI-compatible endpoint: streaming SSE,
-  native tool calls, reasoning deltas, `Step.Tokens` from the response usage. Options include
-  `WithMaxTokens(n)` (the per-response **output** cap — distinct from the session's
-  `WithTokenLimit`, which is cumulative spend).
-- A **tokenizer** adapter (optional) would implement a `Tokenizer` port for proactive pre-send
-  token estimation.
+**Roles:** the tool author picks which axes a tool checks and supplies the matcher + suggestions; the
+consumer's policy classifies each Kind (allow/ask/deny + recall — this is where "reads free, writes
+ask" lives); the human approves once/always/widened; the engine's `ToolSet` is the cage. Supervision
+scales it: an attended agent runs loose with HITL; an unattended one is caged tight (no human to ask).
 
 ---
 
-## Minimal usage
+## Composition
 
 ```go
-weather, _ := agentkit.NewTool(
-    "get_weather", "Current weather for a city.",
-    func(ctx context.Context, args string) (string, error) { /* ... */ return "sunny", nil },
-    agentkit.WithSchema(agentkit.Object(
-        agentkit.Prop("city", agentkit.String("the city name")),
-    ).Require("city")),
-)
-tools, _ := agentkit.NewToolSet(weather)
+llm := openai.New(baseURL, apiKey, model)
+tools, _ := agentkit.NewToolSet(myTools...)          // the cage
+policy := gate.Classify([]string{"notify", "net"}, nil)
 
-sess := agentkit.NewSession(ctx, llm, // ctx is the session lifecycle; cancel it or Close() to stop
-    agentkit.WithSystem("You are a helpful assistant."),
-    agentkit.WithTools(tools),
-    agentkit.WithTimeout(30*time.Second),
-    agentkit.WithTokenLimit(100_000),
+rt := runtime.New(llm,
+    runtime.WithTools(tools),
+    runtime.WithGate(policy, gate.NewMemGrants(), myApprover),
+    runtime.WithSession(agentkit.WithSystem(...), agentkit.WithTimeout(2*time.Minute)),
 )
-defer sess.Close()
-
-go func() {
-    for ev := range sess.Subscribe() { /* render by Frame; closes when the session stops */ }
-}()
-sess.Submit("What's the weather in Cologne?")
+sess := rt.Session(ctx)   // gated tools + permission machinery on the ctx
 ```
 
-Or a one-shot:
-
-```go
-answer, err := agentkit.Once(ctx, llm, "Summarize this.", agentkit.WithTools(tools))
-```
+`runtime` wraps the toolset with the gate and installs the permission machinery on each session's
+ctx, so it reaches every tool call and every sub-agent. What a consumer still brings: a durable
+`gate.Grants` store, a real out-of-band `gate.Approver` (push/ntfy), and its own effect tools beyond
+`agentkit-tools`.
