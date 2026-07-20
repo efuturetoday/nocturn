@@ -1,6 +1,6 @@
 package openai
 
-import "github.com/efuturetoday/agentkit"
+import "github.com/efuturetoday/nocturn/agentkit"
 
 // renderSchema maps agentkit's canonical Schema to the JSON Schema the endpoint accepts. Because the
 // Schema model only holds the portable subset (type/description/properties/required/items/enum) —

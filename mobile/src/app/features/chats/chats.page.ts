@@ -25,21 +25,19 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
     <ion-content>
       <!-- Gemini-style ask box: type a question, it starts a new chat with that first message. -->
       <div class="ask">
-        <div class="ask-border">
-          <div class="ask-inner">
-            <ion-textarea
-              [autoGrow]="true"
-              [rows]="1"
-              placeholder="Frag Nocturn…"
-              [value]="draft()"
-              (ionInput)="draft.set($any($event.target).value ?? '')"
-              (keydown.enter)="$event.preventDefault(); startChat()"
-            />
-            <ion-button fill="clear" size="small" [disabled]="!draft().trim()" (click)="startChat()">
-              <ion-icon slot="icon-only" name="arrow-up-outline" />
-            </ion-button>
-          </div>
-        </div>
+        <ion-item class="ask-item" lines="none" shape="round" fill="outline">
+          <ion-textarea
+            [autoGrow]="true"
+            [rows]="1"
+            placeholder="Frag Nocturn…"
+            [value]="draft()"
+            (ionInput)="draft.set($any($event.target).value ?? '')"
+            (keydown.enter)="$event.preventDefault(); startChat()"
+          />
+          <ion-button slot="end" fill="clear" size="small" [disabled]="!draft().trim()" (click)="startChat()">
+            <ion-icon slot="icon-only" name="arrow-up-outline" />
+          </ion-button>
+        </ion-item>
       </div>
 
       <ion-list inset="true">
@@ -48,7 +46,7 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
             <ion-item button detail="false" (click)="openChat(c)">
               <app-chat-row
                 [chat]="c"
-                [unread]="chat.unread().has(c.id)"
+                [unread]="chat.unreadIds().has(c.id)"
                 [approval]="chat.approvalWaiting().has(c.id)"
               />
             </ion-item>
@@ -68,28 +66,18 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
     </ion-content>
   `,
   styles: `
-    .ask { padding: 12px 12px 4px; }
-    .ask-border {
-      border-radius: 20px;
-      padding: 2px;
-      background: linear-gradient(115deg, #915bd7, #5b8cd7, #d75bd0, #915bd7);
-      background-size: 260% 260%;
-      animation: ask-shimmer 5s linear infinite;
+    .ask { padding: 0.75rem 0.75rem 0.25rem; }
+    .ask-item {
+      --background: var(--ion-background-color-step-100);
+      --border-color: var(--ion-background-color-step-200);
+      --border-width: 1px;
+      --border-radius: 1.25rem;
+      --padding-start: 0.875rem;
+      --inner-padding-end: 0.25rem;
+      --min-height: 0;
     }
-    @keyframes ask-shimmer {
-      0% { background-position: 0% 50%; }
-      100% { background-position: 260% 50%; }
-    }
-    @media (prefers-reduced-motion: reduce) { .ask-border { animation: none; } }
-    .ask-inner {
-      display: flex;
-      align-items: flex-end;
-      gap: 2px;
-      border-radius: 18px;
-      background: var(--ion-color-step-100);
-      padding-left: 14px;
-    }
-    .ask-inner ion-textarea { flex: 1; --padding-top: 12px; --padding-bottom: 12px; }
+    .ask-item.item-has-focus { --border-color: var(--ion-color-primary); }
+    .ask-item ion-textarea { --padding-top: 0.75rem; --padding-bottom: 0.75rem; }
   `,
 })
 export class ChatsPage {

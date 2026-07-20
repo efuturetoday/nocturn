@@ -12,7 +12,7 @@ import (
 
 	goopenai "github.com/sashabaranov/go-openai"
 
-	"github.com/efuturetoday/agentkit"
+	"github.com/efuturetoday/nocturn/agentkit"
 )
 
 // Client is the go-openai-backed LLM adapter. It is read-only after New, so it is safe to share

@@ -3,7 +3,7 @@ package gate
 import (
 	"context"
 
-	"github.com/efuturetoday/agentkit"
+	"github.com/efuturetoday/nocturn/agentkit"
 )
 
 // Wrap decorates a tool so every call is gated on its name (Action{Tool: name}) before it runs. Use

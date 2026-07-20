@@ -30,6 +30,7 @@
               }
             ],
             "styles": [
+              "node_modules/@fontsource-variable/space-grotesk/index.css",
               "src/styles.scss",
               { "input": "node_modules/@ionic/angular/css/core.css" },
               { "input": "node_modules/@ionic/angular/css/normalize.css" },

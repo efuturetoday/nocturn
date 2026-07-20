@@ -67,11 +67,11 @@ const RESCAN_MS = 4000;
     }
     .hero { display: flex; flex-direction: column; align-items: center; }
     .hero img {
-      filter: drop-shadow(0 12px 34px hsl(266 65% 45% / 0.55));
+      filter: drop-shadow(0 14px 30px rgba(8, 4, 16, 0.7));
       animation: mascot-float 6s ease-in-out infinite;
     }
-    .hero h1 { margin: 12px 0 0; font-weight: 700; letter-spacing: 0.02em; }
-    .hero p { margin: 6px 0 0; color: var(--ion-color-medium); font-size: 0.9rem; }
+    .hero h1 { margin: 0.75rem 0 0; font-family: var(--font-display); font-weight: 600; letter-spacing: -0.01em; }
+    .hero p { margin: 0.375rem 0 0; color: var(--ion-color-medium); font-size: 0.9rem; }
     @keyframes mascot-float {
       0%, 100% { transform: translateY(0) rotate(-0.6deg); }
       50% { transform: translateY(-9px) rotate(0.6deg); }
@@ -79,16 +79,16 @@ const RESCAN_MS = 4000;
     @media (prefers-reduced-motion: reduce) { .hero img { animation: none; } }
 
     .searching {
-      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      display: flex; flex-direction: column; align-items: center; gap: 0.625rem;
       margin-top: 6vh;
       color: var(--ion-color-medium); font-size: 0.9rem;
     }
-    .results { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 10px; }
+    .results { width: 100%; max-width: 26.25rem; display: flex; flex-direction: column; gap: 0.625rem; }
     .host {
-      display: flex; align-items: center; gap: 12px;
-      width: 100%; padding: 14px 16px;
-      background: var(--ion-color-step-100); color: var(--ion-text-color);
-      border: 1px solid var(--ion-color-step-150); border-radius: 14px;
+      display: flex; align-items: center; gap: 0.75rem;
+      width: 100%; padding: 0.875rem 1rem;
+      background: var(--ion-background-color-step-100); color: var(--ion-text-color);
+      border: 1px solid var(--ion-background-color-step-150); border-radius: 0.875rem;
       font: inherit; text-align: left; cursor: pointer;
     }
     .host ion-icon { font-size: 1.3rem; color: var(--ion-color-primary); }
@@ -96,15 +96,15 @@ const RESCAN_MS = 4000;
     .host-text small { color: var(--ion-color-medium); font-size: 0.75rem; }
     .host.skeleton { cursor: default; }
     .host.skeleton .dot { width: 1.3rem; height: 1.3rem; border-radius: 50%; }
-    .host.skeleton .host-text { flex: 1; gap: 6px; }
+    .host.skeleton .host-text { flex: 1; gap: 0.375rem; }
 
-    .manual-footer { --background: transparent; background: transparent; text-align: center; }
+    .manual-footer { --background: transparent; text-align: center; }
     .manual-footer::before { display: none; }
     .manual {
       background: none; border: none; cursor: pointer;
       color: var(--ion-color-primary); font: inherit; font-size: 0.9rem;
       text-decoration: underline;
-      padding: 12px; padding-bottom: calc(12px + var(--ion-safe-area-bottom, 0px));
+      padding: 0.75rem; padding-bottom: calc(0.75rem + var(--ion-safe-area-bottom, 0px));
       width: 100%;
     }
   `,

@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, input, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, ViewEncapsulation, input, computed } from '@angular/core';
 import { marked } from 'marked';
 
 /**
@@ -69,41 +69,65 @@ export function renderMarkdown(src: string): string {
 @Component({
   selector: 'app-markdown',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  // None: the rendered markdown is injected via [innerHTML], so those nodes never receive the
+  // component's _ngcontent attribute — Emulated encapsulation would leave every `.md …` rule
+  // unmatched (the whole stylesheet dead). Every selector below is `.md`-scoped, which keeps the
+  // styles namespaced to this component's output even without Angular's attribute scoping.
+  encapsulation: ViewEncapsulation.None,
   template: `<div class="md" [innerHTML]="html()"></div>`,
   styles: `
-    .md { display: block; }
-    .md :first-child { margin-top: 0; }
-    .md :last-child { margin-bottom: 0; }
-    .md p { margin: 0 0 8px; }
-    .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 10px 0 6px; line-height: 1.25; }
-    .md ul, .md ol { margin: 0 0 8px; padding-left: 22px; }
-    .md li { margin: 2px 0; }
-    .md a { color: var(--ion-color-primary); }
+    .md { display: block; font-size: 1rem; line-height: 1.55; }
+    .md > :first-child { margin-top: 0; }
+    .md > :last-child { margin-bottom: 0; }
+
+    .md p { margin: 0 0 0.5rem; }
+
+    .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+      margin: 1rem 0 0.375rem;
+      line-height: 1.25;
+      font-weight: 650;
+    }
+    .md h1 { font-size: 1.3rem; }
+    .md h2 { font-size: 1.15rem; }
+    .md h3 { font-size: 1.03rem; }
+    .md h4, .md h5, .md h6 { font-size: 1rem; }
+    .md h4 { color: var(--ion-color-medium); }
+
+    .md ul, .md ol { margin: 0 0 0.5rem; padding-left: 1.35rem; }
+    .md li { margin: 0.125rem 0; }
+    .md li::marker { color: var(--ion-color-medium); }
+
+    .md a { color: var(--ion-color-primary); text-underline-offset: 2px; }
+    .md strong { font-weight: 650; }
+    .md hr { border: none; border-top: 1px solid var(--ion-background-color-step-200); margin: 0.875rem 0; }
+
     .md code {
       font-family: var(--ion-font-family-monospace, ui-monospace, monospace);
       font-size: 0.85em;
-      background: var(--ion-color-step-200);
-      padding: 1px 5px;
-      border-radius: 5px;
+      background: var(--ion-background-color-step-200);
+      padding: 0.0625rem 0.3125rem;
+      border-radius: 0.3125rem;
     }
     .md pre {
-      background: var(--ion-color-step-150);
-      padding: 10px 12px;
-      border-radius: 10px;
+      background: var(--ion-background-color-step-150);
+      padding: 0.625rem 0.75rem;
+      border-radius: 0.625rem;
       overflow-x: auto;
-      margin: 0 0 8px;
+      margin: 0 0 0.5rem;
     }
     .md pre code { background: none; padding: 0; font-size: 0.82em; }
+
     .md blockquote {
-      margin: 0 0 8px;
-      padding-left: 12px;
-      border-left: 3px solid var(--ion-color-step-300);
+      margin: 0 0 0.5rem;
+      padding-left: 0.75rem;
+      border-left: 2px solid var(--ion-color-primary);
       color: var(--ion-color-medium);
     }
+
     .md .table-wrap, .md table { display: block; overflow-x: auto; }
-    .md table { border-collapse: collapse; margin: 0 0 8px; font-size: 0.9em; }
-    .md th, .md td { border: 1px solid var(--ion-color-step-250); padding: 4px 8px; text-align: left; }
-    .md th { background: var(--ion-color-step-150); }
+    .md table { border-collapse: collapse; margin: 0 0 0.5rem; font-size: 0.9em; }
+    .md th, .md td { border: 1px solid var(--ion-background-color-step-250); padding: 0.25rem 0.5rem; text-align: left; }
+    .md th { background: var(--ion-background-color-step-150); }
     .md .md-img { color: var(--ion-color-primary); }
   `,
 })

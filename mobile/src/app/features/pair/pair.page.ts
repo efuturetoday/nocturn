@@ -61,7 +61,7 @@ import { AuthService } from '../../core/services/auth.service';
     </ion-content>
   `,
   styles: `
-    .host { display: block; text-align: center; margin: 4px 0 16px; word-break: break-all; }
+    .host { display: block; text-align: center; margin: 0.25rem 0 1rem; word-break: break-all; }
     .center, .err { text-align: center; }
     ion-input-otp { justify-content: center; }
     ion-input-otp a { color: var(--ion-color-primary); cursor: pointer; }

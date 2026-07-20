@@ -9,6 +9,7 @@ import { ToastService } from './core/services/toast.service';
 import { KeyboardService } from './core/services/keyboard.service';
 import { JoinPromptService } from './core/services/join-prompt.service';
 import { PresenceService } from './core/services/presence.service';
+import { PushService } from './core/services/push.service';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -23,6 +24,7 @@ export const appConfig: ApplicationConfig = {
       inject(KeyboardService);
       inject(JoinPromptService);
       inject(PresenceService);
+      inject(PushService);
       if (Capacitor.isNativePlatform()) {
         // Immersive: webview draws under the status bar (Ionic headers still offset via safe-area).
         // Style.Dark = light icons/text, for the dark nocturn background.

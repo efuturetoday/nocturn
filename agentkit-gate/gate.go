@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/efuturetoday/agentkit"
+	"github.com/efuturetoday/nocturn/agentkit"
 )
 
 // ErrDenied is returned by Check when an action is not permitted — a policy Deny, an Ask with no

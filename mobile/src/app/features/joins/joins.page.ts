@@ -44,7 +44,7 @@ import { AuthService } from '../../core/services/auth.service';
     </ion-content>
   `,
   styles: `
-    .hint { text-align: center; color: var(--ion-color-medium); margin: 4px 0 12px; }
+    .hint { text-align: center; color: var(--ion-color-medium); margin: 0.25rem 0 0.75rem; }
     ion-chip { font-size: 1.1rem; font-weight: 700; letter-spacing: 0.08em; }
   `,
 })

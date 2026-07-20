@@ -23,9 +23,9 @@ import type { ToolView } from '../../../core/services/chat.service';
     :host {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 0.375rem;
       font-size: 0.8rem;
-      padding: 2px 0;
+      padding: 0.125rem 0;
     }
     .tool-name { font-family: var(--ion-font-family-monospace, monospace); }
   `,

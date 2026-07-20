@@ -2,11 +2,12 @@ import { Component, ChangeDetectionStrategy, inject, linkedSignal } from '@angul
 import { Router } from '@angular/router';
 import {
   IonContent, IonList, IonListHeader, IonItem, IonLabel, IonTextarea, IonButton, IonIcon,
-  IonNote, IonChip, IonItemSliding, IonItemOptions, IonItemOption, AlertController,
+  IonNote, IonChip, IonItemSliding, IonItemOptions, IonItemOption, IonAccordion, IonAccordionGroup,
+  AlertController,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import {
-  logOutOutline, saveOutline, sparklesOutline, trashOutline, notificationsOutline,
+  logOutOutline, saveOutline, trashOutline, notificationsOutline,
   logoApple, logoAndroid, globeOutline,
 } from 'ionicons/icons';
 import { WorkspaceService } from '../../core/services/workspace.service';
@@ -22,17 +23,30 @@ import type { DeviceMeta } from '../../core/protocol/nocturn-protocol';
   imports: [
     WorkspaceHeaderComponent, IonContent, IonList, IonListHeader, IonItem, IonLabel,
     IonTextarea, IonButton, IonIcon, IonNote, IonChip, IonItemSliding, IonItemOptions, IonItemOption,
+    IonAccordion, IonAccordionGroup,
   ],
   styles: `
     .time { color: var(--ion-color-medium); font-size: 0.78rem; }
+    /* Skill description lives in the accordion's expanded content — compact, secondary. */
+    .skill-desc {
+      padding: 0.25rem 1rem 0.875rem;
+      color: var(--ion-color-medium); font-size: 0.85rem; line-height: 1.45;
+    }
   `,
   template: `
     <app-workspace-header />
 
-    <ion-content class="ion-padding">
+    <ion-content>
       <ion-list inset="true">
-        <ion-list-header><ion-label>Persona</ion-label></ion-list-header>
-        <ion-item>
+        <ion-list-header>
+          <ion-label>Persona</ion-label>
+          @if (dirty()) {
+            <ion-button slot="end" size="small" fill="clear" (click)="savePersona()">
+              <ion-icon slot="start" name="save-outline" /> Save
+            </ion-button>
+          }
+        </ion-list-header>
+        <ion-item lines="none">
           <ion-textarea
             [autoGrow]="true"
             [rows]="4"
@@ -41,25 +55,24 @@ import type { DeviceMeta } from '../../core/protocol/nocturn-protocol';
             (ionInput)="persona.set($any($event.target).value ?? '')"
           />
         </ion-item>
-        <ion-item lines="none">
-          <ion-button slot="end" size="small" [disabled]="!dirty()" (click)="savePersona()">
-            <ion-icon slot="start" name="save-outline" /> Save
-          </ion-button>
-        </ion-item>
       </ion-list>
 
       @if (detail(); as d) {
         <ion-list inset="true">
-          <ion-list-header><ion-label>Skills</ion-label></ion-list-header>
-          @for (s of d.skills; track s.name) {
-            <ion-item>
-              <ion-icon slot="start" name="sparkles-outline" color="secondary" aria-hidden="true" />
-              <ion-label class="ion-text-wrap">
-                <h2>{{ s.name }}</h2>
-                <ion-note>{{ s.description }}</ion-note>
-              </ion-label>
-            </ion-item>
-          } @empty {
+          <ion-list-header>
+            <ion-label>Skills</ion-label>
+            @if (d.skills.length) { <ion-note slot="end">{{ d.skills.length }}</ion-note> }
+          </ion-list-header>
+          @if (d.skills.length) {
+            <ion-accordion-group>
+              @for (s of d.skills; track s.name) {
+                <ion-accordion [value]="s.name">
+                  <ion-item slot="header"><ion-label>{{ s.name }}</ion-label></ion-item>
+                  <div slot="content" class="skill-desc">{{ s.description }}</div>
+                </ion-accordion>
+              }
+            </ion-accordion-group>
+          } @else {
             <ion-item lines="none"><ion-label color="medium">No skills.</ion-label></ion-item>
           }
         </ion-list>
@@ -140,7 +153,7 @@ export class SettingsPage {
 
   constructor() {
     addIcons({
-      logOutOutline, saveOutline, sparklesOutline, trashOutline, notificationsOutline,
+      logOutOutline, saveOutline, trashOutline, notificationsOutline,
       logoApple, logoAndroid, globeOutline,
     });
   }

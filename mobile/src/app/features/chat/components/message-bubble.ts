@@ -42,10 +42,11 @@ import type { ChatMessageView } from '../../../core/services/chat.service';
   styles: `
     :host {
       display: block;
+      width: fit-content;
       max-width: 85%;
-      margin: 6px 0;
-      padding: 10px 14px;
-      border-radius: 16px;
+      margin: 0.375rem 0;
+      padding: 0.625rem 0.875rem;
+      border-radius: 1rem;
       word-break: break-word;
     }
     .plain { white-space: pre-wrap; }
@@ -54,16 +55,16 @@ import type { ChatMessageView } from '../../../core/services/chat.service';
       margin-left: auto;
       background: var(--ion-color-primary);
       color: var(--ion-color-primary-contrast);
-      border-bottom-right-radius: 4px;
+      border-bottom-right-radius: 0.25rem;
     }
     :host.assistant {
       margin-right: auto;
-      background: var(--ion-color-step-100, #f2f2f2);
+      background: var(--ion-background-color-step-100);
       color: var(--ion-text-color);
-      border-bottom-left-radius: 4px;
+      border-bottom-left-radius: 0.25rem;
     }
-    .thinking { display: block; font-style: italic; margin-bottom: 6px; }
-    .tools { margin-bottom: 6px; }
+    .thinking { display: block; font-style: italic; margin-bottom: 0.375rem; }
+    .tools { margin-bottom: 0.375rem; }
   `,
 })
 export class MessageBubbleComponent {

@@ -1,31 +1,40 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import {
-  IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonIcon, AlertController,
+  IonHeader, IonToolbar, IonButtons, IonButton, IonIcon, AlertController,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { swapHorizontalOutline } from 'ionicons/icons';
+import { chevronDownOutline } from 'ionicons/icons';
 import { WorkspaceService } from '../core/services/workspace.service';
 
 /**
- * The shared tab-root header: the active workspace NAME as the title, and a switch icon in the
- * end slot that opens a workspace chooser. The bottom tab bar names the page, so no page title
- * is shown; connection status lives in a pill above the tab bar, not here.
+ * The shared tab-root header: a workspace SWITCHER as the title — the active workspace name plus a
+ * chevron so it reads as tappable (opens the chooser). The bottom tab bar names the page, so no
+ * page title is shown; connection status lives in a pill above the tab bar.
  */
 @Component({
   selector: 'app-workspace-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonIcon],
+  imports: [IonHeader, IonToolbar, IonButtons, IonButton, IonIcon],
   template: `
     <ion-header>
       <ion-toolbar>
-        <ion-title>{{ ws.active() }}</ion-title>
-        <ion-buttons slot="end">
-          <ion-button (click)="choose()" aria-label="Switch workspace">
-            <ion-icon slot="icon-only" name="swap-horizontal-outline" />
+        <ion-buttons slot="start">
+          <ion-button class="ws-switch" (click)="choose()" aria-label="Switch workspace">
+            <span class="ws-name">{{ ws.active() }}</span>
+            <ion-icon slot="end" name="chevron-down-outline" aria-hidden="true" />
           </ion-button>
         </ion-buttons>
       </ion-toolbar>
     </ion-header>
+  `,
+  styles: `
+    .ws-switch {
+      --color: var(--ion-text-color);
+      --padding-start: 0.5rem; --padding-end: 0.5rem;
+      font-weight: 700; text-transform: none;
+    }
+    .ws-switch .ws-name { margin-right: 0.25rem; font-family: var(--font-display); }
+    .ws-switch ion-icon[slot='end'] { color: var(--ion-color-medium); font-size: 0.85rem; }
   `,
 })
 export class WorkspaceHeaderComponent {
@@ -33,7 +42,7 @@ export class WorkspaceHeaderComponent {
   private readonly alerts = inject(AlertController);
 
   constructor() {
-    addIcons({ swapHorizontalOutline });
+    addIcons({ chevronDownOutline });
   }
 
   protected async choose(): Promise<void> {

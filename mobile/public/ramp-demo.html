@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nocturn — Flächen-Ramp Demo</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: #0b0a10;
+    color: #ece9f2;
+    padding: 2rem 1.25rem 4rem;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.01em; }
+  .sub { color: #8a8594; font-size: 0.9rem; margin: 0.35rem 0 2rem; max-width: 40rem; }
+  .grid { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start; }
+
+  /* Each ramp column is a phone-sized mock sitting on ITS OWN base bg. */
+  .col { flex: 1 1 300px; min-width: 280px; max-width: 380px; }
+  .name { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .name span { color: #8a8594; font-weight: 500; font-size: 0.8rem; }
+
+  .phone {
+    border-radius: 1.25rem;
+    overflow: hidden;
+    border: 1px solid #211f2b;
+    background: var(--bg);
+  }
+  .toolbar {
+    padding: 0.9rem 1rem;
+    background: var(--surf1);
+    display: flex; align-items: center; gap: 0.5rem;
+    font-weight: 700; letter-spacing: -0.01em;
+    border-bottom: 1px solid var(--border);
+  }
+  .toolbar .chev { color: var(--muted); font-size: 0.8rem; }
+  .body { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; min-height: 320px; }
+
+  .card {
+    background: var(--surf2);
+    border: 1px solid var(--border);
+    border-radius: 0.875rem;
+    padding: 1rem;
+  }
+  .card h3 { font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em; }
+  .card p { color: var(--muted); font-size: 0.85rem; margin-top: 0.35rem; line-height: 1.45; }
+
+  .list {
+    background: var(--surf1);
+    border: 1px solid var(--border);
+    border-radius: 0.875rem;
+    overflow: hidden;
+  }
+  .row { padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: none; }
+  .row .t { font-weight: 600; font-size: 0.92rem; }
+  .row .s { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
+
+  .chips { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  .chip {
+    background: var(--surf2); border: 1px solid var(--border);
+    color: var(--muted); font-size: 0.78rem; font-weight: 600;
+    padding: 0.25rem 0.7rem; border-radius: 999px;
+  }
+  .chip.accent { background: color-mix(in srgb, var(--primary) 20%, transparent); border-color: transparent; color: #cdb8f4; }
+  .btn {
+    align-self: flex-start;
+    background: var(--primary); color: #fff;
+    border: none; border-radius: 0.75rem;
+    padding: 0.55rem 1rem; font-weight: 700; font-size: 0.85rem;
+  }
+
+  /* Swatch strip under each mock. */
+  .swatches { display: flex; margin-top: 0.6rem; border-radius: 0.5rem; overflow: hidden; border: 1px solid #211f2b; }
+  .sw { flex: 1; height: 2.5rem; position: relative; }
+  .sw code { position: absolute; inset: auto 0 0.15rem 0.25rem; font-size: 0.55rem; color: #cfcbd8; opacity: 0.85; font-family: ui-monospace, monospace; }
+
+  /* ---- the three ramps ---- */
+  .dezent  { --bg:#12101a; --surf1:#191722; --surf2:#1e1b28; --surf3:#242030; --border:#2a2636; --muted:#9a94a8; --primary:#915bd7; }
+  .mittel  { --bg:#12101a; --surf1:#1d1830; --surf2:#241d38; --surf3:#2b2244; --border:#332a50; --muted:#9a94a8; --primary:#915bd7; }
+  .neutral { --bg:#12101a; --surf1:#1a1922; --surf2:#201f29; --surf3:#262530; --border:#2c2b37; --muted:#98969f; --primary:#915bd7; }
+
+  .current { --bg:#12101a; --surf1:#251e32; --surf2:#251e32; --surf3:#312a3d; --border:#312a3d; --muted:#8d8698; --primary:#915bd7; }
+  .note { color:#8a8594; font-size:0.78rem; margin-top:0.5rem; }
+</style>
+</head>
+<body>
+  <h1>Nocturn — Flächen-Ramp</h1>
+  <p class="sub">Wie Cards / Items / Toolbar auf dem Base-BG <code>#12101a</code> sitzen. Ganz rechts der
+  IST-Zustand (Ramp startet nicht beim Base → Boxes wirken „extra lila"). Die drei Vorschläge leiten
+  konsistent vom Base ab.</p>
+
+  <div class="grid">
+    <!-- DEZENT -->
+    <div class="col">
+      <div class="name">Dezent <span>· empfohlen</span></div>
+      <div class="phone dezent">
+        <div class="toolbar">default <span class="chev">▾</span></div>
+        <div class="body">
+          <div class="card">
+            <h3>Persona</h3>
+            <p>You are Nocturn, a careful assistant. Use a tool when it helps.</p>
+          </div>
+          <div class="chips">
+            <span class="chip">4 agents</span><span class="chip">2 skills</span>
+            <span class="chip accent">persona set</span>
+          </div>
+          <div class="list">
+            <div class="row"><div class="t">summarize-url</div><div class="s">Fetch a web page and summarize it.</div></div>
+            <div class="row"><div class="t">text-stats</div><div class="s">Compute statistics for a piece of text.</div></div>
+          </div>
+          <button class="btn">Neuer Chat</button>
+        </div>
+      </div>
+      <div class="swatches dezent">
+        <div class="sw" style="background:var(--bg)"><code>bg 12101a</code></div>
+        <div class="sw" style="background:var(--surf1)"><code>191722</code></div>
+        <div class="sw" style="background:var(--surf2)"><code>1e1b28</code></div>
+        <div class="sw" style="background:var(--border)"><code>2a2636</code></div>
+      </div>
+    </div>
+
+    <!-- MITTEL -->
+    <div class="col">
+      <div class="name">Mittel</div>
+      <div class="phone mittel">
+        <div class="toolbar">default <span class="chev">▾</span></div>
+        <div class="body">
+          <div class="card">
+            <h3>Persona</h3>
+            <p>You are Nocturn, a careful assistant. Use a tool when it helps.</p>
+          </div>
+          <div class="chips">
+            <span class="chip">4 agents</span><span class="chip">2 skills</span>
+            <span class="chip accent">persona set</span>
+          </div>
+          <div class="list">
+            <div class="row"><div class="t">summarize-url</div><div class="s">Fetch a web page and summarize it.</div></div>
+            <div class="row"><div class="t">text-stats</div><div class="s">Compute statistics for a piece of text.</div></div>
+          </div>
+          <button class="btn">Neuer Chat</button>
+        </div>
+      </div>
+      <div class="swatches mittel">
+        <div class="sw" style="background:var(--bg)"><code>bg 12101a</code></div>
+        <div class="sw" style="background:var(--surf1)"><code>1d1830</code></div>
+        <div class="sw" style="background:var(--surf2)"><code>241d38</code></div>
+        <div class="sw" style="background:var(--border)"><code>332a50</code></div>
+      </div>
+    </div>
+
+    <!-- NEUTRAL -->
+    <div class="col">
+      <div class="name">Neutral-Ink</div>
+      <div class="phone neutral">
+        <div class="toolbar">default <span class="chev">▾</span></div>
+        <div class="body">
+          <div class="card">
+            <h3>Persona</h3>
+            <p>You are Nocturn, a careful assistant. Use a tool when it helps.</p>
+          </div>
+          <div class="chips">
+            <span class="chip">4 agents</span><span class="chip">2 skills</span>
+            <span class="chip accent">persona set</span>
+          </div>
+          <div class="list">
+            <div class="row"><div class="t">summarize-url</div><div class="s">Fetch a web page and summarize it.</div></div>
+            <div class="row"><div class="t">text-stats</div><div class="s">Compute statistics for a piece of text.</div></div>
+          </div>
+          <button class="btn">Neuer Chat</button>
+        </div>
+      </div>
+      <div class="swatches neutral">
+        <div class="sw" style="background:var(--bg)"><code>bg 12101a</code></div>
+        <div class="sw" style="background:var(--surf1)"><code>1a1922</code></div>
+        <div class="sw" style="background:var(--surf2)"><code>201f29</code></div>
+        <div class="sw" style="background:var(--border)"><code>2c2b37</code></div>
+      </div>
+    </div>
+
+    <!-- CURRENT (IST) -->
+    <div class="col">
+      <div class="name">IST <span>· jetzt (Mismatch)</span></div>
+      <div class="phone current">
+        <div class="toolbar">default <span class="chev">▾</span></div>
+        <div class="body">
+          <div class="card">
+            <h3>Persona</h3>
+            <p>You are Nocturn, a careful assistant. Use a tool when it helps.</p>
+          </div>
+          <div class="chips">
+            <span class="chip">4 agents</span><span class="chip">2 skills</span>
+            <span class="chip accent">persona set</span>
+          </div>
+          <div class="list">
+            <div class="row"><div class="t">summarize-url</div><div class="s">Fetch a web page and summarize it.</div></div>
+            <div class="row"><div class="t">text-stats</div><div class="s">Compute statistics for a piece of text.</div></div>
+          </div>
+          <button class="btn">Neuer Chat</button>
+        </div>
+      </div>
+      <div class="swatches current">
+        <div class="sw" style="background:var(--bg)"><code>bg 12101a</code></div>
+        <div class="sw" style="background:var(--surf1)"><code>251e32</code></div>
+        <div class="sw" style="background:var(--surf2)"><code>251e32</code></div>
+        <div class="sw" style="background:var(--border)"><code>312a3d</code></div>
+      </div>
+      <p class="note">Base neutral, Flächen springen auf sattes Lila → „schwimmende" Boxes.</p>
+    </div>
+  </div>
+</body>
+</html>

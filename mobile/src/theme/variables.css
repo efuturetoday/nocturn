@@ -65,34 +65,36 @@
   --ion-color-dark-shade: #170c28;
   --ion-color-dark-tint: #362b48;
 
-  --ion-background-color: #0f071d;
-  --ion-background-color-rgb: 15, 7, 29;
+  --ion-background-color: #12101a;
+  --ion-background-color-rgb: 18, 16, 26;
   --ion-text-color: #efedf3;
   --ion-text-color-rgb: 239, 237, 243;
 
-  --ion-color-step-50: #1a1228;
-  --ion-color-step-100: #251e32;
-  --ion-color-step-150: #312a3d;
-  --ion-color-step-200: #3c3548;
-  --ion-color-step-250: #474052;
-  --ion-color-step-300: #524c5d;
-  --ion-color-step-350: #5d5868;
-  --ion-color-step-400: #696373;
-  --ion-color-step-450: #746e7d;
-  --ion-color-step-500: #7f7a88;
-  --ion-color-step-550: #8a8693;
-  --ion-color-step-600: #95919d;
-  --ion-color-step-650: #a19ca8;
-  --ion-color-step-700: #aca8b3;
-  --ion-color-step-750: #b7b4be;
-  --ion-color-step-800: #c2bfc8;
-  --ion-color-step-850: #cdcad3;
-  --ion-color-step-900: #d9d6de;
-  --ion-color-step-950: #e4e2e8;
+  /* Surface ramp — consistent low-sat purple lift from the base bg (no "floating" saturated boxes).
+     Reproducible: `node src/theme/ramp.mjs` and paste. Do not hand-tune single steps. */
+  --ion-background-color-step-50: #16141c;
+  --ion-background-color-step-100: #211e2a;
+  --ion-background-color-step-150: #2c2837;
+  --ion-background-color-step-200: #373244;
+  --ion-background-color-step-250: #423d51;
+  --ion-background-color-step-300: #4d475e;
+  --ion-background-color-step-350: #58526b;
+  --ion-background-color-step-400: #635d78;
+  --ion-background-color-step-450: #6f6784;
+  --ion-background-color-step-500: #7a7390;
+  --ion-background-color-step-550: #87819a;
+  --ion-background-color-step-600: #948ea3;
+  --ion-background-color-step-650: #a09cad;
+  --ion-background-color-step-700: #ada9b7;
+  --ion-background-color-step-750: #b9b6c2;
+  --ion-background-color-step-800: #c5c3cc;
+  --ion-background-color-step-850: #d2d0d6;
+  --ion-background-color-step-900: #dedde1;
+  --ion-background-color-step-950: #eae9ec;
 
-  --ion-item-background: var(--ion-color-step-50);
-  --ion-toolbar-background: var(--ion-color-step-100);
-  --ion-card-background: var(--ion-color-step-100);
-  --ion-tab-bar-background: var(--ion-color-step-100);
-  --ion-border-color: var(--ion-color-step-150);
+  --ion-item-background: var(--ion-background-color-step-50);
+  --ion-toolbar-background: var(--ion-background-color-step-100);
+  --ion-card-background: var(--ion-background-color-step-100);
+  --ion-tab-bar-background: var(--ion-background-color-step-100);
+  --ion-border-color: var(--ion-background-color-step-150);
 }

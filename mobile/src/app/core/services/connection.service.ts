@@ -35,6 +35,15 @@ export class ConnectionService {
   private readonly _currentUrl = signal<string | null>(null);
   readonly currentUrl = this._currentUrl.asReadonly();
 
+  private readonly _authError = signal<string | null>(null);
+  /** Set to the failed ws URL when the daemon rejects the bearer (close code 4401). */
+  readonly authError = this._authError.asReadonly();
+
+  /** Clear the auth-error latch once the app has handled it (e.g. after routing to pair). */
+  clearAuthError(): void {
+    this._authError.set(null);
+  }
+
   /** Register a server-event listener. Returns an unsubscribe fn. */
   onEvent(fn: EventListener): () => void {
     this.listeners.add(fn);
@@ -115,9 +124,18 @@ export class ConnectionService {
     ws.onerror = () => {
       /* the close handler drives reconnect */
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       this.ws = null;
       if (this.manualClose) return;
+      // The daemon signals a bad/expired bearer by accepting the upgrade then closing with the
+      // app code 4401 (a plain HTTP 401 pre-upgrade is invisible to the WebSocket API). Treat it
+      // as auth failure: stop reconnecting and surface it so the app can re-pair.
+      if (ev.code === 4401) {
+        this.manualClose = true;
+        this._state.set('disconnected');
+        this._authError.set(this.url);
+        return;
+      }
       this.scheduleReconnect();
     };
   }

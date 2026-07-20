@@ -67,7 +67,7 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
       }
     </ion-content>
   `,
-  styles: `.agent-head h2 { font-weight: 700; } .agent-head { --background: var(--ion-color-step-100); }`,
+  styles: `.agent-head h2 { font-weight: 700; } .agent-head { --background: var(--ion-background-color-step-100); }`,
 })
 export class AgentsPage {
   private readonly workspaces = inject(WorkspaceService);

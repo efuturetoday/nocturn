@@ -30,30 +30,40 @@ export function relativeTime(iso: string): string {
   imports: [IonBadge],
   template: `
     <div class="row">
-      <div class="top">
-        <span class="name" [class.unread]="unread()">{{ chat().name || 'Untitled chat' }}</span>
-        <span class="time">{{ ago() }}</span>
-      </div>
-      <div class="bottom">
-        <span class="sub">{{ chat().turns }} messages</span>
-        @if (approval()) {
-          <ion-badge color="warning">approval</ion-badge>
-        } @else if (unread()) {
+      <div class="lead" aria-hidden="true">
+        @if (unread() && !approval()) {
           <span class="dot" aria-label="unread"></span>
         }
+      </div>
+      <div class="main">
+        <div class="text">
+          <span class="name" [class.unread]="unread()">{{ chat().name || 'Untitled chat' }}</span>
+          <div class="bottom">
+            <span class="sub">{{ chat().turns }} {{ chat().turns === 1 ? 'message' : 'messages' }}</span>
+            @if (approval()) {
+              <ion-badge color="warning">approval</ion-badge>
+            }
+          </div>
+        </div>
+        <span class="time">{{ ago() }}</span>
       </div>
     </div>
   `,
   styles: `
     :host { display: block; width: 100%; }
-    .row { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 3px 0; }
-    .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+    /* Apple-Mail layout: a fixed left gutter holds the unread dot (vertically centred). The gutter
+       reserves its width even when read, so every name lines up on the same left edge. */
+    .row { display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.1875rem 0; }
+    .lead { flex-shrink: 0; width: 0.625rem; display: flex; justify-content: center; }
+    .dot { width: 0.625rem; height: 0.625rem; border-radius: 50%; background: var(--ion-color-primary); }
+    /* Text column on the left, timestamp vertically centred against the whole two-line block. */
+    .main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.5rem; }
+    .text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.125rem; }
     .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .name.unread { font-weight: 700; }
-    .time { flex-shrink: 0; color: var(--ion-color-medium); font-size: 0.78rem; }
-    .bottom { display: flex; justify-content: space-between; align-items: center; min-height: 16px; }
+    .bottom { display: flex; align-items: center; gap: 0.5rem; min-height: 1rem; }
     .sub { color: var(--ion-color-medium); font-size: 0.85rem; }
-    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ion-color-primary); }
+    .time { flex-shrink: 0; color: var(--ion-color-medium); font-size: 0.78rem; }
   `,
 })
 export class ChatRowComponent {

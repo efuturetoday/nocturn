@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/efuturetoday/agentkit"
-	"github.com/efuturetoday/agentkit-gate"
+	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/agentkit-gate"
 )
 
 type scriptApprover struct {

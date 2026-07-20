@@ -22,3 +22,48 @@ ion-content {
   margin-left: var(--ion-safe-area-left, 0);
   margin-right: var(--ion-safe-area-right, 0);
 }
+
+/* ion-list-header ships a fixed light-mode --color (~#262626) on its host that the label inherits →
+   dark-on-dark in our custom dark palette. Ionic sets it with a mode-class selector that outranks a
+   plain `ion-list-header` rule, so !important is needed to re-point the host var to the theme text. */
+ion-list-header {
+  --color: var(--ion-text-color) !important;
+}
+
+/* Inset-list cards: balance vertical breathing. Ionic makes the list-header top-heavy — a 40px
+   min-height AND a ~29px label margin-top — while the last item hugs the card's bottom edge. Zero
+   those out and pad the card symmetrically so top and bottom breathe equally. Scoped to inset lists
+   so non-inset pages (Home) are untouched. */
+ion-list.list-inset {
+  padding-block: 0.75rem;
+}
+ion-list.list-inset ion-list-header {
+  min-height: 0;
+}
+ion-list.list-inset ion-list-header ion-label {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+
+/* Roomier rows: Ionic's 44px ios default packs a two-line row (name + sub) tight. Give items more
+   breathing, and drop the last item's hairline so single-item islands (e.g. one reminder) don't
+   render a stray divider Ionic's own last-child removal misses. */
+ion-list.list-inset ion-item {
+  --min-height: 3.5rem;
+}
+ion-list.list-inset ion-item:last-of-type {
+  --inner-border-width: 0;
+}
+
+/* Display face (Space Grotesk) for the app's OWN headings + wordmark only. Body text and rendered
+   user/markdown content keep the native system stack — fast, platform-native, no webfont on the
+   reading path. The variable font ships one woff2 (weights 300–700), self-hosted, no CDN. */
+:root {
+  --font-display: 'Space Grotesk Variable', var(--ion-font-family, -apple-system, 'Segoe UI', sans-serif);
+}
+
+ion-title,
+ion-list-header ion-label {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}

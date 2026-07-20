@@ -116,6 +116,7 @@ export interface ChatMeta {
   origin: "user" | "agent"; // who created it — filter/group human chats vs agent activity
   agent?: string; // the owning agent's name for an agent run ("" / absent = a user chat) — group runs per agent
   updated: string; // RFC3339
+  read?: string; // RFC3339 shared read cursor; unread when updated > read. Absent = never read
   turns: number; // user messages, for an "N messages" hint
 }
 
@@ -401,6 +402,16 @@ export interface DeleteChatCommand {
 }
 
 /**
+ * Mark a chat read up to its latest turn. The daemon advances one shared read cursor and pushes
+ * the fresh chat list to every paired device (→ ChatsEvent), so the unread dot clears everywhere.
+ */
+export interface MarkReadCommand {
+  cmd: "markRead";
+  ws: string;
+  id: string;
+}
+
+/**
  * Report the app's foreground/background state. Send `active:true` when the app comes to the
  * foreground, `active:false` when it backgrounds. It drives out-of-band routing: while ANY
  * connection is active the daemon answers approvals over the WebSocket (in-band prompt or an
@@ -445,6 +456,7 @@ export type ClientCommand =
   | OpenChatCommand
   | RenameChatCommand
   | DeleteChatCommand
+  | MarkReadCommand
   | SetPresenceCommand
   | ListJoinsCommand
   | ListDevicesCommand

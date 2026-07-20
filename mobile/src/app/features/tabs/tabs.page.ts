@@ -57,13 +57,13 @@ import { KeyboardService } from '../../core/services/keyboard.service';
       transform: translateX(-50%);
       bottom: calc(56px + var(--ion-safe-area-bottom, 0px));
       z-index: 20;
-      padding: 5px 14px;
+      padding: 0.3125rem 0.875rem;
       border-radius: 999px;
       font-size: 0.78rem;
       font-weight: 600;
-      color: #fff;
+      color: var(--ion-color-medium-contrast);
       background: var(--ion-color-medium);
-      box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+      box-shadow: 0 0.25rem 0.875rem rgb(0 0 0 / 0.35);
       pointer-events: none;
     }
     .conn-pill.warn { background: var(--ion-color-warning); color: var(--ion-color-warning-contrast); }

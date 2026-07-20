@@ -1,4 +1,5 @@
 import { Injectable, inject, signal, computed, effect } from '@angular/core';
+import { Preferences } from '@capacitor/preferences';
 import { ConnectionService } from './connection.service';
 import { WorkspaceService } from './workspace.service';
 import type { ChatMeta, ToolFrame, SnapshotTool, ForestFrame, Message, ApprovalEvent } from '../protocol/nocturn-protocol';
@@ -65,21 +66,39 @@ export class ChatService {
   // First message to auto-send once a freshly-created chat opens (Gemini-style composer).
   private readonly pendingFirst = signal<string | null>(null);
 
-  // Badge signals for chats the client does NOT have open (server ChatActivity pushes).
-  private readonly _unread = signal<ReadonlySet<string>>(new Set());
-  readonly unread = this._unread.asReadonly();
+  // Approval-waiting badge (from the chatActivity `approvalPending` push).
   private readonly _approvalWaiting = signal<ReadonlySet<string>>(new Set());
   readonly approvalWaiting = this._approvalWaiting.asReadonly();
+
+  // Read-state: the read cursor is the LATER of the server's shared `read` (cross-device — advanced
+  // by markRead, pushed to every device) and this device's local optimistic `_seen` (instant, and
+  // an offline fallback). A chat is unread when its `updated` is newer than that cursor — durable
+  // across reconnect/reload and covering turns that finish on another tab or while backgrounded
+  // (the daemon bumps `updated` + pushes `chats`).
+  private readonly _seen = signal<Record<string, string>>({});
+  private readonly _viewing = signal<string | null>(null); // the chat currently on screen
+
+  /** Ids of chats with unread activity (updated > read cursor). */
+  readonly unreadIds = computed(() => {
+    const seen = this._seen();
+    const out = new Set<string>();
+    for (const c of this._chats()) {
+      const at = later(seen[c.id], c.read);
+      if (!at || new Date(c.updated) > new Date(at)) out.add(c.id);
+    }
+    return out;
+  });
 
   /** True once we've received a snapshot for the active chat. */
   readonly ready = computed(() => this._activeChatId() !== null);
 
   /** Unread counts split by chat kind (agent runs badge the Agents tab, not Chat). */
   private readonly agentChatIds = computed(() => new Set(this._chats().filter((c) => c.agent).map((c) => c.id)));
-  readonly unreadUserCount = computed(() => [...this._unread()].filter((id) => !this.agentChatIds().has(id)).length);
-  readonly unreadAgentCount = computed(() => [...this._unread()].filter((id) => this.agentChatIds().has(id)).length);
+  readonly unreadUserCount = computed(() => [...this.unreadIds()].filter((id) => !this.agentChatIds().has(id)).length);
+  readonly unreadAgentCount = computed(() => [...this.unreadIds()].filter((id) => this.agentChatIds().has(id)).length);
 
   constructor() {
+    void this.loadSeen();
     this.conn.onEvent((e) => this.reduce(e));
 
     // Resync on (re)connect OR when the active workspace changes: re-list + re-open → fresh
@@ -156,7 +175,13 @@ export class ChatService {
   private reduce(e: import('../protocol/nocturn-protocol').ServerEvent): void {
     switch (e.type) {
       case 'chats':
-        if (e.ws === this.ws.active()) this._chats.set(e.items);
+        if (e.ws === this.ws.active()) {
+          this._chats.set(e.items);
+          // Keep the on-screen chat marked read as its turns stream in / it gets re-pushed.
+          const v = this._viewing();
+          const cur = v ? e.items.find((c) => c.id === v) : undefined;
+          if (cur) this.markSeen(cur.id, cur.updated);
+        }
         break;
 
       case 'snapshot': {
@@ -217,25 +242,52 @@ export class ChatService {
         break;
 
       case 'chatActivity':
-        // Badge a chat in the active workspace we don't have open; the open chat streams its
-        // full events already.
-        if (e.ws === this.ws.active() && e.id !== this._activeChatId()) {
-          this._unread.update((s) => new Set(s).add(e.id));
-          if (e.kind === 'approvalPending') {
-            this._approvalWaiting.update((s) => new Set(s).add(e.id));
-          }
+        // Unread is timestamp-driven; chatActivity only adds the approval-waiting badge for a
+        // chat we're not viewing (the viewed chat surfaces the approval inline instead).
+        if (e.ws === this.ws.active() && e.kind === 'approvalPending' && e.id !== this._viewing()) {
+          this._approvalWaiting.update((s) => new Set(s).add(e.id));
         }
         break;
     }
   }
 
+  // ── read-state (timestamp unread) ────────────────────────────────────────────
+
+  /** Mark this chat as on-screen; anything up to its current `updated` counts as read. */
+  startViewing(id: string): void {
+    this._viewing.set(id);
+    this.clearBadge(id);
+    const cur = this._chats().find((c) => c.id === id);
+    if (cur) this.markSeen(id, cur.updated);
+  }
+
+  stopViewing(id: string): void {
+    if (this._viewing() === id) this._viewing.set(null);
+  }
+
+  private markSeen(id: string, updated: string): void {
+    if (!updated || this._seen()[id] === updated) return; // nothing new → no local write, no resend
+    // Record locally for instant feedback + offline fallback …
+    const next = { ...this._seen(), [id]: updated };
+    this._seen.set(next);
+    void Preferences.set({ key: 'nocturn.seen', value: JSON.stringify(next) });
+    // … and advance the daemon's shared cursor, which clears the dot on every paired device.
+    const ws = this.ws.active();
+    if (ws) this.conn.send({ cmd: 'markRead', ws, id });
+  }
+
+  private async loadSeen(): Promise<void> {
+    const { value } = await Preferences.get({ key: 'nocturn.seen' });
+    if (value) {
+      try {
+        this._seen.set(JSON.parse(value) as Record<string, string>);
+      } catch {
+        /* ignore corrupt cache */
+      }
+    }
+  }
+
   private clearBadge(id: string): void {
-    this._unread.update((s) => {
-      if (!s.has(id)) return s;
-      const next = new Set(s);
-      next.delete(id);
-      return next;
-    });
     this._approvalWaiting.update((s) => {
       if (!s.has(id)) return s;
       const next = new Set(s);
@@ -337,4 +389,12 @@ export class ChatService {
   private snapshotTool(t: SnapshotTool, i: number): ToolView {
     return { key: `s${i}`, tool: t.tool, args: t.args, result: t.result, running: false, depth: 0 };
   }
+}
+
+/** The later of two optional RFC3339 timestamps (undefined = "no cursor"); used to combine the
+ * server's shared read cursor with this device's local optimistic seen-time. */
+function later(a: string | undefined, b: string | undefined): string | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return new Date(a) > new Date(b) ? a : b;
 }

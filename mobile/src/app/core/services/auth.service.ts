@@ -1,4 +1,5 @@
 import { Injectable, inject, signal, effect } from '@angular/core';
+import { Router } from '@angular/router';
 import { Preferences } from '@capacitor/preferences';
 import { Device } from '@capacitor/device';
 import { Capacitor } from '@capacitor/core';
@@ -18,6 +19,7 @@ import type { PairResponse, JoinResponse, JoinConfirmResponse, PendingJoin, Devi
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private readonly conn = inject(ConnectionService);
+  private readonly router = inject(Router);
 
   private readonly _joins = signal<PendingJoin[]>([]);
   /** Pending device-join requests + their codes (live from the `joins` event). */
@@ -38,11 +40,31 @@ export class AuthService {
       this.conn.send({ cmd: 'listJoins' });
       this.conn.send({ cmd: 'listDevices' });
     });
+
+    // Bearer rejected (close 4401) → forget it and send the user back to pair.
+    effect(() => {
+      const url = this.conn.authError();
+      if (!url) return;
+      void this.clear(url);
+      this.conn.clearAuthError();
+      void this.router.navigate(['/discover'], { replaceUrl: true });
+    });
   }
 
   /** Unpair a device by its public handle. Its bearer stops working on next connect. */
   revokeDevice(id: string): void {
     this.conn.send({ cmd: 'revokeDevice', id });
+  }
+
+  /** Register (or, with "", clear) this device's native push token so the daemon can wake it. */
+  async registerPush(wsUrl: string, token: string): Promise<void> {
+    const bearer = await this.bearerFor(wsUrl);
+    if (!bearer) return;
+    await fetch(this.httpBase(wsUrl) + '/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}` },
+      body: JSON.stringify({ token, platform: this.platform() }),
+    });
   }
 
   /** The stored bearer for a daemon (keyed by host), or null if this device isn't paired to it. */
