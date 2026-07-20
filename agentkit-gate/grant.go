@@ -22,12 +22,13 @@ func ExactMatch(pattern, target string) bool { return pattern == "*" || pattern 
 func matchKind(pattern, kind string) bool { return pattern == "*" || pattern == kind }
 
 // Grants stores remembered approvals. Allowed reports whether an action is covered by any grant,
-// using the supplied Matcher for the Target (nil = ExactMatch); Remember records a new grant (Once =
-// session, Always = durable). A durable implementation is the consumer's; MemGrants is the in-memory
+// using the supplied Matcher for the Target (nil = ExactMatch); Remember records a new grant at the
+// given Recall (RecallSession = keep for this session, RecallAlways = keep durably; Check never calls
+// Remember with RecallNever). A durable implementation is the consumer's; MemGrants is the in-memory
 // default.
 type Grants interface {
 	Allowed(a Action, match Matcher) bool
-	Remember(g Grant, s Scope)
+	Remember(g Grant, recall Recall)
 }
 
 // MemGrants is an in-memory Grants. It has no durable backing, so Always is remembered only for the
@@ -58,7 +59,9 @@ func (m *MemGrants) Allowed(a Action, match Matcher) bool {
 	return false
 }
 
-func (m *MemGrants) Remember(g Grant, _ Scope) {
+func (m *MemGrants) Remember(g Grant, _ Recall) {
+	// In-memory: everything lasts the process; the Recall (session vs durable) matters only to a
+	// durable store.
 	m.mu.Lock()
 	m.grants = append(m.grants, g)
 	m.mu.Unlock()

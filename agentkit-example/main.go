@@ -139,13 +139,13 @@ type consoleApprover struct {
 	in *bufio.Reader
 }
 
-func (c *consoleApprover) Ask(_ context.Context, a gate.Action, suggest []gate.Grant) (gate.Decision, gate.Grant, gate.Scope, error) {
+func (c *consoleApprover) Ask(_ context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
 	fmt.Print("\n  [approve] " + a.Kind)
 	if a.Target != "" {
 		fmt.Print(" → " + a.Target)
 	}
-	fmt.Print(" ? [y=once / a=always")
+	fmt.Print(" ? [y=session / a=always")
 	for i, s := range suggest { // widenings proposed by the tool
 		fmt.Printf(" / %d=always %s", i+1, s.Target)
 	}
@@ -154,14 +154,14 @@ func (c *consoleApprover) Ask(_ context.Context, a gate.Action, suggest []gate.G
 	line, _ := c.in.ReadString('\n')
 	switch choice := strings.ToLower(strings.TrimSpace(line)); choice {
 	case "y":
-		return gate.Allow, exact, gate.Once, nil
+		return true, exact, gate.RecallSession, nil
 	case "a":
-		return gate.Allow, exact, gate.Always, nil
+		return true, exact, gate.RecallAlways, nil
 	default:
 		if n, err := strconv.Atoi(choice); err == nil && n >= 1 && n <= len(suggest) {
-			return gate.Allow, suggest[n-1], gate.Always, nil
+			return true, suggest[n-1], gate.RecallAlways, nil
 		}
-		return gate.Deny, gate.Grant{}, gate.Once, nil
+		return false, gate.Grant{}, gate.RecallNever, nil
 	}
 }
 

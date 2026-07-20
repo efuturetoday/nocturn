@@ -51,20 +51,20 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 		return nil // no machinery installed = open
 	}
 
-	ruling := Ruling{Decision: Allow}
+	ruling := Allowed()
 	if p.policy != nil {
 		ruling = p.policy.Decide(a)
 	}
-	switch ruling.Decision {
-	case Allow:
+	switch ruling.decision {
+	case decisionAllow:
 		return nil
-	case Deny:
+	case decisionDeny:
 		return ErrDenied
 	}
 
 	// Ask. A standing grant covers it — unless this Kind is never remembered, in which case the cache
 	// is skipped and a human must approve every time.
-	if ruling.Recall != RecallNever && p.grants != nil && p.grants.Allowed(a, match) {
+	if ruling.recall != RecallNever && p.grants != nil && p.grants.Allowed(a, match) {
 		return nil
 	}
 	if p.approver == nil {
@@ -72,28 +72,19 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 	}
 
 	resume := agentkit.Pause(ctx) // a human deciding must not consume the turn's wall-clock
-	d, g, s, err := p.approver.Ask(ctx, a, suggest)
+	approved, g, chosen, err := p.approver.Ask(ctx, a, suggest)
 	resume()
 	if err != nil {
 		return err
 	}
-	if d != Allow {
+	if !approved {
 		return ErrDenied
 	}
 
-	// Remember the (possibly widened) grant, capped by the policy's Recall ceiling.
-	switch ruling.Recall {
-	case RecallNever:
-		// never remembered — the next call asks again
-	case RecallSession:
-		if s == Always {
-			s = Once // policy caps this Kind to the session; a durable store must not persist it
-		}
-		fallthrough
-	default:
-		if p.grants != nil {
-			p.grants.Remember(g, s)
-		}
+	// Remember the (possibly widened) grant at the more restrictive of the policy's ceiling and the
+	// human's choice; RecallNever means don't remember (asks again next time).
+	if effective := min(ruling.recall, chosen); effective != RecallNever && p.grants != nil {
+		p.grants.Remember(g, effective)
 	}
 	return nil
 }

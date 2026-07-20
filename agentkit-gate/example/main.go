@@ -11,15 +11,15 @@ import (
 )
 
 type scriptApprover struct {
-	decision gate.Decision
-	scope    gate.Scope
-	asks     int
+	approve bool
+	recall  gate.Recall
+	asks    int
 }
 
-func (s *scriptApprover) Ask(_ context.Context, a gate.Action, _ []gate.Grant) (gate.Decision, gate.Grant, gate.Scope, error) {
+func (s *scriptApprover) Ask(_ context.Context, a gate.Action, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	s.asks++
-	fmt.Printf("  [approver] asked about %+v -> %v/%v\n", a, s.decision, s.scope)
-	return s.decision, gate.Grant{Kind: a.Kind, Target: a.Target}, s.scope, nil
+	fmt.Printf("  [approver] asked about %+v -> approve=%v recall=%v\n", a, s.approve, s.recall)
+	return s.approve, gate.Grant{Kind: a.Kind, Target: a.Target}, s.recall, nil
 }
 
 func main() {
@@ -34,16 +34,16 @@ func main() {
 	policy := gate.PolicyFunc(func(a gate.Action) gate.Ruling {
 		switch a.Kind {
 		case "exec":
-			return gate.Ruling{Decision: gate.Deny}
+			return gate.Denied()
 		case "pay":
-			return gate.Ruling{Decision: gate.Ask, Recall: gate.RecallNever}
+			return gate.AskWith(gate.RecallNever)
 		case "send":
-			return gate.Ruling{Decision: gate.Ask, Recall: gate.RecallAlways}
+			return gate.AskWith(gate.RecallAlways)
 		default:
-			return gate.Ruling{Decision: gate.Allow}
+			return gate.Allowed()
 		}
 	})
-	approver := &scriptApprover{decision: gate.Allow, scope: gate.Always}
+	approver := &scriptApprover{approve: true, recall: gate.RecallAlways}
 	ctx := gate.With(context.Background(), policy, gate.NewMemGrants(), approver)
 
 	guardedSend := gate.Wrap(send)
