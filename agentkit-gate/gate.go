@@ -3,6 +3,7 @@ package gate
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/efuturetoday/agentkit"
 )
@@ -39,7 +40,7 @@ func from(ctx context.Context) *perms {
 //	Policy Deny  -> ErrDenied
 //	Policy Ask   -> a covering Grant passes; else the Approver is asked out-of-band (the turn's
 //	                wall-clock is paused via agentkit.Pause while the human decides) and the answer is
-//	                remembered at its Scope (Once = session grant, Always = durable).
+//	                remembered at the more restrictive of the policy's Recall and the human's choice.
 //
 // No machinery in ctx = open (returns nil): gating is opt-in per install. A tool calls Check before a
 // targeted effect (Action{Kind: "net", Target: host}), passing the Matcher for that axis's target
@@ -75,7 +76,7 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 	approved, g, chosen, err := p.approver.Ask(ctx, a, suggest)
 	resume()
 	if err != nil {
-		return err
+		return fmt.Errorf("gate: approver: %w", err)
 	}
 	if !approved {
 		return ErrDenied

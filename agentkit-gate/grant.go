@@ -32,16 +32,19 @@ type Grants interface {
 }
 
 // MemGrants is an in-memory Grants. It has no durable backing, so Always is remembered only for the
-// life of the process. Safe for concurrent use.
+// life of the process. The grants are a set, so repeated approvals don't accumulate. Safe for
+// concurrent use.
 type MemGrants struct {
-	mu     sync.Mutex
-	grants []Grant
+	mu  sync.Mutex
+	set map[Grant]struct{}
 }
 
 // NewMemGrants builds an in-memory grant set, optionally seeded with standing grants.
 func NewMemGrants(seed ...Grant) *MemGrants {
-	m := &MemGrants{grants: make([]Grant, 0, len(seed))}
-	m.grants = append(m.grants, seed...)
+	m := &MemGrants{set: make(map[Grant]struct{}, len(seed))}
+	for _, g := range seed {
+		m.set[g] = struct{}{}
+	}
 	return m
 }
 
@@ -49,9 +52,16 @@ func (m *MemGrants) Allowed(a Action, match Matcher) bool {
 	if match == nil {
 		match = ExactMatch
 	}
+	// Snapshot under the lock, then run the caller-supplied Matcher outside it — never hold the lock
+	// across an arbitrary callback.
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, g := range m.grants {
+	grants := make([]Grant, 0, len(m.set))
+	for g := range m.set {
+		grants = append(grants, g)
+	}
+	m.mu.Unlock()
+
+	for _, g := range grants {
 		if matchKind(g.Kind, a.Kind) && match(g.Target, a.Target) {
 			return true
 		}
@@ -63,7 +73,7 @@ func (m *MemGrants) Remember(g Grant, _ Recall) {
 	// In-memory: everything lasts the process; the Recall (session vs durable) matters only to a
 	// durable store.
 	m.mu.Lock()
-	m.grants = append(m.grants, g)
+	m.set[g] = struct{}{}
 	m.mu.Unlock()
 }
 
