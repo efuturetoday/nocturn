@@ -16,10 +16,10 @@ type scriptApprover struct {
 	asks     int
 }
 
-func (s *scriptApprover) Ask(_ context.Context, a gate.Action) (gate.Decision, gate.Scope, error) {
+func (s *scriptApprover) Ask(_ context.Context, a gate.Action, _ []gate.Grant) (gate.Decision, gate.Grant, gate.Scope, error) {
 	s.asks++
 	fmt.Printf("  [approver] asked about %+v -> %v/%v\n", a, s.decision, s.scope)
-	return s.decision, s.scope, nil
+	return s.decision, gate.Grant{Kind: a.Kind, Target: a.Target}, s.scope, nil
 }
 
 func main() {

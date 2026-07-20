@@ -26,7 +26,7 @@ type gated struct {
 }
 
 func (g gated) Call(ctx context.Context, args string) (string, error) {
-	if err := Check(ctx, Action{Tool: g.Spec().Name}); err != nil {
+	if err := Check(ctx, Action{Kind: g.Spec().Name}, nil); err != nil {
 		return "", err
 	}
 	return g.Tool.Call(ctx, args)

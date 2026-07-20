@@ -2,63 +2,66 @@ package gate
 
 import "sync"
 
-// Grant is a remembered approval — an (Tool, Target) pair a human has allowed. "*" is a wildcard:
-// Target "*" allows any target for that tool; Tool "*" allows any tool for that target.
+// Grant is a remembered approval — a (Kind, Target) pattern a human has allowed. What a Target
+// pattern MEANS is decided by a Matcher supplied at Check time, not by this library; "*" for any is
+// the only structure gate itself knows.
 type Grant struct {
-	Tool   string
+	Kind   string
 	Target string
 }
 
-// Grants stores remembered approvals. Allowed reports whether an action is already covered by a
-// grant; Remember records a new one at the given scope (Once = session, Always = durable). A durable
-// implementation is the consumer's; MemGrants is the in-memory, session-only default.
+// Matcher reports whether a grant's target PATTERN covers an action's Target. This is where target
+// semantics live — host suffixes, path globs — which gate deliberately does not know: the caller
+// that owns those semantics (the tool) passes it to Check. Kind matching is structural and done by
+// gate; a Matcher concerns only the Target. Nil = ExactMatch.
+type Matcher func(pattern, target string) bool
+
+// ExactMatch is the opaque default: "*" matches anything, otherwise equality. No host/path semantics.
+func ExactMatch(pattern, target string) bool { return pattern == "*" || pattern == target }
+
+func matchKind(pattern, kind string) bool { return pattern == "*" || pattern == kind }
+
+// Grants stores remembered approvals. Allowed reports whether an action is covered by any grant,
+// using the supplied Matcher for the Target (nil = ExactMatch); Remember records a new grant (Once =
+// session, Always = durable). A durable implementation is the consumer's; MemGrants is the in-memory
+// default.
 type Grants interface {
-	Allowed(a Action) bool
-	Remember(a Action, s Scope)
+	Allowed(a Action, match Matcher) bool
+	Remember(g Grant, s Scope)
 }
 
 // MemGrants is an in-memory Grants. It has no durable backing, so Always is remembered only for the
-// life of the process (same as Once). Safe for concurrent use.
+// life of the process. Safe for concurrent use.
 type MemGrants struct {
-	mu  sync.Mutex
-	set map[Grant]bool
+	mu     sync.Mutex
+	grants []Grant
 }
 
-// NewMemGrants builds an empty in-memory grant set, optionally seeded with standing grants.
+// NewMemGrants builds an in-memory grant set, optionally seeded with standing grants.
 func NewMemGrants(seed ...Grant) *MemGrants {
-	m := &MemGrants{set: make(map[Grant]bool, len(seed))}
-	for _, g := range seed {
-		m.set[g] = true
-	}
+	m := &MemGrants{grants: make([]Grant, 0, len(seed))}
+	m.grants = append(m.grants, seed...)
 	return m
 }
 
-func (m *MemGrants) Allowed(a Action) bool {
+func (m *MemGrants) Allowed(a Action, match Matcher) bool {
+	if match == nil {
+		match = ExactMatch
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, g := range covering(a) {
-		if m.set[g] {
+	for _, g := range m.grants {
+		if matchKind(g.Kind, a.Kind) && match(g.Target, a.Target) {
 			return true
 		}
 	}
 	return false
 }
 
-func (m *MemGrants) Remember(a Action, _ Scope) {
-	// No durable backing: Once and Always are the same in memory.
+func (m *MemGrants) Remember(g Grant, _ Scope) {
 	m.mu.Lock()
-	m.set[Grant{Tool: a.Tool, Target: a.Target}] = true
+	m.grants = append(m.grants, g)
 	m.mu.Unlock()
 }
 
 var _ Grants = (*MemGrants)(nil)
-
-// covering lists the grants that would permit action a: the exact pair plus the wildcard forms.
-func covering(a Action) [4]Grant {
-	return [4]Grant{
-		{a.Tool, a.Target},
-		{a.Tool, "*"},
-		{"*", a.Target},
-		{"*", "*"},
-	}
-}

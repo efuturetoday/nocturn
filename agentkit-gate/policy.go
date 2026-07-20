@@ -11,17 +11,17 @@ type PolicyFunc func(Action) Decision
 
 func (f PolicyFunc) Decide(a Action) Decision { return f(a) }
 
-// Classify builds a Policy from tool-name lists: a tool in denied is always Deny, a tool in guarded
-// is always Ask, and every other tool is Allow. The common default: reads Allow, writes/sends Ask,
-// exec Deny.
+// Classify builds a Policy from Kind lists: a Kind in denied is always Deny, a Kind in guarded is
+// always Ask, and every other Kind is Allow. Kinds are tool names and/or shared axes (e.g. "net").
+// The common default: reads Allow, writes/sends Ask, exec Deny.
 func Classify(guarded, denied []string) Policy {
 	guardedSet := toSet(guarded)
 	deniedSet := toSet(denied)
 	return PolicyFunc(func(a Action) Decision {
 		switch {
-		case deniedSet[a.Tool]:
+		case deniedSet[a.Kind]:
 			return Deny
-		case guardedSet[a.Tool]:
+		case guardedSet[a.Kind]:
 			return Ask
 		default:
 			return Allow

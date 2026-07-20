@@ -7,4 +7,5 @@ use (
 	./agentkit-example
 	./agentkit-gate
 	./agentkit-runtime
+	./agentkit-tools
 )

@@ -23,6 +23,7 @@ import (
 	"github.com/efuturetoday/agentkit-gate"
 	"github.com/efuturetoday/agentkit-openai"
 	"github.com/efuturetoday/agentkit-runtime"
+	"github.com/efuturetoday/agentkit-tools"
 )
 
 func main() {
@@ -50,7 +51,7 @@ func main() {
 		openai.WithEffort(agentkit.Effort(os.Getenv("FREELLM_REASONING_EFFORT"))),
 	)
 
-	tools, err := buildTools(llm)
+	toolset, err := buildTools(llm)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tools:", err)
 		os.Exit(1)
@@ -61,13 +62,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// notify_user is guarded → asks the human; everything else runs freely.
-	policy := gate.Classify([]string{"notify_user"}, nil)
+	// notify_user (name) and the "net" host axis are guarded → ask the human; everything else free.
+	policy := gate.Classify([]string{"notify_user", tools.NetAxis}, nil)
 
 	rt := runtime.New(llm,
-		runtime.WithTools(tools),
+		runtime.WithTools(toolset),
 		runtime.WithSkills(skills),
-		runtime.WithGate(policy, nil, &consoleApprover{in: stdin}),
+		runtime.WithGate(policy, gate.NewMemGrants(), &consoleApprover{in: stdin}),
 		runtime.WithSession(
 			agentkit.WithSystem("You are a concise, helpful assistant. Use tools when useful, call "+
 				"load_skill for skills, delegate poetry to the poet sub-agent, and notify_user to ping the user."),
@@ -110,7 +111,7 @@ func main() {
 		}
 	}()
 
-	fmt.Printf("agentkit chat (model %q) — tools: current_time, add, poet, notify_user · skill: haiku · /quit\n", model)
+	fmt.Printf("agentkit chat (model %q) — tools: current_time, add, http_get, poet, notify_user · skill: haiku · /quit\n", model)
 	for {
 		fmt.Print("\n> ")
 		line, err := stdin.ReadString('\n')
@@ -138,20 +139,29 @@ type consoleApprover struct {
 	in *bufio.Reader
 }
 
-func (c *consoleApprover) Ask(_ context.Context, a gate.Action) (gate.Decision, gate.Scope, error) {
-	target := ""
+func (c *consoleApprover) Ask(_ context.Context, a gate.Action, suggest []gate.Grant) (gate.Decision, gate.Grant, gate.Scope, error) {
+	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
+	fmt.Print("\n  [approve] " + a.Kind)
 	if a.Target != "" {
-		target = " → " + a.Target
+		fmt.Print(" → " + a.Target)
 	}
-	fmt.Printf("\n  [approve] %s%s ? [y=once / a=always / N] ", a.Tool, target)
+	fmt.Print(" ? [y=once / a=always")
+	for i, s := range suggest { // widenings proposed by the tool
+		fmt.Printf(" / %d=always %s", i+1, s.Target)
+	}
+	fmt.Print(" / N] ")
+
 	line, _ := c.in.ReadString('\n')
-	switch strings.ToLower(strings.TrimSpace(line)) {
+	switch choice := strings.ToLower(strings.TrimSpace(line)); choice {
 	case "y":
-		return gate.Allow, gate.Once, nil
+		return gate.Allow, exact, gate.Once, nil
 	case "a":
-		return gate.Allow, gate.Always, nil
+		return gate.Allow, exact, gate.Always, nil
 	default:
-		return gate.Deny, gate.Once, nil
+		if n, err := strconv.Atoi(choice); err == nil && n >= 1 && n <= len(suggest) {
+			return gate.Allow, suggest[n-1], gate.Always, nil
+		}
+		return gate.Deny, gate.Grant{}, gate.Once, nil
 	}
 }
 
@@ -210,7 +220,10 @@ func buildTools(llm agentkit.LLM) (agentkit.ToolSet, error) {
 	}
 	poetTool := agentkit.AgentTool(poet, llm, nil)
 
-	return agentkit.NewToolSet(timeTool, addTool, notifyTool, poetTool)
+	// http_get self-gates the target host on the "net" axis.
+	httpTool := tools.HTTPGet()
+
+	return agentkit.NewToolSet(timeTool, addTool, notifyTool, httpTool, poetTool)
 }
 
 // buildSkills defines one progressive-disclosure skill the model can load on demand.

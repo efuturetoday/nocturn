@@ -41,9 +41,11 @@ func from(ctx context.Context) *perms {
 //	                wall-clock is paused via agentkit.Pause while the human decides) and the answer is
 //	                remembered at its Scope (Once = session grant, Always = durable).
 //
-// No machinery in ctx = open (returns nil): gating is opt-in per install. A tool calls Check before
-// a targeted effect (Action{Tool, Target: host}); Wrap calls it before Call for name-only tools.
-func Check(ctx context.Context, a Action) error {
+// No machinery in ctx = open (returns nil): gating is opt-in per install. A tool calls Check before a
+// targeted effect (Action{Kind: "net", Target: host}), passing the Matcher for that axis's target
+// semantics and any suggested widenings the human may pick (e.g. Grant{"net", "*.example.com"}); Wrap
+// calls it for a name-only tool with a nil matcher and no suggestions.
+func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error {
 	p := from(ctx)
 	if p == nil {
 		return nil // no machinery installed = open
@@ -61,7 +63,7 @@ func Check(ctx context.Context, a Action) error {
 	}
 
 	// Ask: a standing grant covers it, or a human must approve.
-	if p.grants != nil && p.grants.Allowed(a) {
+	if p.grants != nil && p.grants.Allowed(a, match) {
 		return nil
 	}
 	if p.approver == nil {
@@ -69,7 +71,7 @@ func Check(ctx context.Context, a Action) error {
 	}
 
 	resume := agentkit.Pause(ctx) // a human deciding must not consume the turn's wall-clock
-	d, s, err := p.approver.Ask(ctx, a)
+	d, g, s, err := p.approver.Ask(ctx, a, suggest)
 	resume()
 	if err != nil {
 		return err
@@ -78,7 +80,7 @@ func Check(ctx context.Context, a Action) error {
 		return ErrDenied
 	}
 	if p.grants != nil {
-		p.grants.Remember(a, s)
+		p.grants.Remember(g, s) // the human may have widened the grant (e.g. *.domain)
 	}
 	return nil
 }
