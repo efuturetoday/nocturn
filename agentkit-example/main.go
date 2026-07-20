@@ -1,8 +1,9 @@
-// Command chat is a minimal terminal chat over agentkit + the OpenAI adapter. It wires up the full
-// surface — tools, skills and a sub-agent — streams the answer token-by-token, and keeps history.
+// Command chat wires the whole stack into a terminal chat: the OpenAI adapter (agentkit-openai), a
+// toolset with a sub-agent, permission gating with human approval (agentkit-gate), assembled by
+// agentkit-runtime. It streams the answer, keeps history, and prompts for approval before a guarded
+// tool (notify_user) runs.
 //
-// Run it from the repo root (it reads FREELLM_BASE_URL / FREELLM_API_KEY / FREELLM_MODEL, and loads
-// a .env if present):
+// Run it from the repo root (reads FREELLM_BASE_URL / FREELLM_API_KEY / FREELLM_MODEL, loads .env):
 //
 //	go run ./agentkit-example
 package main
@@ -19,7 +20,9 @@ import (
 	"time"
 
 	"github.com/efuturetoday/agentkit"
-	openai "github.com/efuturetoday/agentkit-openai"
+	"github.com/efuturetoday/agentkit-gate"
+	"github.com/efuturetoday/agentkit-openai"
+	"github.com/efuturetoday/agentkit-runtime"
 )
 
 func main() {
@@ -39,6 +42,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	// One stdin reader, shared by the chat loop and the approval prompt (never concurrent: a turn
+	// blocks the input loop, so stdin is free while the approver asks).
+	stdin := bufio.NewReader(os.Stdin)
+
 	llm := openai.New(baseURL, apiKey, model,
 		openai.WithEffort(agentkit.Effort(os.Getenv("FREELLM_REASONING_EFFORT"))),
 	)
@@ -54,34 +61,41 @@ func main() {
 		os.Exit(1)
 	}
 
-	sess := agentkit.NewSession(ctx, llm,
-		agentkit.WithSystem("You are a concise, helpful assistant. Use tools when useful, "+
-			"call load_skill to load a skill's instructions, and delegate poetry to the poet sub-agent."),
-		agentkit.WithTools(tools),
-		agentkit.WithSkills(skills),
-		// The freellm proxy omits usage; fall back to a rough estimate so [tokens] is meaningful.
-		agentkit.WithTokenizer(agentkit.ApproxTokenizer()),
+	// notify_user is guarded → asks the human; everything else runs freely.
+	policy := gate.Classify([]string{"notify_user"}, nil)
+
+	rt := runtime.New(llm,
+		runtime.WithTools(tools),
+		runtime.WithSkills(skills),
+		runtime.WithGate(policy, nil, &consoleApprover{in: stdin}),
+		runtime.WithSession(
+			agentkit.WithSystem("You are a concise, helpful assistant. Use tools when useful, call "+
+				"load_skill for skills, delegate poetry to the poet sub-agent, and notify_user to ping the user."),
+			agentkit.WithTokenizer(agentkit.ApproxTokenizer()),
+			agentkit.WithTimeout(2*time.Minute),
+		),
 	)
+
+	sess := rt.Session(ctx)
 	defer sess.Close()
 
-	// Render the event stream. turnDone signals the input loop when a turn finishes.
 	turnDone := make(chan struct{}, 1)
 	go func() {
 		for ev := range sess.Subscribe() {
 			switch e := ev.(type) {
 			case agentkit.Token:
 				if e.Frame == 0 {
-					fmt.Print(e.Text) // main agent
+					fmt.Print(e.Text)
 				} else {
 					fmt.Printf("\033[36m%s\033[0m", e.Text) // sub-agent output, cyan
 				}
 			case agentkit.Thinking:
-				fmt.Printf("\033[2m%s\033[0m", e.Text) // reasoning, dimmed
+				fmt.Printf("\033[2m%s\033[0m", e.Text)
 			case agentkit.ToolStart:
 				fmt.Printf("\n  → %s(%s)\n", e.Tool, e.Args)
 			case agentkit.ToolEnd:
 				if e.Err != nil {
-					fmt.Printf("  ← %s: error: %v\n", e.Tool, e.Err)
+					fmt.Printf("  ← %s: %v\n", e.Tool, e.Err)
 				}
 			case agentkit.TurnEnd:
 				if e.Err != nil {
@@ -96,17 +110,14 @@ func main() {
 		}
 	}()
 
-	fmt.Printf("agentkit chat (model %q) — tools: current_time, add, poet · skill: haiku · /quit to exit\n", model)
-	in := bufio.NewScanner(os.Stdin)
+	fmt.Printf("agentkit chat (model %q) — tools: current_time, add, poet, notify_user · skill: haiku · /quit\n", model)
 	for {
 		fmt.Print("\n> ")
-		if !in.Scan() {
-			if err := in.Err(); err != nil {
-				fmt.Fprintln(os.Stderr, "read:", err)
-			}
-			return
+		line, err := stdin.ReadString('\n')
+		if err != nil {
+			return // EOF
 		}
-		line := strings.TrimSpace(in.Text())
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -122,7 +133,29 @@ func main() {
 	}
 }
 
-// buildTools defines two plain tools and one sub-agent exposed as a tool.
+// consoleApprover asks for approval on the terminal, sharing the chat's stdin reader.
+type consoleApprover struct {
+	in *bufio.Reader
+}
+
+func (c *consoleApprover) Ask(_ context.Context, a gate.Action) (gate.Decision, gate.Scope, error) {
+	target := ""
+	if a.Target != "" {
+		target = " → " + a.Target
+	}
+	fmt.Printf("\n  [approve] %s%s ? [y=once / a=always / N] ", a.Tool, target)
+	line, _ := c.in.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y":
+		return gate.Allow, gate.Once, nil
+	case "a":
+		return gate.Allow, gate.Always, nil
+	default:
+		return gate.Deny, gate.Once, nil
+	}
+}
+
+// buildTools defines plain tools, a guarded tool, and a sub-agent exposed as a tool.
 func buildTools(llm agentkit.LLM) (agentkit.ToolSet, error) {
 	timeTool, err := agentkit.NewTool("current_time", "Return the current local time.",
 		func(context.Context, string) (string, error) {
@@ -152,14 +185,32 @@ func buildTools(llm agentkit.LLM) (agentkit.ToolSet, error) {
 		return nil, err
 	}
 
-	// A leaf sub-agent (no tools of its own), exposed to the main agent as a tool named "poet".
+	notifyTool, err := agentkit.NewTool("notify_user", "Send a short notification to the user.",
+		func(_ context.Context, args string) (string, error) {
+			var in struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(args), &in); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+			fmt.Printf("\n  📣 %s\n", in.Message)
+			return "delivered", nil
+		},
+		agentkit.WithSchema(agentkit.Object(
+			agentkit.Prop("message", agentkit.String("the message to show the user")),
+		).Require("message")),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	poet := agentkit.Agent{
 		Name:         "poet",
 		Instructions: "You are a poet. Reply with a single short, vivid poem about the given topic. No preamble.",
 	}
-	poetTool := agentkit.AgentTool(poet, llm, nil) // nil = leaf, no tools
+	poetTool := agentkit.AgentTool(poet, llm, nil)
 
-	return agentkit.NewToolSet(timeTool, addTool, poetTool)
+	return agentkit.NewToolSet(timeTool, addTool, notifyTool, poetTool)
 }
 
 // buildSkills defines one progressive-disclosure skill the model can load on demand.
@@ -171,8 +222,8 @@ func buildSkills() (agentkit.SkillSet, error) {
 	})
 }
 
-// loadDotEnv loads KEY=VALUE lines from path into the environment (existing vars win). A missing
-// file is ignored. Minimal, stdlib-only — the example pulls no config dependency.
+// loadDotEnv loads KEY=VALUE lines from path into the environment (existing vars win). A missing file
+// is ignored. Minimal, stdlib-only — the example pulls no config dependency.
 func loadDotEnv(path string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -195,5 +246,5 @@ func loadDotEnv(path string) {
 			_ = os.Setenv(k, v)
 		}
 	}
-	_ = sc.Err() // best-effort .env load; a read error just means fewer vars
+	_ = sc.Err() // best-effort .env load
 }

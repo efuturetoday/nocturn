@@ -6,4 +6,5 @@ use (
 	./agentkit-openai
 	./agentkit-example
 	./agentkit-gate
+	./agentkit-runtime
 )
