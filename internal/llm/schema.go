@@ -82,6 +82,17 @@ func sanitizeNode(v any, fixes *[]string) any {
 			}
 		}
 		for k, child := range n {
+			if k == "properties" {
+				// A `properties` value is a map of NAME→schema: the keys are property names, NOT
+				// schema keywords, so recurse into each value but never strip the map's keys (a
+				// param legitimately named "title"/"default" must survive).
+				if props, ok := child.(map[string]any); ok {
+					for name, sub := range props {
+						props[name] = sanitizeNode(sub, fixes)
+					}
+					continue
+				}
+			}
 			n[k] = sanitizeNode(child, fixes)
 		}
 		return n
