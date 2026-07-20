@@ -11,19 +11,21 @@ const (
 )
 
 // Message is one conversation turn. A tool result is a RoleTool message whose ToolCallID
-// links it to the call it answers (native id association, not positional).
+// links it to the call it answers (native id association, not positional). The optional fields carry
+// omitempty so a persisted transcript stays clean — a plain message serializes to just role +
+// content, without null tool-call clutter.
 type Message struct {
-	Role       Role
-	Content    string
-	ToolCalls  []ToolCall // set on an assistant message that issues calls
-	ToolCallID string     // set on a tool-result message
+	Role       Role       `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"toolCalls,omitempty"`  // set on an assistant message that issues calls
+	ToolCallID string     `json:"toolCallID,omitempty"` // set on a tool-result message
 }
 
 // ToolCall is one model-issued call, carrying the id used to match its result.
 type ToolCall struct {
-	ID   string
-	Tool string
-	Args string // JSON
+	ID   string `json:"id"`
+	Tool string `json:"tool"`
+	Args string `json:"args"` // JSON
 }
 
 // Step is the LLM's output for one Next: either a final Answer or a batch of ToolCalls, plus the
