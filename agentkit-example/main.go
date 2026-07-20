@@ -154,13 +154,8 @@ func buildTools(llm agentkit.LLM) (agentkit.ToolSet, error) {
 	poet := agentkit.Agent{
 		Name:         "poet",
 		Instructions: "You are a poet. Reply with a single short, vivid poem about the given topic. No preamble.",
-		Tools:        func(string) bool { return false },
 	}
-	base, err := agentkit.NewToolSet(timeTool, addTool)
-	if err != nil {
-		return nil, err
-	}
-	poetTool := agentkit.AgentTool(poet, llm, base)
+	poetTool := agentkit.AgentTool(poet, llm, nil) // nil = leaf, no tools
 
 	return agentkit.NewToolSet(timeTool, addTool, poetTool)
 }

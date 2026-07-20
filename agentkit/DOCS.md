@@ -101,11 +101,13 @@ into every `Call`.
 
 ## Sub-agents
 
-A **sub-agent is a tool.** `AgentTool(a, llm, tools)` wraps an `Agent` as a `Tool` whose `Call`
-runs the agent to a final answer (`Once`) over the input argument, with the agent's instructions as
-system prompt and `tools.Select(a.Matches)` as its toolset. Add it to a parent's `ToolSet` and the
-parent can delegate to it like any tool. Nesting, event differentiation and budget inheritance all
-follow from ctx propagation — no separate sub-agent subsystem exists.
+A **sub-agent is a tool.** `AgentTool(a, llm, tools)` wraps an `Agent` (name + instructions +
+effort) as a `Tool` whose `Call` runs the agent to a final answer (`Once`) over the input argument,
+with the agent's instructions as system prompt and `tools` as its toolset. The caller scopes the
+sub-agent by what it passes — `nil` for a leaf, `tools.Select(keep)` for a subset, the full set
+otherwise (the same immutable-subset mechanism as everywhere else). Add the result to a parent's
+`ToolSet` and the parent delegates to it like any tool. Nesting, event differentiation and budget
+inheritance all follow from ctx propagation — no separate sub-agent subsystem exists.
 
 ---
 
