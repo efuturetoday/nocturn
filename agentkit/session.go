@@ -28,6 +28,7 @@ type Session struct {
 	system     string
 	timeout    time.Duration
 	tokenLimit int
+	tokenizer  Tokenizer // optional: estimate Step.Tokens when the provider reports none
 	effort     Effort
 	maxSteps   int
 	maxDepth   int // sub-agent nesting depth cap (top-level only; nested runs inherit)
@@ -81,9 +82,17 @@ func WithTimeout(d time.Duration) Option { return func(s *Session) { s.timeout =
 
 // WithTokenLimit caps the turn's cumulative BILLED tokens (sum of every round-trip's prompt +
 // completion). Reactive: the loop checks the running total after each round-trip and stops with
-// ErrTokenLimit before the next. 0 = none. No tokenizer needed — the count comes from the provider
-// response. (max_tokens, the per-response output cap, is a separate adapter option.)
+// ErrTokenLimit before the next. 0 = none. The count comes from the provider response; if the
+// provider omits it, configure WithTokenizer to fall back to an estimate. (max_tokens, the
+// per-response output cap, is a separate adapter option.)
 func WithTokenLimit(n int) Option { return func(s *Session) { s.tokenLimit = n } }
+
+// WithTokenizer sets a fallback tokenizer to ESTIMATE a round-trip's tokens at the model boundary
+// (the conversation sent in, the step returned out) when the provider reports no usage — so
+// WithTokenLimit and the [tokens] readout still work against endpoints that omit it. When the
+// provider returns usage, that exact count wins and the tokenizer is unused. Estimation is
+// approximate; exact billing is the provider's usage.
+func WithTokenizer(t Tokenizer) Option { return func(s *Session) { s.tokenizer = t } }
 
 // Sub-agent spawn guards — bound a nested AgentTool tree. Depth alone is insufficient (a
 // depth-capped tree can still fan out), so cap both, and the inherited shared token/time budget caps
@@ -222,6 +231,9 @@ func (s *Session) run(ctx context.Context, tools ToolSet, conv []Message) (answe
 		if e != nil {
 			return answer, produced, total, fmt.Errorf("agentkit: model call: %w", e)
 		}
+		if step.Tokens.Total == 0 && s.tokenizer != nil {
+			step.Tokens = s.estimate(ctx, conv, step)
+		}
 		total.add(step.Tokens)
 
 		if len(step.ToolCalls) == 0 {
@@ -332,6 +344,35 @@ func (s *Session) persist() {
 	if err := s.store.Save(s.id, h); err != nil {
 		s.log.Warn("agentkit: persist failed", "id", s.id, "err", err)
 	}
+}
+
+// estimate approximates a round-trip's tokens at the model boundary via the configured Tokenizer:
+// the whole conversation sent in as prompt, the step's answer and tool-call arguments as completion.
+// A tokenizer error is logged and that piece counts as zero — a rough estimate beats failing.
+func (s *Session) estimate(ctx context.Context, conv []Message, step Step) TokenCount {
+	count := func(text string) int {
+		if text == "" {
+			return 0
+		}
+		n, err := s.tokenizer.Count(text)
+		if err != nil {
+			s.log.WithContext(ctx).Warn("agentkit: tokenizer count failed", "err", err)
+			return 0
+		}
+		return n
+	}
+	prompt := 0
+	for _, m := range conv {
+		prompt += count(m.Content)
+		for _, tc := range m.ToolCalls {
+			prompt += count(tc.Args)
+		}
+	}
+	completion := count(step.Answer)
+	for _, tc := range step.ToolCalls {
+		completion += count(tc.Args)
+	}
+	return TokenCount{Prompt: prompt, Completion: completion, Total: prompt + completion}
 }
 
 // Once runs a throwaway session for a single input and returns its final answer — the synchronous

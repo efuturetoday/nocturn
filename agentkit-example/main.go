@@ -59,6 +59,8 @@ func main() {
 			"call load_skill to load a skill's instructions, and delegate poetry to the poet sub-agent."),
 		agentkit.WithTools(tools),
 		agentkit.WithSkills(skills),
+		// The freellm proxy omits usage; fall back to a rough estimate so [tokens] is meaningful.
+		agentkit.WithTokenizer(agentkit.ApproxTokenizer()),
 	)
 	defer sess.Close()
 
@@ -68,7 +70,11 @@ func main() {
 		for ev := range sess.Subscribe() {
 			switch e := ev.(type) {
 			case agentkit.Token:
-				fmt.Print(e.Text)
+				if e.Frame == 0 {
+					fmt.Print(e.Text) // main agent
+				} else {
+					fmt.Printf("\033[36m%s\033[0m", e.Text) // sub-agent output, cyan
+				}
 			case agentkit.Thinking:
 				fmt.Printf("\033[2m%s\033[0m", e.Text) // reasoning, dimmed
 			case agentkit.ToolStart:
@@ -95,6 +101,9 @@ func main() {
 	for {
 		fmt.Print("\n> ")
 		if !in.Scan() {
+			if err := in.Err(); err != nil {
+				fmt.Fprintln(os.Stderr, "read:", err)
+			}
 			return
 		}
 		line := strings.TrimSpace(in.Text())
@@ -189,4 +198,5 @@ func loadDotEnv(path string) {
 			_ = os.Setenv(k, v)
 		}
 	}
+	_ = sc.Err() // best-effort .env load; a read error just means fewer vars
 }

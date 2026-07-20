@@ -19,7 +19,12 @@ Rate-limit / network / 5xx retries with backoff. This is an **adapter** concern 
 `func(next LLM) LLM`), NOT a core type — the core stays provider-agnostic. Implement inside an
 adapter or as a small reusable `LLM` wrapper; must honor `ctx.Err()` between attempts.
 
+## Accurate tokenizer adapter
+The `Tokenizer` port and a rough dependency-free `ApproxTokenizer` (~4 chars/token) exist: the
+session estimates a round-trip's tokens at the model boundary when the provider omits usage. An
+ACCURATE, model-specific tokenizer (e.g. tiktoken BPE) is still open — it belongs in a SEPARATE
+adapter module (it pulls a dependency + data), plugged in via `WithTokenizer`. The same port also
+covers proactive pre-send / context-fit estimation.
+
 ## Maybe later
-- A `Tokenizer` port for PROACTIVE pre-send token estimation / context-fit checks (optional adapter;
-  actual usage already comes from the response, so this is only for "don't send if too big").
 - Optional ready-made middleware wrappers (retry/cache/rate-limit) as a SEPARATE module, never core.
