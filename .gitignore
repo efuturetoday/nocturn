@@ -25,3 +25,6 @@ internal/script/qjs/.buildcache/
 # nocturne workspaces (per-workspace runtime state: mnt data, .skills, grants, vault).
 # Anchored so it does not swallow internal/workspace/.
 /workspaces/
+
+# greenfield app runtime data (chats)
+/nocturn-data/

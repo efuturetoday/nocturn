@@ -54,3 +54,18 @@ require (
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 )
+
+require (
+	github.com/efuturetoday/nocturn/agentkit v0.0.0
+	github.com/efuturetoday/nocturn/agentkit/gate v0.0.0
+	github.com/efuturetoday/nocturn/agentkit/openai v0.0.0
+	github.com/efuturetoday/nocturn/agentkit/runtime v0.0.0
+)
+
+replace (
+	github.com/efuturetoday/nocturn/agentkit => ./agentkit
+	github.com/efuturetoday/nocturn/agentkit/gate => ./agentkit/gate
+	github.com/efuturetoday/nocturn/agentkit/openai => ./agentkit/openai
+	github.com/efuturetoday/nocturn/agentkit/runtime => ./agentkit/runtime
+	github.com/efuturetoday/nocturn/agentkit/tools => ./agentkit/tools
+)
