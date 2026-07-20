@@ -51,19 +51,20 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 		return nil // no machinery installed = open
 	}
 
-	decision := Allow
+	ruling := Ruling{Decision: Allow}
 	if p.policy != nil {
-		decision = p.policy.Decide(a)
+		ruling = p.policy.Decide(a)
 	}
-	switch decision {
+	switch ruling.Decision {
 	case Allow:
 		return nil
 	case Deny:
 		return ErrDenied
 	}
 
-	// Ask: a standing grant covers it, or a human must approve.
-	if p.grants != nil && p.grants.Allowed(a, match) {
+	// Ask. A standing grant covers it — unless this Kind is never remembered, in which case the cache
+	// is skipped and a human must approve every time.
+	if ruling.Recall != RecallNever && p.grants != nil && p.grants.Allowed(a, match) {
 		return nil
 	}
 	if p.approver == nil {
@@ -79,8 +80,20 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 	if d != Allow {
 		return ErrDenied
 	}
-	if p.grants != nil {
-		p.grants.Remember(g, s) // the human may have widened the grant (e.g. *.domain)
+
+	// Remember the (possibly widened) grant, capped by the policy's Recall ceiling.
+	switch ruling.Recall {
+	case RecallNever:
+		// never remembered — the next call asks again
+	case RecallSession:
+		if s == Always {
+			s = Once // policy caps this Kind to the session; a durable store must not persist it
+		}
+		fallthrough
+	default:
+		if p.grants != nil {
+			p.grants.Remember(g, s)
+		}
 	}
 	return nil
 }

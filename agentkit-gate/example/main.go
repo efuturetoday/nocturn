@@ -25,21 +25,39 @@ func (s *scriptApprover) Ask(_ context.Context, a gate.Action, _ []gate.Grant) (
 func main() {
 	send, _ := agentkit.NewTool("send", "send a message",
 		func(_ context.Context, args string) (string, error) { return "sent: " + args, nil })
+	pay, _ := agentkit.NewTool("pay", "pay an invoice",
+		func(_ context.Context, args string) (string, error) { return "paid: " + args, nil })
 	exec, _ := agentkit.NewTool("exec", "run a shell command",
 		func(context.Context, string) (string, error) { return "ran", nil })
 
-	// send is guarded (ask), exec is denied.
-	policy := gate.Classify([]string{"send"}, []string{"exec"})
+	// send: ask, remember always. pay: ask EVERY time (irreversible). exec: denied.
+	policy := gate.PolicyFunc(func(a gate.Action) gate.Ruling {
+		switch a.Kind {
+		case "exec":
+			return gate.Ruling{Decision: gate.Deny}
+		case "pay":
+			return gate.Ruling{Decision: gate.Ask, Recall: gate.RecallNever}
+		case "send":
+			return gate.Ruling{Decision: gate.Ask, Recall: gate.RecallAlways}
+		default:
+			return gate.Ruling{Decision: gate.Allow}
+		}
+	})
 	approver := &scriptApprover{decision: gate.Allow, scope: gate.Always}
 	ctx := gate.With(context.Background(), policy, gate.NewMemGrants(), approver)
 
 	guardedSend := gate.Wrap(send)
 	out1, err1 := guardedSend.Call(ctx, `{"x":1}`)
-	fmt.Printf("call1: out=%q err=%v  asks=%d\n", out1, err1, approver.asks)
-
+	fmt.Printf("send #1: out=%q err=%v  asks=%d\n", out1, err1, approver.asks)
 	out2, err2 := guardedSend.Call(ctx, `{"x":2}`)
-	fmt.Printf("call2: out=%q err=%v  asks=%d (grant covers -> no ask)\n", out2, err2, approver.asks)
+	fmt.Printf("send #2: out=%q err=%v  asks=%d (RecallAlways: grant covers -> no ask)\n", out2, err2, approver.asks)
 
-	out3, err3 := gate.Wrap(exec).Call(ctx, `{}`)
-	fmt.Printf("exec:  out=%q err=%v (policy deny)\n", out3, err3)
+	guardedPay := gate.Wrap(pay)
+	out3, err3 := guardedPay.Call(ctx, `{"n":1}`)
+	fmt.Printf("pay  #1: out=%q err=%v  asks=%d\n", out3, err3, approver.asks)
+	out4, err4 := guardedPay.Call(ctx, `{"n":2}`)
+	fmt.Printf("pay  #2: out=%q err=%v  asks=%d (RecallNever: asks AGAIN)\n", out4, err4, approver.asks)
+
+	out5, err5 := gate.Wrap(exec).Call(ctx, `{}`)
+	fmt.Printf("exec:    out=%q err=%v (policy deny)\n", out5, err5)
 }
