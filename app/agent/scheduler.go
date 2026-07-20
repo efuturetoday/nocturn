@@ -1,4 +1,4 @@
-package workspace
+package agent
 
 import (
 	"context"
@@ -7,21 +7,22 @@ import (
 	"time"
 )
 
-// scheduler fires agents on their cron schedule. It ticks once a minute (aligned to the minute
+// Scheduler fires agents on their cron schedule. It ticks once a minute (aligned to the minute
 // boundary) and, for each agent whose When matches, calls fire. agentkit has no notion of time, so
-// scheduling lives here.
-type scheduler struct {
-	agents []Agent
+// scheduling lives here; execution is the caller's, injected as fire.
+type Scheduler struct {
+	agents Set
 	fire   func(ctx context.Context, a Agent)
 }
 
-func newScheduler(agents []Agent, fire func(ctx context.Context, a Agent)) *scheduler {
-	return &scheduler{agents: agents, fire: fire}
+// NewScheduler builds a Scheduler over a Set, calling fire for each agent whose schedule matches.
+func NewScheduler(agents Set, fire func(ctx context.Context, a Agent)) *Scheduler {
+	return &Scheduler{agents: agents, fire: fire}
 }
 
-// start runs the tick loop until ctx is cancelled. It aligns to the next minute so a "* * * * *"
+// Start runs the tick loop until ctx is cancelled. It aligns to the next minute so a "* * * * *"
 // agent fires at :00, then every minute.
-func (s *scheduler) start(ctx context.Context) {
+func (s *Scheduler) Start(ctx context.Context) {
 	for {
 		next := time.Now().Truncate(time.Minute).Add(time.Minute)
 		timer := time.NewTimer(time.Until(next))
@@ -36,7 +37,7 @@ func (s *scheduler) start(ctx context.Context) {
 }
 
 // tick fires every agent whose schedule matches t.
-func (s *scheduler) tick(ctx context.Context, t time.Time) {
+func (s *Scheduler) tick(ctx context.Context, t time.Time) {
 	for _, a := range s.agents {
 		if a.When != "" && cronMatches(a.When, t) {
 			s.fire(ctx, a)
