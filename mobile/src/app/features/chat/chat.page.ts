@@ -177,7 +177,11 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
     // reacts to new messages, not to the user's own scrolling flipping the flag.
     effect(() => {
       this.chat.messages();
-      if (untracked(this.atBottom)) void this.content().scrollToBottom(0);
+      if (!untracked(this.atBottom)) return;
+      // Defer past this render: scrollToBottom reads scrollHeight, which is still stale if we call
+      // it before the @for lays out the just-appended token — so the view lags one frame behind the
+      // stream and never truly sticks to the bottom. rAF runs after layout, so we reach the real end.
+      requestAnimationFrame(() => void this.content().scrollToBottom(0));
     });
   }
 
