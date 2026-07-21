@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"maps"
 	"sync"
@@ -18,6 +19,11 @@ import (
 
 // approvalTimeout bounds how long an Ask waits before failing closed (deny).
 const approvalTimeout = 2 * time.Minute
+
+// ErrApprovalTimeout is returned by Ask when no human answered within approvalTimeout. The action is
+// still denied (approved=false, fail-closed); the error only lets the caller tell a timeout apart
+// from a deliberate human "no" (which returns a nil error so the gate surfaces it to the model).
+var ErrApprovalTimeout = errors.New("hitl: approval timed out")
 
 // Sink is a connection the broker can present an approval to and later tell to clear it. serve's
 // connections implement it; the broker never imports serve.
@@ -115,8 +121,12 @@ func (b *Broker) Resolve(id string, choice int) {
 }
 
 // Ask implements gate.Approver: present the action to every attached connection (or wake a device
-// via the Pusher when none is attached) and return the first decision, or deny on timeout or when
-// the turn is cancelled (no longer needed). gate.Check pauses the turn clock around this call.
+// via the Pusher when none is attached) and return the first decision. Every non-approval is
+// fail-closed (approved=false), but the error distinguishes them: a deliberate human "no" returns a
+// nil error (the gate surfaces it to the model as ErrDenied so it can adapt), a timeout returns
+// ErrApprovalTimeout, and a cancelled turn returns ctx.Err() — so the caller can tell "the human
+// declined" from "nobody answered" from "the turn was torn down". gate.Check pauses the turn clock
+// around this call.
 func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	labels, resolve := decision(a, suggest)
 	id := newID()
@@ -151,9 +161,9 @@ func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (
 		return resolve(choice)
 	case <-time.After(approvalTimeout):
 		b.log.Warn("hitl approval timed out — denying", "intent", intent)
-		return false, gate.Grant{}, gate.RecallNever, nil
+		return false, gate.Grant{}, gate.RecallNever, ErrApprovalTimeout
 	case <-ctx.Done():
-		return false, gate.Grant{}, gate.RecallNever, nil
+		return false, gate.Grant{}, gate.RecallNever, ctx.Err()
 	}
 }
 

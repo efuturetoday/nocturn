@@ -109,12 +109,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	for _, ws := range spaces {
-		go ws.StartAgents(ctx) // cron scheduler per workspace
-	}
-
 	if *serveAddr != "" {
 		fmt.Printf("nocturn daemon — ws on %s (%d workspaces, model %q)\n", *serveAddr, len(spaces), model)
+		// serve.Serve wires each workspace's chat subscriptions and only then starts its agent
+		// schedulers, so a scheduled firing can never race the subscription wiring.
 		if err := serve.Serve(ctx, *serveAddr, spaces, devices, broker, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintln(os.Stderr, "serve:", err)
 			os.Exit(1)
@@ -122,6 +120,10 @@ func main() {
 		return
 	}
 
+	// Terminal mode has no daemon subscriptions to race against, so start the schedulers here.
+	for _, ws := range spaces {
+		go ws.StartAgents(ctx)
+	}
 	run(ctx, spaces[workspace.DefaultWorkspace], stdin, model)
 }
 

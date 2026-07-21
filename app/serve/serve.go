@@ -71,23 +71,26 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 	// Every device is a sink of the whole daemon: chat activity (list changes) AND live chat events
 	// (tokens/tools/turnEnd, tagged with chatId) are broadcast to all connections; the client routes
 	// by chatId. So a session's turn is never tied to one connection.
-	broadcast := newHub()
+	hub := newHub()
 	for name, ws := range spaces {
 		ws.OnChatUpdate(func(m chat.Meta) {
-			broadcast.broadcast(ChatActivity{Type: "chat.activity", Ws: name, Chat: m})
+			hub.broadcast(ChatActivity{Type: "chat.activity", Ws: name, Chat: m})
 		})
 		ws.Chats().OnEvent(func(chatID string, ev agentkit.Event) {
 			if msg, ok := chatEvent(chatID, ev); ok {
-				broadcast.broadcast(msg)
+				hub.broadcast(msg)
 			}
 		})
 		// On daemon shutdown (Serve returns): stop each Manager's reaper and close every live session.
 		defer ws.Chats().CloseAll()
+		// Start the cron schedulers only AFTER this workspace's subscriptions are wired: a scheduled
+		// firing saves a transcript (→ OnSave/OnEvent), so starting earlier would race the wiring.
+		go ws.StartAgents(ctx)
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/pair", func(w http.ResponseWriter, r *http.Request) { handlePair(w, r, devices, log) })
-	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) { handleJoin(w, r, devices, broadcast, log) })
+	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) { handleJoin(w, r, devices, hub, log) })
 	mux.HandleFunc("/join/confirm", func(w http.ResponseWriter, r *http.Request) { handleJoinConfirm(w, r, devices, log) })
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) { handleRegister(w, r, devices, log) })
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +113,7 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 			return
 		}
 		devices.UpdateLastUsed(bearer)
-		newConn(ws, spaces, devices, broker, broadcast, log.With("remote", r.RemoteAddr)).serve(r.Context())
+		newConn(ws, spaces, devices, broker, hub, log.With("remote", r.RemoteAddr)).serve(r.Context())
 	})
 
 	srv := &http.Server{Addr: addr, Handler: cors(mux)}

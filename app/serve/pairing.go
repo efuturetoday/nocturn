@@ -33,7 +33,7 @@ func handlePair(w http.ResponseWriter, r *http.Request, devices *auth.Store, log
 // revealed only to an already-paired device (join.list). It then pushes the refreshed join list to
 // every connected paired device, so an admin device shows the request live instead of only on its
 // next connect.
-func handleJoin(w http.ResponseWriter, r *http.Request, devices *auth.Store, broadcast *hub, log *slog.Logger) {
+func handleJoin(w http.ResponseWriter, r *http.Request, devices *auth.Store, hub *hub, log *slog.Logger) {
 	var req struct {
 		Name     string `json:"name"`
 		Platform string `json:"platform"`
@@ -44,7 +44,7 @@ func handleJoin(w http.ResponseWriter, r *http.Request, devices *auth.Store, bro
 	id := devices.Join(req.Name, req.Platform)
 	log.Info("join requested", "name", req.Name)
 	writeJSON(w, map[string]string{"joinId": id})
-	broadcast.broadcast(JoinListResult{Type: "join.list", Joins: devices.PendingJoins()})
+	hub.broadcast(JoinListResult{Type: "join.list", Joins: devices.PendingJoins()})
 }
 
 // handleJoinConfirm redeems a joinId and its relayed code for a new device's bearer.

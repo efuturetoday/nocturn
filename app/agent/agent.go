@@ -22,10 +22,14 @@ type Agent struct {
 }
 
 // Matches reports whether toolName is in the agent's cage. A bare group name ("http") also matches
-// its members ("http.read", "http/get").
+// its members under any of the separators tool names use: "http_read" (underscore, the agentkit
+// convention), "http.read", or "http/get".
 func (a Agent) Matches(toolName string) bool {
 	for _, t := range a.Tools {
-		if t == toolName || strings.HasPrefix(toolName, t+".") || strings.HasPrefix(toolName, t+"/") {
+		if t == toolName ||
+			strings.HasPrefix(toolName, t+"_") ||
+			strings.HasPrefix(toolName, t+".") ||
+			strings.HasPrefix(toolName, t+"/") {
 			return true
 		}
 	}

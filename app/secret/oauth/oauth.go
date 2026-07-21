@@ -50,7 +50,7 @@ func Provider(authURL, tokenURL, clientID, clientSecret string, scopes ...string
 // prompt=consent are required for Google to return a refresh_token.
 func Authorize(ctx context.Context, cfg *oauth2.Config, prompt func(url string)) (*oauth2.Token, error) {
 	if prompt == nil {
-		prompt = func(u string) { fmt.Println("Open this URL to authorize:\n" + u) }
+		prompt = func(u string) { fmt.Printf("Open this URL to authorize:\n%s\n", u) }
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0") // loopback only, never 0.0.0.0
 	if err != nil {

@@ -36,10 +36,10 @@ func ValidID(id string) bool {
 }
 
 const (
-	ext       = ".json" // chat transcript file extension
-	tmpSuffix = ".tmp"  // suffix for the write-then-rename temp file
-	nameLimit    = 40   // max runes of the first message kept as a chat name
-	previewLimit = 80   // max runes of the last message kept as a list preview
+	ext          = ".json" // chat transcript file extension
+	tmpSuffix    = ".tmp"  // suffix for the write-then-rename temp file
+	nameLimit    = 40      // max runes of the first message kept as a chat name
+	previewLimit = 80      // max runes of the last message kept as a list preview
 )
 
 // Source is who a store's chats belong to. It is a property of the store instance (set once with
@@ -60,7 +60,7 @@ type Meta struct {
 	Source  Source    `json:"source"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
-	Read    time.Time `json:"read,omitzero"`    // shared read cursor; unread when Updated is later
+	Read    time.Time `json:"read,omitzero"` // shared read cursor; unread when Updated is later
 	Turns   int       `json:"turns"`
 	Preview string    `json:"preview,omitempty"` // last message's first line, for the list (à la Apple Mail)
 }
