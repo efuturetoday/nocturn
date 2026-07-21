@@ -24,10 +24,10 @@ const approvalTimeout = 2 * time.Minute
 type Sink interface {
 	// Approval presents a pending approval: an intent to render and choice labels (index 0.. are
 	// approvals, a client answers with the chosen index or -1 to deny).
-	Approval(id, intent string, options []string)
+	Approval(ctx context.Context, id, intent string, options []string)
 	// Resolved tells the connection an approval is concluded (answered anywhere, timed out, or no
 	// longer needed) so it clears the prompt.
-	Resolved(id string)
+	Resolved(ctx context.Context, id string)
 }
 
 // Broker turns a gate Ask into an out-of-band decision. It implements gate.Approver.
@@ -36,7 +36,7 @@ type Broker struct {
 	log    *slog.Logger
 
 	mu      sync.Mutex
-	sinks   map[Sink]struct{}
+	sinks   map[Sink]bool               // attached connection → active (foreground)
 	pending map[string]*pendingApproval // open approvals, by id
 }
 
@@ -54,28 +54,50 @@ func NewBroker(pusher Pusher, log *slog.Logger) *Broker {
 	return &Broker{
 		pusher:  pusher,
 		log:     log,
-		sinks:   map[Sink]struct{}{},
+		sinks:   map[Sink]bool{},
 		pending: map[string]*pendingApproval{},
 	}
 }
 
-// Attach registers a connection to receive approvals, re-presenting any already-open approvals so a
-// device that connects mid-flight (or is woken by a push) can answer them. Detach removes it.
-func (b *Broker) Attach(s Sink) {
+// Attach registers a connection, active (foreground) until it says otherwise, and re-presents any
+// open approvals so a device that connects mid-flight (or is woken by a push) can answer them. ctx is
+// the connection's, for the presenting sends.
+func (b *Broker) Attach(ctx context.Context, s Sink) {
 	b.mu.Lock()
-	b.sinks[s] = struct{}{}
-	open := make(map[string]*pendingApproval, len(b.pending))
-	maps.Copy(open, b.pending)
+	b.sinks[s] = true
 	b.mu.Unlock()
-	for id, p := range open {
-		s.Approval(id, p.intent, p.options)
-	}
+	b.presentPending(ctx, s)
 }
 
+// Detach removes a connection.
 func (b *Broker) Detach(s Sink) {
 	b.mu.Lock()
 	delete(b.sinks, s)
 	b.mu.Unlock()
+}
+
+// SetActive marks a connection foreground/background. Approvals route only to active connections; a
+// connection coming to the foreground gets the open approvals re-presented (the woken-by-push case).
+func (b *Broker) SetActive(ctx context.Context, s Sink, active bool) {
+	b.mu.Lock()
+	if _, ok := b.sinks[s]; ok {
+		b.sinks[s] = active
+	}
+	b.mu.Unlock()
+	if active {
+		b.presentPending(ctx, s)
+	}
+}
+
+// presentPending shows every open approval to one connection.
+func (b *Broker) presentPending(ctx context.Context, s Sink) {
+	b.mu.Lock()
+	open := make(map[string]*pendingApproval, len(b.pending))
+	maps.Copy(open, b.pending)
+	b.mu.Unlock()
+	for id, p := range open {
+		s.Approval(ctx, id, p.intent, p.options)
+	}
 }
 
 // Resolve delivers a connection's decision for approval id (a choice index, or -1 to deny). First
@@ -103,27 +125,27 @@ func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (
 
 	b.mu.Lock()
 	b.pending[id] = &pendingApproval{intent: intent, options: labels, ch: ch}
-	sinks := snapshot(b.sinks)
 	b.mu.Unlock()
-	defer b.conclude(id)
 
-	if len(sinks) == 0 {
-		// No device attached: reserve the out-of-band path. A real Pusher wakes a device, which
-		// connects, sees the pending approval and resolves; the placeholder just logs and this Ask
-		// times out to deny.
+	active := b.activeSinks()
+	if len(active) == 0 {
+		// No active device: reserve the out-of-band path. A real Pusher wakes a device, which comes
+		// to the foreground, gets the pending approval re-presented and resolves; the placeholder
+		// just logs and this Ask times out to deny.
 		if b.pusher != nil {
 			if err := b.pusher.Push(ctx, intent); err != nil {
 				b.log.Warn("hitl push failed", "err", err)
 			}
 		} else {
-			b.log.Warn("hitl approval with no attached device — denying", "intent", intent)
+			b.log.Warn("hitl approval with no active device — denying", "intent", intent)
 		}
 	} else {
-		for s := range sinks {
-			s.Approval(id, intent, labels)
+		for _, s := range active {
+			s.Approval(ctx, id, intent, labels)
 		}
 	}
 
+	defer b.conclude(ctx, id)
 	select {
 	case choice := <-ch:
 		return resolve(choice)
@@ -135,16 +157,34 @@ func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (
 	}
 }
 
-// conclude clears the pending approval and tells every attached connection to remove its prompt,
-// whatever the outcome (answered, timed out, cancelled).
-func (b *Broker) conclude(id string) {
+// conclude clears the pending approval and tells every attached connection (active or not) to remove
+// its prompt, whatever the outcome (answered, timed out, cancelled). It runs on WithoutCancel so a
+// cancelled turn still clears the prompts it raised.
+func (b *Broker) conclude(ctx context.Context, id string) {
+	ctx = context.WithoutCancel(ctx)
 	b.mu.Lock()
 	delete(b.pending, id)
-	sinks := snapshot(b.sinks)
-	b.mu.Unlock()
-	for s := range sinks {
-		s.Resolved(id)
+	all := make([]Sink, 0, len(b.sinks))
+	for s := range b.sinks {
+		all = append(all, s)
 	}
+	b.mu.Unlock()
+	for _, s := range all {
+		s.Resolved(ctx, id)
+	}
+}
+
+// activeSinks returns the attached connections currently in the foreground.
+func (b *Broker) activeSinks() []Sink {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []Sink
+	for s, active := range b.sinks {
+		if active {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // decision builds the human choice labels for an action and the mapper from a chosen index back to
@@ -174,15 +214,6 @@ func intentOf(a gate.Action) string {
 		return a.Kind + " → " + a.Target
 	}
 	return a.Kind
-}
-
-// snapshot copies the sink set so sinks are called without holding the lock.
-func snapshot(m map[Sink]struct{}) map[Sink]struct{} {
-	cp := make(map[Sink]struct{}, len(m))
-	for s := range m {
-		cp[s] = struct{}{}
-	}
-	return cp
 }
 
 func newID() string {

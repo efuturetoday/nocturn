@@ -39,7 +39,6 @@ type conn struct {
 	log     *slog.Logger
 	out     chan any
 
-	ctx    context.Context // the connection's lifecycle ctx, for async sends (approvals)
 	active *agentkit.Session
 }
 
@@ -51,10 +50,9 @@ func newConn(ws *websocket.Conn, space *workspace.Workspace, devices *auth.Store
 // out, and this goroutine reads and dispatches commands. While connected, it is attached to the
 // broker to receive approval requests.
 func (c *conn) serve(ctx context.Context) {
-	c.ctx = ctx
 	c.log.Info("ws connection opened")
 	go c.writer(ctx)
-	c.broker.Attach(c)
+	c.broker.Attach(ctx, c)
 	defer func() {
 		c.broker.Detach(c)
 		if c.active != nil {
@@ -88,8 +86,10 @@ func (c *conn) writer(ctx context.Context) {
 }
 
 // send hands a message to the writer, applying backpressure: it blocks until the writer takes it or
-// the connection is torn down (ctx cancelled). It never silently drops — a slow client slows the
-// producer instead of losing stream events.
+// ctx is done (the connection tearing down, or the request that produced it). It never silently
+// drops — a slow client slows the producer instead of losing stream events. ctx is passed, never
+// stored: the broker supplies the connection's ctx when it presents an approval from another
+// goroutine.
 func (c *conn) send(ctx context.Context, msg any) {
 	select {
 	case c.out <- msg:
@@ -114,6 +114,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.join(ctx, env.Cmd)
 	case "approval":
 		c.approval(ctx, env.Cmd, data)
+	case "presence":
+		c.presence(ctx, env.Cmd, data)
 	default:
 		c.send(ctx, newError("unknown domain: "+env.Cmd))
 	}
