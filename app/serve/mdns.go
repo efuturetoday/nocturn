@@ -20,7 +20,7 @@ const mdnsService = "_nocturn._tcp"
 func advertiseMDNS(addr string) (func(), error) {
 	_, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mdns: split %q: %w", addr, err)
 	}
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
@@ -34,7 +34,7 @@ func advertiseMDNS(addr string) (func(), error) {
 
 	server, err := zeroconf.Register(instance, mdnsService, "local.", port, []string{"path=/ws"}, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mdns: register: %w", err)
 	}
 	return server.Shutdown, nil
 }

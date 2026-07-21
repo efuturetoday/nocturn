@@ -216,6 +216,8 @@ func intentOf(a gate.Action) string {
 	return a.Kind
 }
 
+// newID returns a random 12-hex-char prompt id. It panics if crypto/rand fails,
+// which on a healthy host never happens and signals the OS entropy source is broken.
 func newID() string {
 	b := make([]byte, 6)
 	if _, err := rand.Read(b); err != nil {

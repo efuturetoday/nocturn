@@ -21,6 +21,7 @@ type LogPusher struct {
 // NewLogPusher builds the placeholder Pusher.
 func NewLogPusher(log *slog.Logger) *LogPusher { return &LogPusher{log: log} }
 
+// Push logs that a device would be woken; the placeholder delivers nothing.
 func (p *LogPusher) Push(_ context.Context, intent string) error {
 	p.log.Info("hitl push (placeholder — not delivered)", "intent", intent)
 	return nil

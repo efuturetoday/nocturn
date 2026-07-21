@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,6 +28,21 @@ type Manifest struct {
 	Tools       []ToolDecl       `json:"tools"`
 	Uses        []string         `json:"uses"`        // base tool names the guest may call ("*" = all); its cage
 	Credentials []CredentialDecl `json:"credentials"` // host-injected credentials it uses
+	OAuth       []OAuthDecl      `json:"oauth"`       // OAuth2 providers the host runs on its behalf
+}
+
+// OAuthDecl declares an OAuth2 provider the plugin needs — so the plugin brings its own instead of the
+// host hard-coding every one. The host runs the authorization-code (+PKCE) flow via `nocturn auth
+// <name>`, holds and refreshes the token, and injects it as the credential named Name (which must
+// match a CredentialDecl). The guest never sees the token. ClientSecret may be "" for a public/PKCE
+// client; a desktop-app client's secret is non-confidential and shipped in the manifest.
+type OAuthDecl struct {
+	Name         string   `json:"name"` // links to a CredentialDecl.Name (the injected secret)
+	AuthURL      string   `json:"auth_url"`
+	TokenURL     string   `json:"token_url"`
+	ClientID     string   `json:"client_id"`
+	ClientSecret string   `json:"client_secret"`
+	Scopes       []string `json:"scopes"`
 }
 
 // ToolDecl declares a tool the plugin exposes to the model.
@@ -76,15 +92,36 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("plugin: tool %q parameters must be a JSON object schema", t.Name)
 		}
 	}
+	credentialNames := map[string]bool{}
 	for _, c := range m.Credentials {
 		if c.Name == "" || c.Host == "" || c.Header == "" {
 			return fmt.Errorf("plugin: credential %q needs name, host and header", c.Name)
+		}
+		credentialNames[c.Name] = true
+	}
+	for _, o := range m.OAuth {
+		if o.Name == "" || o.ClientID == "" || len(o.Scopes) == 0 {
+			return fmt.Errorf("plugin: oauth %q needs a name, client_id and at least one scope", o.Name)
+		}
+		if !isHTTPSURL(o.AuthURL) || !isHTTPSURL(o.TokenURL) {
+			return fmt.Errorf("plugin: oauth %q auth_url and token_url must be https URLs", o.Name)
+		}
+		// The token has to be injected somewhere — an oauth block with no matching credential of the
+		// same name would fetch a token nothing ever uses.
+		if !credentialNames[o.Name] {
+			return fmt.Errorf("plugin: oauth %q has no matching credential of the same name", o.Name)
 		}
 	}
 	return nil
 }
 
-// uses reports whether the guest may dispatch to a base tool of the given name: an exact match in the
+// isHTTPSURL reports whether s is a well-formed https:// URL with a host.
+func isHTTPSURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Host != ""
+}
+
+// allows reports whether the guest may dispatch to a base tool of the given name: an exact match in the
 // manifest's Uses list, or a bare "*" that admits all base tools. Empty Uses = a pure-compute plugin
 // (its guest can call nothing).
 func (m Manifest) allows(tool string) bool {
@@ -135,10 +172,16 @@ func Load(dir string) (Loaded, error) {
 		return Loaded{}, errors.New("plugin: both plugin.wasm and plugin.js present — pick one")
 	case hasWASM:
 		b, err := os.ReadFile(wasm)
-		return Loaded{Manifest: m, Artifact: b, Kind: KindWASM}, err
+		if err != nil {
+			return Loaded{}, fmt.Errorf("plugin: read artifact: %w", err)
+		}
+		return Loaded{Manifest: m, Artifact: b, Kind: KindWASM}, nil
 	case hasJS:
 		b, err := os.ReadFile(js)
-		return Loaded{Manifest: m, Artifact: b, Kind: KindJS}, err
+		if err != nil {
+			return Loaded{}, fmt.Errorf("plugin: read artifact: %w", err)
+		}
+		return Loaded{Manifest: m, Artifact: b, Kind: KindJS}, nil
 	default:
 		return Loaded{}, errors.New("plugin: no plugin.wasm or plugin.js in " + dir)
 	}

@@ -6,6 +6,7 @@ package chat
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,10 +17,29 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit"
 )
 
+// ErrInvalidID rejects a chat id that isn't a safe filename — a client mints its own ids, so the
+// store never trusts one: only non-empty lowercase hex reaches the filesystem (no separators, "..").
+var ErrInvalidID = errors.New("chat: invalid id")
+
+// ValidID reports whether id is a safe chat id (non-empty lowercase hex). The server validates a
+// client-supplied id with this before it is ever used as a transcript key / filename.
+func ValidID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
 const (
 	ext       = ".json" // chat transcript file extension
 	tmpSuffix = ".tmp"  // suffix for the write-then-rename temp file
-	nameLimit = 40      // max runes of the first message kept as a chat name
+	nameLimit    = 40   // max runes of the first message kept as a chat name
+	previewLimit = 80   // max runes of the last message kept as a list preview
 )
 
 // Source is who a store's chats belong to. It is a property of the store instance (set once with
@@ -40,8 +60,9 @@ type Meta struct {
 	Source  Source    `json:"source"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
-	Read    time.Time `json:"read,omitzero"` // shared read cursor; unread when Updated is later
+	Read    time.Time `json:"read,omitzero"`    // shared read cursor; unread when Updated is later
 	Turns   int       `json:"turns"`
+	Preview string    `json:"preview,omitempty"` // last message's first line, for the list (à la Apple Mail)
 }
 
 // record is the on-disk shape: metadata plus the agentkit transcript.
@@ -60,12 +81,21 @@ type Store struct {
 }
 
 // OnSave registers a callback run after every persist (a turn save, a markRead), for broadcasting
-// chat activity. Set once at wiring time.
-func (s *Store) OnSave(fn func(Meta)) { s.onSave = fn }
+// chat activity. Guarded by s.mu: the daemon wires this from serve.Serve while agent-scheduler
+// goroutines that call Save (hence fireSaved) are already running, so the write must synchronize
+// with the read in fireSaved.
+func (s *Store) OnSave(fn func(Meta)) {
+	s.mu.Lock()
+	s.onSave = fn
+	s.mu.Unlock()
+}
 
 func (s *Store) fireSaved(m Meta) {
-	if s.onSave != nil {
-		s.onSave(m)
+	s.mu.Lock()
+	fn := s.onSave
+	s.mu.Unlock()
+	if fn != nil {
+		fn(m)
 	}
 }
 
@@ -107,6 +137,7 @@ func (s *Store) Save(id string, msgs []agentkit.Message) error {
 	rec.Messages = msgs
 	rec.Meta.Updated = now
 	rec.Meta.Turns++
+	rec.Meta.Preview = previewFrom(msgs)
 	err = s.write(rec)
 	meta := rec.Meta
 	s.mu.Unlock()
@@ -197,6 +228,9 @@ func (s *Store) Rename(id, name string) error {
 
 // Delete removes a chat's file. A missing chat is not an error.
 func (s *Store) Delete(id string) error {
+	if !ValidID(id) {
+		return ErrInvalidID
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.Remove(s.path(id)); err != nil && !os.IsNotExist(err) {
@@ -207,6 +241,9 @@ func (s *Store) Delete(id string) error {
 
 // read loads a chat record, returning (nil, nil) when the file does not exist. Callers hold s.mu.
 func (s *Store) read(id string) (*record, error) {
+	if !ValidID(id) {
+		return nil, ErrInvalidID
+	}
 	data, err := os.ReadFile(s.path(id))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -232,6 +269,26 @@ func (s *Store) write(rec *record) error {
 		return err
 	}
 	return os.Rename(tmp, s.path(rec.Meta.ID))
+}
+
+// previewFrom is the last user/assistant message's first line, trimmed to previewLimit — the
+// "what happened last" hint for the chat list (like Apple Mail), far more telling than a turn count.
+func previewFrom(msgs []agentkit.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Role != agentkit.RoleUser && m.Role != agentkit.RoleAssistant {
+			continue
+		}
+		line := strings.TrimSpace(strings.SplitN(m.Content, "\n", 2)[0])
+		if line == "" {
+			continue
+		}
+		if r := []rune(line); len(r) > previewLimit {
+			line = strings.TrimSpace(string(r[:previewLimit])) + "…"
+		}
+		return line
+	}
+	return ""
 }
 
 // nameFrom derives a chat name from its first user message: the first line, trimmed to nameLimit.

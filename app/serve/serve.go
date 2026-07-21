@@ -9,6 +9,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/app/auth"
 	"github.com/efuturetoday/nocturn/app/chat"
 	"github.com/efuturetoday/nocturn/app/hitl"
@@ -67,12 +68,21 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 		log.Info("no devices paired — pair one with POST /pair", "code", code, "validFor", bootstrapTTL)
 	}
 
-	// Broadcast chat activity to every device when any workspace's chat changes.
+	// Every device is a sink of the whole daemon: chat activity (list changes) AND live chat events
+	// (tokens/tools/turnEnd, tagged with chatId) are broadcast to all connections; the client routes
+	// by chatId. So a session's turn is never tied to one connection.
 	broadcast := newHub()
 	for name, ws := range spaces {
 		ws.OnChatUpdate(func(m chat.Meta) {
 			broadcast.broadcast(ChatActivity{Type: "chat.activity", Ws: name, Chat: m})
 		})
+		ws.Chats().OnEvent(func(chatID string, ev agentkit.Event) {
+			if msg, ok := chatEvent(chatID, ev); ok {
+				broadcast.broadcast(msg)
+			}
+		})
+		// On daemon shutdown (Serve returns): stop each Manager's reaper and close every live session.
+		defer ws.Chats().CloseAll()
 	}
 
 	mux := http.NewServeMux()

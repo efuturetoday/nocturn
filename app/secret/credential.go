@@ -223,7 +223,7 @@ type ownerKey struct{}
 
 // WithOwner marks ctx as originating from a specific plugin (its manifest name).
 // The plugin layer stamps it before running a plugin's guest, so a credential
-// injected on effects from that guest is limited to the plugin's own bindings
+// injected on requests from that guest is limited to the plugin's own bindings
 // (plus the app's unowned defaults). Calls without it — the model's own tool
 // calls, or a script's — see only the unowned defaults.
 func WithOwner(ctx context.Context, owner string) context.Context {

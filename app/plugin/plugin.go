@@ -73,10 +73,9 @@ func (p *Plugin) Tools() ([]agentkit.Tool, error) {
 		if err != nil {
 			return nil, fmt.Errorf("plugin %q tool %q: %w", p.manifest.Name, td.Name, err)
 		}
-		name := td.Name
-		t, err := agentkit.NewTool(p.manifest.Name+"_"+name, td.Description,
+		t, err := agentkit.NewTool(p.manifest.Name+"_"+td.Name, td.Description,
 			func(ctx context.Context, args string) (string, error) {
-				return p.run(ctx, name, args)
+				return p.run(ctx, td.Name, args)
 			},
 			agentkit.WithSchema(schema),
 		)

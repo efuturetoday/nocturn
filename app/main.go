@@ -9,6 +9,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -38,6 +39,23 @@ func main() {
 	flag.Parse()
 
 	_ = godotenv.Load()
+
+	// `nocturn auth <name>`: connect a plugin's OAuth account via the interactive terminal flow. It
+	// needs only the vault (master passphrase), not the LLM endpoint, so it runs before that setup.
+	if flag.Arg(0) == "auth" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		name := flag.Arg(1)
+		if name == "" {
+			fmt.Fprintln(os.Stderr, "usage: nocturn auth <name>")
+			os.Exit(1)
+		}
+		if err := runAuth(ctx, name); err != nil {
+			fmt.Fprintln(os.Stderr, "auth:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	baseURL := os.Getenv("FREELLM_BASE_URL")
 	apiKey := os.Getenv("FREELLM_API_KEY")
@@ -97,7 +115,7 @@ func main() {
 
 	if *serveAddr != "" {
 		fmt.Printf("nocturn daemon — ws on %s (%d workspaces, model %q)\n", *serveAddr, len(spaces), model)
-		if err := serve.Serve(ctx, *serveAddr, spaces, devices, broker, logger); err != nil && err != http.ErrServerClosed {
+		if err := serve.Serve(ctx, *serveAddr, spaces, devices, broker, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintln(os.Stderr, "serve:", err)
 			os.Exit(1)
 		}
@@ -151,21 +169,13 @@ func (p *pushWaker) Push(ctx context.Context, intent string) error {
 // (its transcript is already persisted and reloads on resume).
 func run(ctx context.Context, ws *workspace.Workspace, stdin *bufio.Reader, model string) {
 	mgr := ws.Chats()
+	defer mgr.CloseAll() // stop the reaper + close every live session on exit
 	turnDone := make(chan struct{}, 1)
-	var active *agentkit.Session
 
-	activate := func(sess *agentkit.Session) {
-		if active != nil {
-			active.Close()
-		}
-		active = sess
-		go render(sess, turnDone)
-	}
-	defer func() {
-		if active != nil {
-			active.Close()
-		}
-	}()
+	// The Manager owns the live sessions and drains each one's events; the REPL just prints them
+	// (one chat active at a time). No local session ownership.
+	mgr.OnEvent(func(_ string, ev agentkit.Event) { renderEvent(ev, turnDone) })
+	var activeID string
 
 	fmt.Printf("nocturn (model %q) — /chats · /open <id> · /new · /agents · /fire <name> <task> · /quit\n", model)
 	fmt.Print("\ntype a message to start a chat.\n")
@@ -193,25 +203,21 @@ func run(ctx context.Context, ws *workspace.Workspace, stdin *bufio.Reader, mode
 			fireAgent(ctx, ws, strings.TrimPrefix(line, "/fire "))
 			continue
 		case line == "/new":
-			if active != nil {
-				active.Close()
-				active = nil
-			}
+			activeID = "" // the next message starts a fresh chat; the old one keeps living in the Manager
 			fmt.Println("new chat — type your first message.")
 			continue
 		case strings.HasPrefix(line, "/open "):
-			id := strings.TrimSpace(strings.TrimPrefix(line, "/open "))
-			activate(mgr.Open(ctx, id))
-			fmt.Printf("opened %s — type to continue.\n", id)
+			activeID = strings.TrimSpace(strings.TrimPrefix(line, "/open "))
+			mgr.Open(activeID) // spin/get the live session; its events print via OnEvent
+			fmt.Printf("opened %s — type to continue.\n", activeID)
 			continue
 		}
 
-		// A plain line: start a new chat, or continue the active one.
-		if active == nil {
-			_, sess := mgr.Start(ctx, line)
-			activate(sess)
+		// A plain line: start a new chat, or continue the active one — id-addressed, no session owned.
+		if activeID == "" {
+			activeID, _ = mgr.Start(line)
 		} else {
-			active.Submit(line)
+			mgr.Open(activeID).Submit(line)
 		}
 		select {
 		case <-turnDone:
@@ -267,30 +273,31 @@ func fireAgent(ctx context.Context, ws *workspace.Workspace, rest string) {
 	}
 }
 
-// render drains one session's event stream to the terminal and signals turnDone on each TurnEnd. It
-// ends when the session is closed (the stream closes).
-func render(sess *agentkit.Session, done chan<- struct{}) {
-	for ev := range sess.Subscribe() {
-		switch e := ev.(type) {
-		case agentkit.Token:
-			fmt.Print(e.Text)
-		case agentkit.Thinking:
-			fmt.Printf("\033[2m%s\033[0m", e.Text)
-		case agentkit.ToolStart:
-			fmt.Printf("\n  → %s(%s)\n", e.Tool, e.Args)
-		case agentkit.ToolEnd:
-			if e.Err != nil {
-				fmt.Printf("  ← %s: %v\n", e.Tool, e.Err)
-			}
-		case agentkit.TurnEnd:
-			if e.Err != nil {
-				fmt.Printf("\n[stopped: %v]", e.Err)
-			}
-			fmt.Printf("\n[tokens: %d]\n", e.Tokens.Total)
-			select {
-			case done <- struct{}{}:
-			default:
-			}
+// renderEvent prints one streamed event to the terminal and signals done on the top-level TurnEnd.
+// The Manager's pump feeds it every live session's events (see OnEvent).
+func renderEvent(ev agentkit.Event, done chan<- struct{}) {
+	switch e := ev.(type) {
+	case agentkit.Token:
+		fmt.Print(e.Text)
+	case agentkit.Thinking:
+		fmt.Printf("\033[2m%s\033[0m", e.Text)
+	case agentkit.ToolStart:
+		fmt.Printf("\n  → %s(%s)\n", e.Tool, e.Args)
+	case agentkit.ToolEnd:
+		if e.Err != nil {
+			fmt.Printf("  ← %s: %v\n", e.Tool, e.Err)
+		}
+	case agentkit.TurnEnd:
+		if e.Frame != 0 {
+			return // a sub-agent turn ended; the user's turn is the top-level one
+		}
+		if e.Err != nil {
+			fmt.Printf("\n[stopped: %v]", e.Err)
+		}
+		fmt.Printf("\n[tokens: %d]\n", e.Tokens.Total)
+		select {
+		case done <- struct{}{}:
+		default:
 		}
 	}
 }

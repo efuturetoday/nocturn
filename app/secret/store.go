@@ -9,9 +9,10 @@
 // the in-memory surface; Vault (vault.go) is its encrypted persistence.
 package secret
 
-import "maps"
-
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 // Store holds secrets by name. It is host-trusted; never hand a *Store to a
 // guest — hand it a GuestView.

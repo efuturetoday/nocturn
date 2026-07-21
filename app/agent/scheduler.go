@@ -36,11 +36,13 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}
 }
 
-// tick fires every agent whose schedule matches t.
+// tick fires every agent whose schedule matches t. Each fire runs in its own goroutine so a slow
+// run (fire blocks for a whole turn) never stalls the loop past the next minute boundary; fire
+// honors ctx and exits when Start returns.
 func (s *Scheduler) tick(ctx context.Context, t time.Time) {
 	for _, a := range s.agents {
 		if a.When != "" && cronMatches(a.When, t) {
-			s.fire(ctx, a)
+			go s.fire(ctx, a)
 		}
 	}
 }

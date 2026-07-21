@@ -65,6 +65,10 @@ func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, e
 	case err := <-done:
 		return answer.String(), err
 	case <-ctx.Done():
+		// Stop the stream and wait for the goroutine to stop writing answer before
+		// we read it — strings.Builder is not concurrency-safe.
+		sess.Close()
+		<-done
 		return answer.String(), ctx.Err()
 	}
 }

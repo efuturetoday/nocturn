@@ -8,8 +8,6 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
-
-	"github.com/efuturetoday/nocturn/app/deadline"
 )
 
 // EngineConfig fixes the compile-scoped knobs of an Engine. wazero bakes the
@@ -92,10 +90,11 @@ func (e *Engine) Run(ctx context.Context, cfg Config) (Result, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	// A pausable budget, not a plain timeout: while a host call is parked waiting
-	// for an out-of-band human approval, hitl pauses this deadline so the wait
-	// doesn't trap the (suspended) guest. It still bounds real execution time.
-	budgetCtx, cancel := deadline.WithBudget(ctx, timeout)
+	// A per-run wall-clock cap. The PAUSABLE turn deadline lives in agentkit: while a host call is
+	// parked waiting for an out-of-band approval, the gate calls agentkit.Pause on the session
+	// deadline so the wait doesn't trap the (suspended) guest. This cap just bounds real execution
+	// time for a single guest run (and stands alone when there is no session deadline in ctx).
+	budgetCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// Stamp this call's dispatchers onto the same ctx wazero hands the trampoline
 	// during _start. Unexported seam, stamped in exactly one place, so no caller

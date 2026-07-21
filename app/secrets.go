@@ -28,28 +28,38 @@ const (
 // feeds the same passphrase here instead of the env. Both returns are nil when the vault stays
 // locked — the assistant runs without credentials and without scanning.
 func buildSecrets(log *slog.Logger) (*secret.Injector, *secret.Scanner) {
-	pass := os.Getenv("NOCTURN_MASTER_PASSPHRASE")
-	if pass == "" {
-		return nil, nil // vault locked — no injection, no scanning
-	}
-	master, err := unlockMaster(pass, filepath.Join(dataDir, saltFile))
+	vault, err := openVault()
 	if err != nil {
 		log.Warn("secret: vault stays locked", "err", err)
 		return nil, nil
 	}
-	vault, err := secret.OpenVault(filepath.Join(dataDir, vaultFile), master.WorkspaceKey("vault"))
-	if err != nil {
-		log.Warn("secret: open vault", "err", err)
-		return nil, nil
+	if vault == nil {
+		return nil, nil // no passphrase — vault locked, no injection, no scanning
 	}
 	seedEnvSecrets(vault, log)
-	inj := secret.NewInjector(vault.Store())
-	loadBindings(inj, filepath.Join(dataDir, bindFile), log)
+	injector := secret.NewInjector(vault.Store())
+	loadBindings(injector, filepath.Join(dataDir, bindFile), log)
+	registerOAuth(injector, vault, wsRoot, log) // refreshing token sources for authed OAuth plugins
 	// The scanner screens traffic for the vault's known values (plus embedded gitleaks patterns), so
 	// it shares the vault's store and lifecycle.
 	scanner := secret.NewScanner(vault.Store())
 	log.Info("secret: vault unlocked")
-	return inj, scanner
+	return injector, scanner
+}
+
+// openVault unlocks (or first-run initializes) the encrypted vault with the master passphrase. It
+// returns (nil, nil) when no passphrase is set — the vault simply stays locked. It is the shared
+// entrypoint for both the daemon (buildSecrets) and `nocturn auth` (runAuth).
+func openVault() (*secret.Vault, error) {
+	pass := os.Getenv("NOCTURN_MASTER_PASSPHRASE")
+	if pass == "" {
+		return nil, nil
+	}
+	master, err := unlockMaster(pass, filepath.Join(dataDir, saltFile))
+	if err != nil {
+		return nil, err
+	}
+	return secret.OpenVault(filepath.Join(dataDir, vaultFile), master.WorkspaceKey("vault"))
 }
 
 // unlockMaster derives the master key from the passphrase, minting the salt on first run and

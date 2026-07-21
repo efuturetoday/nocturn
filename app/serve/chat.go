@@ -10,11 +10,15 @@ import (
 
 // ── client → server (cmd) ────────────────────────────────────────────────────
 
-// ChatSubmit sends a message to the active chat (starting a new one in workspace Ws if none is active).
+// ChatSubmit sends a message to the chat with id ID — the client MINTS the id (crypto-random hex),
+// so the request is self-identifying: an unknown id starts that chat (create-on-first-submit), a
+// known one appends. No server-minted id, no chat.opened round-trip, no correlation problem. The
+// server validates the id (ValidID) before it is ever a filesystem key.
 type ChatSubmit struct {
 	Cmd  string `json:"cmd"`
 	Ws   string `json:"ws"`
 	Text string `json:"text"`
+	ID   string `json:"id"`
 }
 
 // ChatOpen resumes a chat in workspace Ws: the server replies with a ChatSnapshot, then streams turns.
@@ -30,9 +34,11 @@ type ChatList struct {
 	Ws  string `json:"ws"`
 }
 
-// ChatCancel aborts the active chat's running turn (the chat and session stay open).
+// ChatCancel aborts a chat's running turn (id-addressed; the chat and session stay open).
 type ChatCancel struct {
 	Cmd string `json:"cmd"`
+	Ws  string `json:"ws"`
+	ID  string `json:"id"`
 }
 
 // ChatMarkRead advances a chat's shared read cursor (clears its unread state on every device).
@@ -44,23 +50,30 @@ type ChatMarkRead struct {
 
 // ── server → client (type) ───────────────────────────────────────────────────
 
+// The streaming events all carry ChatID: every live session broadcasts to EVERY device (no
+// per-connection subscription), so the client routes each event to the right chat and drops those
+// for a chat it isn't showing.
+
 // ChatToken is one answer-text delta.
 type ChatToken struct {
-	Type  string `json:"type"`
-	Frame uint64 `json:"frame"`
-	Text  string `json:"text"`
+	Type   string `json:"type"`
+	ChatID string `json:"chatId"`
+	Frame  uint64 `json:"frame"`
+	Text   string `json:"text"`
 }
 
 // ChatThinking is one reasoning-text delta.
 type ChatThinking struct {
-	Type  string `json:"type"`
-	Frame uint64 `json:"frame"`
-	Text  string `json:"text"`
+	Type   string `json:"type"`
+	ChatID string `json:"chatId"`
+	Frame  uint64 `json:"frame"`
+	Text   string `json:"text"`
 }
 
 // ChatTool is a tool call's start or end.
 type ChatTool struct {
 	Type   string `json:"type"`
+	ChatID string `json:"chatId"`
 	Phase  string `json:"phase"` // "start" | "end"
 	Frame  uint64 `json:"frame"`
 	ID     uint64 `json:"id"`
@@ -73,16 +86,10 @@ type ChatTool struct {
 // ChatTurnEnd closes a turn, with the stop reason (if any) and the turn's total tokens.
 type ChatTurnEnd struct {
 	Type   string `json:"type"`
+	ChatID string `json:"chatId"`
 	Frame  uint64 `json:"frame"`
 	Err    string `json:"err,omitempty"`
 	Tokens int    `json:"tokens"`
-}
-
-// ChatOpened tells the client the id of the chat it just started (a new chat from chat.submit), so
-// it can bind its active-chat id — a resume already knows the id it opened.
-type ChatOpened struct {
-	Type string `json:"type"`
-	ID   string `json:"id"`
 }
 
 // ChatSnapshot is a chat's persisted transcript, sent on open so the client can render it.
@@ -132,8 +139,13 @@ func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 		}
 		c.chatList(ctx, m.Ws)
 	case "chat.cancel":
-		if c.active != nil {
-			c.active.Cancel()
+		var m ChatCancel
+		if err := json.Unmarshal(data, &m); err != nil {
+			c.send(ctx, newError("bad chat.cancel"))
+			return
+		}
+		if ws, ok := c.workspace(ctx, m.Ws); ok {
+			ws.Chats().Cancel(m.ID)
 		}
 	case "chat.markRead":
 		var m ChatMarkRead
@@ -150,17 +162,18 @@ func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 }
 
 func (c *conn) chatSubmit(ctx context.Context, m ChatSubmit) {
-	if c.active != nil {
-		c.active.Submit(m.Text)
-		return
-	}
 	ws, ok := c.workspace(ctx, m.Ws)
 	if !ok {
 		return
 	}
-	id, sess := ws.Chats().Start(ctx, m.Text)
-	c.send(ctx, ChatOpened{Type: "chat.opened", ID: id})
-	c.activate(ctx, sess)
+	// Client-minted id: validate it (never trust a client id as a filesystem key), then submit. An
+	// unknown id starts a fresh chat, a known one appends. The turn's events reach every device via
+	// the Manager's broadcast, so this handler touches NO connection state and owns no session.
+	if !chat.ValidID(m.ID) {
+		c.send(ctx, newError("bad chat id"))
+		return
+	}
+	ws.Chats().Open(m.ID).Submit(m.Text)
 }
 
 func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
@@ -176,8 +189,9 @@ func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 	if msgs == nil {
 		msgs = []agentkit.Message{} // the wire carries [] not null
 	}
+	// Just the persisted transcript for the initial render — live tokens already stream to every
+	// device via the Manager's broadcast (filtered client-side by chat id). No session is touched.
 	c.send(ctx, ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs})
-	c.activate(ctx, ws.Chats().Open(ctx, m.ID))
 }
 
 func (c *conn) chatList(ctx context.Context, wsName string) {
@@ -193,31 +207,21 @@ func (c *conn) chatList(ctx context.Context, wsName string) {
 	c.send(ctx, ChatListResult{Type: "chat.list", Ws: wsName, Chats: metas})
 }
 
-// activate makes sess the connection's live chat: the previous one is closed (its transcript is
-// persisted and reloads on open), and a render goroutine forwards the new session's events until
-// the session or the connection ends.
-func (c *conn) activate(ctx context.Context, sess *agentkit.Session) {
-	if c.active != nil {
-		c.active.Close()
+// chatEvent renders one agentkit event as a wire chat.* message tagged with its chat id, for
+// broadcast to every device (the client routes by chatId). TurnStart — and any event with no wire
+// form — is skipped (ok=false).
+func chatEvent(chatID string, ev agentkit.Event) (any, bool) {
+	switch e := ev.(type) {
+	case agentkit.Token:
+		return ChatToken{Type: "chat.token", ChatID: chatID, Frame: e.Frame, Text: e.Text}, true
+	case agentkit.Thinking:
+		return ChatThinking{Type: "chat.thinking", ChatID: chatID, Frame: e.Frame, Text: e.Text}, true
+	case agentkit.ToolStart:
+		return ChatTool{Type: "chat.tool", ChatID: chatID, Phase: "start", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args}, true
+	case agentkit.ToolEnd:
+		return ChatTool{Type: "chat.tool", ChatID: chatID, Phase: "end", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args, Result: e.Result, Err: errText(e.Err)}, true
+	case agentkit.TurnEnd:
+		return ChatTurnEnd{Type: "chat.turnEnd", ChatID: chatID, Frame: e.Frame, Err: errText(e.Err), Tokens: e.Tokens.Total}, true
 	}
-	c.active = sess
-	go c.render(ctx, sess)
-}
-
-// render forwards one session's event stream to the client as chat.* events until it closes.
-func (c *conn) render(ctx context.Context, sess *agentkit.Session) {
-	for ev := range sess.Subscribe() {
-		switch e := ev.(type) {
-		case agentkit.Token:
-			c.send(ctx, ChatToken{Type: "chat.token", Frame: e.Frame, Text: e.Text})
-		case agentkit.Thinking:
-			c.send(ctx, ChatThinking{Type: "chat.thinking", Frame: e.Frame, Text: e.Text})
-		case agentkit.ToolStart:
-			c.send(ctx, ChatTool{Type: "chat.tool", Phase: "start", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args})
-		case agentkit.ToolEnd:
-			c.send(ctx, ChatTool{Type: "chat.tool", Phase: "end", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args, Result: e.Result, Err: errText(e.Err)})
-		case agentkit.TurnEnd:
-			c.send(ctx, ChatTurnEnd{Type: "chat.turnEnd", Frame: e.Frame, Err: errText(e.Err), Tokens: e.Tokens.Total})
-		}
-	}
+	return nil, false
 }

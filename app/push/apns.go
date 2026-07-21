@@ -174,7 +174,7 @@ func (a *APNS) push(ctx context.Context, jwt, token string, body []byte) error {
 	url := "https://" + a.host + "/3/device/" + token
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("apns: build request: %w", err)
 	}
 	req.Header.Set("authorization", "bearer "+jwt)
 	req.Header.Set("apns-topic", a.cfg.BundleID)
@@ -182,7 +182,7 @@ func (a *APNS) push(ctx context.Context, jwt, token string, body []byte) error {
 
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("apns: post: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {

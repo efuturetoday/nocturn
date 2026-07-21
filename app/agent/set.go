@@ -2,7 +2,7 @@ package agent
 
 import "sort"
 
-// Set is an immutable collection of declared agents, keyed by name (mirrors agentkit's ToolSet /
+// Set is a read-only-by-convention collection of declared agents, keyed by name (mirrors agentkit's ToolSet /
 // SkillSet). Build one with Discover; read it with Get and All.
 type Set map[string]Agent
 

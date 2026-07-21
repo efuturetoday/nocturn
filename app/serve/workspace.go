@@ -2,7 +2,8 @@ package serve
 
 import (
 	"context"
-	"sort"
+	"slices"
+	"strings"
 )
 
 // WorkspaceList requests the daemon's workspaces (client → server).
@@ -29,7 +30,7 @@ func (c *conn) workspaceCmd(ctx context.Context, cmd string) {
 		for name := range c.spaces {
 			items = append(items, WorkspaceInfo{Name: name})
 		}
-		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+		slices.SortFunc(items, func(a, b WorkspaceInfo) int { return strings.Compare(a.Name, b.Name) })
 		c.send(ctx, WorkspaceListResult{Type: "workspace.list", Items: items})
 	default:
 		c.send(ctx, newError("unknown action: "+cmd))

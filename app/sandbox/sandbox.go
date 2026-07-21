@@ -5,7 +5,7 @@
 // needs and nothing more: WASI stdio for input/output, an optional
 // workspace directory confined by construction, brokered host-function imports,
 // and hardening (a memory cap and a wall-clock deadline that traps runaway
-// guests). The sandbox performs NO effect itself — every effect is a HostFunc
+// guests). The sandbox performs NO action itself — every action is a HostFunc
 // supplied by the caller, which is where the broker/gateway sits.
 //
 // Guests are compiled once into an Engine (compilation dominates per-call cost)
@@ -34,10 +34,10 @@ const (
 	defaultMaxPages = 1024 // 64 MiB (× 64 KiB pages)
 )
 
-// HostFunc is a brokered capability exposed to the guest. The guest calls it by
+// HostFunc is a brokered host function exposed to the guest. The guest calls it by
 // Name over the (ptr,len) ABI; Fn receives the request bytes and returns the
 // response bytes. Fn is where the broker/gateway lives — the sandbox never
-// performs an effect itself.
+// performs an action itself.
 type HostFunc struct {
 	Name string
 	Fn   func(ctx context.Context, req []byte) ([]byte, error)

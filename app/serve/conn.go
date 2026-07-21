@@ -13,7 +13,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
-	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/app/auth"
 	"github.com/efuturetoday/nocturn/app/hitl"
 	"github.com/efuturetoday/nocturn/app/workspace"
@@ -28,9 +27,11 @@ type Error struct {
 // newError builds an Error event with the discriminator set.
 func newError(text string) Error { return Error{Type: "error", Text: text} }
 
-// conn is one WebSocket client. It drives the workspace's chat manager and streams a single active
-// chat's events back. Every outbound message goes through out — coder/websocket forbids concurrent
-// writes, so one writer goroutine owns the socket's write side.
+// conn is one WebSocket client. It is STATELESS w.r.t. chats: commands are id-addressed and routed to
+// the Manager, and live chat events arrive via the daemon-wide hub (the Manager broadcasts every
+// session's events to every device). A connection never owns or closes a session. Every outbound
+// message goes through out — coder/websocket forbids concurrent writes, so one writer goroutine owns
+// the socket's write side.
 type conn struct {
 	ws      *websocket.Conn
 	spaces  map[string]*workspace.Workspace // the daemon's workspaces, by name
@@ -39,8 +40,6 @@ type conn struct {
 	hub     *hub
 	log     *slog.Logger
 	out     chan any
-
-	active *agentkit.Session
 }
 
 func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, log *slog.Logger) *conn {
@@ -67,9 +66,7 @@ func (c *conn) serve(ctx context.Context) {
 	defer func() {
 		c.hub.remove(c)
 		c.broker.Detach(c)
-		if c.active != nil {
-			c.active.Close()
-		}
+		// No session cleanup: sessions are server-owned and keep running past this connection.
 		c.log.Info("ws connection closed")
 	}()
 	for {

@@ -47,7 +47,7 @@ func (s *grantStore) Remember(g gate.Grant, recall gate.Recall) {
 		return
 	}
 	s.durable[g] = struct{}{}
-	// Best-effort: a failed write drops durability to session-only, never blocks the effect.
+	// Best-effort: a failed write drops durability to session-only, never blocks the action.
 	_ = s.write()
 }
 

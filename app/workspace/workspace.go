@@ -5,6 +5,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -93,7 +94,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		runtime.WithTools(toolset),
 		runtime.WithGate(policy(), gs, h.Approver),
 		runtime.WithSession(
-			agentkit.WithSystem(resolvePersona(dir)),
+			agentkit.WithSystem(resolvePersona(dir, h.Log)),
 			agentkit.WithTimeout(turnTimeout),
 			agentkit.WithLogger(agentkit.SlogLogger(h.Log)),
 		),
@@ -263,9 +264,14 @@ const defaultPersona = "You are nocturn, a concise, helpful assistant. Use http_
 // if present and non-empty, else defaultPersona. PERSONA.md lives in the ROOT — control-plane, never
 // a tool-reachable path — so the model can neither read nor rewrite its own identity; a self-writable
 // persona would be a prompt-injection vector onto the assistant itself.
-func resolvePersona(dir string) string {
+func resolvePersona(dir string, log *slog.Logger) string {
 	data, err := os.ReadFile(filepath.Join(dir, "PERSONA.md"))
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			// A real read error (permissions, I/O) on an existing PERSONA.md must not
+			// silently swap in the wrong identity — surface it rather than mask it.
+			log.Warn("workspace: reading PERSONA.md, using default", "dir", dir, "err", err)
+		}
 		return defaultPersona
 	}
 	if body := strings.TrimSpace(string(data)); body != "" {

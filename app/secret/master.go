@@ -121,7 +121,7 @@ type masterSaltFile struct {
 func NewMasterSalt() (salt []byte, logN int, err error) {
 	s := make([]byte, 16)
 	if _, err := rand.Read(s); err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("secret: master salt: %w", err)
 	}
 	return s, masterWorkFactor, nil
 }
