@@ -28,9 +28,12 @@ export class WorkspaceService {
     this.conn.onEvent((e) => {
       if (e.type === 'workspace.list') {
         this._workspaces.set(e.items);
-        // Auto-select the first workspace if none is active yet, so the tabs shell always has a
-        // scope right after connect (no separate picker screen needed).
-        if (!this._active() && e.items.length) void this.setActive(e.items[0].name);
+        // Reconcile the active selection against what the daemon actually serves: pick the first
+        // workspace when none is active yet, OR when the persisted one no longer exists (e.g. a
+        // stale name from an older build) — otherwise every command targets an unknown workspace.
+        const active = this._active();
+        const known = active !== null && e.items.some((w) => w.name === active);
+        if (!known && e.items.length) void this.setActive(e.items[0].name);
       }
     });
 

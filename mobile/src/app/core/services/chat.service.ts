@@ -92,13 +92,16 @@ export class ChatService {
   constructor() {
     this.conn.onEvent((e) => this.reduce(e));
 
-    // Resync on (re)connect or active-workspace change: re-list + re-open → fresh snapshot.
+    // Resync on (re)connect or active-workspace change: re-list + re-open → fresh snapshot. Only
+    // once the active workspace is one the daemon actually serves — else a stale persisted name
+    // would target an unknown workspace before workspace.list reconciles it.
     effect(() => {
       if (this.conn.state() !== 'connected') return;
       const ws = this.ws.active();
+      if (!ws || !this.ws.workspaces().some((w) => w.name === ws)) return;
       const id = this._activeChatId();
-      if (ws) this.conn.send({ cmd: 'chat.list', ws });
-      if (ws && id) this.conn.send({ cmd: 'chat.open', ws, id });
+      this.conn.send({ cmd: 'chat.list', ws });
+      if (id) this.conn.send({ cmd: 'chat.open', ws, id });
     });
   }
 
