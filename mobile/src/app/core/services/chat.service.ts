@@ -204,6 +204,9 @@ export class ChatService {
         if (e.frame === 0) {
           this.appendAssistant((m) => ({ ...m, error: e.err, pending: false }));
           this._running.set(false);
+          // The daemon bumped the chat's `updated` before this event; refresh the list so a chat
+          // you left mid-turn raises its unread dot (and a still-viewed one stays marked read).
+          this.listChats();
         }
         break;
 
