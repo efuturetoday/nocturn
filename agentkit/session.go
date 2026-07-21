@@ -318,7 +318,7 @@ func (s *Session) runTools(ctx context.Context, tools ToolSet, calls []ToolCall)
 }
 
 // toolset returns the tools the model sees: the session's tools plus, when the session has skills,
-// the load_skill tool that pulls a skill body into context on demand.
+// the skill_load tool that pulls a skill body into context on demand.
 func (s *Session) toolset() ToolSet {
 	if len(s.skills) == 0 {
 		return s.tools

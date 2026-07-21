@@ -79,7 +79,7 @@ func main() {
 		runtime.WithGate(policy, gate.NewMemGrants(), &consoleApprover{in: stdin}),
 		runtime.WithSession(
 			agentkit.WithSystem("You are a concise, helpful assistant. Use tools when useful, call "+
-				"load_skill for skills, delegate poetry to the poet sub-agent, and notify_user to ping the user."),
+				"skill_load for skills, delegate poetry to the poet sub-agent, and notify_user to ping the user."),
 			agentkit.WithTokenizer(agentkit.ApproxTokenizer()),
 			agentkit.WithTimeout(2*time.Minute),
 		),

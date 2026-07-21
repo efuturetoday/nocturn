@@ -20,6 +20,7 @@ import (
 	"github.com/efuturetoday/nocturn/app/chat"
 	"github.com/efuturetoday/nocturn/app/plugin"
 	"github.com/efuturetoday/nocturn/app/secret"
+	"github.com/efuturetoday/nocturn/app/skill"
 	"github.com/efuturetoday/nocturn/app/tools"
 )
 
@@ -88,6 +89,21 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		}
 		baseTools = append(baseTools, remindTools...)
 	}
+	// Skills: load the workspace's skills/ folder into an agentkit.SkillSet. agentkit surfaces the
+	// catalog (system prompt) and skill_load per top-level session; skill_read (for a skill's bundled
+	// files) is a base tool, so it flows into the cages like the file tools. An invalid skill is
+	// skipped inside Load with a logged warning — never blocks the workspace.
+	skills, skillDirs, err := skill.Load(filepath.Join(dir, "skills"), h.Log)
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: skills: %w", name, err)
+	}
+	if len(skillDirs) > 0 {
+		readTool, err := skill.ReadTool(skillDirs)
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q: skill_read: %w", name, err)
+		}
+		baseTools = append(baseTools, readTool)
+	}
 	base, err := agentkit.NewToolSet(baseTools...)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
@@ -111,6 +127,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 
 	rt := runtime.New(h.LLM,
 		runtime.WithTools(toolset),
+		runtime.WithSkills(skills),
 		runtime.WithGate(policy(), gs, h.Approver),
 		runtime.WithSession(
 			agentkit.WithSystem(resolvePersona(dir, h.Log)),

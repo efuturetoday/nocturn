@@ -18,9 +18,10 @@ const (
 	SkillNamePattern = `^[a-z0-9-]{1,64}$`
 
 	// loadSkillToolName is the progressive-disclosure tool a SkillSet exposes. The provider tool-name
-	// regex (ToolNamePattern) allows only letters, digits, '_' and '-' — no '.', so this is
-	// "load_skill", not "skill.load", to pass validation.
-	loadSkillToolName = "load_skill"
+	// regex (ToolNamePattern) allows only letters, digits, '_' and '-' — no '.', so it is underscored,
+	// not dotted. Named skill_load (verb suffix) so it and a consumer's skill_read form one skill_*
+	// family.
+	loadSkillToolName = "skill_load"
 )
 
 var skillNameRe = regexp.MustCompile(SkillNamePattern)
