@@ -6,6 +6,7 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,7 @@ const turnTimeout = 2 * time.Minute
 type Host struct {
 	LLM      agentkit.LLM
 	Approver gate.Approver
+	Log      *slog.Logger
 }
 
 // Workspace is one isolated stack: its own tools, grants, persona, and chats over the Host.
@@ -39,6 +41,7 @@ type Workspace struct {
 	agentStore *chat.Store   // agent run transcripts (SourceAgent)
 	agents     agent.Set
 	sched      *agent.Scheduler
+	log        *slog.Logger
 }
 
 // Open builds (creating its directory if needed) a workspace named name rooted at dir: it assembles
@@ -68,6 +71,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		runtime.WithSession(
 			agentkit.WithSystem(resolvePersona(dir)),
 			agentkit.WithTimeout(turnTimeout),
+			agentkit.WithLogger(agentkit.SlogLogger(h.Log)),
 		),
 	)
 
@@ -94,6 +98,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		chats:      chat.NewManager(rt, userStore),
 		agentStore: agentStore,
 		agents:     agents,
+		log:        h.Log,
 	}
 	w.sched = agent.NewScheduler(agents, func(ctx context.Context, a agent.Agent) {
 		_, _ = w.FireAgent(ctx, a.Name, "Run your scheduled task now.")

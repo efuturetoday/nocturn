@@ -9,7 +9,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -21,12 +24,16 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/agentkit/openai"
 	"github.com/efuturetoday/nocturn/app/chat"
+	"github.com/efuturetoday/nocturn/app/serve"
 	"github.com/efuturetoday/nocturn/app/workspace"
 )
 
 const wsDir = "./nocturn-data/workspaces/main"
 
 func main() {
+	serveAddr := flag.String("serve", "", "run a WebSocket daemon at this address instead of the terminal (e.g. :8080)")
+	flag.Parse()
+
 	_ = godotenv.Load()
 
 	baseURL := os.Getenv("FREELLM_BASE_URL")
@@ -47,10 +54,22 @@ func main() {
 	// loop, so stdin is free while the approver asks.
 	stdin := bufio.NewReader(os.Stdin)
 
+	// Logs go to stderr (structured); the terminal UI keeps stdout. In daemon mode, stderr is the
+	// operator's window into the running backend.
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
 	llm := openai.New(baseURL, apiKey, model,
 		openai.WithEffort(agentkit.Effort(os.Getenv("FREELLM_REASONING_EFFORT"))),
+		openai.WithLogger(agentkit.SlogLogger(logger)),
 	)
-	host := workspace.Host{LLM: llm, Approver: &terminalApprover{in: stdin}}
+
+	// In daemon mode there is no terminal to prompt, so no approver: any Ask is denied until the
+	// out-of-band push approver lands (a later slice).
+	var approver gate.Approver
+	if *serveAddr == "" {
+		approver = &terminalApprover{in: stdin}
+	}
+	host := workspace.Host{LLM: llm, Approver: approver, Log: logger}
 
 	ws, err := workspace.Open(host, "main", wsDir)
 	if err != nil {
@@ -58,6 +77,15 @@ func main() {
 		os.Exit(1)
 	}
 	go ws.StartAgents(ctx) // cron scheduler for declared agents
+
+	if *serveAddr != "" {
+		fmt.Printf("nocturn daemon — ws on %s (model %q)\n", *serveAddr, model)
+		if err := serve.Serve(ctx, *serveAddr, ws, logger); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintln(os.Stderr, "serve:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	run(ctx, ws, stdin, model)
 }

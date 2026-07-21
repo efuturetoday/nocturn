@@ -44,6 +44,9 @@ func (m *Manager) session(ctx context.Context, id string) *agentkit.Session {
 // List returns every chat's metadata, most recent first.
 func (m *Manager) List() ([]Meta, error) { return m.store.Metas() }
 
+// Transcript returns a chat's persisted messages, for rendering a snapshot on open.
+func (m *Manager) Transcript(id string) ([]agentkit.Message, error) { return m.store.Load(id) }
+
 // Delete removes a chat's transcript.
 func (m *Manager) Delete(id string) error { return m.store.Delete(id) }
 

@@ -37,6 +37,7 @@ func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, e
 			agentkit.WithSystem(a.Instructions),
 			agentkit.WithEffort(a.Effort),
 			agentkit.WithTimeout(turnTimeout),
+			agentkit.WithLogger(agentkit.SlogLogger(w.log)),
 		),
 	)
 
