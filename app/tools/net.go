@@ -197,8 +197,9 @@ func methodOrDefault(m, def string) string {
 	return def
 }
 
-// firstHeaders flattens response headers to one value each — enough for a guest's Response, without
-// leaking the multi-value structure.
+// firstHeaders flattens http.Header (map[string][]string) to one value per name — the first. Almost
+// every header is single-valued, and a guest's Response.headers.get returns a single value anyway; a
+// genuinely multi-valued header (e.g. Set-Cookie) keeps only its first value here.
 func firstHeaders(h http.Header) map[string]string {
 	out := make(map[string]string, len(h))
 	for k, v := range h {
