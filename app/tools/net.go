@@ -29,14 +29,14 @@ const maxBody = 1 << 16 // 64 KiB of response body handed back to the caller
 // caller tries to smuggle OUT and redacts one echoed back IN.
 type Net struct {
 	client  *http.Client
-	creds   *secret.Injector // host-owned, host-bound credential jar; nil = no injection
+	secrets *secret.Injector // host-owned, host-bound credential jar; nil = no injection
 	scanner *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
 }
 
 // New builds a Net with a bounded HTTP client, an optional credential injector and an optional leak
 // scanner (nil = that feature off).
-func New(creds *secret.Injector, scanner *secret.Scanner) *Net {
-	return &Net{client: &http.Client{Timeout: 30 * time.Second}, creds: creds, scanner: scanner}
+func New(secrets *secret.Injector, scanner *secret.Scanner) *Net {
+	return &Net{client: &http.Client{Timeout: 30 * time.Second}, secrets: secrets, scanner: scanner}
 }
 
 // Tools exposes the network tools. http_read and http_write are split so the tool the model (or a
@@ -152,9 +152,9 @@ func (n *Net) do(ctx context.Context, method, rawURL, body, contentType string) 
 	// Inject any host-owned credential bound to this host, at the border: the value comes from the
 	// vault and is scoped to the caller (WithOwner in ctx), so the model/script never handles it. A
 	// locked vault or no matching binding injects nothing — the request just goes out unauthenticated.
-	if n.creds != nil {
+	if n.secrets != nil {
 		sr := secret.Request{Method: method, URL: u.String(), Headers: map[string]string{}}
-		if _, err := n.creds.InjectMatching(ctx, &sr, u.Host); err != nil {
+		if _, err := n.secrets.InjectMatching(ctx, &sr, u.Host); err != nil {
 			return "", fmt.Errorf("credential injection: %w", err)
 		}
 		for k, v := range sr.Headers {

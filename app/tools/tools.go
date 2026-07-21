@@ -16,10 +16,10 @@ import (
 // narrows it. It grows as capabilities land (file, notify, time, …). Returned as a slice so the
 // caller can both form the base ToolSet and scope per-agent subsets from it. code_run is NOT here: it
 // is woven per cage by Compose, so a script's reach is bounded to exactly the tools of the cage it
-// runs in. creds and scanner (either may be nil) are the host-owned credential jar the network tool
+// runs in. secrets and scanner (either may be nil) are the host-owned credential jar the network tool
 // injects from and the bidirectional leak scanner it screens traffic through.
-func Base(creds *secret.Injector, scanner *secret.Scanner) ([]agentkit.Tool, error) {
-	return New(creds, scanner).Tools()
+func Base(secrets *secret.Injector, scanner *secret.Scanner) ([]agentkit.Tool, error) {
+	return New(secrets, scanner).Tools()
 }
 
 // Compose finalizes one cage: the tools of `cage`, plus — only when allowCodeRun — a code_run whose
