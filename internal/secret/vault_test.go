@@ -154,12 +154,12 @@ func TestVault_InjectorOverVaultStore(t *testing.T) {
 
 	in := secret.NewInjector(v.Store())
 	in.AddBinding("mcp:github", secret.Binding{
-		Secret: "mcp:github/oauth", Kind: "http.write", Host: "api.github.com",
+		Secret: "mcp:github/oauth", Host: "api.github.com",
 		Header: "Authorization", Prefix: "Bearer ",
 	})
 
 	req := &secret.Request{URL: "https://api.github.com/user"}
-	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "mcp:github"), req, "http.write", "api.github.com"); err != nil {
+	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "mcp:github"), req, "api.github.com"); err != nil {
 		t.Fatalf("inject: %v", err)
 	}
 	if got := req.Headers["Authorization"]; got != "Bearer ghp_pat123" {

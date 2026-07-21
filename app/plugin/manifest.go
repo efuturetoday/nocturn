@@ -37,11 +37,10 @@ type ToolDecl struct {
 }
 
 // CredentialDecl declares a credential the host injects for the plugin (never seen by the plugin),
-// mirroring secret.Binding. Axis scopes it to a gate axis ("net"); a bearer is injected on any
-// request to the bound host.
+// mirroring secret.Binding. Host is the sole scoping dimension — a request credential is inherently a
+// network credential, so the host IS the discriminator; a bearer is injected on any request to it.
 type CredentialDecl struct {
 	Name   string `json:"name"`
-	Axis   string `json:"axis"`
 	Host   string `json:"host"`
 	Header string `json:"header"`
 	Prefix string `json:"prefix"`
@@ -78,8 +77,8 @@ func (m Manifest) Validate() error {
 		}
 	}
 	for _, c := range m.Credentials {
-		if c.Name == "" || c.Axis == "" || c.Host == "" || c.Header == "" {
-			return fmt.Errorf("plugin: credential %q needs name, axis, host and header", c.Name)
+		if c.Name == "" || c.Host == "" || c.Header == "" {
+			return fmt.Errorf("plugin: credential %q needs name, host and header", c.Name)
 		}
 	}
 	return nil

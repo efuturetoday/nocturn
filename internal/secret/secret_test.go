@@ -41,12 +41,12 @@ func TestInjector_StampsMatchingAtBorder(t *testing.T) {
 	s := secret.NewStore()
 	s.Set("ms_graph", []byte("abc123"))
 	in := secret.NewInjector(s, secret.Binding{
-		Secret: "ms_graph", Kind: "http.read", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+		Secret: "ms_graph", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
 	})
 
 	// The guest built this request by URL only — no credential in sight.
 	req := &secret.Request{Method: "GET", URL: "https://graph.microsoft.com/v1.0/me"}
-	names, err := in.InjectMatching(context.Background(), req, "http.read", "graph.microsoft.com")
+	names, err := in.InjectMatching(context.Background(), req, "graph.microsoft.com")
 	if err != nil {
 		t.Fatalf("inject failed: %v", err)
 	}
@@ -64,11 +64,11 @@ func TestInjector_NonMatchingHost_NoInjection(t *testing.T) {
 	s := secret.NewStore()
 	s.Set("ms_graph", []byte("abc123"))
 	in := secret.NewInjector(s, secret.Binding{
-		Secret: "ms_graph", Kind: "*", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+		Secret: "ms_graph", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
 	})
 
 	req := &secret.Request{URL: "https://evil.example.com/"}
-	names, err := in.InjectMatching(context.Background(), req, "http.read", "evil.example.com")
+	names, err := in.InjectMatching(context.Background(), req, "evil.example.com")
 	if err != nil {
 		t.Fatalf("inject: %v", err)
 	}
@@ -80,40 +80,18 @@ func TestInjector_NonMatchingHost_NoInjection(t *testing.T) {
 	}
 }
 
-// A binding scoped to one kind does not ride on another, even to the right
-// host: a read-only token must not be sent on a write.
-func TestInjector_WrongKind_NoInjection(t *testing.T) {
-	s := secret.NewStore()
-	s.Set("ms_graph", []byte("abc123"))
-	in := secret.NewInjector(s, secret.Binding{
-		Secret: "ms_graph", Kind: "http.read", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
-	})
-
-	req := &secret.Request{}
-	names, err := in.InjectMatching(context.Background(), req, "http.write", "graph.microsoft.com")
-	if err != nil {
-		t.Fatalf("inject: %v", err)
-	}
-	if _, present := req.Headers["Authorization"]; present {
-		t.Fatal("a credential bound to http.read must not ride on an http.write")
-	}
-	if names != nil {
-		t.Fatalf("injected = %v, want none", names)
-	}
-}
-
 // A "*.suffix" host binding matches sub-domains but not the bare domain.
 func TestInjector_WildcardSuffix(t *testing.T) {
 	s := secret.NewStore()
 	s.Set("k", []byte("v"))
-	in := secret.NewInjector(s, secret.Binding{Secret: "k", Kind: "*", Host: "*.example.com", Header: "X-Token"})
+	in := secret.NewInjector(s, secret.Binding{Secret: "k", Host: "*.example.com", Header: "X-Token"})
 
 	sub := &secret.Request{}
-	if _, err := in.InjectMatching(context.Background(), sub, "http.read", "a.example.com"); err != nil || sub.Headers["X-Token"] != "v" {
+	if _, err := in.InjectMatching(context.Background(), sub, "a.example.com"); err != nil || sub.Headers["X-Token"] != "v" {
 		t.Fatalf("sub-domain should match: err=%v header=%q", err, sub.Headers["X-Token"])
 	}
 	bare := &secret.Request{}
-	if _, err := in.InjectMatching(context.Background(), bare, "http.read", "example.com"); err != nil {
+	if _, err := in.InjectMatching(context.Background(), bare, "example.com"); err != nil {
 		t.Fatalf("bare: %v", err)
 	}
 	if _, present := bare.Headers["X-Token"]; present {
@@ -125,10 +103,10 @@ func TestInjector_WildcardSuffix(t *testing.T) {
 // of sending an unauthenticated request.
 func TestInjector_MissingSecret_FailsClosed(t *testing.T) {
 	s := secret.NewStore()
-	in := secret.NewInjector(s, secret.Binding{Secret: "absent", Kind: "*", Host: "api.example.com", Header: "Authorization"})
+	in := secret.NewInjector(s, secret.Binding{Secret: "absent", Host: "api.example.com", Header: "Authorization"})
 
 	req := &secret.Request{URL: "https://api.example.com"}
-	if _, err := in.InjectMatching(context.Background(), req, "http.read", "api.example.com"); !errors.Is(err, secret.ErrNotFound) {
+	if _, err := in.InjectMatching(context.Background(), req, "api.example.com"); !errors.Is(err, secret.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 	if _, present := req.Headers["Authorization"]; present {
@@ -151,16 +129,16 @@ func (s *rotatingSource) Value(context.Context) ([]byte, error) {
 }
 
 func TestInjector_DynamicSourceConsulted(t *testing.T) {
-	b := secret.Binding{Secret: "tok", Kind: "*", Host: "api.example.com", Header: "X-Token"}
+	b := secret.Binding{Secret: "tok", Host: "api.example.com", Header: "X-Token"}
 	in := secret.NewInjector(secret.NewStore(), b)
 	in.SetResolver("tok", &rotatingSource{vals: []string{"one", "two"}})
 
 	req1 := &secret.Request{URL: "https://api.example.com"}
-	if _, err := in.InjectMatching(context.Background(), req1, "http.read", "api.example.com"); err != nil {
+	if _, err := in.InjectMatching(context.Background(), req1, "api.example.com"); err != nil {
 		t.Fatalf("inject 1: %v", err)
 	}
 	req2 := &secret.Request{URL: "https://api.example.com"}
-	if _, err := in.InjectMatching(context.Background(), req2, "http.read", "api.example.com"); err != nil {
+	if _, err := in.InjectMatching(context.Background(), req2, "api.example.com"); err != nil {
 		t.Fatalf("inject 2: %v", err)
 	}
 	if req1.Headers["X-Token"] != "one" || req2.Headers["X-Token"] != "two" {
@@ -175,12 +153,12 @@ type errSource struct{ err error }
 func (s errSource) Value(context.Context) ([]byte, error) { return nil, s.err }
 
 func TestInjector_SourceError_FailsClosed(t *testing.T) {
-	b := secret.Binding{Secret: "tok", Kind: "*", Host: "api.example.com", Header: "Authorization"}
+	b := secret.Binding{Secret: "tok", Host: "api.example.com", Header: "Authorization"}
 	in := secret.NewInjector(secret.NewStore(), b)
 	in.SetResolver("tok", errSource{err: errors.New("refresh boom")})
 
 	req := &secret.Request{URL: "https://api.example.com"}
-	if _, err := in.InjectMatching(context.Background(), req, "http.read", "api.example.com"); err == nil {
+	if _, err := in.InjectMatching(context.Background(), req, "api.example.com"); err == nil {
 		t.Fatal("expected the source error to propagate")
 	}
 	if _, present := req.Headers["Authorization"]; present {
@@ -199,14 +177,14 @@ func TestInjector_OwnerScopesCredentials(t *testing.T) {
 	s.Set("tok-default", []byte("DEF"))
 
 	in := secret.NewInjector(s, secret.Binding{
-		Secret: "tok-default", Kind: "*", Host: "api.example.com", Header: "Authorization", Prefix: "Bearer ",
+		Secret: "tok-default", Host: "api.example.com", Header: "Authorization", Prefix: "Bearer ",
 	})
-	in.AddBinding("plugin-a", secret.Binding{Secret: "tok-a", Kind: "*", Host: "api.example.com", Header: "X-A"})
-	in.AddBinding("plugin-b", secret.Binding{Secret: "tok-b", Kind: "*", Host: "api.example.com", Header: "X-B"})
+	in.AddBinding("plugin-a", secret.Binding{Secret: "tok-a", Host: "api.example.com", Header: "X-A"})
+	in.AddBinding("plugin-b", secret.Binding{Secret: "tok-b", Host: "api.example.com", Header: "X-B"})
 
 	// Plugin A: its own token + the app default; NOT plugin B's.
 	reqA := &secret.Request{}
-	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin-a"), reqA, "http.read", "api.example.com"); err != nil {
+	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin-a"), reqA, "api.example.com"); err != nil {
 		t.Fatalf("inject A: %v", err)
 	}
 	if reqA.Headers["X-A"] != "AAA" {
@@ -221,7 +199,7 @@ func TestInjector_OwnerScopesCredentials(t *testing.T) {
 
 	// Model / script (no owner): only the unowned default, neither plugin token.
 	reqM := &secret.Request{}
-	if _, err := in.InjectMatching(context.Background(), reqM, "http.read", "api.example.com"); err != nil {
+	if _, err := in.InjectMatching(context.Background(), reqM, "api.example.com"); err != nil {
 		t.Fatalf("inject model: %v", err)
 	}
 	if _, a := reqM.Headers["X-A"]; a {
@@ -242,12 +220,12 @@ func TestInjector_RemoveBindingsForDropsSource(t *testing.T) {
 	s := secret.NewStore()
 	in := secret.NewInjector(s)
 	in.AddBinding("plugin:gmail", secret.Binding{
-		Secret: "plugin:gmail/tok", Kind: "*", Host: "api.example.com", Header: "Authorization", Prefix: "Bearer ",
+		Secret: "plugin:gmail/tok", Host: "api.example.com", Header: "Authorization", Prefix: "Bearer ",
 	})
 	in.SetResolver("plugin:gmail/tok", staticSrc("TOKEN"))
 
 	req := &secret.Request{}
-	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin:gmail"), req, "http.read", "api.example.com"); err != nil ||
+	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin:gmail"), req, "api.example.com"); err != nil ||
 		req.Headers["Authorization"] != "Bearer TOKEN" {
 		t.Fatalf("before uninstall: err=%v header=%q", err, req.Headers["Authorization"])
 	}
@@ -255,7 +233,7 @@ func TestInjector_RemoveBindingsForDropsSource(t *testing.T) {
 	in.RemoveBindingsFor("plugin:gmail")
 
 	req2 := &secret.Request{}
-	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin:gmail"), req2, "http.read", "api.example.com"); err != nil {
+	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin:gmail"), req2, "api.example.com"); err != nil {
 		t.Fatalf("after uninstall the binding is gone, so nothing injects (no error): %v", err)
 	}
 	if _, present := req2.Headers["Authorization"]; present {
@@ -263,10 +241,10 @@ func TestInjector_RemoveBindingsForDropsSource(t *testing.T) {
 	}
 	// The source is gone: re-binding without re-setting it is fail-closed.
 	in.AddBinding("plugin:gmail", secret.Binding{
-		Secret: "plugin:gmail/tok", Kind: "*", Host: "api.example.com", Header: "Authorization",
+		Secret: "plugin:gmail/tok", Host: "api.example.com", Header: "Authorization",
 	})
 	req3 := &secret.Request{}
-	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin:gmail"), req3, "http.read", "api.example.com"); err == nil {
+	if _, err := in.InjectMatching(secret.WithOwner(context.Background(), "plugin:gmail"), req3, "api.example.com"); err == nil {
 		t.Fatal("source should be gone after uninstall — a re-bind without re-set must fail closed")
 	}
 }

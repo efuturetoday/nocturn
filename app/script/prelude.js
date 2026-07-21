@@ -262,7 +262,7 @@
     return { body: body, contentType: "multipart/form-data; boundary=" + boundary };
   }
 
-  // serializeBody maps a fetch body onto the {body, content_type} http.write takes.
+  // serializeBody maps a fetch body onto the {body, content_type} http_write takes.
   function serializeBody(body) {
     if (body == null) return { body: "", contentType: undefined };
     if (typeof body === "string") return { body: body, contentType: undefined };
@@ -273,11 +273,11 @@
     return { body: String(body), contentType: undefined };
   }
 
-  // --- fetch → nocturn.call (http.read / http.write) ---
-  // NOTE: request headers other than Content-Type are NOT forwarded — the host
-  // owns the credential channel and injects auth at the boundary (a guest may not
-  // set Authorization/Cookie/etc.). A denied or failed action rejects with the
-  // thrown error, matching WHATWG fetch's network-error rejection.
+  // --- fetch → nocturn.call (http_read / http_write) ---
+  // NOTE: request headers other than Content-Type are NOT forwarded — the host owns the credential
+  // channel and injects auth at the boundary (a guest may not set Authorization/Cookie/etc.). Both
+  // tools return a JSON envelope {status, statusText, headers, body}. A denied or failed action
+  // rejects with the thrown error, matching WHATWG fetch's network-error rejection.
   function fetch(url, opts) {
     opts = opts || {};
     return new Promise(function (resolve, reject) {
@@ -286,11 +286,11 @@
         var reqHeaders = new Headers(opts.headers || {});
         var out;
         if (method === "GET" || method === "HEAD") {
-          out = g.nocturn.call("http.read", { url: String(url), method: method });
+          out = g.nocturn.call("http_read", { url: String(url), method: method });
         } else {
           var ser = serializeBody(opts.body);
           var ct = reqHeaders.get("content-type") || ser.contentType || "application/json";
-          out = g.nocturn.call("http.write", { url: String(url), method: method, body: ser.body, content_type: ct });
+          out = g.nocturn.call("http_write", { url: String(url), method: method, body: ser.body, content_type: ct });
         }
         resolve(new Response(JSON.parse(out)));
       } catch (e) {

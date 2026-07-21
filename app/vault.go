@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/efuturetoday/nocturn/app/tools"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
@@ -118,7 +117,6 @@ func loadBindings(inj *secret.Injector, path string, log *slog.Logger) {
 	for _, b := range raw {
 		inj.AddBinding("", secret.Binding{
 			Secret: b.Secret,
-			Kind:   tools.NetAxis, // a network credential
 			Host:   b.Host,
 			Header: b.Header,
 			Prefix: b.Prefix,

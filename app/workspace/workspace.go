@@ -234,7 +234,6 @@ func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Inje
 		for _, c := range p.Credentials() {
 			inj.AddBinding(owner, secret.Binding{
 				Secret: strings.ToLower(c.Name),
-				Kind:   c.Axis,
 				Host:   c.Host,
 				Header: c.Header,
 				Prefix: c.Prefix,
@@ -244,12 +243,12 @@ func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Inje
 	return nil
 }
 
-// policy is the workspace-root policy: the net axis asks the human (remembered for the session);
+// policy is the workspace-root policy: the net kind asks the human (remembered for the session);
 // every other Kind runs free. Per-agent policies (stricter) come with the agent slice.
 func policy() gate.Policy {
 	return gate.PolicyFunc(func(a gate.Action) gate.Ruling {
 		switch a.Kind {
-		case tools.NetAxis:
+		case tools.NetKind:
 			return gate.AskWith(gate.RecallSession)
 		default:
 			return gate.Allowed()

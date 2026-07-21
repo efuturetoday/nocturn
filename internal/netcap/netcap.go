@@ -152,7 +152,7 @@ func (n *Net) Fetch(ctx context.Context, req secret.Request) (*Response, error) 
 			// credential whose binding matches the "http" family AND destination host
 			// rides along (a bearer is action-agnostic — same for read and write; nil
 			// Injector = none).
-			if _, err := n.credentials.InjectMatching(ctx, &req, "http", host); err != nil {
+			if _, err := n.credentials.InjectMatching(ctx, &req, host); err != nil {
 				return nil, err
 			}
 

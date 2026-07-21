@@ -114,7 +114,7 @@ func New(srv Server, guard *gateway.Guard, creds *secret.Injector, scanner *secr
 	c.client = mcp.New(c.transport)
 	if (srv.OAuth != nil || srv.Auth == "token") && creds != nil {
 		creds.AddBinding(Owner(srv.Name), secret.Binding{
-			Secret: SecretName(srv.Name, c.host), Kind: "http", Host: c.host,
+			Secret: SecretName(srv.Name, c.host), Host: c.host,
 			Header: "Authorization", Prefix: "Bearer ",
 		})
 	}
@@ -176,7 +176,7 @@ func (c *Conn) transport(ctx context.Context, body []byte, header http.Header) (
 		for k := range header {
 			req.Headers[k] = header.Get(k)
 		}
-		if _, err := c.creds.InjectMatching(ctx, &req, call.Family, c.host); err != nil {
+		if _, err := c.creds.InjectMatching(ctx, &req, c.host); err != nil {
 			return nil, err
 		}
 

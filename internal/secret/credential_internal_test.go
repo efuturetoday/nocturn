@@ -2,24 +2,6 @@ package secret
 
 import "testing"
 
-func TestKindMatches(t *testing.T) {
-	cases := []struct {
-		pattern, cap string
-		want         bool
-	}{
-		{"http.write", "http.write", true},
-		{"http.read", "http.write", false},
-		{"*", "http.write", true},
-		{"*", "anything", true},
-		{"", "http.read", false}, // empty matches nothing (fail closed)
-	}
-	for _, c := range cases {
-		if got := kindMatches(c.pattern, c.cap); got != c.want {
-			t.Errorf("kindMatches(%q, %q) = %v, want %v", c.pattern, c.cap, got, c.want)
-		}
-	}
-}
-
 func TestHostMatches(t *testing.T) {
 	cases := []struct {
 		pattern, host string

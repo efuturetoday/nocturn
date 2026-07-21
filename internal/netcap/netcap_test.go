@@ -220,7 +220,7 @@ func TestFetch_InjectsCredentialForBoundHost(t *testing.T) {
 	v := secret.NewStore()
 	v.Set("ms_graph", []byte("abc123"))
 	in := secret.NewInjector(v, secret.Binding{
-		Secret: "ms_graph", Capability: "http", Host: hostFromURL(t, srv.URL), Header: "Authorization", Prefix: "Bearer ",
+		Secret: "ms_graph", Host: hostFromURL(t, srv.URL), Header: "Authorization", Prefix: "Bearer ",
 	})
 
 	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)}, netcap.WithCredentials(in))
@@ -244,7 +244,7 @@ func TestFetch_NoInjectForOtherHost(t *testing.T) {
 	v := secret.NewStore()
 	v.Set("ms_graph", []byte("abc123"))
 	in := secret.NewInjector(v, secret.Binding{
-		Secret: "ms_graph", Capability: "http", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
+		Secret: "ms_graph", Host: "graph.microsoft.com", Header: "Authorization", Prefix: "Bearer ",
 	})
 
 	n := netcap.New(&gateway.Guard{Policy: allowRead(capability.Wildcard)}, netcap.WithCredentials(in))

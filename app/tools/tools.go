@@ -1,6 +1,6 @@
 // Package tools bundles nocturn's own gated tools — the thin ones whose whole body is "build an
-// agentkit.Tool that gates its target on a shared axis before it acts". They share only the gate
-// model (each owns its own axis constant and target matcher), so they live together here rather than
+// agentkit.Tool that gates its target on a shared kind before it acts". They share only the gate
+// model (each owns its own kind constant and target matcher), so they live together here rather than
 // one sprawling package per tool. Heavier capabilities that carry their own runtime — code.run
 // (QuickJS/wasm) and plugins — stay in their own packages; they just contribute agentkit.Tools that
 // Base folds in the same way.
@@ -19,11 +19,7 @@ import (
 // runs in. creds and scanner (either may be nil) are the host-owned credential jar the network tool
 // injects from and the bidirectional leak scanner it screens traffic through.
 func Base(creds *secret.Injector, scanner *secret.Scanner) ([]agentkit.Tool, error) {
-	httpTool, err := New(creds, scanner).Tool()
-	if err != nil {
-		return nil, err
-	}
-	return []agentkit.Tool{httpTool}, nil
+	return New(creds, scanner).Tools()
 }
 
 // Compose finalizes one cage: the tools of `cage`, plus — only when allowCodeRun — a code_run whose

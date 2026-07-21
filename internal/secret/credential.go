@@ -20,22 +20,21 @@ var ErrNotFound = errors.New("secret not found")
 // credential package once this grows); the store stays a plain byte store.
 
 // Binding declares that a stored secret rides along on a request: which secret
-// (by name), for which Kind, to which destination Host, into which Header
-// (with an optional Prefix like "Bearer ").
+// (by name), to which destination Host, into which Header (with an optional
+// Prefix like "Bearer ").
 //
-// Kind and Host both scope the credential (least privilege — both must
-// match). Kind is matched by kindMatches: an exact kind name
-// ("net.write"), "*" (any kind), or "" (nothing — fail closed). A normal
-// token uses Kind "*" (host-scoped like a cookie); tighten to a specific
-// kind for e.g. a read-only token. Host is matched by hostMatches: an
-// exact host or "*.suffix"; empty/"*" matches nothing (cookie-domain rule).
+// Host is the sole scoping dimension — a request credential is inherently a
+// network credential, so a separate "kind" would be redundant; the host IS the
+// discriminator. It is matched by hostMatches: an exact host or "*.suffix";
+// empty/"*" matches nothing (cookie-domain rule, fail closed). Owner scoping
+// (via WithOwner) is the second boundary, so one plugin never rides another's
+// token even at a shared host.
 //
 // Placement is Header-only today. Query/path/body targets are a planned
 // extension; the placement is isolated in applyTo so Header+Prefix can later
 // become a Target sum type without disturbing Binding or its callers.
 type Binding struct {
 	Secret string
-	Kind   string
 	Host   string
 	Header string
 	Prefix string
@@ -160,9 +159,9 @@ func (in *Injector) SetResolver(name string, src Resolver) {
 	in.resolvers[name] = src
 }
 
-// InjectMatching stamps every binding matching the kind, the destination
-// host, AND the calling owner into req, host-side (the guest never saw the
-// value). Owner scoping (via WithOwner on ctx) keeps a plugin's credential on
+// InjectMatching stamps every binding matching the destination host AND the
+// calling owner into req, host-side (the guest never saw the value). Owner
+// scoping (via WithOwner on ctx) keeps a plugin's credential on
 // its OWN calls only: a binding rides along iff it is unowned (an app default) or
 // owned by the calling plugin — so plugin B can never pick up plugin A's token,
 // even when both declare the same host. Each value comes from the binding's
@@ -170,7 +169,7 @@ func (in *Injector) SetResolver(name string, src Resolver) {
 // any Resolver error is fail-closed: no half-authenticated request leaves. It
 // returns the names of the injected secrets, so a later leak scan can redact them
 // if they echo back. A nil Injector injects nothing.
-func (in *Injector) InjectMatching(ctx context.Context, req *Request, kind, host string) ([]string, error) {
+func (in *Injector) InjectMatching(ctx context.Context, req *Request, host string) ([]string, error) {
 	if in == nil {
 		return nil, nil
 	}
@@ -184,7 +183,7 @@ func (in *Injector) InjectMatching(ctx context.Context, req *Request, kind, host
 	var matches []match
 	in.mu.Lock()
 	for _, ob := range in.bindings {
-		if !ownerMatches(ob.owner, caller) || !kindMatches(ob.Kind, kind) || !hostMatches(ob.Host, host) {
+		if !ownerMatches(ob.owner, caller) || !hostMatches(ob.Host, host) {
 			continue
 		}
 		src, ok := in.resolvers[ob.Secret]
@@ -241,20 +240,6 @@ func ownerFrom(ctx context.Context) string {
 // all callers; an owned binding rides ONLY on its owner's own calls.
 func ownerMatches(bindingOwner, caller string) bool {
 	return bindingOwner == "" || bindingOwner == caller
-}
-
-// kindMatches reports whether a call's kind is covered by a binding's
-// Kind pattern: an exact name, "*" (any kind), or "" (nothing —
-// fail closed, so a forgotten field never grants to every kind).
-func kindMatches(pattern, kind string) bool {
-	switch pattern {
-	case "":
-		return false
-	case "*":
-		return true
-	default:
-		return pattern == kind
-	}
 }
 
 // hostMatches reports whether a destination host is covered by a binding's Host

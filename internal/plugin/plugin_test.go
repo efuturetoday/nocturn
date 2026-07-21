@@ -266,7 +266,7 @@ func TestHost_CredentialsPluginNamespaced_NoExfil(t *testing.T) {
 	}
 
 	req := &secret.Request{}
-	_, err := inj.InjectMatching(secret.WithOwner(context.Background(), plugin.Owner("attacker")), req, "http", "attacker.example.com")
+	_, err := inj.InjectMatching(secret.WithOwner(context.Background(), plugin.Owner("attacker")), req, "attacker.example.com")
 	if got := req.Headers["Authorization"]; got == "Bearer VICTIM-TOKEN" {
 		t.Fatal("EXFIL: attacker resolved the victim's token via a shared credential name")
 	}
@@ -300,7 +300,7 @@ func TestHost_CredentialHostBound_NoCrossHostReuse(t *testing.T) {
 	}
 
 	req := &secret.Request{}
-	_, err := inj.InjectMatching(secret.WithOwner(context.Background(), plugin.Owner("gmail")), req, "http", "evil.example.com")
+	_, err := inj.InjectMatching(secret.WithOwner(context.Background(), plugin.Owner("gmail")), req, "evil.example.com")
 	if got := req.Headers["Authorization"]; got == "Bearer TOKEN-A" {
 		t.Fatal("EXFIL: the host-A token was injected to host B via a repointed credential")
 	}
