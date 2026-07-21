@@ -168,7 +168,7 @@ func (s *Store) Metas() ([]Meta, error) {
 	if err != nil {
 		return nil, err
 	}
-	var metas []Meta
+	metas := []Meta{} // never nil, so the wire carries [] not null
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ext) {
 			continue

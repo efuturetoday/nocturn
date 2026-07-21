@@ -56,7 +56,13 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: net tool: %w", name, err)
 	}
-	tools, err := agentkit.NewToolSet(httpTool)
+
+	agents, err := agent.Discover(filepath.Join(dir, "agents"))
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: agents: %w", name, err)
+	}
+
+	tools, err := buildTools(h.LLM, httpTool, agents)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
 	}
@@ -83,11 +89,6 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	agentStore, err := chat.NewStore(filepath.Join(dir, "agent-runs"), chat.WithSource(chat.SourceAgent))
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: agent store: %w", name, err)
-	}
-
-	agents, err := agent.Discover(filepath.Join(dir, "agents"))
-	if err != nil {
-		return nil, fmt.Errorf("workspace %q: agents: %w", name, err)
 	}
 
 	w := &Workspace{
@@ -153,6 +154,24 @@ func (w *Workspace) OnChatUpdate(fn func(chat.Meta)) {
 func (w *Workspace) MarkRead(id string) {
 	_ = w.userStore.MarkRead(id)
 	_ = w.agentStore.MarkRead(id)
+}
+
+// buildTools assembles the workspace toolset: the base tools, plus each declared agent exposed as a
+// sub-agent tool the model can delegate to, scoped to its own filtered subset of the base tools.
+func buildTools(llm agentkit.LLM, httpTool agentkit.Tool, agents agent.Set) (agentkit.ToolSet, error) {
+	base, err := agentkit.NewToolSet(httpTool)
+	if err != nil {
+		return nil, err
+	}
+	all := []agentkit.Tool{httpTool}
+	for _, a := range agents.All() {
+		sub := agentkit.AgentTool(
+			agentkit.Agent{Name: a.Name, Instructions: a.Instructions, Effort: a.Effort},
+			llm, base.Select(a.Matches),
+		)
+		all = append(all, sub)
+	}
+	return agentkit.NewToolSet(all...)
 }
 
 // policy is the workspace-root policy: the net axis asks the human (remembered for the session);

@@ -173,6 +173,9 @@ func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 		c.send(ctx, newError("open: "+err.Error()))
 		return
 	}
+	if msgs == nil {
+		msgs = []agentkit.Message{} // the wire carries [] not null
+	}
 	c.send(ctx, ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs})
 	c.activate(ctx, ws.Chats().Open(ctx, m.ID))
 }

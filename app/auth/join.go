@@ -47,7 +47,7 @@ func (s *Store) PendingJoins() []PendingJoin {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	var out []PendingJoin
+	out := []PendingJoin{} // never nil, so the wire carries [] not null
 	for id, j := range s.joins {
 		if now.After(j.expires) {
 			delete(s.joins, id)
