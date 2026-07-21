@@ -48,7 +48,7 @@ type Tool interface {
 	Call(ctx context.Context, args string) (string, error)
 }
 
-// ToolFunc is a tool's effect as a closure: raw JSON args in, a string result out. It is what
+// ToolFunc is a tool's implementation as a closure: raw JSON args in, a string result out. It is what
 // NewTool wraps and what a Tool's Call ultimately runs.
 type ToolFunc func(ctx context.Context, args string) (string, error)
 

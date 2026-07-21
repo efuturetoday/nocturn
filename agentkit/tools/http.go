@@ -1,7 +1,6 @@
-// Package tools provides ready-made effect tools for agentkit that gate their own effect through
-// agentkit-gate. They are the "base capabilities as tools": a tool that reaches the network gates
-// the target HOST itself before the request, so the permission layer sees a normalized target
-// without knowing the tool's argument format.
+// Package tools provides ready-made tools for agentkit that gate their own target through
+// agentkit-gate: a tool that reaches the network gates the target HOST itself before the request, so
+// the permission layer sees a normalized target without knowing the tool's argument format.
 package tools
 
 import (

@@ -43,7 +43,7 @@ func from(ctx context.Context) *perms {
 //	                remembered at the more restrictive of the policy's Recall and the human's choice.
 //
 // No machinery in ctx = open (returns nil): gating is opt-in per install. A tool calls Check before a
-// targeted effect (Action{Kind: "net", Target: host}), passing the Matcher for that axis's target
+// targeted action (Action{Kind: "net", Target: host}), passing the Matcher for that axis's target
 // semantics and any suggested widenings the human may pick (e.g. Grant{"net", "*.example.com"}); Wrap
 // calls it for a name-only tool with a nil matcher and no suggestions.
 func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error {
