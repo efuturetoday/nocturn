@@ -12,6 +12,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
+	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
 // NetAxis is the shared gate Kind every network tool checks, so one host allowlist spans them all.
@@ -21,14 +22,17 @@ const NetAxis = "net"
 
 const maxBody = 1 << 16 // 64 KiB of body handed back to the model
 
-// Net is the gated HTTP tool. It holds only transport; authority is read from ctx by the gate.
+// Net is the gated HTTP tool. It holds only transport plus a host-owned credential jar; authority is
+// read from ctx by the gate, and any bearer is injected host-side so the model (and any script/plugin
+// behind it) never sees it.
 type Net struct {
 	client *http.Client
+	creds  *secret.Injector // host-owned, host-bound credential jar; nil = no injection
 }
 
-// New builds a Net with a bounded HTTP client.
-func New() *Net {
-	return &Net{client: &http.Client{Timeout: 30 * time.Second}}
+// New builds a Net with a bounded HTTP client and an optional credential injector (nil = none).
+func New(creds *secret.Injector) *Net {
+	return &Net{client: &http.Client{Timeout: 30 * time.Second}, creds: creds}
 }
 
 // Tool exposes http_get: fetch a URL, but only after the gate authorizes its host.
@@ -63,6 +67,20 @@ func (n *Net) get(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	// Inject any host-owned credential bound to this host, at the border: the value comes from the
+	// vault and is scoped to the caller (WithOwner in ctx), so the model/script never handles it. A
+	// locked vault or no matching binding injects nothing — the fetch just goes out unauthenticated.
+	if n.creds != nil {
+		sr := secret.Request{Method: http.MethodGet, URL: u.String(), Headers: map[string]string{}}
+		if _, err := n.creds.InjectMatching(ctx, &sr, NetAxis, u.Host); err != nil {
+			return "", fmt.Errorf("credential injection: %w", err)
+		}
+		for k, v := range sr.Headers {
+			req.Header.Set(k, v)
+		}
+	}
+
 	resp, err := n.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch: %w", err)

@@ -18,6 +18,7 @@ import (
 	"github.com/efuturetoday/nocturn/app/agent"
 	"github.com/efuturetoday/nocturn/app/chat"
 	"github.com/efuturetoday/nocturn/app/tools"
+	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
 const turnTimeout = 2 * time.Minute
@@ -30,6 +31,7 @@ const DefaultWorkspace = "main"
 type Host struct {
 	LLM      agentkit.LLM
 	Approver gate.Approver
+	Secrets  *secret.Injector // host-owned credential jar the network tool injects from; nil = none
 	Log      *slog.Logger
 }
 
@@ -60,7 +62,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: agents: %w", name, err)
 	}
 
-	toolset, err := buildTools(h.LLM, agents)
+	toolset, err := buildTools(h.LLM, agents, h.Secrets)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
 	}
@@ -158,8 +160,8 @@ func (w *Workspace) MarkRead(id string) {
 // and each declared agent exposed as a sub-agent tool scoped to its OWN cage — its filtered subset of
 // the base tools, plus code_run only if the agent declares it, dispatching over that same subset.
 // code_run is woven per cage (tools.Compose), so a script never reaches past the cage it runs in.
-func buildTools(llm agentkit.LLM, agents agent.Set) (agentkit.ToolSet, error) {
-	baseTools, err := tools.Base()
+func buildTools(llm agentkit.LLM, agents agent.Set, creds *secret.Injector) (agentkit.ToolSet, error) {
+	baseTools, err := tools.Base(creds)
 	if err != nil {
 		return agentkit.ToolSet{}, err
 	}
