@@ -26,27 +26,31 @@ const (
 // input channel until an interactive add-secret UX lands); host bindings come from bindings.json.
 //
 // This is the one unlock entrypoint; an interactive prompt (WebSocket/TUI) is a later slice that
-// feeds the same passphrase here instead of the env.
-func buildSecrets(log *slog.Logger) *secret.Injector {
+// feeds the same passphrase here instead of the env. Both returns are nil when the vault stays
+// locked — the assistant runs without credentials and without scanning.
+func buildSecrets(log *slog.Logger) (*secret.Injector, *secret.Scanner) {
 	pass := os.Getenv("NOCTURN_MASTER_PASSPHRASE")
 	if pass == "" {
-		return nil // vault locked — no credential injection
+		return nil, nil // vault locked — no injection, no scanning
 	}
 	master, err := unlockMaster(pass, filepath.Join(dataDir, saltFile))
 	if err != nil {
 		log.Warn("secret: vault stays locked", "err", err)
-		return nil
+		return nil, nil
 	}
 	vault, err := secret.OpenVault(filepath.Join(dataDir, vaultFile), master.WorkspaceKey("vault"))
 	if err != nil {
 		log.Warn("secret: open vault", "err", err)
-		return nil
+		return nil, nil
 	}
 	seedEnvSecrets(vault, log)
 	inj := secret.NewInjector(vault.Store())
 	loadBindings(inj, filepath.Join(dataDir, bindFile), log)
+	// The scanner screens traffic for the vault's known values (plus embedded gitleaks patterns), so
+	// it shares the vault's store and lifecycle.
+	scanner := secret.NewScanner(vault.Store())
 	log.Info("secret: vault unlocked")
-	return inj
+	return inj, scanner
 }
 
 // unlockMaster derives the master key from the passphrase, minting the salt on first run and

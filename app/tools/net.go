@@ -22,17 +22,20 @@ const NetAxis = "net"
 
 const maxBody = 1 << 16 // 64 KiB of body handed back to the model
 
-// Net is the gated HTTP tool. It holds only transport plus a host-owned credential jar; authority is
-// read from ctx by the gate, and any bearer is injected host-side so the model (and any script/plugin
-// behind it) never sees it.
+// Net is the gated HTTP tool. It holds only transport plus a host-owned credential jar and a
+// bidirectional leak scanner; authority is read from ctx by the gate. A bearer is injected host-side
+// so the model (and any script/plugin behind it) never sees it, and the scanner blocks a secret the
+// model tries to smuggle OUT and redacts one echoed back IN.
 type Net struct {
-	client *http.Client
-	creds  *secret.Injector // host-owned, host-bound credential jar; nil = no injection
+	client  *http.Client
+	creds   *secret.Injector // host-owned, host-bound credential jar; nil = no injection
+	scanner *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
 }
 
-// New builds a Net with a bounded HTTP client and an optional credential injector (nil = none).
-func New(creds *secret.Injector) *Net {
-	return &Net{client: &http.Client{Timeout: 30 * time.Second}, creds: creds}
+// New builds a Net with a bounded HTTP client, an optional credential injector and an optional leak
+// scanner (nil = that feature off).
+func New(creds *secret.Injector, scanner *secret.Scanner) *Net {
+	return &Net{client: &http.Client{Timeout: 30 * time.Second}, creds: creds, scanner: scanner}
 }
 
 // Tool exposes http_get: fetch a URL, but only after the gate authorizes its host.
@@ -63,6 +66,15 @@ func (n *Net) get(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
+	// Egress leak scan the MODEL-built URL before anything host-owned is added — a secret smuggled
+	// into the path/query is blocked here. Runs before injection so the host's own bearer (added
+	// next) is never mistaken for a leak.
+	if n.scanner != nil {
+		if err := n.scanner.ScanEgress(u.String()); err != nil {
+			return "", fmt.Errorf("egress blocked: %w", err)
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return "", err
@@ -90,6 +102,12 @@ func (n *Net) get(ctx context.Context, args string) (string, error) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		return "", fmt.Errorf("read body: %w", err)
+	}
+
+	// Ingress redaction: strip any known secret echoed back before the response reaches the model, so
+	// a reflecting endpoint can't launder a vault value into the transcript.
+	if n.scanner != nil {
+		body = n.scanner.RedactIngress(body)
 	}
 	return fmt.Sprintf("HTTP %d\n\n%s", resp.StatusCode, body), nil
 }

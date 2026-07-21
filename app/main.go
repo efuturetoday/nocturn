@@ -83,7 +83,8 @@ func main() {
 		broker = hitl.NewBroker(buildPusher(devices, logger), logger)
 		approver = broker
 	}
-	host := workspace.Host{LLM: llm, Approver: approver, Secrets: buildSecrets(logger), Log: logger}
+	injector, scanner := buildSecrets(logger)
+	host := workspace.Host{LLM: llm, Approver: approver, Secrets: injector, Scanner: scanner, Log: logger}
 
 	spaces, err := workspace.OpenAll(host, wsRoot)
 	if err != nil {

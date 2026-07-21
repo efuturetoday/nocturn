@@ -32,6 +32,7 @@ type Host struct {
 	LLM      agentkit.LLM
 	Approver gate.Approver
 	Secrets  *secret.Injector // host-owned credential jar the network tool injects from; nil = none
+	Scanner  *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
 	Log      *slog.Logger
 }
 
@@ -62,7 +63,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: agents: %w", name, err)
 	}
 
-	toolset, err := buildTools(h.LLM, agents, h.Secrets)
+	toolset, err := buildTools(h.LLM, agents, h.Secrets, h.Scanner)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
 	}
@@ -160,8 +161,8 @@ func (w *Workspace) MarkRead(id string) {
 // and each declared agent exposed as a sub-agent tool scoped to its OWN cage — its filtered subset of
 // the base tools, plus code_run only if the agent declares it, dispatching over that same subset.
 // code_run is woven per cage (tools.Compose), so a script never reaches past the cage it runs in.
-func buildTools(llm agentkit.LLM, agents agent.Set, creds *secret.Injector) (agentkit.ToolSet, error) {
-	baseTools, err := tools.Base(creds)
+func buildTools(llm agentkit.LLM, agents agent.Set, creds *secret.Injector, scanner *secret.Scanner) (agentkit.ToolSet, error) {
+	baseTools, err := tools.Base(creds, scanner)
 	if err != nil {
 		return agentkit.ToolSet{}, err
 	}
