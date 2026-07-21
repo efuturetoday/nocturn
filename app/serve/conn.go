@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/app/auth"
 	"github.com/efuturetoday/nocturn/app/workspace"
 )
 
@@ -30,15 +31,16 @@ func newError(text string) Error { return Error{Type: "error", Text: text} }
 // chat's events back. Every outbound message goes through out — coder/websocket forbids concurrent
 // writes, so one writer goroutine owns the socket's write side.
 type conn struct {
-	ws     *websocket.Conn
-	space  *workspace.Workspace
-	log    *slog.Logger
-	out    chan any
-	active *agentkit.Session
+	ws      *websocket.Conn
+	space   *workspace.Workspace
+	devices *auth.Store
+	log     *slog.Logger
+	out     chan any
+	active  *agentkit.Session
 }
 
-func newConn(ws *websocket.Conn, space *workspace.Workspace, log *slog.Logger) *conn {
-	return &conn{ws: ws, space: space, log: log, out: make(chan any, 64)}
+func newConn(ws *websocket.Conn, space *workspace.Workspace, devices *auth.Store, log *slog.Logger) *conn {
+	return &conn{ws: ws, space: space, devices: devices, log: log, out: make(chan any, 64)}
 }
 
 // serve runs the connection until ctx is cancelled or the socket closes: a writer goroutine drains
@@ -100,6 +102,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 	switch domain {
 	case "chat":
 		c.chat(ctx, env.Cmd, data)
+	case "join":
+		c.join(ctx, env.Cmd)
 	default:
 		c.send(ctx, newError("unknown domain: "+env.Cmd))
 	}

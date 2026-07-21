@@ -23,6 +23,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/agentkit/openai"
+	"github.com/efuturetoday/nocturn/app/auth"
 	"github.com/efuturetoday/nocturn/app/chat"
 	"github.com/efuturetoday/nocturn/app/serve"
 	"github.com/efuturetoday/nocturn/app/workspace"
@@ -79,8 +80,13 @@ func main() {
 	go ws.StartAgents(ctx) // cron scheduler for declared agents
 
 	if *serveAddr != "" {
+		devices, err := auth.New("./nocturn-data/devices.json")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "auth:", err)
+			os.Exit(1)
+		}
 		fmt.Printf("nocturn daemon — ws on %s (model %q)\n", *serveAddr, model)
-		if err := serve.Serve(ctx, *serveAddr, ws, logger); err != nil && err != http.ErrServerClosed {
+		if err := serve.Serve(ctx, *serveAddr, ws, devices, logger); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintln(os.Stderr, "serve:", err)
 			os.Exit(1)
 		}
