@@ -36,14 +36,15 @@ type conn struct {
 	spaces  map[string]*workspace.Workspace // the daemon's workspaces, by name
 	devices *auth.Store
 	broker  *hitl.Broker
+	hub     *hub
 	log     *slog.Logger
 	out     chan any
 
 	active *agentkit.Session
 }
 
-func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger) *conn {
-	return &conn{ws: ws, spaces: spaces, devices: devices, broker: broker, log: log, out: make(chan any, 64)}
+func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, log *slog.Logger) *conn {
+	return &conn{ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, log: log, out: make(chan any, 64)}
 }
 
 // workspace resolves a workspace by name, writing an error and returning false if unknown.
@@ -62,7 +63,9 @@ func (c *conn) serve(ctx context.Context) {
 	c.log.Info("ws connection opened")
 	go c.writer(ctx)
 	c.broker.Attach(ctx, c)
+	c.hub.add(c)
 	defer func() {
+		c.hub.remove(c)
 		c.broker.Detach(c)
 		if c.active != nil {
 			c.active.Close()
@@ -91,6 +94,15 @@ func (c *conn) writer(ctx context.Context) {
 				return
 			}
 		}
+	}
+}
+
+// trySend enqueues a message without blocking, dropping it if the buffer is full — for broadcast
+// hints (chat activity) a congested client can miss and recover from on its next resync.
+func (c *conn) trySend(msg any) {
+	select {
+	case c.out <- msg:
+	default:
 	}
 }
 

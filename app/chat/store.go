@@ -40,6 +40,7 @@ type Meta struct {
 	Source  Source    `json:"source"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
+	Read    time.Time `json:"read,omitzero"` // shared read cursor; unread when Updated is later
 	Turns   int       `json:"turns"`
 }
 
@@ -55,6 +56,17 @@ type Store struct {
 	dir    string
 	source Source
 	mu     sync.Mutex
+	onSave func(Meta) // fired (outside the lock) after every persist, for pushing chat activity
+}
+
+// OnSave registers a callback run after every persist (a turn save, a markRead), for broadcasting
+// chat activity. Set once at wiring time.
+func (s *Store) OnSave(fn func(Meta)) { s.onSave = fn }
+
+func (s *Store) fireSaved(m Meta) {
+	if s.onSave != nil {
+		s.onSave(m)
+	}
 }
 
 // Option configures a Store.
@@ -83,9 +95,9 @@ func (s *Store) path(id string) string { return filepath.Join(s.dir, id+ext) }
 // agentkit calls this once per turn, so it is the per-turn metadata hook.
 func (s *Store) Save(id string, msgs []agentkit.Message) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	rec, err := s.read(id)
 	if err != nil {
+		s.mu.Unlock()
 		return err
 	}
 	now := time.Now()
@@ -95,7 +107,32 @@ func (s *Store) Save(id string, msgs []agentkit.Message) error {
 	rec.Messages = msgs
 	rec.Meta.Updated = now
 	rec.Meta.Turns++
-	return s.write(rec)
+	err = s.write(rec)
+	meta := rec.Meta
+	s.mu.Unlock()
+	if err == nil {
+		s.fireSaved(meta)
+	}
+	return err
+}
+
+// MarkRead advances the shared read cursor to the chat's Updated, clearing its unread state (on every
+// device, once the activity broadcast reaches them). A no-op if the chat is unknown.
+func (s *Store) MarkRead(id string) error {
+	s.mu.Lock()
+	rec, err := s.read(id)
+	if err != nil || rec == nil {
+		s.mu.Unlock()
+		return err
+	}
+	rec.Meta.Read = rec.Meta.Updated
+	err = s.write(rec)
+	meta := rec.Meta
+	s.mu.Unlock()
+	if err == nil {
+		s.fireSaved(meta)
+	}
+	return err
 }
 
 // Load returns the stored transcript for id, or nil (empty, not an error) if the chat has no file

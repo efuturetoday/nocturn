@@ -4,14 +4,41 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/efuturetoday/nocturn/app/auth"
+	"github.com/efuturetoday/nocturn/app/chat"
 	"github.com/efuturetoday/nocturn/app/hitl"
 	"github.com/efuturetoday/nocturn/app/workspace"
 )
+
+// hub is the set of live connections, so a chat change (a turn save, a markRead) can be broadcast to
+// every device — the daemon is the truth, the WebSocket a sink.
+type hub struct {
+	mu    sync.Mutex
+	conns map[*conn]struct{}
+}
+
+func newHub() *hub { return &hub{conns: map[*conn]struct{}{}} }
+
+func (h *hub) add(c *conn)    { h.mu.Lock(); h.conns[c] = struct{}{}; h.mu.Unlock() }
+func (h *hub) remove(c *conn) { h.mu.Lock(); delete(h.conns, c); h.mu.Unlock() }
+
+// broadcast sends msg to every connection without blocking (a slow one drops it and resyncs).
+func (h *hub) broadcast(msg any) {
+	h.mu.Lock()
+	conns := make([]*conn, 0, len(h.conns))
+	for c := range h.conns {
+		conns = append(conns, c)
+	}
+	h.mu.Unlock()
+	for _, c := range conns {
+		c.trySend(msg)
+	}
+}
 
 // bootstrapTTL is how long a first-device pairing code stays valid.
 const bootstrapTTL = 5 * time.Minute
@@ -40,6 +67,14 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 		log.Info("no devices paired — pair one with POST /pair", "code", code, "validFor", bootstrapTTL)
 	}
 
+	// Broadcast chat activity to every device when any workspace's chat changes.
+	broadcast := newHub()
+	for name, ws := range spaces {
+		ws.OnChatUpdate(func(m chat.Meta) {
+			broadcast.broadcast(ChatActivity{Type: "chat.activity", Ws: name, Chat: m})
+		})
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/pair", func(w http.ResponseWriter, r *http.Request) { handlePair(w, r, devices, log) })
 	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) { handleJoin(w, r, devices, log) })
@@ -64,7 +99,7 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 			return
 		}
 		devices.UpdateLastUsed(bearer)
-		newConn(ws, spaces, devices, broker, log.With("remote", r.RemoteAddr)).serve(r.Context())
+		newConn(ws, spaces, devices, broker, broadcast, log.With("remote", r.RemoteAddr)).serve(r.Context())
 	})
 
 	srv := &http.Server{Addr: addr, Handler: cors(mux)}

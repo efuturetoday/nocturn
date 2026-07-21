@@ -29,6 +29,7 @@ export interface ChatMeta {
   source: Source;
   created: string; // RFC3339
   updated: string; // RFC3339
+  read?: string; // RFC3339 shared read cursor; unread when updated > read (absent = never read)
   turns: number;
 }
 
@@ -121,6 +122,16 @@ export interface WorkspaceList {
   items: WorkspaceInfo[];
 }
 
+/**
+ * Pushed to every device when a chat changes (a turn ended, a markRead) so lists update live — its
+ * unread dot raises or clears without the device streaming that chat.
+ */
+export interface ChatActivity {
+  type: "chat.activity";
+  ws: string;
+  chat: ChatMeta;
+}
+
 /** The pending second-device joins with their codes, replying to join.list (paired devices only). */
 export interface JoinList {
   type: "join.list";
@@ -160,6 +171,7 @@ export type ServerEvent =
   | ChatSnapshot
   | ChatList
   | WorkspaceList
+  | ChatActivity
   | JoinList
   | ApprovalRequest
   | ApprovalResolved
@@ -190,6 +202,13 @@ export interface ChatListCmd {
 /** Abort the active chat's running turn (the chat and session stay open). */
 export interface ChatCancel {
   cmd: "chat.cancel";
+}
+
+/** Mark a chat read up to its latest turn — the daemon advances a shared cursor for every device. */
+export interface ChatMarkRead {
+  cmd: "chat.markRead";
+  ws: string;
+  id: string;
 }
 
 /** Request the daemon's workspaces (→ WorkspaceList). */
@@ -225,6 +244,7 @@ export type ClientCommand =
   | ChatOpen
   | ChatListCmd
   | ChatCancel
+  | ChatMarkRead
   | WorkspaceListCmd
   | JoinListCmd
   | ApprovalResolve

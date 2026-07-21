@@ -35,6 +35,13 @@ type ChatCancel struct {
 	Cmd string `json:"cmd"`
 }
 
+// ChatMarkRead advances a chat's shared read cursor (clears its unread state on every device).
+type ChatMarkRead struct {
+	Cmd string `json:"cmd"`
+	Ws  string `json:"ws"`
+	ID  string `json:"id"`
+}
+
 // ── server → client (type) ───────────────────────────────────────────────────
 
 // ChatToken is one answer-text delta.
@@ -85,6 +92,14 @@ type ChatSnapshot struct {
 	Messages []agentkit.Message `json:"messages"`
 }
 
+// ChatActivity is pushed to every device when a chat changes (a turn ends, a markRead) so their
+// lists update — its unread dot raises or clears without the device streaming that chat.
+type ChatActivity struct {
+	Type string    `json:"type"`
+	Ws   string    `json:"ws"`
+	Chat chat.Meta `json:"chat"`
+}
+
 // ChatListResult is a workspace's chat list, replying to chat.list.
 type ChatListResult struct {
 	Type  string      `json:"type"`
@@ -119,6 +134,15 @@ func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 	case "chat.cancel":
 		if c.active != nil {
 			c.active.Cancel()
+		}
+	case "chat.markRead":
+		var m ChatMarkRead
+		if err := json.Unmarshal(data, &m); err != nil {
+			c.send(ctx, newError("bad chat.markRead"))
+			return
+		}
+		if ws, ok := c.workspace(ctx, m.Ws); ok {
+			ws.MarkRead(m.ID)
 		}
 	default:
 		c.send(ctx, newError("unknown action: "+cmd))

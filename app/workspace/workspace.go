@@ -38,6 +38,7 @@ type Workspace struct {
 	tools      agentkit.ToolSet
 	grants     gate.Grants
 	chats      *chat.Manager // user chats
+	userStore  *chat.Store   // the user chat store (behind chats)
 	agentStore *chat.Store   // agent run transcripts (SourceAgent)
 	agents     agent.Set
 	sched      *agent.Scheduler
@@ -96,6 +97,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		tools:      tools,
 		grants:     gs,
 		chats:      chat.NewManager(rt, userStore),
+		userStore:  userStore,
 		agentStore: agentStore,
 		agents:     agents,
 		log:        h.Log,
@@ -111,6 +113,19 @@ func (w *Workspace) Name() string { return w.name }
 
 // Chats returns the workspace's chat manager.
 func (w *Workspace) Chats() *chat.Manager { return w.chats }
+
+// OnChatUpdate wires a callback fired whenever any chat here changes (a turn save, a markRead), for
+// pushing chat activity — both user chats and agent runs.
+func (w *Workspace) OnChatUpdate(fn func(chat.Meta)) {
+	w.userStore.OnSave(fn)
+	w.agentStore.OnSave(fn)
+}
+
+// MarkRead advances a chat's shared read cursor (user chat or agent run; the wrong store no-ops).
+func (w *Workspace) MarkRead(id string) {
+	_ = w.userStore.MarkRead(id)
+	_ = w.agentStore.MarkRead(id)
+}
 
 // policy is the workspace-root policy: the net axis asks the human (remembered for the session);
 // every other Kind runs free. Per-agent policies (stricter) come with the agent slice.

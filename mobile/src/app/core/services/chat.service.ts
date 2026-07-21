@@ -1,8 +1,7 @@
 import { Injectable, inject, signal, computed, effect } from '@angular/core';
-import { Preferences } from '@capacitor/preferences';
 import { ConnectionService } from './connection.service';
 import { WorkspaceService } from './workspace.service';
-import type { ChatMeta, Message, ChatTool, ApprovalRequest } from '../protocol/nocturn-protocol';
+import type { ChatMeta, Message, ChatTool } from '../protocol/nocturn-protocol';
 
 /** A rendered tool call — live (streamed, has phase/err) or from a snapshot (finished). */
 export interface ToolView {
@@ -69,18 +68,15 @@ export class ChatService {
   private readonly _approvalWaiting = signal<ReadonlySet<string>>(new Set());
   readonly approvalWaiting = this._approvalWaiting.asReadonly();
 
-  // Read-state: local optimistic seen-times (no shared cross-device cursor yet). A chat is unread
-  // when its `updated` is newer than what this device has seen.
-  private readonly _seen = signal<Record<string, string>>({});
+  // Read-state: the daemon owns a shared read cursor per chat (ChatMeta.read), advanced by markRead
+  // and pushed to every device via chat.activity. A chat is unread when its `updated` is later.
   private readonly _viewing = signal<string | null>(null);
 
-  /** Ids of chats with unread activity (updated > seen). */
+  /** Ids of chats with unread activity (updated > read). */
   readonly unreadIds = computed(() => {
-    const seen = this._seen();
     const out = new Set<string>();
     for (const c of this._chats()) {
-      const at = seen[c.id];
-      if (!at || new Date(c.updated) > new Date(at)) out.add(c.id);
+      if (!c.read || new Date(c.updated) > new Date(c.read)) out.add(c.id);
     }
     return out;
   });
@@ -94,7 +90,6 @@ export class ChatService {
   readonly unreadAgentCount = computed(() => [...this.unreadIds()].filter((id) => this.agentChatIds().has(id)).length);
 
   constructor() {
-    void this.loadSeen();
     this.conn.onEvent((e) => this.reduce(e));
 
     // Resync on (re)connect or active-workspace change: re-list + re-open → fresh snapshot.
@@ -170,11 +165,14 @@ export class ChatService {
   private reduce(e: import('../protocol/nocturn-protocol').ServerEvent): void {
     switch (e.type) {
       case 'chat.list':
+        if (e.ws === this.ws.active()) this._chats.set(e.chats);
+        break;
+
+      case 'chat.activity':
         if (e.ws === this.ws.active()) {
-          this._chats.set(e.chats);
-          const v = this._viewing();
-          const cur = v ? e.chats.find((c) => c.id === v) : undefined;
-          if (cur) this.markSeen(cur.id, cur.updated);
+          this.upsertChat(e.chat);
+          // Keep the on-screen chat read as its turns stream in (updated advances past read).
+          if (e.chat.id === this._viewing()) this.markRead(e.chat.id);
         }
         break;
 
@@ -204,9 +202,7 @@ export class ChatService {
         if (e.frame === 0) {
           this.appendAssistant((m) => ({ ...m, error: e.err, pending: false }));
           this._running.set(false);
-          // The daemon bumped the chat's `updated` before this event; refresh the list so a chat
-          // you left mid-turn raises its unread dot (and a still-viewed one stays marked read).
-          this.listChats();
+          // The unread dot updates from the daemon's chat.activity push, not from here.
         }
         break;
 
@@ -225,30 +221,30 @@ export class ChatService {
   startViewing(id: string): void {
     this._viewing.set(id);
     this.clearBadge(id);
-    const cur = this._chats().find((c) => c.id === id);
-    if (cur) this.markSeen(id, cur.updated);
+    this.markRead(id);
   }
 
   stopViewing(id: string): void {
     if (this._viewing() === id) this._viewing.set(null);
   }
 
-  private markSeen(id: string, updated: string): void {
-    if (!updated || this._seen()[id] === updated) return;
-    const next = { ...this._seen(), [id]: updated };
-    this._seen.set(next);
-    void Preferences.set({ key: 'nocturn.seen', value: JSON.stringify(next) });
+  /** Advance a chat's shared read cursor on the daemon (clears its dot on every device). */
+  private markRead(id: string): void {
+    const ws = this.ws.active();
+    if (ws) this.conn.send({ cmd: 'chat.markRead', ws, id });
   }
 
-  private async loadSeen(): Promise<void> {
-    const { value } = await Preferences.get({ key: 'nocturn.seen' });
-    if (value) {
-      try {
-        this._seen.set(JSON.parse(value) as Record<string, string>);
-      } catch {
-        /* ignore corrupt cache */
+  /** Insert or replace one chat's metadata in the list (from a chat.activity push). */
+  private upsertChat(c: ChatMeta): void {
+    this._chats.update((cs) => {
+      const i = cs.findIndex((x) => x.id === c.id);
+      if (i >= 0) {
+        const next = cs.slice();
+        next[i] = c;
+        return next;
       }
-    }
+      return [c, ...cs];
+    });
   }
 
   private clearBadge(id: string): void {
