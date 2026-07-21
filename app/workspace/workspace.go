@@ -154,8 +154,10 @@ func (w *Workspace) MarkRead(id string) {
 	_ = w.agentStore.MarkRead(id)
 }
 
-// buildTools assembles the workspace toolset: the base tools, plus each declared agent exposed as a
-// sub-agent tool the model can delegate to, scoped to its own filtered subset of the base tools.
+// buildTools assembles the workspace toolset: the base tools plus code_run (the root chat's cage),
+// and each declared agent exposed as a sub-agent tool scoped to its OWN cage — its filtered subset of
+// the base tools, plus code_run only if the agent declares it, dispatching over that same subset.
+// code_run is woven per cage (tools.Compose), so a script never reaches past the cage it runs in.
 func buildTools(llm agentkit.LLM, agents agent.Set) (agentkit.ToolSet, error) {
 	baseTools, err := tools.Base()
 	if err != nil {
@@ -165,11 +167,27 @@ func buildTools(llm agentkit.LLM, agents agent.Set) (agentkit.ToolSet, error) {
 	if err != nil {
 		return agentkit.ToolSet{}, err
 	}
-	all := append([]agentkit.Tool{}, baseTools...)
+
+	// Root chat cage: every base tool + code_run dispatching over them.
+	rootSet, err := tools.Compose(base, true)
+	if err != nil {
+		return agentkit.ToolSet{}, err
+	}
+	all := make([]agentkit.Tool, 0, len(rootSet)+len(agents.All()))
+	for _, t := range rootSet {
+		all = append(all, t)
+	}
+
 	for _, a := range agents.All() {
+		// The agent's cage is its filtered base subset; code_run is added only if it declares it,
+		// and then dispatches over exactly that subset — no widening.
+		cage, err := tools.Compose(base.Select(a.Matches), a.Matches(tools.CodeRunTool))
+		if err != nil {
+			return agentkit.ToolSet{}, err
+		}
 		sub := agentkit.AgentTool(
 			agentkit.Agent{Name: a.Name, Instructions: a.Instructions, Effort: a.Effort},
-			llm, base.Select(a.Matches),
+			llm, cage,
 		)
 		all = append(all, sub)
 	}
