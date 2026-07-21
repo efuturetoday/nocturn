@@ -37,7 +37,7 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
         </ion-item>
       </div>
 
-      <ion-list inset="true">
+      <ion-list>
         @for (c of sorted(); track c.id) {
           <ion-item button detail="false" (click)="openChat(c)">
             <app-chat-row

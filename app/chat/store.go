@@ -65,10 +65,28 @@ type Meta struct {
 	Preview string    `json:"preview,omitempty"` // last message's first line, for the list (à la Apple Mail)
 }
 
-// record is the on-disk shape: metadata plus the agentkit transcript.
+// ToolNode is one captured tool call in a turn's forest — an OBSERVABILITY artifact, kept beside the
+// agentkit transcript but NOT part of it (the transcript is re-sent to the LLM; this never is). Parent
+// is the enclosing live call id (0 = top level), so it reconstructs the nesting the live event stream
+// shows — INCLUDING nested host-bridge calls (code_run→http_read) and sub-agent internals, neither of
+// which ever reaches the transcript.
+type ToolNode struct {
+	ID         uint64 `json:"id"`
+	Parent     uint64 `json:"parent"`
+	Tool       string `json:"tool"`
+	Args       string `json:"args,omitempty"`
+	Result     string `json:"result,omitempty"`
+	Err        string `json:"err,omitempty"`
+	DurationMs int64  `json:"durationMs,omitempty"`
+}
+
+// record is the on-disk shape: metadata, the agentkit transcript, and the per-turn tool forest. Tools
+// holds one group per turn, index-aligned to the turns (which are 1:1 with the transcript's user
+// messages) — the client zips group k onto the k-th turn's assistant bubble.
 type record struct {
 	Meta     Meta               `json:"meta"`
 	Messages []agentkit.Message `json:"messages"`
+	Tools    [][]ToolNode       `json:"tools,omitempty"`
 }
 
 // Store is a file-backed agentkit.Store: one JSON file per chat under dir. A chat's file appears on
@@ -147,14 +165,48 @@ func (s *Store) Save(id string, msgs []agentkit.Message) error {
 	return err
 }
 
+// AppendTools appends one turn's captured tool forest (may be empty, to stay index-aligned with the
+// turns). A no-op if the chat has no transcript yet. It shares s.mu with Save so the read-modify-write
+// never races: Save preserves rec.Tools, AppendTools preserves rec.Messages. It does NOT bump Meta or
+// fire the save callback — the turn's Save already did that; this is a pure observability sidecar.
+func (s *Store) AppendTools(id string, nodes []ToolNode) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, err := s.read(id)
+	if err != nil || rec == nil {
+		return err
+	}
+	rec.Tools = append(rec.Tools, nodes)
+	return s.write(rec)
+}
+
+// LoadTools returns the per-turn tool forest for id (nil if none), for rebuilding the nested forest on
+// snapshot.
+func (s *Store) LoadTools(id string) ([][]ToolNode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, err := s.read(id)
+	if err != nil || rec == nil {
+		return nil, err
+	}
+	return rec.Tools, nil
+}
+
 // MarkRead advances the shared read cursor to the chat's Updated, clearing its unread state (on every
-// device, once the activity broadcast reaches them). A no-op if the chat is unknown.
+// device, once the activity broadcast reaches them). A no-op if the chat is unknown OR already read up
+// to Updated — the latter guard matters: without it, marking an already-read chat still writes and
+// broadcasts a chat.activity, which a viewing client can echo back into another markRead (a tight
+// loop). Marking-read what is already read changes nothing, so it neither writes nor broadcasts.
 func (s *Store) MarkRead(id string) error {
 	s.mu.Lock()
 	rec, err := s.read(id)
 	if err != nil || rec == nil {
 		s.mu.Unlock()
 		return err
+	}
+	if rec.Meta.Read.Equal(rec.Meta.Updated) {
+		s.mu.Unlock()
+		return nil // already read up to the latest — no change, no write, no broadcast
 	}
 	rec.Meta.Read = rec.Meta.Updated
 	err = s.write(rec)

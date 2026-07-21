@@ -106,19 +106,97 @@ func (m *Manager) Cancel(id string) {
 }
 
 // pump drains one session's event stream — ALWAYS, whether or not a client is watching, so a turn
-// never blocks on a full channel — tracks the running/idle state, and forwards each event to emit.
-// It exits when the session is closed (Delete / reaper / CloseAll), which closes the stream.
+// never blocks on a full channel — tracks the running/idle state, captures the tool forest, and
+// forwards each event to emit. It exits when the session is closed (Delete / reaper / CloseAll), which
+// closes the stream.
 func (m *Manager) pump(id string, lv *live) {
 	defer m.wg.Done()
 	m.mu.Lock()
 	emit := m.emit
 	m.mu.Unlock()
+	f := newForest() // pump-local: one goroutine owns it, so no lock; a reload spins a fresh one
 	for ev := range lv.sess.Subscribe() {
 		m.track(lv, ev)
+		m.recordForest(id, f, ev)
 		if emit != nil {
 			emit(id, ev)
 		}
 	}
+}
+
+// recordForest builds the turn's tool forest from the SAME event stream the pump drains — the parent
+// linkage (ToolStart.Frame → the enclosing call id) exists only here and on the wire, never in the
+// transcript. On the turn's close (TurnEnd, Frame 0) it flushes the group to the store so a reopened
+// chat can rebuild the nesting, including nested host-bridge and sub-agent calls (non-zero frames)
+// that never reach the transcript. Best-effort: a persist error is swallowed (observability, not
+// authority), like the event sink itself.
+func (m *Manager) recordForest(id string, f *forest, ev agentkit.Event) {
+	switch e := ev.(type) {
+	case agentkit.TurnStart:
+		if e.Frame == 0 {
+			f.reset()
+		}
+	case agentkit.ToolStart:
+		f.start(e.ID, e.Frame, e.Tool, e.Args)
+	case agentkit.ToolEnd:
+		f.end(e.ID, e.Result, errText(e.Err), e.Duration.Milliseconds())
+	case agentkit.TurnEnd:
+		if e.Frame == 0 {
+			_ = m.store.AppendTools(id, f.snapshot())
+			f.reset()
+		}
+	}
+}
+
+// Tools returns a chat's persisted per-turn tool forest, for rebuilding the nested forest on snapshot.
+func (m *Manager) Tools(id string) ([][]ToolNode, error) { return m.store.LoadTools(id) }
+
+// errText renders an error as a wire string ("" for nil) — the store keeps a captured tool's error as
+// text, mirroring the live ToolEnd wire form.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// forest accumulates one turn's tool calls from the live event stream, keyed by call id, in first-seen
+// (start) order so parents precede children. It is owned by a single pump goroutine — no locking.
+type forest struct {
+	order []uint64
+	nodes map[uint64]*ToolNode
+}
+
+func newForest() *forest { return &forest{nodes: map[uint64]*ToolNode{}} }
+
+// start records a call's opening (create-if-absent); parent is the enclosing call id (0 = top level).
+func (f *forest) start(id, parent uint64, tool, args string) {
+	if _, ok := f.nodes[id]; ok {
+		return
+	}
+	f.nodes[id] = &ToolNode{ID: id, Parent: parent, Tool: tool, Args: args}
+	f.order = append(f.order, id)
+}
+
+// end fills in a call's result once it returns. A missing start (should not happen) is ignored.
+func (f *forest) end(id uint64, result, errText string, durationMs int64) {
+	if n := f.nodes[id]; n != nil {
+		n.Result, n.Err, n.DurationMs = result, errText, durationMs
+	}
+}
+
+// snapshot returns the turn's nodes in start order (parents before children).
+func (f *forest) snapshot() []ToolNode {
+	out := make([]ToolNode, 0, len(f.order))
+	for _, id := range f.order {
+		out = append(out, *f.nodes[id])
+	}
+	return out
+}
+
+func (f *forest) reset() {
+	f.order = f.order[:0]
+	clear(f.nodes)
 }
 
 // track keeps a live chat's running/idle state current from its own event stream — only the

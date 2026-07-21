@@ -115,11 +115,31 @@ export interface ChatTurnEnd {
 }
 
 
-/** A chat's persisted transcript, sent on chat.open so the client can render it. */
+/**
+ * One captured tool call in a turn's forest (observability, not part of the transcript). `parent` is
+ * the enclosing call's id (0 = top level) — it reconstructs the nesting the live stream shows,
+ * including nested host-bridge calls (code_run→http_read) and sub-agent internals.
+ */
+export interface ToolNode {
+  id: number;
+  parent: number;
+  tool: string;
+  args?: string;
+  result?: string;
+  err?: string;
+  durationMs?: number;
+}
+
+/**
+ * A chat's persisted transcript plus its per-turn tool forest, sent on chat.open. `tools[k]` is the
+ * k-th turn's forest (turns are 1:1 with the transcript's user messages); the client zips group k onto
+ * the k-th assistant bubble. Absent/empty groups fall back to the flat toolCalls in the messages.
+ */
 export interface ChatSnapshot {
   type: "chat.snapshot";
   id: string;
   messages: Message[];
+  tools?: ToolNode[][];
 }
 
 /** A workspace's chat list, replying to chat.list. */

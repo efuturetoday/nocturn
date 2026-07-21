@@ -102,11 +102,14 @@ type ChatTurnEnd struct {
 	Tokens int    `json:"tokens"`
 }
 
-// ChatSnapshot is a chat's persisted transcript, sent on open so the client can render it.
+// ChatSnapshot is a chat's persisted transcript plus its per-turn tool forest, sent on open so the
+// client can render both the conversation and the nested tool calls (Tools[k] belongs to the k-th
+// turn). Tools reconstructs nesting the flat transcript can't — nested and sub-agent calls.
 type ChatSnapshot struct {
 	Type     string             `json:"type"`
 	ID       string             `json:"id"`
 	Messages []agentkit.Message `json:"messages"`
+	Tools    [][]chat.ToolNode  `json:"tools"`
 }
 
 // ChatActivity is pushed to every device when a chat changes (a turn ends, a markRead) so their
@@ -199,9 +202,18 @@ func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 	if msgs == nil {
 		msgs = []agentkit.Message{} // the wire carries [] not null
 	}
-	// Just the persisted transcript for the initial render — live tokens already stream to every
-	// device via the Manager's broadcast (filtered client-side by chat id). No session is touched.
-	c.send(ctx, ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs})
+	tools, err := ws.Chats().Tools(m.ID)
+	if err != nil {
+		c.send(ctx, newError("open: "+err.Error()))
+		return
+	}
+	if tools == nil {
+		tools = [][]chat.ToolNode{} // the wire carries [] not null
+	}
+	// Just the persisted transcript + tool forest for the initial render — live tokens already stream
+	// to every device via the Manager's broadcast (filtered client-side by chat id). No session is
+	// touched.
+	c.send(ctx, ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs, Tools: tools})
 }
 
 func (c *conn) chatList(ctx context.Context, wsName string) {
