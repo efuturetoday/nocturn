@@ -183,6 +183,16 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
       // stream and never truly sticks to the bottom. rAF runs after layout, so we reach the real end.
       requestAnimationFrame(() => void this.content().scrollToBottom(0));
     });
+
+    // The keyboard opening lifts the footer and grows the content's bottom padding, pushing the
+    // newest message up out of view even though nothing new arrived. Re-pin to the bottom when the
+    // keyboard height changes, but only if we were already following — so opening the keyboard while
+    // scrolled up to read doesn't yank the user down.
+    effect(() => {
+      this.kb.height();
+      if (!untracked(this.atBottom)) return;
+      requestAnimationFrame(() => void this.content().scrollToBottom(0));
+    });
   }
 
   // Read-marking is bound to actual on-screen presence, not component lifetime: ionViewWillEnter
