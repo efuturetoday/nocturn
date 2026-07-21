@@ -25,10 +25,17 @@ var ErrPairing = errors.New("auth: invalid or expired pairing code")
 type Device struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
-	Platform   string    `json:"platform,omitempty"` // ios|android|web, for push routing later
-	BearerHash string    `json:"bearerHash"`         // hex sha256 of the bearer
+	Platform   string    `json:"platform,omitempty"`  // ios|android|web, selects the push provider
+	BearerHash string    `json:"bearerHash"`          // hex sha256 of the bearer
+	PushToken  string    `json:"pushToken,omitempty"` // APNs/FCM token, for out-of-band wake
 	Added      time.Time `json:"added"`
 	LastUsed   time.Time `json:"lastUsed,omitzero"`
+}
+
+// PushTarget is a device reachable out of band: its push token and platform.
+type PushTarget struct {
+	Token    string
+	Platform string
 }
 
 // Store verifies bearers and pairs new devices, persisting device records (hashes only, 0600).
@@ -98,6 +105,37 @@ func (s *Store) addDevice(name, platform string) (string, error) {
 		return "", err
 	}
 	return bearer, nil
+}
+
+// RegisterPush records (or, with an empty token, clears) the push token of the device owning bearer,
+// so it can be woken out of band. A no-op if the bearer is unknown.
+func (s *Store) RegisterPush(bearer, token, platform string) error {
+	want := hashBearer(bearer)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.devices {
+		if subtle.ConstantTimeCompare([]byte(s.devices[i].BearerHash), []byte(want)) == 1 {
+			s.devices[i].PushToken = token
+			if platform != "" {
+				s.devices[i].Platform = platform
+			}
+			return s.save()
+		}
+	}
+	return nil
+}
+
+// PushTargets returns every device reachable out of band (has a push token).
+func (s *Store) PushTargets() []PushTarget {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []PushTarget
+	for _, d := range s.devices {
+		if d.PushToken != "" {
+			out = append(out, PushTarget{Token: d.PushToken, Platform: d.Platform})
+		}
+	}
+	return out
 }
 
 // UpdateLastUsed sets a device's LastUsed to now on connect. A no-op if the bearer is unknown

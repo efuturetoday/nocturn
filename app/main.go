@@ -26,6 +26,7 @@ import (
 	"github.com/efuturetoday/nocturn/app/auth"
 	"github.com/efuturetoday/nocturn/app/chat"
 	"github.com/efuturetoday/nocturn/app/hitl"
+	"github.com/efuturetoday/nocturn/app/push"
 	"github.com/efuturetoday/nocturn/app/serve"
 	"github.com/efuturetoday/nocturn/app/workspace"
 )
@@ -66,13 +67,20 @@ func main() {
 	)
 
 	// The terminal prompts inline; the daemon routes approvals out of band to a connected device via
-	// the hitl broker (and, when none is attached, a placeholder push).
+	// the hitl broker, and wakes a backgrounded device with a push (APNs) when none is attached.
 	var approver gate.Approver
 	var broker *hitl.Broker
+	var devices *auth.Store
 	if *serveAddr == "" {
 		approver = &terminalApprover{in: stdin}
 	} else {
-		broker = hitl.NewBroker(hitl.NewLogPusher(logger), logger)
+		var err error
+		devices, err = auth.New("./nocturn-data/devices.json")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "auth:", err)
+			os.Exit(1)
+		}
+		broker = hitl.NewBroker(buildPusher(devices, logger), logger)
 		approver = broker
 	}
 	host := workspace.Host{LLM: llm, Approver: approver, Log: logger}
@@ -87,11 +95,6 @@ func main() {
 	}
 
 	if *serveAddr != "" {
-		devices, err := auth.New("./nocturn-data/devices.json")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "auth:", err)
-			os.Exit(1)
-		}
 		fmt.Printf("nocturn daemon — ws on %s (%d workspaces, model %q)\n", *serveAddr, len(spaces), model)
 		if err := serve.Serve(ctx, *serveAddr, spaces, devices, broker, logger); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintln(os.Stderr, "serve:", err)
@@ -100,7 +103,46 @@ func main() {
 		return
 	}
 
-	run(ctx, spaces["main"], stdin, model)
+	run(ctx, spaces[workspace.DefaultWorkspace], stdin, model)
+}
+
+// buildPusher builds the out-of-band waker for the hitl broker: APNs when NOCTURN_APNS_* is
+// configured, else a logging placeholder.
+func buildPusher(devices *auth.Store, log *slog.Logger) hitl.Pusher {
+	sender, err := push.APNSFromEnv()
+	if err != nil {
+		log.Warn("apns push disabled", "err", err)
+		return hitl.NewLogPusher(log)
+	}
+	if sender == nil {
+		return hitl.NewLogPusher(log) // NOCTURN_APNS_KEY unset — push off
+	}
+	log.Info("apns push enabled")
+	return &pushWaker{devices: devices, sender: sender}
+}
+
+// pushWaker bridges the device registry and a push Sender into hitl.Pusher: it wakes every device
+// with a registered token so it can foreground and answer the pending approval over the WebSocket.
+type pushWaker struct {
+	devices *auth.Store
+	sender  push.Sender
+}
+
+func (p *pushWaker) Push(ctx context.Context, intent string) error {
+	var tokens []string
+	for _, t := range p.devices.PushTargets() {
+		if t.Platform == "ios" || t.Platform == "" {
+			tokens = append(tokens, t.Token)
+		}
+	}
+	if len(tokens) == 0 {
+		return nil
+	}
+	return p.sender.Send(ctx, push.Message{
+		Title: "Nocturn",
+		Body:  intent,
+		Data:  map[string]string{"type": "approval"},
+	}, tokens)
 }
 
 // run is the terminal loop: the first message (or one after /new) starts a chat; /chats lists,

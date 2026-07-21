@@ -79,6 +79,7 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 	mux.HandleFunc("/pair", func(w http.ResponseWriter, r *http.Request) { handlePair(w, r, devices, log) })
 	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) { handleJoin(w, r, devices, log) })
 	mux.HandleFunc("/join/confirm", func(w http.ResponseWriter, r *http.Request) { handleJoinConfirm(w, r, devices, log) })
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) { handleRegister(w, r, devices, log) })
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			OriginPatterns: []string{"*"}, // dev: the companion app's origin is not fixed

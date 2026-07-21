@@ -62,6 +62,29 @@ func handleJoinConfirm(w http.ResponseWriter, r *http.Request, devices *auth.Sto
 	writeJSON(w, map[string]string{"bearer": bearer})
 }
 
+// handleRegister records the calling device's push token (bearer-gated), so it can be woken out of
+// band for a background approval. An empty token clears it.
+func handleRegister(w http.ResponseWriter, r *http.Request, devices *auth.Store, log *slog.Logger) {
+	bearer := bearerOf(r)
+	if !devices.Verify(bearer) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Token    string `json:"token"`
+		Platform string `json:"platform"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if err := devices.RegisterPush(bearer, req.Token, req.Platform); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		log.Error("register push", "err", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // decode reads a POST JSON body into v, writing the HTTP error and returning false on any problem.
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	if r.Method != http.MethodPost {

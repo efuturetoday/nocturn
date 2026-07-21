@@ -22,6 +22,9 @@ import (
 
 const turnTimeout = 2 * time.Minute
 
+// DefaultWorkspace is the workspace a fresh install and the terminal always have.
+const DefaultWorkspace = "main"
+
 // Host is the process-wide wiring shared by every workspace: the LLM endpoint and the one human
 // approver (one device). It grows as more shared services arrive (notify, log, master key).
 type Host struct {
@@ -127,12 +130,12 @@ func OpenAll(h Host, root string) (map[string]*Workspace, error) {
 		}
 		spaces[e.Name()] = ws
 	}
-	if _, ok := spaces["main"]; !ok {
-		ws, err := Open(h, "main", filepath.Join(root, "main"))
+	if _, ok := spaces[DefaultWorkspace]; !ok {
+		ws, err := Open(h, DefaultWorkspace, filepath.Join(root, DefaultWorkspace))
 		if err != nil {
 			return nil, err
 		}
-		spaces["main"] = ws
+		spaces[DefaultWorkspace] = ws
 	}
 	return spaces, nil
 }

@@ -51,6 +51,17 @@ export class AuthService {
     return value ?? null;
   }
 
+  /** Register (or, with "", clear) this device's native push token so the daemon can wake it. */
+  async registerPush(wsUrl: string, token: string): Promise<void> {
+    const bearer = await this.bearerFor(wsUrl);
+    if (!bearer) return;
+    await fetch(this.httpBase(wsUrl) + '/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}` },
+      body: JSON.stringify({ token, platform: this.platform() }),
+    });
+  }
+
   /** Redeem the bootstrap OTP or QR secret → bearer (first device). */
   async pair(wsUrl: string, credential: string): Promise<string> {
     const res = await this.post<PairResponse>(wsUrl, '/pair', {
