@@ -113,6 +113,17 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 	})
 	defer stop()
 
+	// Advertise on the LAN so the app finds the daemon without a typed IP. Only meaningful off
+	// loopback; a failure is non-fatal (the app can still connect by IP).
+	if !isLoopbackAddr(addr) {
+		if shutdown, err := advertiseMDNS(addr); err != nil {
+			log.Warn("mdns advertise failed — the app must connect by IP", "err", err)
+		} else {
+			log.Info("discoverable on the LAN", "service", mdnsService)
+			defer shutdown()
+		}
+	}
+
 	log.Info("ws daemon listening", "addr", addr)
 	return srv.ListenAndServe()
 }
