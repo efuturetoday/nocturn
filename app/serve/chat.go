@@ -104,12 +104,15 @@ type ChatTurnEnd struct {
 
 // ChatSnapshot is a chat's persisted transcript plus its per-turn tool forest, sent on open so the
 // client can render both the conversation and the nested tool calls (Tools[k] belongs to the k-th
-// turn). Tools reconstructs nesting the flat transcript can't — nested and sub-agent calls.
+// turn). Tools reconstructs nesting the flat transcript can't — nested and sub-agent calls. Inflight
+// (present only when a turn is running) carries the CURRENT turn, which is not yet in the transcript —
+// so a client that reopens mid-turn sees its message + the working state, not a stale snapshot.
 type ChatSnapshot struct {
 	Type     string             `json:"type"`
 	ID       string             `json:"id"`
 	Messages []agentkit.Message `json:"messages"`
 	Tools    [][]chat.ToolNode  `json:"tools"`
+	Inflight *chat.Inflight     `json:"inflight,omitempty"`
 }
 
 // ChatActivity is pushed to every device when a chat changes (a turn ends, a markRead) so their
@@ -186,7 +189,9 @@ func (c *conn) chatSubmit(ctx context.Context, m ChatSubmit) {
 		c.send(ctx, newError("bad chat id"))
 		return
 	}
-	ws.Chats().Open(m.ID).Submit(m.Text)
+	// Submit (not Open().Submit) so the Manager records the input as the in-flight turn's user message —
+	// a device reopening before the turn ends still sees the message and the working state.
+	ws.Chats().Submit(m.ID, m.Text)
 }
 
 func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
@@ -210,10 +215,14 @@ func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 	if tools == nil {
 		tools = [][]chat.ToolNode{} // the wire carries [] not null
 	}
-	// Just the persisted transcript + tool forest for the initial render — live tokens already stream
-	// to every device via the Manager's broadcast (filtered client-side by chat id). No session is
-	// touched.
-	c.send(ctx, ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs, Tools: tools})
+	// The persisted transcript + forest are finished turns; the in-flight turn (if any) is NOT yet in
+	// them, so hand it over separately — else a reopen mid-turn would drop the client's own message and
+	// the working state. Live tokens keep streaming via the Manager's broadcast on top of this.
+	snap := ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs, Tools: tools}
+	if inf := ws.Chats().Inflight(m.ID); inf.Running {
+		snap.Inflight = &inf
+	}
+	c.send(ctx, snap)
 }
 
 func (c *conn) chatList(ctx context.Context, wsName string) {

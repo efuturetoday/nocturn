@@ -130,16 +130,38 @@ export interface ToolNode {
   durationMs?: number;
 }
 
+/** One tool call of the RUNNING turn — a ToolNode plus whether it is still executing (finished-turn
+ * forests use plain ToolNode). */
+export interface InflightTool extends ToolNode {
+  running: boolean;
+}
+
+/**
+ * The RUNNING turn's state, present on a chat.snapshot only while a turn is in progress. It carries
+ * the current turn — the user's message, the partial answer/reasoning, and the tool forest so far —
+ * which is NOT yet in `messages` (the transcript persists only at turn end). A client reopening
+ * mid-turn renders this so it sees its own message + the working state; live events then stream on top.
+ */
+export interface Inflight {
+  running: boolean;
+  input?: string;
+  answer?: string;
+  thinking?: string;
+  tools?: InflightTool[];
+}
+
 /**
  * A chat's persisted transcript plus its per-turn tool forest, sent on chat.open. `tools[k]` is the
  * k-th turn's forest (turns are 1:1 with the transcript's user messages); the client zips group k onto
  * the k-th assistant bubble. Absent/empty groups fall back to the flat toolCalls in the messages.
+ * `inflight` (when present) is the running turn, appended after the transcript.
  */
 export interface ChatSnapshot {
   type: "chat.snapshot";
   id: string;
   messages: Message[];
   tools?: ToolNode[][];
+  inflight?: Inflight;
 }
 
 /** A workspace's chat list, replying to chat.list. */

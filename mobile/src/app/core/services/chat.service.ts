@@ -216,11 +216,28 @@ export class ChatService {
         }
         break;
 
-      case 'chat.snapshot':
+      case 'chat.snapshot': {
         this._activeChatId.set(e.id);
-        this._messages.set(this.buildSnapshotMessages(e.messages, e.tools ?? []));
-        this._running.set(false);
+        const msgs = this.buildSnapshotMessages(e.messages, e.tools ?? []);
+        // The in-flight turn is NOT in the transcript yet — append it so a reopen mid-turn shows the
+        // user's own message + a pending assistant (partial answer/reasoning + running forest). Live
+        // events then stream onto this same pending bubble (its tools use live `l` keys, so a following
+        // ToolEnd updates them in place). Without this the running turn would vanish on reopen.
+        const inf = e.inflight;
+        if (inf?.running) {
+          if (inf.input) msgs.push({ role: 'user', content: inf.input, thinking: '', tools: [], pending: false });
+          msgs.push({
+            role: 'assistant',
+            content: inf.answer ?? '',
+            thinking: inf.thinking ?? '',
+            tools: buildForestTools(inf.tools ?? [], true),
+            pending: true,
+          });
+        }
+        this._messages.set(msgs);
+        this._running.set(!!inf?.running);
         break;
+      }
 
       // Streaming events broadcast for EVERY live chat; apply only those for the chat on screen.
       // The assistant bubble is opened by chat.turnStart (below), NOT inferred here — so a locally
@@ -429,11 +446,13 @@ export class ChatService {
   }
 }
 
-/** Build the rendered tool forest for one turn from its captured nodes: depth is the length of the
- * parent chain (walked within the group), and id/parentId are restored so the render nests exactly
- * like the live path (message-bubble indents by depth; parkedToolIds walks parentId). Nodes are in
- * start order, so parents precede children. */
-function buildForestTools(nodes: ToolNode[]): ToolView[] {
+/** Build the rendered tool forest from captured nodes: depth is the length of the parent chain (walked
+ * within the group), and id/parentId are restored so the render nests exactly like the live path
+ * (message-bubble indents by depth; parkedToolIds walks parentId). Nodes are in start order, so parents
+ * precede children. `live=true` keys them in the live `l` namespace and honours each node's `running`
+ * flag, so a still-open call of the in-flight turn shows as running and a following live ToolEnd
+ * updates the SAME entry; a finished-turn forest uses `s` keys and is never running. */
+function buildForestTools(nodes: Array<ToolNode & { running?: boolean }>, live = false): ToolView[] {
   const byId = new Map<number, ToolNode>(nodes.map((n) => [n.id, n]));
   const depthOf = (n: ToolNode): number => {
     let d = 0;
@@ -449,12 +468,12 @@ function buildForestTools(nodes: ToolNode[]): ToolView[] {
     return d;
   };
   return nodes.map((n) => ({
-    key: `s${n.id}`,
+    key: `${live ? 'l' : 's'}${n.id}`,
     tool: n.tool,
     args: n.args,
     result: n.result,
     err: n.err,
-    running: false,
+    running: live && !!n.running,
     depth: depthOf(n),
     id: n.id,
     parentId: n.parent || undefined,
