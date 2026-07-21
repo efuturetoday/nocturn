@@ -15,6 +15,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/app/auth"
+	"github.com/efuturetoday/nocturn/app/hitl"
 	"github.com/efuturetoday/nocturn/app/workspace"
 )
 
@@ -34,21 +35,28 @@ type conn struct {
 	ws      *websocket.Conn
 	space   *workspace.Workspace
 	devices *auth.Store
+	broker  *hitl.Broker
 	log     *slog.Logger
 	out     chan any
-	active  *agentkit.Session
+
+	ctx    context.Context // the connection's lifecycle ctx, for async sends (approvals)
+	active *agentkit.Session
 }
 
-func newConn(ws *websocket.Conn, space *workspace.Workspace, devices *auth.Store, log *slog.Logger) *conn {
-	return &conn{ws: ws, space: space, devices: devices, log: log, out: make(chan any, 64)}
+func newConn(ws *websocket.Conn, space *workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger) *conn {
+	return &conn{ws: ws, space: space, devices: devices, broker: broker, log: log, out: make(chan any, 64)}
 }
 
 // serve runs the connection until ctx is cancelled or the socket closes: a writer goroutine drains
-// out, and this goroutine reads and dispatches commands.
+// out, and this goroutine reads and dispatches commands. While connected, it is attached to the
+// broker to receive approval requests.
 func (c *conn) serve(ctx context.Context) {
+	c.ctx = ctx
 	c.log.Info("ws connection opened")
 	go c.writer(ctx)
+	c.broker.Attach(c)
 	defer func() {
+		c.broker.Detach(c)
 		if c.active != nil {
 			c.active.Close()
 		}
@@ -104,6 +112,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.chat(ctx, env.Cmd, data)
 	case "join":
 		c.join(ctx, env.Cmd)
+	case "approval":
+		c.approval(ctx, env.Cmd, data)
 	default:
 		c.send(ctx, newError("unknown domain: "+env.Cmd))
 	}

@@ -25,6 +25,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/openai"
 	"github.com/efuturetoday/nocturn/app/auth"
 	"github.com/efuturetoday/nocturn/app/chat"
+	"github.com/efuturetoday/nocturn/app/hitl"
 	"github.com/efuturetoday/nocturn/app/serve"
 	"github.com/efuturetoday/nocturn/app/workspace"
 )
@@ -64,11 +65,15 @@ func main() {
 		openai.WithLogger(agentkit.SlogLogger(logger)),
 	)
 
-	// In daemon mode there is no terminal to prompt, so no approver: any Ask is denied until the
-	// out-of-band push approver lands (a later slice).
+	// The terminal prompts inline; the daemon routes approvals out of band to a connected device via
+	// the hitl broker (and, when none is attached, a placeholder push).
 	var approver gate.Approver
+	var broker *hitl.Broker
 	if *serveAddr == "" {
 		approver = &terminalApprover{in: stdin}
+	} else {
+		broker = hitl.NewBroker(hitl.NewLogPusher(logger), logger)
+		approver = broker
 	}
 	host := workspace.Host{LLM: llm, Approver: approver, Log: logger}
 
@@ -86,7 +91,7 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("nocturn daemon — ws on %s (model %q)\n", *serveAddr, model)
-		if err := serve.Serve(ctx, *serveAddr, ws, devices, logger); err != nil && err != http.ErrServerClosed {
+		if err := serve.Serve(ctx, *serveAddr, ws, devices, broker, logger); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintln(os.Stderr, "serve:", err)
 			os.Exit(1)
 		}
