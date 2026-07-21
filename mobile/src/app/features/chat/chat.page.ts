@@ -26,11 +26,6 @@ import { MessageBubbleComponent } from './components/message-bubble';
       <ion-toolbar>
         <ion-buttons slot="start"><ion-back-button defaultHref="/tabs/chat" /></ion-buttons>
         <ion-title>Chat</ion-title>
-        <ion-buttons slot="end">
-          <ion-button (click)="reset()" title="New session">
-            <ion-icon slot="icon-only" name="refresh-outline" />
-          </ion-button>
-        </ion-buttons>
       </ion-toolbar>
     </ion-header>
 
@@ -143,8 +138,9 @@ import { MessageBubbleComponent } from './components/message-bubble';
   `,
 })
 export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
-  /** Bound from the `:id` route param via withComponentInputBinding(). */
-  readonly id = input.required<string>();
+  /** Bound from the `:id` route param via withComponentInputBinding(); undefined on the /chat/new
+      route (a fresh chat, whose id arrives via chat.opened once the first message is sent). */
+  readonly id = input<string>();
 
   protected readonly chat = inject(ChatService);
   protected readonly connection = inject(ConnectionService);
@@ -158,7 +154,7 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
   protected readonly atBottom = signal(true);
 
   constructor() {
-    addIcons({ sendOutline, stopOutline, refreshOutline, chevronDownOutline });
+    addIcons({ sendOutline, stopOutline, chevronDownOutline });
 
     // Open the chat when the route param resolves/changes (ws = the active workspace). Viewing
     // state (which drives read-marking) is tied to the Ionic page lifecycle below, NOT here —
@@ -167,7 +163,13 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
     // is what makes a background turnEnd raise the unread dot.
     effect(() => {
       const i = this.id();
-      if (i) this.chat.openChat(i);
+      if (i) {
+        this.chat.openChat(i);
+      } else {
+        // /chat/new: send the message queued by the ask box; the daemon replies chat.opened.
+        const q = untracked(() => this.chat.takePendingFirst());
+        if (q) this.chat.submit(q);
+      }
     });
 
     // Pin to the newest content while the user is at the bottom — instantly, no animation (both on
@@ -184,7 +186,8 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
   // leave — including a tab switch that keeps this page cached. Anything that finishes while we
   // are NOT viewing then stays unread (raises the dot in the list).
   ionViewWillEnter(): void {
-    this.chat.startViewing(this.id());
+    const i = this.id();
+    if (i) this.chat.startViewing(i);
     this.atBottom.set(true); // a freshly opened / returned chat starts pinned to the newest message
   }
 
@@ -197,7 +200,8 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
   }
 
   ionViewDidLeave(): void {
-    this.chat.stopViewing(this.id());
+    const i = this.id();
+    if (i) this.chat.stopViewing(i);
   }
 
   /** Track how close the scroll is to the bottom, so live updates only follow when already there. */
@@ -218,9 +222,5 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
     if (!text) return;
     this.chat.submit(text);
     this.draft.set('');
-  }
-
-  protected reset(): void {
-    this.chat.reset();
   }
 }

@@ -71,6 +71,13 @@ type ChatTurnEnd struct {
 	Tokens int    `json:"tokens"`
 }
 
+// ChatOpened tells the client the id of the chat it just started (a new chat from chat.submit), so
+// it can bind its active-chat id — a resume already knows the id it opened.
+type ChatOpened struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
 // ChatSnapshot is a chat's persisted transcript, sent on open so the client can render it.
 type ChatSnapshot struct {
 	Type     string             `json:"type"`
@@ -127,7 +134,8 @@ func (c *conn) chatSubmit(ctx context.Context, m ChatSubmit) {
 	if !ok {
 		return
 	}
-	_, sess := ws.Chats().Start(ctx, m.Text)
+	id, sess := ws.Chats().Start(ctx, m.Text)
+	c.send(ctx, ChatOpened{Type: "chat.opened", ID: id})
 	c.activate(ctx, sess)
 }
 

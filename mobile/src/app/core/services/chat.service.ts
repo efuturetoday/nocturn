@@ -2,12 +2,9 @@ import { Injectable, inject, signal, computed, effect } from '@angular/core';
 import { Preferences } from '@capacitor/preferences';
 import { ConnectionService } from './connection.service';
 import { WorkspaceService } from './workspace.service';
-import type { ChatMeta, ToolFrame, SnapshotTool, ForestFrame, Message, ApprovalEvent } from '../protocol/nocturn-protocol';
+import type { ChatMeta, Message, ChatTool, ApprovalRequest } from '../protocol/nocturn-protocol';
 
-/**
- * A rendered tool call — unifies the live `ToolFrame` (streamed, has phase/err) and the
- * static `SnapshotTool` (finished, from history) so the UI renders one shape.
- */
+/** A rendered tool call — live (streamed, has phase/err) or from a snapshot (finished). */
 export interface ToolView {
   key: string; // stable track id
   tool: string;
@@ -15,7 +12,7 @@ export interface ToolView {
   result?: string;
   err?: string;
   running: boolean;
-  depth: number; // nesting: 0 = top-level model call, >0 = sub-call (indent)
+  depth: number; // nesting: 0 = top-level call, >0 = sub-agent call (indent)
 }
 
 /** A rendered conversation message: user text, or an assistant turn with reasoning + tools. */
@@ -23,7 +20,7 @@ export interface ChatMessageView {
   role: 'user' | 'assistant';
   content: string;
   thinking: string; // dim reasoning, assistant only
-  tools: ToolView[]; // the assistant turn's tool calls (live or from snapshot)
+  tools: ToolView[];
   error?: string;
   pending: boolean; // assistant turn still streaming
 }
@@ -35,10 +32,11 @@ export interface PendingApproval {
 }
 
 /**
- * ChatService owns the chat list per workspace and the ONE active chat's assembled state. It
- * consumes the chat-stream events (`snapshot`/`token`/`thinking`/`tool`/`turn*`/`approval`…)
- * and reduces them into `messages` + `toolForest` + `pendingApproval`. `snapshot` is the
- * wholesale resync primitive; on (re)connect it re-opens the active chat to pull a fresh one.
+ * ChatService owns the chat list per workspace and the ONE active chat's assembled state. It reduces
+ * the chat.* stream (snapshot/token/thinking/tool/turnEnd) + approval.* into `messages` +
+ * `pendingApproval`. A chat is message-first: submitting with no active chat starts one, and the
+ * daemon replies chat.opened with its id. `chat.snapshot` is the wholesale resync primitive; on
+ * (re)connect it re-opens the active chat to pull a fresh one.
  */
 @Injectable({ providedIn: 'root' })
 export class ChatService {
@@ -63,37 +61,35 @@ export class ChatService {
   private readonly _notice = signal<string | null>(null);
   readonly notice = this._notice.asReadonly();
 
-  // First message to auto-send once a freshly-created chat opens (Gemini-style composer).
-  private readonly pendingFirst = signal<string | null>(null);
+  // First message to auto-send once the composer opens a fresh chat (consumed by the chat page).
+  private readonly _pendingFirst = signal<string | null>(null);
 
-  // Approval-waiting badge (from the chatActivity `approvalPending` push).
+  // Kept for template compatibility; the per-chat approval badge needs a backend signal we don't have
+  // yet, so it stays empty (a pending approval surfaces inline on the open chat instead).
   private readonly _approvalWaiting = signal<ReadonlySet<string>>(new Set());
   readonly approvalWaiting = this._approvalWaiting.asReadonly();
 
-  // Read-state: the read cursor is the LATER of the server's shared `read` (cross-device — advanced
-  // by markRead, pushed to every device) and this device's local optimistic `_seen` (instant, and
-  // an offline fallback). A chat is unread when its `updated` is newer than that cursor — durable
-  // across reconnect/reload and covering turns that finish on another tab or while backgrounded
-  // (the daemon bumps `updated` + pushes `chats`).
+  // Read-state: local optimistic seen-times (no shared cross-device cursor yet). A chat is unread
+  // when its `updated` is newer than what this device has seen.
   private readonly _seen = signal<Record<string, string>>({});
-  private readonly _viewing = signal<string | null>(null); // the chat currently on screen
+  private readonly _viewing = signal<string | null>(null);
 
-  /** Ids of chats with unread activity (updated > read cursor). */
+  /** Ids of chats with unread activity (updated > seen). */
   readonly unreadIds = computed(() => {
     const seen = this._seen();
     const out = new Set<string>();
     for (const c of this._chats()) {
-      const at = later(seen[c.id], c.read);
+      const at = seen[c.id];
       if (!at || new Date(c.updated) > new Date(at)) out.add(c.id);
     }
     return out;
   });
 
-  /** True once we've received a snapshot for the active chat. */
+  /** True once we have an active chat. */
   readonly ready = computed(() => this._activeChatId() !== null);
 
   /** Unread counts split by chat kind (agent runs badge the Agents tab, not Chat). */
-  private readonly agentChatIds = computed(() => new Set(this._chats().filter((c) => c.agent).map((c) => c.id)));
+  private readonly agentChatIds = computed(() => new Set(this._chats().filter((c) => c.source === 'agent').map((c) => c.id)));
   readonly unreadUserCount = computed(() => [...this.unreadIds()].filter((id) => !this.agentChatIds().has(id)).length);
   readonly unreadAgentCount = computed(() => [...this.unreadIds()].filter((id) => this.agentChatIds().has(id)).length);
 
@@ -101,72 +97,71 @@ export class ChatService {
     void this.loadSeen();
     this.conn.onEvent((e) => this.reduce(e));
 
-    // Resync on (re)connect OR when the active workspace changes: re-list + re-open → fresh
-    // snapshot. Depends on WorkspaceService.active() so switching workspace reloads its chats.
+    // Resync on (re)connect or active-workspace change: re-list + re-open → fresh snapshot.
     effect(() => {
       if (this.conn.state() !== 'connected') return;
       const ws = this.ws.active();
       const id = this._activeChatId();
-      if (ws) this.conn.send({ cmd: 'listChats', ws });
-      if (ws && id) this.conn.send({ cmd: 'openChat', ws, id });
+      if (ws) this.conn.send({ cmd: 'chat.list', ws });
+      if (ws && id) this.conn.send({ cmd: 'chat.open', ws, id });
     });
   }
 
-  // ── commands (ws is the app-wide active workspace) ───────────────────────────
+  // ── commands (ws = the app-wide active workspace) ────────────────────────────
 
   listChats(): void {
     const ws = this.ws.active();
-    if (ws) this.conn.send({ cmd: 'listChats', ws });
+    if (ws) this.conn.send({ cmd: 'chat.list', ws });
   }
 
-  newChat(name: string): void {
-    const ws = this.ws.active();
-    if (ws) this.conn.send({ cmd: 'newChat', ws, name });
+  /** Begin a fresh chat: clear the active one so the next submit starts a new chat (message-first). */
+  newChat(): void {
+    this._activeChatId.set(null);
+    this.resetLocal();
   }
 
-  /** Queue a first message to auto-send when the next freshly-opened (empty) chat snapshots. */
+  /** Queue a first message the chat page submits once its composer is ready. */
   queueFirstMessage(text: string): void {
-    this.pendingFirst.set(text.trim() || null);
+    this._pendingFirst.set(text.trim() || null);
   }
 
-  /** Open a chat: clears local state + its unread badges, and requests its snapshot. */
+  /** Take (and clear) the queued first message, if any. */
+  takePendingFirst(): string | null {
+    const v = this._pendingFirst();
+    this._pendingFirst.set(null);
+    return v;
+  }
+
+  /** Open a chat: clear local state + its unread badge, request its snapshot. */
   openChat(id: string): void {
     const ws = this.ws.active();
     if (!ws) return;
     this._activeChatId.set(id);
     this.clearBadge(id);
     this.resetLocal();
-    this.conn.send({ cmd: 'openChat', ws, id });
+    this.conn.send({ cmd: 'chat.open', ws, id });
   }
 
-  renameChat(id: string, name: string): void {
-    const ws = this.ws.active();
-    if (ws) this.conn.send({ cmd: 'renameChat', ws, id, name });
-  }
-
-  deleteChat(id: string): void {
-    const ws = this.ws.active();
-    if (ws) this.conn.send({ cmd: 'deleteChat', ws, id });
-  }
-
+  /** Send a message: optimistically show it + open an assistant bubble, then stream the reply. */
   submit(input: string): void {
     const text = input.trim();
-    if (text) this.conn.send({ cmd: 'submit', input: text });
+    const ws = this.ws.active();
+    if (!text || !ws) return;
+    this.pushUser(text);
+    this.openAssistant();
+    this._running.set(true);
+    this.conn.send({ cmd: 'chat.submit', ws, text });
   }
 
   cancel(): void {
-    this.conn.send({ cmd: 'cancel' });
-  }
-
-  reset(): void {
-    this.conn.send({ cmd: 'reset' });
+    this.conn.send({ cmd: 'chat.cancel' });
   }
 
   /** Answer the pending approval by option index (-1 = deny). */
   resolve(choice: number): void {
     const p = this._pendingApproval();
     if (!p) return;
-    this.conn.send({ cmd: 'resolve', id: p.id, choice });
+    this.conn.send({ cmd: 'approval.resolve', id: p.id, choice });
     this._pendingApproval.set(null);
   }
 
@@ -174,86 +169,56 @@ export class ChatService {
 
   private reduce(e: import('../protocol/nocturn-protocol').ServerEvent): void {
     switch (e.type) {
-      case 'chats':
+      case 'chat.list':
         if (e.ws === this.ws.active()) {
-          this._chats.set(e.items);
-          // Keep the on-screen chat marked read as its turns stream in / it gets re-pushed.
+          this._chats.set(e.chats);
           const v = this._viewing();
-          const cur = v ? e.items.find((c) => c.id === v) : undefined;
+          const cur = v ? e.chats.find((c) => c.id === v) : undefined;
           if (cur) this.markSeen(cur.id, cur.updated);
         }
         break;
 
-      case 'snapshot': {
-        this._running.set(e.running);
-        this._messages.set(this.buildSnapshotMessages(e.messages, e.forest));
-        this._pendingApproval.set(e.pending ? this.toApproval(e.pending) : null);
-        // Fresh chat just opened — fire the queued first message (composer flow).
-        const first = this.pendingFirst();
-        if (first && e.messages.length === 0) {
-          this.pendingFirst.set(null);
-          this.submit(first);
-        }
-        break;
-      }
-
-      case 'turnStart':
-        if (e.source === 'user') this.pushUser(e.display);
-        this.openAssistant();
-        this._running.set(true);
+      case 'chat.opened':
+        this._activeChatId.set(e.id);
         break;
 
-      case 'token':
-        this.appendAssistant((m) => ({ ...m, content: m.content + e.text }));
-        break;
-
-      case 'thinking':
-        this.appendAssistant((m) => ({ ...m, thinking: m.thinking + e.text }));
-        break;
-
-      case 'tool':
-        this.applyTool(e.tool);
-        break;
-
-      case 'turnEnd':
-        this.appendAssistant((m) => ({
-          ...m,
-          content: e.answer && !m.content ? e.answer : m.content,
-          error: e.err,
-          pending: false,
-        }));
+      case 'chat.snapshot':
+        this._activeChatId.set(e.id);
+        this._messages.set(this.buildSnapshotMessages(e.messages));
         this._running.set(false);
         break;
 
-      case 'queued':
-        this._notice.set(`queued: ${e.display}`);
+      case 'chat.token':
+        if (e.frame === 0) this.appendAssistant((m) => ({ ...m, content: m.content + e.text }));
         break;
 
-      case 'notice':
-        this._notice.set(e.text);
+      case 'chat.thinking':
+        if (e.frame === 0) this.appendAssistant((m) => ({ ...m, thinking: m.thinking + e.text }));
         break;
 
-      case 'approval':
-        this._pendingApproval.set(this.toApproval(e));
+      case 'chat.tool':
+        this.applyTool(e);
         break;
 
-      case 'approvalResolved':
-        if (this._pendingApproval()?.id === e.id) this._pendingApproval.set(null);
-        break;
-
-      case 'chatActivity':
-        // Unread is timestamp-driven; chatActivity only adds the approval-waiting badge for a
-        // chat we're not viewing (the viewed chat surfaces the approval inline instead).
-        if (e.ws === this.ws.active() && e.kind === 'approvalPending' && e.id !== this._viewing()) {
-          this._approvalWaiting.update((s) => new Set(s).add(e.id));
+      case 'chat.turnEnd':
+        if (e.frame === 0) {
+          this.appendAssistant((m) => ({ ...m, error: e.err, pending: false }));
+          this._running.set(false);
         }
+        break;
+
+      case 'approval.request':
+        this._pendingApproval.set({ id: e.id, intent: e.intent, options: e.options });
+        break;
+
+      case 'approval.resolved':
+        if (this._pendingApproval()?.id === e.id) this._pendingApproval.set(null);
         break;
     }
   }
 
-  // ── read-state (timestamp unread) ────────────────────────────────────────────
+  // ── read-state (timestamp unread, local) ─────────────────────────────────────
 
-  /** Mark this chat as on-screen; anything up to its current `updated` counts as read. */
   startViewing(id: string): void {
     this._viewing.set(id);
     this.clearBadge(id);
@@ -266,14 +231,10 @@ export class ChatService {
   }
 
   private markSeen(id: string, updated: string): void {
-    if (!updated || this._seen()[id] === updated) return; // nothing new → no local write, no resend
-    // Record locally for instant feedback + offline fallback …
+    if (!updated || this._seen()[id] === updated) return;
     const next = { ...this._seen(), [id]: updated };
     this._seen.set(next);
     void Preferences.set({ key: 'nocturn.seen', value: JSON.stringify(next) });
-    // … and advance the daemon's shared cursor, which clears the dot on every paired device.
-    const ws = this.ws.active();
-    if (ws) this.conn.send({ cmd: 'markRead', ws, id });
   }
 
   private async loadSeen(): Promise<void> {
@@ -296,10 +257,6 @@ export class ChatService {
     });
   }
 
-  private toApproval(e: ApprovalEvent): PendingApproval {
-    return { id: e.id, intent: e.intent, options: e.options };
-  }
-
   private resetLocal(): void {
     this._messages.set([]);
     this._running.set(false);
@@ -310,7 +267,6 @@ export class ChatService {
     this._messages.update((ms) => [...ms, { role: 'user', content, thinking: '', tools: [], pending: false }]);
   }
 
-  /** Ensure there's a trailing in-progress assistant message to stream into. */
   private openAssistant(): void {
     this._messages.update((ms) => {
       const last = ms[ms.length - 1];
@@ -330,18 +286,17 @@ export class ChatService {
     });
   }
 
-  /** Match tool start/end by id on the active assistant turn; flip start→end in place. */
-  private applyTool(frame: ToolFrame): void {
+  /** Match tool start/end by id on the active assistant turn; nesting comes from the enclosing frame. */
+  private applyTool(e: ChatTool): void {
     this.appendAssistant((m) => {
-      // Depth from the parent already in this turn's tools (nested effects indent under it).
-      const parent = frame.parent ? m.tools.find((t) => t.key === `l${frame.parent}`) : undefined;
+      const parent = e.frame ? m.tools.find((t) => t.key === `l${e.frame}`) : undefined;
       const view: ToolView = {
-        key: `l${frame.id}`,
-        tool: frame.tool,
-        args: frame.args,
-        result: frame.result,
-        err: frame.err,
-        running: frame.phase === 'start',
+        key: `l${e.id}`,
+        tool: e.tool,
+        args: e.args,
+        result: e.result,
+        err: e.err,
+        running: e.phase === 'start',
         depth: parent ? parent.depth + 1 : 0,
       };
       const idx = m.tools.findIndex((t) => t.key === view.key);
@@ -351,50 +306,28 @@ export class ChatService {
   }
 
   /**
-   * Build snapshot messages, attaching each assistant turn its tool tree. Prefers the full
-   * `forest` (id/parent → sub-calls + errors); consumes its top-level frames in order, one
-   * group per top-level call recorded in that turn's `Message.tools`. Falls back to the flat
-   * `Message.tools` when no forest is present.
+   * Build snapshot messages from the persisted transcript. An assistant message's tool calls carry
+   * their args; the matching tool-result messages (linked by toolCallID) carry the results, folded
+   * back onto each call. Tool-result and system messages are not shown on their own.
    */
-  private buildSnapshotMessages(messages: Message[], forest?: ForestFrame[]): ChatMessageView[] {
-    const children = new Map<number, ForestFrame[]>();
-    const topLevel: ForestFrame[] = [];
-    for (const f of forest ?? []) {
-      if (f.parent === 0) topLevel.push(f);
-      else (children.get(f.parent) ?? children.set(f.parent, []).get(f.parent)!).push(f);
+  private buildSnapshotMessages(messages: Message[]): ChatMessageView[] {
+    const results = new Map<string, string>();
+    for (const m of messages) {
+      if (m.role === 'tool' && m.toolCallID) results.set(m.toolCallID, m.content ?? '');
     }
-    let ti = 0; // pointer into topLevel, consumed across assistant turns in stream order
-
-    const flatten = (f: ForestFrame, depth: number, out: ToolView[]): void => {
-      out.push({ key: `f${f.id}`, tool: f.tool, args: f.args, result: f.result, err: f.err, running: false, depth });
-      for (const c of children.get(f.id) ?? []) flatten(c, depth + 1, out);
-    };
-
-    return messages.map((m) => {
-      let tools: ToolView[] = [];
-      if (m.role === 'assistant') {
-        const k = m.tools?.length ?? 0;
-        if (forest && forest.length) {
-          const out: ToolView[] = [];
-          for (let n = 0; n < k && ti < topLevel.length; n++, ti++) flatten(topLevel[ti], 0, out);
-          tools = out;
-        } else {
-          tools = (m.tools ?? []).map((t, i) => this.snapshotTool(t, i));
-        }
-      }
-      return { role: m.role, content: m.content, thinking: '', tools, pending: false };
-    });
+    const out: ChatMessageView[] = [];
+    for (const m of messages) {
+      if (m.role === 'tool' || m.role === 'system') continue;
+      const tools: ToolView[] = (m.toolCalls ?? []).map((tc) => ({
+        key: `s${tc.id}`,
+        tool: tc.tool,
+        args: tc.args,
+        result: results.get(tc.id),
+        running: false,
+        depth: 0,
+      }));
+      out.push({ role: m.role, content: m.content ?? '', thinking: '', tools, pending: false });
+    }
+    return out;
   }
-
-  private snapshotTool(t: SnapshotTool, i: number): ToolView {
-    return { key: `s${i}`, tool: t.tool, args: t.args, result: t.result, running: false, depth: 0 };
-  }
-}
-
-/** The later of two optional RFC3339 timestamps (undefined = "no cursor"); used to combine the
- * server's shared read cursor with this device's local optimistic seen-time. */
-function later(a: string | undefined, b: string | undefined): string | undefined {
-  if (!a) return b;
-  if (!b) return a;
-  return new Date(a) > new Date(b) ? a : b;
 }

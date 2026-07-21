@@ -23,7 +23,7 @@ export class PresenceService {
     }
     // Re-assert presence whenever a connection (re)establishes.
     effect(() => {
-      if (this.conn.state() === 'connected') this.conn.send({ cmd: 'setPresence', active: this.active });
+      if (this.conn.state() === 'connected') this.conn.send({ cmd: 'presence.set', active: this.active });
     });
   }
 
@@ -32,6 +32,6 @@ export class PresenceService {
     // Coming to the foreground: force an immediate reconnect (the connect effect re-asserts
     // presence once the socket opens). Otherwise just report the new state.
     if (active) this.conn.reconnectNow();
-    this.conn.send({ cmd: 'setPresence', active });
+    this.conn.send({ cmd: 'presence.set', active });
   }
 }

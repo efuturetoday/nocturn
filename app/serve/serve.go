@@ -30,13 +30,6 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) { handleJoin(w, r, devices, log) })
 	mux.HandleFunc("/join/confirm", func(w http.ResponseWriter, r *http.Request) { handleJoinConfirm(w, r, devices, log) })
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		bearer := bearerOf(r)
-		if !devices.Verify(bearer) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			log.Warn("ws unauthorized", "remote", r.RemoteAddr)
-			return
-		}
-		devices.UpdateLastUsed(bearer)
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			OriginPatterns: []string{"*"}, // dev: the companion app's origin is not fixed
 		})
@@ -45,6 +38,17 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 			return
 		}
 		defer ws.CloseNow()
+
+		// Verify AFTER the upgrade, then close with app code 4401 on a bad bearer: a pre-upgrade
+		// HTTP 401 is invisible to the browser WebSocket API, so the client couldn't tell auth
+		// failure from a network drop and would reconnect-loop instead of re-pairing.
+		bearer := bearerOf(r)
+		if !devices.Verify(bearer) {
+			log.Warn("ws unauthorized", "remote", r.RemoteAddr)
+			_ = ws.Close(4401, "unauthorized")
+			return
+		}
+		devices.UpdateLastUsed(bearer)
 		newConn(ws, spaces, devices, broker, log.With("remote", r.RemoteAddr)).serve(r.Context())
 	})
 

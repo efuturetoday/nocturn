@@ -4,17 +4,18 @@ import { Preferences } from '@capacitor/preferences';
 import { Device } from '@capacitor/device';
 import { Capacitor } from '@capacitor/core';
 import { ConnectionService } from './connection.service';
-import type { PairResponse, JoinResponse, JoinConfirmResponse, PendingJoin, DeviceMeta } from '../protocol/nocturn-protocol';
+import type { PairResponse, JoinResponse, JoinConfirmResponse, PendingJoin } from '../protocol/nocturn-protocol';
 
 /**
  * AuthService owns device pairing + the per-daemon bearer. A device must pair before `/ws` will
- * accept it (else HTTP 401). Pairing is HTTP (not the WebSocket): redeem a bootstrap OTP/QR-secret
- * (`/pair`), or join an already-paired daemon by relaying a code (`/join` → `/join/confirm`). The
- * bearer is stored per daemon host (Preferences today; Keychain/secure-storage is a later hardening)
- * and sent on the ws URL as `?token=` (browsers/Capacitor can't set headers on the ws handshake).
+ * accept it (else the daemon closes with 4401). Pairing is HTTP (not the WebSocket): redeem a
+ * bootstrap OTP/QR-secret (`/pair`), or join an already-paired daemon by relaying a code (`/join` →
+ * `/join/confirm`). The bearer is stored per daemon host (Preferences today; secure storage is a
+ * later hardening) and sent on the ws URL as `?token=` (browsers/Capacitor can't set headers on the
+ * ws handshake).
  *
- * Pending device-joins (the codes an admin device relays) arrive as the `joins` WS event — kept in
- * the `joins` signal, re-requested via `listJoins` on (re)connect.
+ * Pending device-joins (the codes an admin device relays) arrive as the `join.list` WS event —
+ * re-requested via `join.list` on (re)connect.
  */
 @Injectable({ providedIn: 'root' })
 export class AuthService {
@@ -22,23 +23,16 @@ export class AuthService {
   private readonly router = inject(Router);
 
   private readonly _joins = signal<PendingJoin[]>([]);
-  /** Pending device-join requests + their codes (live from the `joins` event). */
+  /** Pending device-join requests + their codes (live from the `join.list` event). */
   readonly joins = this._joins.asReadonly();
-
-  private readonly _devices = signal<DeviceMeta[]>([]);
-  /** The paired devices (live from the `devices` event). */
-  readonly devices = this._devices.asReadonly();
 
   constructor() {
     this.conn.onEvent((e) => {
-      if (e.type === 'joins') this._joins.set(e.items);
-      else if (e.type === 'devices') this._devices.set(e.items);
+      if (e.type === 'join.list') this._joins.set(e.joins);
     });
-    // Re-request joins + devices on every (re)connect; then they arrive live.
+    // Re-request pending joins on every (re)connect; then they arrive live.
     effect(() => {
-      if (this.conn.state() !== 'connected') return;
-      this.conn.send({ cmd: 'listJoins' });
-      this.conn.send({ cmd: 'listDevices' });
+      if (this.conn.state() === 'connected') this.conn.send({ cmd: 'join.list' });
     });
 
     // Bearer rejected (close 4401) → forget it and send the user back to pair.
@@ -48,22 +42,6 @@ export class AuthService {
       void this.clear(url);
       this.conn.clearAuthError();
       void this.router.navigate(['/discover'], { replaceUrl: true });
-    });
-  }
-
-  /** Unpair a device by its public handle. Its bearer stops working on next connect. */
-  revokeDevice(id: string): void {
-    this.conn.send({ cmd: 'revokeDevice', id });
-  }
-
-  /** Register (or, with "", clear) this device's native push token so the daemon can wake it. */
-  async registerPush(wsUrl: string, token: string): Promise<void> {
-    const bearer = await this.bearerFor(wsUrl);
-    if (!bearer) return;
-    await fetch(this.httpBase(wsUrl) + '/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}` },
-      body: JSON.stringify({ token, platform: this.platform() }),
     });
   }
 
@@ -93,12 +71,24 @@ export class AuthService {
     return res.joinId;
   }
 
+  /** Confirm a join with the code read off a paired device → bearer. */
+  async joinConfirm(wsUrl: string, joinId: string, code: string): Promise<string> {
+    const res = await this.post<JoinConfirmResponse>(wsUrl, '/join/confirm', { joinId, code: code.trim() });
+    await this.store(wsUrl, res.bearer);
+    return res.bearer;
+  }
+
+  /** Forget this daemon's bearer (e.g. after a 4401 or an explicit unpair). */
+  async clear(wsUrl: string): Promise<void> {
+    await Preferences.remove({ key: this.key(wsUrl) });
+  }
+
   /** Always send the platform (ios | android | web) — the daemon records it for push routing. */
   private platform(): string {
     return Capacitor.getPlatform();
   }
 
-  /** A permission-free device label for the paired-devices list (from @capacitor/device). */
+  /** A permission-free device label (from @capacitor/device). */
   private cachedName: string | null = null;
   async deviceName(): Promise<string> {
     if (this.cachedName) return this.cachedName;
@@ -110,18 +100,6 @@ export class AuthService {
       this.cachedName = 'Nocturn Mobile';
     }
     return this.cachedName;
-  }
-
-  /** Confirm a join with the code read off a paired device → bearer. */
-  async joinConfirm(wsUrl: string, joinId: string, code: string): Promise<string> {
-    const res = await this.post<JoinConfirmResponse>(wsUrl, '/join/confirm', { joinId, code: code.trim() });
-    await this.store(wsUrl, res.bearer);
-    return res.bearer;
-  }
-
-  /** Forget this daemon's bearer (e.g. after a 401 or an explicit unpair). */
-  async clear(wsUrl: string): Promise<void> {
-    await Preferences.remove({ key: this.key(wsUrl) });
   }
 
   // ── internals ────────────────────────────────────────────────────────────────

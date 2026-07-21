@@ -21,6 +21,7 @@ export const routes: Routes = [
     children: [
       { path: 'home', loadComponent: () => import('./features/home/home.page').then((m) => m.HomePage) },
       { path: 'chat', loadComponent: () => import('./features/chats/chats.page').then((m) => m.ChatsPage) },
+      { path: 'chat/new', loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
       { path: 'chat/:id', loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
       { path: 'agents', loadComponent: () => import('./features/agents/agents.page').then((m) => m.AgentsPage) },
       { path: 'agents/run/:id', loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
