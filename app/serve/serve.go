@@ -16,6 +16,21 @@ import (
 // bootstrapTTL is how long a first-device pairing code stays valid.
 const bootstrapTTL = 5 * time.Minute
 
+// cors wraps a handler to allow any origin (the companion app's origin is not fixed) and answers the
+// preflight OPTIONS with 204. Pairing endpoints carry no cookies, so allow-all is safe here.
+func cors(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 // Serve runs a WebSocket daemon at addr exposing space's chats until ctx is cancelled. Every /ws
 // connection must carry a paired device's bearer; the first device pairs via POST /pair with the
 // bootstrap code logged at startup, further devices via POST /join + /join/confirm. One backend,
@@ -52,7 +67,7 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 		newConn(ws, spaces, devices, broker, log.With("remote", r.RemoteAddr)).serve(r.Context())
 	})
 
-	srv := &http.Server{Addr: addr, Handler: mux}
+	srv := &http.Server{Addr: addr, Handler: cors(mux)}
 	// Graceful shutdown on cancel; stop() cancels the hook if ListenAndServe returns first, so the
 	// watcher never leaks.
 	stop := context.AfterFunc(ctx, func() {
