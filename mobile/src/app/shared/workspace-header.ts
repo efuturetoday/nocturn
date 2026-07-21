@@ -1,6 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import {
-  IonHeader, IonToolbar, IonButtons, IonButton, IonIcon, AlertController,
+  IonHeader, IonToolbar, IonButtons, IonButton, IonIcon, ActionSheetController,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { chevronDownOutline } from 'ionicons/icons';
@@ -39,7 +39,7 @@ import { WorkspaceService } from '../core/services/workspace.service';
 })
 export class WorkspaceHeaderComponent {
   protected readonly ws = inject(WorkspaceService);
-  private readonly alerts = inject(AlertController);
+  private readonly sheets = inject(ActionSheetController);
 
   constructor() {
     addIcons({ chevronDownOutline });
@@ -47,19 +47,19 @@ export class WorkspaceHeaderComponent {
 
   protected async choose(): Promise<void> {
     const current = this.ws.active();
-    const alert = await this.alerts.create({
+    const sheet = await this.sheets.create({
       header: 'Workspace',
-      inputs: this.ws.workspaces().map((w) => ({
-        type: 'radio' as const,
-        label: w.name,
-        value: w.name,
-        checked: w.name === current,
-      })),
+      // Tapping a name switches immediately — no separate confirm step. The active one is marked
+      // selected so it reads as the current choice.
       buttons: [
-        { text: 'Cancel', role: 'cancel' },
-        { text: 'Switch', handler: (name: string) => { if (name) void this.ws.setActive(name); } },
+        ...this.ws.workspaces().map((w) => ({
+          text: w.name,
+          role: w.name === current ? ('selected' as const) : undefined,
+          handler: () => { void this.ws.setActive(w.name); },
+        })),
+        { text: 'Cancel', role: 'cancel' as const },
       ],
     });
-    await alert.present();
+    await sheet.present();
   }
 }
