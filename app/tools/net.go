@@ -34,9 +34,33 @@ type Net struct {
 }
 
 // New builds a Net with a bounded HTTP client, an optional credential injector and an optional leak
-// scanner (nil = that feature off).
+// scanner (nil = that feature off). The client re-gates every redirect hop (see checkRedirect): a 3xx
+// is a fresh request to a possibly-different host, so it must clear the same host allowlist and egress
+// scan as the original — otherwise a redirect is a gate/exfil bypass.
 func New(secrets *secret.Injector, scanner *secret.Scanner) *Net {
-	return &Net{client: &http.Client{Timeout: 30 * time.Second}, secrets: secrets, scanner: scanner}
+	n := &Net{secrets: secrets, scanner: scanner}
+	n.client = &http.Client{Timeout: 30 * time.Second, CheckRedirect: n.checkRedirect}
+	return n
+}
+
+// checkRedirect authorizes each redirect the client is about to follow. The redirected request carries
+// the original request's context (so the gate machinery is still installed), and req.URL is the NEW
+// target — we gate and egress-scan it exactly like the first hop. Returning an error stops the follow
+// and surfaces as the do() "fetch" error, so the redirect's body never reaches the caller.
+func (n *Net) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	ctx := req.Context()
+	if err := gate.Check(ctx, gate.Action{Kind: NetKind, Target: req.URL.Host}, hostMatch, suggestions(req.URL.Host)...); err != nil {
+		return err
+	}
+	if n.scanner != nil {
+		if err := n.scanner.ScanEgress(req.URL.String(), ""); err != nil {
+			return fmt.Errorf("egress blocked: %w", err)
+		}
+	}
+	return nil
 }
 
 // Tools exposes the network tools. http_read and http_write are split so the tool the model (or a
@@ -191,7 +215,7 @@ func (n *Net) do(ctx context.Context, method, rawURL, body, contentType string) 
 		StatusText string            `json:"statusText"`
 		Headers    map[string]string `json:"headers"`
 		Body       string            `json:"body"`
-	}{resp.StatusCode, resp.Status, firstHeaders(resp.Header), string(respBody)})
+	}{resp.StatusCode, resp.Status, n.safeHeaders(resp.Header), string(respBody)})
 	if err != nil {
 		return "", err
 	}
@@ -205,15 +229,36 @@ func methodOrDefault(m, def string) string {
 	return def
 }
 
-// firstHeaders flattens http.Header (map[string][]string) to one value per name — the first. Almost
-// every header is single-valued, and a guest's Response.headers.get returns a single value anyway; a
-// genuinely multi-valued header (e.g. Set-Cookie) keeps only its first value here.
-func firstHeaders(h http.Header) map[string]string {
+// credentialHeaders are response headers dropped wholesale before the envelope reaches the caller:
+// they carry credentials or auth challenges a reflecting/authenticating endpoint could otherwise
+// launder into the model transcript. Canonical (http.Header) casing; lookup is exact after
+// CanonicalMIMEHeaderKey normalises the incoming name.
+var credentialHeaders = map[string]bool{
+	"Set-Cookie":          true,
+	"Set-Cookie2":         true,
+	"Authorization":       true,
+	"Proxy-Authorization": true,
+	"Www-Authenticate":    true,
+	"Proxy-Authenticate":  true,
+}
+
+// safeHeaders flattens http.Header (map[string][]string) to one value per name — the first — after
+// dropping credential-bearing headers entirely and ingress-redacting any known vault value echoed in
+// the surviving values. Without this the header map is a leak channel the body scanner never sees:
+// Set-Cookie / WWW-Authenticate reach the model raw, and a secret reflected into an arbitrary header
+// slips past RedactIngress (which scans only the body). Almost every header is single-valued; a
+// genuinely multi-valued header keeps only its first value here.
+func (n *Net) safeHeaders(h http.Header) map[string]string {
 	out := make(map[string]string, len(h))
 	for k, v := range h {
-		if len(v) > 0 {
-			out[k] = v[0]
+		if credentialHeaders[http.CanonicalHeaderKey(k)] || len(v) == 0 {
+			continue
 		}
+		val := v[0]
+		if n.scanner != nil {
+			val = string(n.scanner.RedactIngress([]byte(val)))
+		}
+		out[k] = val
 	}
 	return out
 }

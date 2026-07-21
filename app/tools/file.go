@@ -14,6 +14,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
+	"github.com/efuturetoday/nocturn/app/secret"
 )
 
 // FileKind is the shared gate Kind file MUTATIONS check; the Target is the workspace-relative,
@@ -37,7 +38,10 @@ const (
 // Rel/prefix checks miss). os.Root re-validates at the syscall level. resolve/confine still compute
 // the cleaned workspace-relative target the gate matches (and a fast lexical reject), but the real
 // guarantee is the kernel's, not the string's.
-type files struct{ root string }
+type files struct {
+	root    string
+	scanner *secret.Scanner // ingress leak scanner; nil = no redaction of read content
+}
 
 // Tools exposes the filesystem tools. read/list/stat/search are observations (ungated within Root);
 // write/remove/move are mutations gated on FileKind.
@@ -107,6 +111,11 @@ func (f files) read(_ context.Context, args string) (string, error) {
 	data, err := io.ReadAll(io.LimitReader(fh, maxFileBytes))
 	if err != nil {
 		return "", err
+	}
+	// Ingress redaction: a workspace file may itself hold a known vault secret; strip it before the
+	// content reaches the model, mirroring the net/dns read paths. A nil scanner is a no-op.
+	if f.scanner != nil {
+		data = f.scanner.RedactIngress(data)
 	}
 	return string(data), nil
 }

@@ -38,7 +38,7 @@ func Base(cfg Config) ([]agentkit.Tool, error) {
 	}
 	out := append(netTools, timeNow)
 	if cfg.Root != "" {
-		fileTools, err := files{root: cfg.Root}.Tools()
+		fileTools, err := files{root: cfg.Root, scanner: cfg.Scanner}.Tools()
 		if err != nil {
 			return nil, err
 		}

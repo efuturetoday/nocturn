@@ -63,6 +63,14 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("workspace %q: %w", name, err)
 	}
+	// The file tools mount ONLY dir/mnt — the LLM's world. The workspace root (dir) holds the
+	// control plane (grants.json, reminders.json, agents/, PERSONA.md, chats/, agent-runs/, …); those
+	// are siblings of the mount, so os.Root confinement keeps the model out of them. Rooting the file
+	// tools at dir itself would let file_read/file_write reach grants.json — a full gate bypass.
+	mnt := filepath.Join(dir, "mnt")
+	if err := os.MkdirAll(mnt, 0o700); err != nil {
+		return nil, fmt.Errorf("workspace %q: mnt: %w", name, err)
+	}
 
 	agents, err := agent.Discover(filepath.Join(dir, "agents"))
 	if err != nil {
@@ -73,7 +81,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// tools by Base; it is bound to the chat manager below (Bind) so a fired wake resolves the
 	// invoking chat by id.
 	waker := tools.NewWaker(tools.WithWakeLogger(h.Log))
-	baseTools, err := tools.Base(tools.Config{Secrets: h.Secrets, Scanner: h.Scanner, Root: dir, Notifier: h.Notifier, Waker: waker})
+	baseTools, err := tools.Base(tools.Config{Secrets: h.Secrets, Scanner: h.Scanner, Root: mnt, Notifier: h.Notifier, Waker: waker})
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: tools: %w", name, err)
 	}

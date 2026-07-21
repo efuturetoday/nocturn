@@ -8,8 +8,26 @@ import (
 	"testing"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/app/secret"
 	"github.com/efuturetoday/nocturn/app/tools"
 )
+
+// fileToolWithScanner builds the base toolset over root with a leak scanner installed and returns the
+// named file tool — used to exercise ingress redaction on reads.
+func fileToolWithScanner(t *testing.T, root, name string, sc *secret.Scanner) agentkit.Tool {
+	t.Helper()
+	ts, err := tools.Base(tools.Config{Root: root, Scanner: sc})
+	if err != nil {
+		t.Fatalf("Base: %v", err)
+	}
+	for _, tl := range ts {
+		if tl.Spec().Name == name {
+			return tl
+		}
+	}
+	t.Fatalf("tool %q not found in Base", name)
+	return nil
+}
 
 // toolByName builds the base toolset over a workspace root and returns the named file tool.
 func toolByName(t *testing.T, root, name string) agentkit.Tool {
@@ -120,6 +138,69 @@ func TestFile_Escape(t *testing.T) {
 	// And a plain .. write escape is refused.
 	if _, err := write.Call(ctx, `{"path":"../evil.txt","content":"x"}`); err == nil {
 		t.Error("write to ../evil.txt was allowed")
+	}
+}
+
+// TestFile_MntConfinement is the HIGH-1 guarantee at the tools layer: when the file tools are rooted
+// at the LLM mount (dir/mnt), the control-plane files that live as SIBLINGS of the mount (grants.json
+// et al. at dir) are unreachable — not via .., not via an absolute path. Rooting the tools at dir
+// itself (the old bug) would let file_read grants.json and file_write forge new grants.
+func TestFile_MntConfinement(t *testing.T) {
+	dir := t.TempDir()
+	mnt := filepath.Join(dir, "mnt")
+	if err := os.MkdirAll(mnt, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The control plane sits at dir, a sibling of the mount.
+	if err := os.WriteFile(filepath.Join(dir, "grants.json"), []byte(`{"grants":"ALL"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	read := toolByName(t, mnt, "file_read")
+	write := toolByName(t, mnt, "file_write")
+
+	// Reads of the control plane must fail and never surface its contents.
+	for _, p := range []string{"../grants.json", filepath.Join(dir, "grants.json")} {
+		out, err := read.Call(ctx, `{"path":`+jsonQuote(p)+`}`)
+		if strings.Contains(out, "ALL") {
+			t.Fatalf("LEAKED grants.json via %q", p)
+		}
+		if err == nil && strings.Contains(out, "grants") {
+			t.Fatalf("read of control plane %q was allowed: %q", p, out)
+		}
+	}
+
+	// A write that tries to forge grants.json must not touch the real (sibling) file.
+	if _, err := write.Call(ctx, `{"path":"../grants.json","content":"{\"grants\":\"PWNED\"}"}`); err == nil {
+		t.Error("write to ../grants.json was allowed")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "grants.json")); strings.Contains(string(b), "PWNED") {
+		t.Fatalf("control-plane grants.json was overwritten through the mount: %q", b)
+	}
+}
+
+// TestFile_Read_RedactsVaultSecret is the MED-1 guarantee: a workspace file that itself holds a stored
+// vault value is ingress-redacted on file_read, so the secret never reaches the model transcript.
+func TestFile_Read_RedactsVaultSecret(t *testing.T) {
+	root := t.TempDir()
+	store := secret.NewStore()
+	store.Set("api", []byte("SUPERSECRETVALUE123"))
+	sc := secret.NewScanner(store)
+
+	if err := os.WriteFile(filepath.Join(root, "leak.txt"), []byte("token=SUPERSECRETVALUE123 done"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read := fileToolWithScanner(t, root, "file_read", sc)
+	out, err := read.Call(context.Background(), `{"path":"leak.txt"}`)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(out, "SUPERSECRETVALUE123") {
+		t.Fatalf("file_read leaked a stored vault secret: %q", out)
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("expected redaction marker, got %q", out)
 	}
 }
 
