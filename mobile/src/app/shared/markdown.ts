@@ -61,8 +61,15 @@ export function completeStreaming(src: string): string {
 /** Render markdown → HTML string (streaming-safe). Bind via [innerHTML] so Angular sanitizes. */
 export function renderMarkdown(src: string): string {
   const html = marked.parse(completeStreaming(src), { async: false }) as string;
-  // Open links out-of-app, never as a same-origin/prefetched navigation.
-  return html.replace(/<a href/g, '<a target="_blank" rel="noopener noreferrer" href');
+  return (
+    html
+      // Open links out-of-app, never as a same-origin/prefetched navigation.
+      .replace(/<a href/g, '<a target="_blank" rel="noopener noreferrer" href')
+      // Wrap tables in a horizontal scroller — a wide table scrolls inside its own box instead of
+      // squishing every column to per-character wrapping (or forcing the whole page wide).
+      .replace(/<table>/g, '<div class="table-wrap"><table>')
+      .replace(/<\/table>/g, '</table></div>')
+  );
 }
 
 /** Renders a (possibly still-streaming) markdown string. Used for assistant chat content. */
@@ -70,65 +77,71 @@ export function renderMarkdown(src: string): string {
   selector: 'app-markdown',
   changeDetection: ChangeDetectionStrategy.OnPush,
   // None: the rendered markdown is injected via [innerHTML], so those nodes never receive the
-  // component's _ngcontent attribute — Emulated encapsulation would leave every `.md …` rule
-  // unmatched (the whole stylesheet dead). Every selector below is `.md`-scoped, which keeps the
-  // styles namespaced to this component's output even without Angular's attribute scoping.
+  // component's _ngcontent attribute — Emulated encapsulation would leave every rule unmatched
+  // (the whole stylesheet dead). So these styles are GLOBAL; the container class must therefore be
+  // app-unique. `.md` is NOT unique — it is Ionic's platform MODE class, stamped on every ion-*
+  // component (ion-tab-bar.md, ion-tab-button.md, …). A global `.md { display: block }` overrode
+  // Ionic's `:host { display: flex }` and broke the tab bar (buttons stacked vertically). Hence
+  // `.markdown`, which nothing else uses.
   encapsulation: ViewEncapsulation.None,
-  template: `<div class="md" [innerHTML]="html()"></div>`,
+  template: `<div class="markdown" [innerHTML]="html()"></div>`,
   styles: `
-    .md { display: block; font-size: 1rem; line-height: 1.55; }
-    .md > :first-child { margin-top: 0; }
-    .md > :last-child { margin-bottom: 0; }
+    .markdown { display: block; font-size: 1rem; line-height: 1.55; }
+    .markdown > :first-child { margin-top: 0; }
+    .markdown > :last-child { margin-bottom: 0; }
 
-    .md p { margin: 0 0 0.5rem; }
+    .markdown p { margin: 0 0 0.5rem; }
 
-    .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+    .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
       margin: 1rem 0 0.375rem;
       line-height: 1.25;
       font-weight: 650;
     }
-    .md h1 { font-size: 1.3rem; }
-    .md h2 { font-size: 1.15rem; }
-    .md h3 { font-size: 1.03rem; }
-    .md h4, .md h5, .md h6 { font-size: 1rem; }
-    .md h4 { color: var(--ion-color-medium); }
+    .markdown h1 { font-size: 1.3rem; }
+    .markdown h2 { font-size: 1.15rem; }
+    .markdown h3 { font-size: 1.03rem; }
+    .markdown h4, .markdown h5, .markdown h6 { font-size: 1rem; }
+    .markdown h4 { color: var(--ion-color-medium); }
 
-    .md ul, .md ol { margin: 0 0 0.5rem; padding-left: 1.35rem; }
-    .md li { margin: 0.125rem 0; }
-    .md li::marker { color: var(--ion-color-medium); }
+    .markdown ul, .markdown ol { margin: 0 0 0.5rem; padding-left: 1.35rem; }
+    .markdown li { margin: 0.125rem 0; }
+    .markdown li::marker { color: var(--ion-color-medium); }
 
-    .md a { color: var(--ion-color-primary); text-underline-offset: 2px; }
-    .md strong { font-weight: 650; }
-    .md hr { border: none; border-top: 1px solid var(--ion-background-color-step-200); margin: 0.875rem 0; }
+    .markdown a { color: var(--ion-color-primary); text-underline-offset: 2px; }
+    .markdown strong { font-weight: 650; }
+    .markdown hr { border: none; border-top: 1px solid var(--ion-background-color-step-200); margin: 0.875rem 0; }
 
-    .md code {
+    .markdown code {
       font-family: var(--ion-font-family-monospace, ui-monospace, monospace);
       font-size: 0.85em;
       background: var(--ion-background-color-step-200);
       padding: 0.0625rem 0.3125rem;
       border-radius: 0.3125rem;
     }
-    .md pre {
+    .markdown pre {
       background: var(--ion-background-color-step-150);
       padding: 0.625rem 0.75rem;
       border-radius: 0.625rem;
       overflow-x: auto;
       margin: 0 0 0.5rem;
     }
-    .md pre code { background: none; padding: 0; font-size: 0.82em; }
+    .markdown pre code { background: none; padding: 0; font-size: 0.82em; }
 
-    .md blockquote {
+    .markdown blockquote {
       margin: 0 0 0.5rem;
       padding-left: 0.75rem;
       border-left: 2px solid var(--ion-color-primary);
       color: var(--ion-color-medium);
     }
 
-    .md .table-wrap, .md table { display: block; overflow-x: auto; }
-    .md table { border-collapse: collapse; margin: 0 0 0.5rem; font-size: 0.9em; }
-    .md th, .md td { border: 1px solid var(--ion-background-color-step-250); padding: 0.25rem 0.5rem; text-align: left; }
-    .md th { background: var(--ion-background-color-step-150); }
-    .md .md-img { color: var(--ion-color-primary); }
+    .markdown .table-wrap { overflow-x: auto; max-width: 100%; margin: 0 0 0.5rem; -webkit-overflow-scrolling: touch; }
+    .markdown table { border-collapse: collapse; font-size: 0.9em; }
+    .markdown th, .markdown td {
+      border: 1px solid var(--ion-background-color-step-250); padding: 0.25rem 0.5rem; text-align: left;
+      white-space: nowrap; /* let the table exceed its box and scroll, rather than squish columns */
+    }
+    .markdown th { background: var(--ion-background-color-step-150); }
+    .markdown .md-img { color: var(--ion-color-primary); }
   `,
 })
 export class MarkdownComponent {

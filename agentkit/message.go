@@ -19,6 +19,7 @@ type Message struct {
 	Content    string     `json:"content,omitempty"`
 	ToolCalls  []ToolCall `json:"toolCalls,omitempty"`  // set on an assistant message that issues calls
 	ToolCallID string     `json:"toolCallID,omitempty"` // set on a tool-result message
+	DurationMs int64      `json:"durationMs,omitempty"` // wall-clock of the tool call, on a tool-result message
 }
 
 // ToolCall is one model-issued call, carrying the id used to match its result.

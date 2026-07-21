@@ -31,6 +31,7 @@ export interface ChatMeta {
   updated: string; // RFC3339
   read?: string; // RFC3339 shared read cursor; unread when updated > read (absent = never read)
   turns: number;
+  preview?: string; // last message's first line — the list row's subtitle (à la Apple Mail)
 }
 
 /** One model-issued tool call inside a transcript message. */
@@ -50,6 +51,7 @@ export interface Message {
   content?: string;
   toolCalls?: ToolCall[];
   toolCallID?: string;
+  durationMs?: number; // on a tool-result message: the call's wall-clock (persisted, survives reload)
 }
 
 /** A pending second-device join, shown to an already-paired device (join.list) so a human relays the code. */
@@ -62,9 +64,13 @@ export interface PendingJoin {
 
 // ── server → client events (discriminate on `type`) ──────────────────────────
 
+// The streaming events all carry `chatId`: the daemon broadcasts every live chat's events to every
+// device (no per-connection subscription), so the client applies only those for the chat it shows.
+
 /** One streamed chunk of the assistant's answer. `frame` is the enclosing call (0 = top-level). */
 export interface ChatToken {
   type: "chat.token";
+  chatId: string;
   frame: number;
   text: string;
 }
@@ -72,6 +78,7 @@ export interface ChatToken {
 /** One streamed chunk of the model's reasoning (render dim). */
 export interface ChatThinking {
   type: "chat.thinking";
+  chatId: string;
   frame: number;
   text: string;
 }
@@ -79,6 +86,7 @@ export interface ChatThinking {
 /** A tool call's start or end. Group by `frame` to nest sub-agent activity; `id` is the call instance. */
 export interface ChatTool {
   type: "chat.tool";
+  chatId: string;
   phase: "start" | "end";
   frame: number;
   id: number;
@@ -86,21 +94,26 @@ export interface ChatTool {
   args: string;
   result?: string; // end only
   err?: string; // end only (e.g. a denied effect)
+  durationMs?: number; // end only — the call's wall-clock (server-measured)
+}
+
+/** A turn starting: the client opens a fresh assistant bubble from it, so the answer bubble comes
+    deterministically from the stream (a local turn and a backend-initiated one render identically). */
+export interface ChatTurnStart {
+  type: "chat.turnStart";
+  chatId: string;
+  frame: number;
 }
 
 /** A turn finishing, with its stop reason (if any) and the turn's total tokens. */
 export interface ChatTurnEnd {
   type: "chat.turnEnd";
+  chatId: string;
   frame: number;
   err?: string;
   tokens: number;
 }
 
-/** The id of a chat just started from chat.submit, so the client can bind its active-chat id. */
-export interface ChatOpened {
-  type: "chat.opened";
-  id: string;
-}
 
 /** A chat's persisted transcript, sent on chat.open so the client can render it. */
 export interface ChatSnapshot {
@@ -145,6 +158,7 @@ export interface JoinList {
 export interface ApprovalRequest {
   type: "approval.request";
   id: string;
+  frame?: number; // the tool call this approval is for (freeze that tool's timer); absent = not tool-scoped
   intent: string;
   options: string[];
 }
@@ -163,11 +177,11 @@ export interface ErrorEvent {
 
 /** The closed union of everything the server sends. Switch on `type`. */
 export type ServerEvent =
+  | ChatTurnStart
   | ChatToken
   | ChatThinking
   | ChatTool
   | ChatTurnEnd
-  | ChatOpened
   | ChatSnapshot
   | ChatList
   | WorkspaceList
@@ -179,11 +193,12 @@ export type ServerEvent =
 
 // ── client → server commands (discriminate on `cmd`) ─────────────────────────
 
-/** Send a message to the active chat (starting a new one in workspace `ws` if none is active). */
+/** Send a message to chat `id` (client-minted). An unknown id starts that chat, a known one appends. */
 export interface ChatSubmit {
   cmd: "chat.submit";
   ws: string;
   text: string;
+  id: string;
 }
 
 /** Resume a chat in workspace `ws`: the server replies with a ChatSnapshot, then streams its turns. */
@@ -199,9 +214,11 @@ export interface ChatListCmd {
   ws: string;
 }
 
-/** Abort the active chat's running turn (the chat and session stay open). */
+/** Abort a chat's running turn (id-addressed; the chat and session stay open). */
 export interface ChatCancel {
   cmd: "chat.cancel";
+  ws: string;
+  id: string;
 }
 
 /** Mark a chat read up to its latest turn — the daemon advances a shared cursor for every device. */

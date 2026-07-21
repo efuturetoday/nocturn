@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 )
 
@@ -29,8 +30,10 @@ var ErrApprovalTimeout = errors.New("hitl: approval timed out")
 // connections implement it; the broker never imports serve.
 type Sink interface {
 	// Approval presents a pending approval: an intent to render and choice labels (index 0.. are
-	// approvals, a client answers with the chosen index or -1 to deny).
-	Approval(ctx context.Context, id, intent string, options []string)
+	// approvals, a client answers with the chosen index or -1 to deny). frame is the id of the tool
+	// call this approval belongs to (opaque correlation — the connection forwards it so the UI can tie
+	// the prompt to the exact call; 0 = not tool-scoped).
+	Approval(ctx context.Context, id string, frame uint64, intent string, options []string)
 	// Resolved tells the connection an approval is concluded (answered anywhere, timed out, or no
 	// longer needed) so it clears the prompt.
 	Resolved(ctx context.Context, id string)
@@ -52,6 +55,7 @@ type Broker struct {
 type pendingApproval struct {
 	intent  string
 	options []string
+	frame   uint64 // the tool call this approval is for (for re-present on attach)
 	ch      chan int
 }
 
@@ -102,7 +106,7 @@ func (b *Broker) presentPending(ctx context.Context, s Sink) {
 	maps.Copy(open, b.pending)
 	b.mu.Unlock()
 	for id, p := range open {
-		s.Approval(ctx, id, p.intent, p.options)
+		s.Approval(ctx, id, p.frame, p.intent, p.options)
 	}
 }
 
@@ -131,10 +135,11 @@ func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (
 	labels, resolve := decision(a, suggest)
 	id := newID()
 	intent := intentOf(a)
+	frame := agentkit.FrameFrom(ctx) // the tool call asking — for the UI to tie the prompt to it
 	ch := make(chan int, 1)
 
 	b.mu.Lock()
-	b.pending[id] = &pendingApproval{intent: intent, options: labels, ch: ch}
+	b.pending[id] = &pendingApproval{intent: intent, options: labels, frame: frame, ch: ch}
 	b.mu.Unlock()
 
 	active := b.activeSinks()
@@ -151,7 +156,7 @@ func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (
 		}
 	} else {
 		for _, s := range active {
-			s.Approval(ctx, id, intent, labels)
+			s.Approval(ctx, id, frame, intent, labels)
 		}
 	}
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
+	"github.com/efuturetoday/nocturn/app/tools"
 )
 
 // idleTTL: a live session with no running turn is unloaded this long after its last turn ended. It
@@ -72,8 +73,11 @@ func (m *Manager) openLocked(id string) *agentkit.Session {
 	if lv := m.active[id]; lv != nil {
 		return lv.sess
 	}
-	// Background, not a request ctx: the session outlives any connection; only Close ends it.
-	lv := &live{sess: m.rt.Session(context.Background(), agentkit.WithStore(m.store, id)), idleSince: time.Now()}
+	// Background, not a request ctx: the session outlives any connection; only Close ends it. The
+	// chat id is stamped on the ctx so the wake tool can resume THIS chat by id — a plain tag, no
+	// resume logic here (the manager stays wake-agnostic).
+	ctx := tools.WithChatID(context.Background(), id)
+	lv := &live{sess: m.rt.Session(ctx, agentkit.WithStore(m.store, id)), idleSince: time.Now()}
 	m.active[id] = lv
 	m.wg.Add(1)
 	go m.pump(id, lv)

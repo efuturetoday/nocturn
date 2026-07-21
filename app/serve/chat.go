@@ -72,15 +72,25 @@ type ChatThinking struct {
 
 // ChatTool is a tool call's start or end.
 type ChatTool struct {
+	Type       string `json:"type"`
+	ChatID     string `json:"chatId"`
+	Phase      string `json:"phase"` // "start" | "end"
+	Frame      uint64 `json:"frame"`
+	ID         uint64 `json:"id"`
+	Tool       string `json:"tool"`
+	Args       string `json:"args"`
+	Result     string `json:"result,omitempty"`
+	Err        string `json:"err,omitempty"`
+	DurationMs int64  `json:"durationMs,omitempty"` // end only — the call's wall-clock (server-measured)
+}
+
+// ChatTurnStart opens a turn: the client starts a fresh assistant bubble from it, so the answer
+// bubble comes deterministically from the stream — a locally-sent turn and a backend-initiated one
+// (wake resume, agent run, another device) render identically.
+type ChatTurnStart struct {
 	Type   string `json:"type"`
 	ChatID string `json:"chatId"`
-	Phase  string `json:"phase"` // "start" | "end"
 	Frame  uint64 `json:"frame"`
-	ID     uint64 `json:"id"`
-	Tool   string `json:"tool"`
-	Args   string `json:"args"`
-	Result string `json:"result,omitempty"`
-	Err    string `json:"err,omitempty"`
 }
 
 // ChatTurnEnd closes a turn, with the stop reason (if any) and the turn's total tokens.
@@ -212,6 +222,8 @@ func (c *conn) chatList(ctx context.Context, wsName string) {
 // form — is skipped (ok=false).
 func chatEvent(chatID string, ev agentkit.Event) (any, bool) {
 	switch e := ev.(type) {
+	case agentkit.TurnStart:
+		return ChatTurnStart{Type: "chat.turnStart", ChatID: chatID, Frame: e.Frame}, true
 	case agentkit.Token:
 		return ChatToken{Type: "chat.token", ChatID: chatID, Frame: e.Frame, Text: e.Text}, true
 	case agentkit.Thinking:
@@ -219,7 +231,7 @@ func chatEvent(chatID string, ev agentkit.Event) (any, bool) {
 	case agentkit.ToolStart:
 		return ChatTool{Type: "chat.tool", ChatID: chatID, Phase: "start", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args}, true
 	case agentkit.ToolEnd:
-		return ChatTool{Type: "chat.tool", ChatID: chatID, Phase: "end", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args, Result: e.Result, Err: errText(e.Err)}, true
+		return ChatTool{Type: "chat.tool", ChatID: chatID, Phase: "end", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args, Result: e.Result, Err: errText(e.Err), DurationMs: e.Duration.Milliseconds()}, true
 	case agentkit.TurnEnd:
 		return ChatTurnEnd{Type: "chat.turnEnd", ChatID: chatID, Frame: e.Frame, Err: errText(e.Err), Tokens: e.Tokens.Total}, true
 	}

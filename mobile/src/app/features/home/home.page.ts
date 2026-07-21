@@ -66,6 +66,6 @@ export class HomePage {
 
   protected openChat(c: ChatMeta): void {
     this.chat.openChat(c.id);
-    void this.router.navigate(['/tabs', 'chat', c.id]);
+    void this.router.navigate(['/chat', c.id]);
   }
 }

@@ -12,6 +12,7 @@ import (
 type ApprovalRequest struct {
 	Type    string   `json:"type"`
 	ID      string   `json:"id"`
+	Frame   uint64   `json:"frame,omitempty"` // the tool call this approval is for (0 = not tool-scoped)
 	Intent  string   `json:"intent"`
 	Options []string `json:"options"`
 }
@@ -49,8 +50,8 @@ func (c *conn) approval(ctx context.Context, cmd string, data []byte) {
 
 // Approval implements hitl.Sink: it forwards a pending approval to this client. The broker supplies
 // the ctx (the connection's or the asking turn's), so none is stored on the conn.
-func (c *conn) Approval(ctx context.Context, id, intent string, options []string) {
-	c.send(ctx, ApprovalRequest{Type: "approval.request", ID: id, Intent: intent, Options: options})
+func (c *conn) Approval(ctx context.Context, id string, frame uint64, intent string, options []string) {
+	c.send(ctx, ApprovalRequest{Type: "approval.request", ID: id, Frame: frame, Intent: intent, Options: options})
 }
 
 // Resolved implements hitl.Sink: it tells this client to clear a concluded approval.

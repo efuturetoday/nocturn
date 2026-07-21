@@ -78,6 +78,7 @@ import { MessageBubbleComponent } from './components/message-bubble';
           placeholder="Message…"
           [value]="draft()"
           (ionInput)="draft.set($any($event.target).value ?? '')"
+          (keydown.enter)="$event.preventDefault(); send()"
           [disabled]="!connection.connected()"
         />
         <ion-buttons slot="end">
@@ -138,8 +139,8 @@ import { MessageBubbleComponent } from './components/message-bubble';
   `,
 })
 export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
-  /** Bound from the `:id` route param via withComponentInputBinding(); undefined on the /chat/new
-      route (a fresh chat, whose id arrives via chat.opened once the first message is sent). */
+  /** The chat id, bound from the `:id` route param via withComponentInputBinding(). Client-minted, so
+      it is set for a fresh chat too (navigated to straight from the ask box). */
   readonly id = input<string>();
 
   protected readonly chat = inject(ChatService);
@@ -163,12 +164,16 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
     // is what makes a background turnEnd raise the unread dot.
     effect(() => {
       const i = this.id();
-      if (i) {
+      if (!i) return;
+      // A fresh chat (client-minted id) arrives here with its id already active (set by newChat) and a
+      // queued first message — send it (an unknown id creates the chat on the daemon). Otherwise this
+      // is an existing chat: open it for its snapshot, unless it's already the active one (don't
+      // re-open — openChat resets local state and would wipe the live view).
+      const first = untracked(() => this.chat.takePendingFirst());
+      if (first) {
+        this.chat.submit(first);
+      } else if (i !== untracked(() => this.chat.activeChatId())) {
         this.chat.openChat(i);
-      } else {
-        // /chat/new: send the message queued by the ask box; the daemon replies chat.opened.
-        const q = untracked(() => this.chat.takePendingFirst());
-        if (q) this.chat.submit(q);
       }
     });
 

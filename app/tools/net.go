@@ -69,7 +69,15 @@ func (n *Net) Tools() ([]agentkit.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []agentkit.Tool{read, write}, nil
+	resolve, err := n.resolveTool()
+	if err != nil {
+		return nil, err
+	}
+	ping, err := n.pingTool()
+	if err != nil {
+		return nil, err
+	}
+	return []agentkit.Tool{read, write, resolve, ping}, nil
 }
 
 func (n *Net) read(ctx context.Context, args string) (string, error) {

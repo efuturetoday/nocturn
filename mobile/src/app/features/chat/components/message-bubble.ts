@@ -1,14 +1,21 @@
-import { Component, ChangeDetectionStrategy, input, computed } from '@angular/core';
-import { IonNote, IonSpinner } from '@ionic/angular/standalone';
+import { Component, ChangeDetectionStrategy, input, inject, computed, signal } from '@angular/core';
+import {
+  IonNote, IonSpinner, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent, IonIcon,
+} from '@ionic/angular/standalone';
+import { addIcons } from 'ionicons';
+import { construct, chevronForward, closeOutline } from 'ionicons/icons';
 import { ToolFrameComponent } from './tool-frame';
 import { MarkdownComponent } from '../../../shared/markdown';
-import type { ChatMessageView } from '../../../core/services/chat.service';
+import { ChatService, type ChatMessageView } from '../../../core/services/chat.service';
 
 /** One conversation message: user bubble, or assistant turn with dim reasoning + tool forest. */
 @Component({
   selector: 'app-message-bubble',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [IonNote, IonSpinner, ToolFrameComponent, MarkdownComponent],
+  imports: [
+    IonNote, IonSpinner, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent, IonIcon,
+    ToolFrameComponent, MarkdownComponent,
+  ],
   host: {
     class: 'message-bubble',
     '[class.user]': 'isUser()',
@@ -18,13 +25,44 @@ import type { ChatMessageView } from '../../../core/services/chat.service';
     @if (message().thinking) {
       <ion-note class="thinking" color="medium">{{ message().thinking }}</ion-note>
     }
+
+    <!-- One finger-sized trigger for the whole turn's tools — tapping opens a window with EVERY tool
+         as an accordion, so a fat finger never has to pick one tiny row out of the forest. -->
     @if (message().tools.length) {
-      <div class="tools">
-        @for (t of message().tools; track t.key) {
-          <app-tool-frame [tool]="t" [style.margin-left.px]="t.depth * 16" />
+      <button type="button" class="tools-trigger" (click)="open.set(true)">
+        @if (anyRunning()) {
+          <ion-spinner name="dots" />
+        } @else {
+          <ion-icon name="construct" aria-hidden="true" />
         }
-      </div>
+        <span class="summary">{{ toolSummary() }}</span>
+        @if (anyWaiting()) {
+          <span class="wait">needs approval</span>
+        }
+        <ion-icon class="chev" name="chevron-forward" aria-hidden="true" />
+      </button>
+
+      <ion-modal [isOpen]="open()" (didDismiss)="open.set(false)">
+        <ng-template>
+          <ion-header>
+            <ion-toolbar>
+              <ion-title>Tools</ion-title>
+              <ion-buttons slot="end">
+                <ion-button (click)="open.set(false)" aria-label="Close">
+                  <ion-icon slot="icon-only" name="close-outline" />
+                </ion-button>
+              </ion-buttons>
+            </ion-toolbar>
+          </ion-header>
+          <ion-content class="tools-window">
+            @for (t of message().tools; track t.key) {
+              <app-tool-frame [tool]="t" [style.margin-left.px]="t.depth * 16" />
+            }
+          </ion-content>
+        </ng-template>
+      </ion-modal>
     }
+
     @if (message().content) {
       @if (isUser()) {
         <div class="plain">{{ message().content }}</div>
@@ -64,10 +102,48 @@ import type { ChatMessageView } from '../../../core/services/chat.service';
       border-bottom-left-radius: 0.25rem;
     }
     .thinking { display: block; font-style: italic; margin-bottom: 0.375rem; }
-    .tools { margin-bottom: 0.375rem; }
+
+    /* Trigger row: full width, finger-sized — the single tap target for the turn's tools. */
+    .tools-trigger {
+      display: flex; align-items: center; gap: 0.5rem; width: 100%;
+      margin-bottom: 0.375rem; padding: 0.375rem 0.5rem;
+      background: var(--ion-background-color-step-150); border: 0; border-radius: 0.625rem;
+      color: inherit; text-align: left; cursor: pointer; font-size: 0.8rem; min-height: 2.25rem;
+    }
+    .tools-trigger ion-icon { font-size: 1rem; color: var(--ion-color-medium); flex-shrink: 0; }
+    .tools-trigger ion-spinner { width: 1rem; height: 1rem; flex-shrink: 0; }
+    .tools-trigger .summary {
+      flex: 1; min-width: 0; font-family: var(--ion-font-family-monospace, monospace);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .tools-trigger .wait { color: var(--ion-color-warning); flex-shrink: 0; font-size: 0.78rem; }
+    .tools-trigger .chev { opacity: 0.5; }
+
+    .tools-window { --padding-start: 0.75rem; --padding-end: 0.75rem; --padding-top: 0.5rem; --padding-bottom: 1.5rem; }
   `,
 })
 export class MessageBubbleComponent {
   readonly message = input.required<ChatMessageView>();
+  private readonly chat = inject(ChatService);
+  protected readonly open = signal(false);
+
   protected readonly isUser = computed(() => this.message().role === 'user');
+  protected readonly anyRunning = computed(() => this.message().tools.some((t) => t.running));
+
+  // A pending approval belongs to this turn if its frame matches any of the turn's tool calls.
+  protected readonly anyWaiting = computed(() => {
+    const frame = this.chat.pendingApproval()?.frame;
+    return frame != null && this.message().tools.some((t) => t.id === frame);
+  });
+
+  // A compact one-line list of the tool names — the trigger's label (e.g. `code_run · http_read +1`).
+  protected readonly toolSummary = computed(() => {
+    const names = this.message().tools.map((t) => t.tool);
+    const head = names.slice(0, 3).join(' · ');
+    return names.length > 3 ? `${head} +${names.length - 3}` : head;
+  });
+
+  constructor() {
+    addIcons({ construct, chevronForward, closeOutline });
+  }
 }

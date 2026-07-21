@@ -170,8 +170,11 @@ func (t ToolSet) Call(ctx context.Context, name, args string) (string, error) {
 	id := nextCallID(ctx)
 	Emit(ctx, ToolStart{Frame: parent, ID: id, Tool: name, Args: args})
 	start := time.Now()
+	pausedStart := pausedNanos(ctx)
 	out, err := tool.Call(withFrame(ctx, id), args)
-	Emit(ctx, ToolEnd{Frame: parent, ID: id, Tool: name, Args: args, Result: out, Err: err, Duration: time.Since(start)})
+	// Duration is ACTIVE execution time — any out-of-band approval wait that parked this call (or a
+	// nested one) is subtracted, so the live stream matches the persisted duration and the frozen UI.
+	Emit(ctx, ToolEnd{Frame: parent, ID: id, Tool: name, Args: args, Result: out, Err: err, Duration: activeSince(ctx, start, pausedStart)})
 	return out, err
 }
 
@@ -202,6 +205,12 @@ func frameFrom(ctx context.Context) uint64 {
 	f, _ := ctx.Value(frameKey{}).(uint64)
 	return f
 }
+
+// FrameFrom is the id of the tool call currently executing (0 = top level / main agent) — the same
+// id carried on that call's Tool* events. A consumer reads it to correlate out-of-band work (e.g. an
+// approval request presented mid-call) back to the exact call, without agentkit knowing what that
+// work is.
+func FrameFrom(ctx context.Context) uint64 { return frameFrom(ctx) }
 
 func withFrame(ctx context.Context, id uint64) context.Context {
 	return context.WithValue(ctx, frameKey{}, id)

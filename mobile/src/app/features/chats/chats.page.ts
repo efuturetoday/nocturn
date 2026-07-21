@@ -92,15 +92,15 @@ export class ChatsPage {
     const q = this.draft().trim();
     if (!q) return;
     this.draft.set('');
-    this.chat.newChat();
+    const id = this.chat.newChat(); // client-minted id → navigate straight to it (one transition)
     this.chat.queueFirstMessage(q);
-    void this.router.navigate(['/tabs', 'chat']);
+    void this.router.navigate(['/chat', id]);
   }
 
   protected openChat(c: ChatMeta): void {
     this.blur();
     this.chat.openChat(c.id);
-    void this.router.navigate(['/tabs', 'chat', c.id]);
+    void this.router.navigate(['/chat', c.id]);
   }
 
   private blur(): void {

@@ -23,64 +23,173 @@ const (
 // never inherited.
 
 // --- wall-clock (pausable) ---
+//
+// A ctx carries a SET of pausable wall-clock deadlines: the turn's, plus any NESTED budget that also
+// wants to pause while parked on an approval — e.g. a sandbox guest run (WithPausableBudget). Pause
+// pauses them ALL, so an out-of-band human decision never trips the turn deadline NOR the inner
+// guest budget. When a deadline fires it cancels its ctx with cause ErrTurnTimeout, so the turn can
+// report a clear "timed out" instead of a bare "context canceled".
 
-type timeoutKey struct{}
+type pausablesKey struct{}
 
-type timeoutState struct {
+// pausables is the shared set of active deadlines on a ctx. The turn creates it; a nested budget
+// appends to it (so Pause reaches both). Each deadline owns its own timer and ctx.
+type pausables struct {
+	mu    sync.Mutex
+	items []*deadline
+}
+
+type deadline struct {
 	mu        sync.Mutex
 	timer     *time.Timer
-	cancel    context.CancelFunc
-	deadline  time.Time     // when the timer fires (while running)
+	cancel    context.CancelCauseFunc
+	at        time.Time     // when it fires (while running)
 	remaining time.Duration // time left (while paused)
 	paused    bool
 }
 
-// withTimeout installs a pausable wall-clock deadline of d (d <= 0 = no timeout), returning a cancel
-// func that stops the timer. A session calls this only if ctx carries no timeout yet, so an embedded
-// run inherits the parent's remaining time.
-func withTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	if d <= 0 || ctx.Value(timeoutKey{}) != nil {
-		return context.WithCancel(ctx)
+// installDeadline adds a pausable deadline of d to ctx (creating the shared set if this is the first),
+// cancelling ctx with cause ErrTurnTimeout when it fires. Returns ctx + a stop func that cancels and
+// removes it.
+func installDeadline(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	dl := &deadline{cancel: cancel, at: time.Now().Add(d)}
+	dl.timer = time.AfterFunc(d, func() { cancel(ErrTurnTimeout) })
+
+	set, _ := ctx.Value(pausablesKey{}).(*pausables)
+	if set == nil {
+		set = &pausables{}
+		ctx = context.WithValue(ctx, pausablesKey{}, set)
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	st := &timeoutState{cancel: cancel, deadline: time.Now().Add(d)}
-	st.timer = time.AfterFunc(d, cancel)
-	ctx = context.WithValue(ctx, timeoutKey{}, st)
+	set.mu.Lock()
+	set.items = append(set.items, dl)
+	set.mu.Unlock()
+
 	return ctx, func() {
-		st.timer.Stop()
-		cancel()
+		dl.timer.Stop()
+		cancel(context.Canceled)
+		set.mu.Lock()
+		for i, x := range set.items {
+			if x == dl {
+				set.items = append(set.items[:i], set.items[i+1:]...)
+				break
+			}
+		}
+		set.mu.Unlock()
 	}
 }
 
-// Pause stops the wall-clock while a blocking wait (e.g. an out-of-band approval) is in progress and
-// returns a resume func to restart it. A tool's Call invokes it so a human deciding never trips the
-// turn timeout. No-op (resume is a no-op) if ctx carries no pausable timeout. Token spend is
-// unaffected.
+// withTimeout installs the TURN's pausable deadline (d <= 0 = none). A session calls it only if ctx
+// carries no deadline set yet, so an embedded run inherits the parent's remaining time.
+func withTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d <= 0 || ctx.Value(pausablesKey{}) != nil {
+		return context.WithCancel(ctx)
+	}
+	return installDeadline(ctx, d)
+}
+
+// WithPausableBudget adds a pausable wall-clock cap of d (d <= 0 = none) that ALSO pauses (via Pause)
+// while parked on an approval — for a nested budget such as a sandbox guest run, whose real-execution
+// cap must not count out-of-band wait time. Unlike the turn deadline it does NOT inherit; each call
+// adds its own to the set. Returns ctx + a stop func.
+func WithPausableBudget(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return installDeadline(ctx, d)
+}
+
+// Pause stops EVERY pausable deadline on ctx while a blocking wait (e.g. an out-of-band approval) is
+// in progress, returning a resume that restarts them all. A tool's Call invokes it so a human
+// deciding never trips a wall-clock cap. No-op if ctx carries none. Token spend is unaffected. The
+// paused span is also banked on the ctx's pausedClock so a tool's reported duration can exclude the
+// out-of-band wait (see activeSince).
 func Pause(ctx context.Context) (resume func()) {
-	st, _ := ctx.Value(timeoutKey{}).(*timeoutState)
-	if st == nil {
-		return func() {}
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.paused {
-		return func() {}
-	}
-	st.paused = true
-	if st.timer.Stop() {
-		st.remaining = max(time.Until(st.deadline), 0)
-	} else {
-		st.remaining = 0 // already fired
+	clock, _ := ctx.Value(pausedClockKey{}).(*pausedClock)
+	start := time.Now()
+
+	set, _ := ctx.Value(pausablesKey{}).(*pausables)
+	var resumes []func()
+	if set != nil {
+		set.mu.Lock()
+		items := append([]*deadline(nil), set.items...) // snapshot; don't hold the set lock while pausing
+		set.mu.Unlock()
+		resumes = make([]func(), 0, len(items))
+		for _, dl := range items {
+			resumes = append(resumes, dl.pause())
+		}
 	}
 	return func() {
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		if !st.paused {
+		for _, r := range resumes {
+			r()
+		}
+		if clock != nil {
+			clock.nanos.Add(int64(time.Since(start)))
+		}
+	}
+}
+
+// --- paused-time accounting (shared) ---
+//
+// A ctx carries a single monotonic counter of nanoseconds spent parked in Pause (out-of-band
+// approvals). It is installed once at the top level and inherited by nested runs, so every tool
+// call — parent or nested — reads the SAME counter. A call snapshots it at start and end; the delta
+// is exactly the approval wait that overlapped that call, which it subtracts from its wall-clock so
+// the reported duration is active execution time, not human-decision time.
+
+type pausedClockKey struct{}
+
+type pausedClock struct{ nanos atomic.Int64 }
+
+// withPausedClock installs the shared paused-time counter (inherit-if-present, like the token pool).
+func withPausedClock(ctx context.Context) context.Context {
+	if ctx.Value(pausedClockKey{}) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, pausedClockKey{}, &pausedClock{})
+}
+
+// pausedNanos reports the ctx's total banked paused time so far (0 if none installed).
+func pausedNanos(ctx context.Context) int64 {
+	c, _ := ctx.Value(pausedClockKey{}).(*pausedClock)
+	if c == nil {
+		return 0
+	}
+	return c.nanos.Load()
+}
+
+// activeSince returns the wall-clock elapsed since start MINUS any approval wait banked over that
+// span (pausedStart = pausedNanos(ctx) captured at start). Never negative.
+func activeSince(ctx context.Context, start time.Time, pausedStart int64) time.Duration {
+	d := time.Since(start) - time.Duration(pausedNanos(ctx)-pausedStart)
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+// pause stops one deadline's timer, banking its remaining time, and returns a resume that restarts it.
+func (dl *deadline) pause() (resume func()) {
+	dl.mu.Lock()
+	defer dl.mu.Unlock()
+	if dl.paused {
+		return func() {}
+	}
+	dl.paused = true
+	if dl.timer.Stop() {
+		dl.remaining = max(time.Until(dl.at), 0)
+	} else {
+		dl.remaining = 0 // already fired
+	}
+	return func() {
+		dl.mu.Lock()
+		defer dl.mu.Unlock()
+		if !dl.paused {
 			return
 		}
-		st.paused = false
-		st.deadline = time.Now().Add(st.remaining)
-		st.timer.Reset(st.remaining)
+		dl.paused = false
+		dl.at = time.Now().Add(dl.remaining)
+		dl.timer.Reset(dl.remaining)
 	}
 }
 

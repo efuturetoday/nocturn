@@ -35,6 +35,7 @@ type Host struct {
 	Approver gate.Approver
 	Secrets  *secret.Injector // host-owned credential jar the network tool injects from; nil = none
 	Scanner  *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
+	Notifier tools.Notifier   // out-of-band user notification for the notify tool; nil = no notify
 	Log      *slog.Logger
 }
 
@@ -50,6 +51,8 @@ type Workspace struct {
 	agentStore *chat.Store   // agent run transcripts (SourceAgent)
 	agents     agent.Set
 	sched      *agent.Scheduler
+	reminders  *tools.Reminders // persistent reminder timers; nil when no notifier
+	waker      *tools.Waker     // self-continuation timers, bound to the chat manager
 	log        *slog.Logger
 }
 
@@ -65,9 +68,25 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: agents: %w", name, err)
 	}
 
-	baseTools, err := tools.Base(h.Secrets, h.Scanner)
+	// wake lets a chat schedule its own continuation. One Waker per workspace, folded into the base
+	// tools by Base; it is bound to the chat manager below (Bind) so a fired wake resolves the
+	// invoking chat by id.
+	waker := tools.NewWaker(tools.WithWakeLogger(h.Log))
+	baseTools, err := tools.Base(tools.Config{Secrets: h.Secrets, Scanner: h.Scanner, Root: dir, Notifier: h.Notifier, Waker: waker})
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: tools: %w", name, err)
+	}
+	// Reminders are persistent per-workspace and fire through the notifier, so they only exist when a
+	// notifier does. Their tools fold into the base set like any other; the instance is held for its
+	// timer lifecycle (Restore below, Close on shutdown).
+	var reminders *tools.Reminders
+	if h.Notifier != nil {
+		reminders = tools.NewReminders(filepath.Join(dir, "reminders.json"), h.Notifier, h.Scanner)
+		remindTools, err := reminders.Tools()
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q: reminders: %w", name, err)
+		}
+		baseTools = append(baseTools, remindTools...)
 	}
 	base, err := agentkit.NewToolSet(baseTools...)
 	if err != nil {
@@ -119,11 +138,19 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		userStore:  userStore,
 		agentStore: agentStore,
 		agents:     agents,
+		reminders:  reminders,
+		waker:      waker,
 		log:        h.Log,
 	}
+	// Bind wake to the live chat manager now it exists: a fired wake resolves its chat by id via Open.
+	waker.Bind(w.chats)
 	w.sched = agent.NewScheduler(agents, func(ctx context.Context, a agent.Agent) {
 		_, _ = w.FireAgent(ctx, a.Name, "Run your scheduled task now.")
 	})
+	// Re-arm persisted reminders (overdue ones fire promptly) now the workspace is wired.
+	if reminders != nil {
+		reminders.Restore()
+	}
 	return w, nil
 }
 
@@ -249,7 +276,7 @@ func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Inje
 func policy() gate.Policy {
 	return gate.PolicyFunc(func(a gate.Action) gate.Ruling {
 		switch a.Kind {
-		case tools.NetKind:
+		case tools.NetKind, tools.FileKind:
 			return gate.AskWith(gate.RecallSession)
 		default:
 			return gate.Allowed()

@@ -13,10 +13,11 @@ import (
 // Stop reasons a turn can end with, surfaced on TurnEnd.Err (a wall-clock stop uses the ctx's
 // context.DeadlineExceeded).
 var (
-	ErrMaxSteps   = errors.New("agentkit: max steps reached")
-	ErrTokenLimit = errors.New("agentkit: token limit reached")
-	ErrMaxDepth   = errors.New("agentkit: max sub-agent depth reached")
-	ErrMaxSpawns  = errors.New("agentkit: max sub-agent spawns reached")
+	ErrMaxSteps    = errors.New("agentkit: max steps reached")
+	ErrTokenLimit  = errors.New("agentkit: token limit reached")
+	ErrMaxDepth    = errors.New("agentkit: max sub-agent depth reached")
+	ErrMaxSpawns   = errors.New("agentkit: max sub-agent spawns reached")
+	ErrTurnTimeout = errors.New("agentkit: turn timed out")
 )
 
 // Session is a live conversation: a serialized turn loop driven by Submit (input in) and observed
@@ -209,6 +210,11 @@ func (s *Session) turn(ctx context.Context, input string) {
 	s.appendMsgs(Message{Role: RoleUser, Content: input})
 	tools := s.toolset()
 	_, produced, total, err := s.run(ctx, tools, s.assemble())
+	// A wall-clock deadline cancels ctx with cause ErrTurnTimeout — surface that clear reason instead
+	// of the bare "context canceled" the aborted model/tool call bubbled up.
+	if context.Cause(ctx) == ErrTurnTimeout {
+		err = ErrTurnTimeout
+	}
 	s.appendMsgs(produced...)
 	s.persist()
 	Emit(ctx, TurnEnd{Err: err, Tokens: total})
@@ -232,6 +238,7 @@ func (s *Session) sink(ctx context.Context) func(Event) {
 // turn does that; Once keeps the caller's sink so a sub-agent streams to the parent).
 func (s *Session) decorate(ctx context.Context) (context.Context, context.CancelFunc) {
 	ctx = withCounter(ctx)
+	ctx = withPausedClock(ctx)
 	ctx = withTokenBudget(ctx, s.tokenLimit)
 	ctx = withSpawnLimits(ctx, s.maxDepth, s.maxSpawns)
 	ctx = withEffort(ctx, s.effort)
@@ -293,11 +300,17 @@ func (s *Session) runTools(ctx context.Context, tools ToolSet, calls []ToolCall)
 	var wg sync.WaitGroup
 	for i, tc := range calls {
 		wg.Go(func() {
+			start := time.Now()
+			pausedStart := pausedNanos(ctx)
 			out, err := tools.Call(ctx, tc.Tool, tc.Args)
 			if err != nil {
 				out = "error: " + err.Error()
 			}
-			results[i] = Message{Role: RoleTool, ToolCallID: tc.ID, Content: out}
+			// Persist the call's ACTIVE wall-clock (excluding any out-of-band approval wait) so the
+			// duration survives a reload (the live stream has it on ToolEnd; a reopened transcript reads
+			// it from here). Without the subtraction a call that parked on an approval would report the
+			// human's decision time as its own runtime.
+			results[i] = Message{Role: RoleTool, ToolCallID: tc.ID, Content: out, DurationMs: activeSince(ctx, start, pausedStart).Milliseconds()}
 		})
 	}
 	wg.Wait()

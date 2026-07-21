@@ -29,6 +29,7 @@ import (
 	"github.com/efuturetoday/nocturn/app/hitl"
 	"github.com/efuturetoday/nocturn/app/push"
 	"github.com/efuturetoday/nocturn/app/serve"
+	"github.com/efuturetoday/nocturn/app/tools"
 	"github.com/efuturetoday/nocturn/app/workspace"
 )
 
@@ -89,8 +90,10 @@ func main() {
 	var approver gate.Approver
 	var broker *hitl.Broker
 	var devices *auth.Store
+	var notifier tools.Notifier
 	if *serveAddr == "" {
 		approver = &terminalApprover{in: stdin}
+		notifier = printNotifier{} // proactive notify prints to the terminal
 	} else {
 		var err error
 		devices, err = auth.New("./nocturn-data/devices.json")
@@ -98,11 +101,13 @@ func main() {
 			fmt.Fprintln(os.Stderr, "auth:", err)
 			os.Exit(1)
 		}
-		broker = hitl.NewBroker(buildPusher(devices, logger), logger)
+		sender := apnsSender(logger) // nil when APNs is not configured
+		broker = hitl.NewBroker(pusherFor(sender, devices, logger), logger)
 		approver = broker
+		notifier = &pushNotifier{devices: devices, sender: sender, log: logger}
 	}
 	injector, scanner := buildSecrets(logger)
-	host := workspace.Host{LLM: llm, Approver: approver, Secrets: injector, Scanner: scanner, Log: logger}
+	host := workspace.Host{LLM: llm, Approver: approver, Secrets: injector, Scanner: scanner, Notifier: notifier, Log: logger}
 
 	spaces, err := workspace.OpenAll(host, wsRoot)
 	if err != nil {
@@ -127,19 +132,68 @@ func main() {
 	run(ctx, spaces[workspace.DefaultWorkspace], stdin, model)
 }
 
-// buildPusher builds the out-of-band waker for the hitl broker: APNs when NOCTURN_APNS_* is
-// configured, else a logging placeholder.
-func buildPusher(devices *auth.Store, log *slog.Logger) hitl.Pusher {
+// apnsSender builds the APNs sender from NOCTURN_APNS_*; nil when unconfigured or on error, so both
+// the hitl waker and the notify tool degrade to a log line rather than failing.
+func apnsSender(log *slog.Logger) push.Sender {
 	sender, err := push.APNSFromEnv()
 	if err != nil {
 		log.Warn("apns push disabled", "err", err)
-		return hitl.NewLogPusher(log)
+		return nil
 	}
 	if sender == nil {
-		return hitl.NewLogPusher(log) // NOCTURN_APNS_KEY unset — push off
+		return nil // NOCTURN_APNS_KEY unset — push off
 	}
 	log.Info("apns push enabled")
+	return sender
+}
+
+// pusherFor builds the out-of-band waker for the hitl broker: a real push when sender is set, else a
+// logging placeholder.
+func pusherFor(sender push.Sender, devices *auth.Store, log *slog.Logger) hitl.Pusher {
+	if sender == nil {
+		return hitl.NewLogPusher(log)
+	}
 	return &pushWaker{devices: devices, sender: sender}
+}
+
+// pushNotifier is the notify tool's user-facing sender in daemon mode: it pushes to every paired iOS
+// device. A nil sender (APNs unconfigured) degrades to a log line rather than an error.
+type pushNotifier struct {
+	devices *auth.Store
+	sender  push.Sender
+	log     *slog.Logger
+}
+
+func (p *pushNotifier) Notify(ctx context.Context, title, message string) error {
+	if p.sender == nil {
+		p.log.Info("notify (no push configured)", "title", title, "message", message)
+		return nil
+	}
+	var tokens []string
+	for _, t := range p.devices.PushTargets() {
+		if t.Platform == "ios" || t.Platform == "" {
+			tokens = append(tokens, t.Token)
+		}
+	}
+	if len(tokens) == 0 {
+		return nil
+	}
+	if title == "" {
+		title = "Nocturn"
+	}
+	return p.sender.Send(ctx, push.Message{Title: title, Body: message, Data: map[string]string{"type": "notify"}}, tokens)
+}
+
+// printNotifier is the notify tool's terminal fallback: a proactive notification prints inline.
+type printNotifier struct{}
+
+func (printNotifier) Notify(_ context.Context, title, message string) error {
+	if title != "" {
+		fmt.Printf("\n[notify] %s: %s\n", title, message)
+	} else {
+		fmt.Printf("\n[notify] %s\n", message)
+	}
+	return nil
 }
 
 // pushWaker bridges the device registry and a push Sender into hitl.Pusher: it wakes every device

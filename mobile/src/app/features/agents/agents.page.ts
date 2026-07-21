@@ -52,6 +52,6 @@ export class AgentsPage {
   protected openChat(c: ChatMeta): void {
     (document.activeElement as HTMLElement | null)?.blur();
     this.chat.openChat(c.id);
-    void this.router.navigate(['/tabs', 'agents', 'run', c.id]);
+    void this.router.navigate(['/agents', 'run', c.id]);
   }
 }

@@ -33,8 +33,9 @@ import { WorkspaceService } from '../core/services/workspace.service';
       --padding-start: 0.5rem; --padding-end: 0.5rem;
       font-weight: 700; text-transform: none;
     }
-    .ws-switch .ws-name { margin-right: 0.25rem; font-family: var(--font-display); }
-    .ws-switch ion-icon[slot='end'] { color: var(--ion-color-medium); font-size: 0.85rem; }
+    /* Match ion-title typography so the switcher reads as the page title, not a small button. */
+    .ws-switch .ws-name { margin-right: 0.25rem; font-family: var(--font-display); font-size: 1.25rem; }
+    .ws-switch ion-icon[slot='end'] { color: var(--ion-color-medium); font-size: 1rem; }
   `,
 })
 export class WorkspaceHeaderComponent {

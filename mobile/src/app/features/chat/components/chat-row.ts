@@ -20,7 +20,7 @@ export function relativeTime(iso: string): string {
 }
 
 /**
- * One lean chat-list row (Apple-Mail style): name + relative time on top, message count below,
+ * One lean chat-list row (Apple-Mail style): name + relative time on top, last-message preview below,
  * unread dot / approval badge on the right. Self-contained (no ion-item slots), so it drops into
  * an <ion-item> in the chat list AND the home dashboard — one source of truth for the row.
  */
@@ -39,7 +39,7 @@ export function relativeTime(iso: string): string {
         <div class="text">
           <span class="name" [class.unread]="unread()">{{ chat().name || 'Untitled chat' }}</span>
           <div class="bottom">
-            <span class="sub">{{ chat().turns }} {{ chat().turns === 1 ? 'message' : 'messages' }}</span>
+            <span class="sub">{{ chat().preview || 'No messages yet' }}</span>
             @if (approval()) {
               <ion-badge color="warning">approval</ion-badge>
             }
@@ -62,7 +62,8 @@ export function relativeTime(iso: string): string {
     .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .name.unread { font-weight: 700; }
     .bottom { display: flex; align-items: center; gap: 0.5rem; min-height: 1rem; }
-    .sub { color: var(--ion-color-medium); font-size: 0.85rem; }
+    /* Preview truncates to one line so a long last message never wraps the row. */
+    .sub { flex: 1; min-width: 0; color: var(--ion-color-medium); font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .time { flex-shrink: 0; color: var(--ion-color-medium); font-size: 0.78rem; }
   `,
 })
