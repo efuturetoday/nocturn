@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -29,6 +30,13 @@ const (
 
 // files is the filesystem tool group: every path is confined to one workspace root before anything
 // else. Like Net it is a small type owning its dep (the root), not a field on a god-object.
+//
+// Confinement is enforced by os.Root, not by lexical path math: each operation opens the workspace
+// root and performs the op through that handle, so a path can never escape the workspace — not via
+// "..", an absolute path, or a symlink INSIDE the workspace pointing out (the last of which lexical
+// Rel/prefix checks miss). os.Root re-validates at the syscall level. resolve/confine still compute
+// the cleaned workspace-relative target the gate matches (and a fast lexical reject), but the real
+// guarantee is the kernel's, not the string's.
 type files struct{ root string }
 
 // Tools exposes the filesystem tools. read/list/stat/search are observations (ungated within Root);
@@ -75,16 +83,30 @@ func (f files) Tools() ([]agentkit.Tool, error) {
 }
 
 func (f files) read(_ context.Context, args string) (string, error) {
-	abs, _, err := f.resolve(args)
+	target, err := f.resolve(args)
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(abs)
+	root, err := os.OpenRoot(f.root)
 	if err != nil {
 		return "", err
 	}
-	if len(data) > maxFileBytes {
-		data = data[:maxFileBytes]
+	defer root.Close()
+	fh, err := root.Open(filepath.FromSlash(target))
+	if err != nil {
+		return "", err
+	}
+	defer fh.Close()
+	info, err := fh.Stat()
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%q is not a regular file", target)
+	}
+	data, err := io.ReadAll(io.LimitReader(fh, maxFileBytes))
+	if err != nil {
+		return "", err
 	}
 	return string(data), nil
 }
@@ -100,11 +122,21 @@ func (f files) list(_ context.Context, args string) (string, error) {
 	if p == "" {
 		p = "." // listing the workspace root is legal; target is "."
 	}
-	abs, _, err := f.resolvePath(p)
+	target, err := f.confine(p)
 	if err != nil {
 		return "", err
 	}
-	entries, err := os.ReadDir(abs)
+	root, err := os.OpenRoot(f.root)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	dh, err := root.Open(filepath.FromSlash(target))
+	if err != nil {
+		return "", err
+	}
+	defer dh.Close()
+	entries, err := dh.ReadDir(-1)
 	if err != nil {
 		return "", err
 	}
@@ -125,16 +157,21 @@ func (f files) list(_ context.Context, args string) (string, error) {
 }
 
 func (f files) stat(_ context.Context, args string) (string, error) {
-	abs, _, err := f.resolve(args)
+	target, err := f.resolve(args)
 	if err != nil {
 		return "", err
 	}
+	root, err := os.OpenRoot(f.root)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
 	type stat struct {
 		Exists bool  `json:"exists"`
 		IsDir  bool  `json:"isDir"`
 		Size   int64 `json:"size"`
 	}
-	info, err := os.Stat(abs)
+	info, err := root.Stat(filepath.FromSlash(target))
 	var s stat
 	switch {
 	case err == nil:
@@ -147,7 +184,7 @@ func (f files) stat(_ context.Context, args string) (string, error) {
 	return jsonResult(s)
 }
 
-func (f files) search(ctx context.Context, args string) (string, error) {
+func (f files) search(_ context.Context, args string) (string, error) {
 	var a struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
@@ -166,18 +203,23 @@ func (f files) search(ctx context.Context, args string) (string, error) {
 	if base == "" {
 		base = "." // searching from the workspace root
 	}
-	absBase, _, err := f.resolvePath(base)
+	target, err := f.confine(base)
 	if err != nil {
 		return "", err
 	}
-	rootAbs, err := filepath.Abs(f.root)
+	root, err := os.OpenRoot(f.root)
 	if err != nil {
 		return "", err
 	}
+	defer root.Close()
+
+	// root.FS() is an fs.FS rooted at the workspace: WalkDir cannot escape it, and every path it
+	// yields is already the workspace-relative, forward-slashed path the other file_ tools take.
+	fsys := root.FS()
 	recursive := !strings.Contains(a.Pattern, "/")
 	matches := make([]string, 0, 16)
 	truncated := false
-	walkErr := filepath.WalkDir(absBase, func(p string, d fs.DirEntry, err error) error {
+	walkErr := fs.WalkDir(fsys, target, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -189,12 +231,10 @@ func (f files) search(ctx context.Context, args string) (string, error) {
 		var candidate string
 		if recursive {
 			candidate = d.Name()
+		} else if target == "." {
+			candidate = p
 		} else {
-			rel, rerr := filepath.Rel(absBase, p)
-			if rerr != nil {
-				return nil
-			}
-			candidate = filepath.ToSlash(rel)
+			candidate = strings.TrimPrefix(p, target+"/")
 		}
 		ok, merr := path.Match(a.Pattern, candidate)
 		if merr != nil {
@@ -203,12 +243,7 @@ func (f files) search(ctx context.Context, args string) (string, error) {
 		if !ok {
 			return nil
 		}
-		// Report the workspace-relative path (from Root) so the result feeds the other file_ tools.
-		rel, rerr := filepath.Rel(rootAbs, p)
-		if rerr != nil {
-			return nil
-		}
-		matches = append(matches, filepath.ToSlash(rel))
+		matches = append(matches, p)
 		if len(matches) >= maxSearchResults {
 			truncated = true
 			return fs.SkipAll
@@ -238,17 +273,24 @@ func (f files) write(ctx context.Context, args string) (string, error) {
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
-	abs, target, err := f.resolvePath(a.Path)
+	target, err := f.confine(a.Path)
 	if err != nil {
 		return "", err
 	}
 	if err := gate.Check(ctx, gate.Action{Kind: FileKind, Target: target}, pathMatch, dirSuggestions(target)...); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+	root, err := os.OpenRoot(f.root)
+	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(abs, []byte(a.Content), 0o600); err != nil {
+	defer root.Close()
+	if dir := path.Dir(target); dir != "." {
+		if err := root.MkdirAll(filepath.FromSlash(dir), 0o700); err != nil {
+			return "", err
+		}
+	}
+	if err := root.WriteFile(filepath.FromSlash(target), []byte(a.Content), 0o600); err != nil {
 		return "", err
 	}
 	return jsonResult(struct {
@@ -258,14 +300,19 @@ func (f files) write(ctx context.Context, args string) (string, error) {
 }
 
 func (f files) remove(ctx context.Context, args string) (string, error) {
-	abs, target, err := f.resolve(args)
+	target, err := f.resolve(args)
 	if err != nil {
 		return "", err
 	}
 	if err := gate.Check(ctx, gate.Action{Kind: FileKind, Target: target}, pathMatch, dirSuggestions(target)...); err != nil {
 		return "", err
 	}
-	if err := os.Remove(abs); err != nil {
+	root, err := os.OpenRoot(f.root)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	if err := root.Remove(filepath.FromSlash(target)); err != nil {
 		return "", err
 	}
 	return jsonResult(struct {
@@ -283,11 +330,11 @@ func (f files) move(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 	// BOTH endpoints are confined to Root — a move can neither read from nor write outside it.
-	fromAbs, fromTarget, err := f.resolvePath(a.From)
+	fromTarget, err := f.confine(a.From)
 	if err != nil {
 		return "", err
 	}
-	toAbs, toTarget, err := f.resolvePath(a.To)
+	toTarget, err := f.confine(a.To)
 	if err != nil {
 		return "", err
 	}
@@ -295,10 +342,17 @@ func (f files) move(ctx context.Context, args string) (string, error) {
 	if err := gate.Check(ctx, gate.Action{Kind: FileKind, Target: toTarget}, pathMatch, dirSuggestions(toTarget)...); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(toAbs), 0o700); err != nil {
+	root, err := os.OpenRoot(f.root)
+	if err != nil {
 		return "", err
 	}
-	if err := os.Rename(fromAbs, toAbs); err != nil {
+	defer root.Close()
+	if dir := path.Dir(toTarget); dir != "." {
+		if err := root.MkdirAll(filepath.FromSlash(dir), 0o700); err != nil {
+			return "", err
+		}
+	}
+	if err := root.Rename(filepath.FromSlash(fromTarget), filepath.FromSlash(toTarget)); err != nil {
 		return "", err
 	}
 	return jsonResult(struct {
@@ -307,35 +361,36 @@ func (f files) move(ctx context.Context, args string) (string, error) {
 	}{fromTarget, toTarget})
 }
 
-// resolve parses a tool's {path} argument and confines it.
-func (f files) resolve(args string) (abs, target string, err error) {
+// resolve parses a tool's {path} argument and confines it, returning the workspace-relative,
+// forward-slashed target.
+func (f files) resolve(args string) (target string, err error) {
 	var a struct {
 		Path string `json:"path"`
 	}
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return "", "", fmt.Errorf("invalid arguments: %w", err)
+		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
-	return f.resolvePath(a.Path)
+	return f.confine(a.Path)
 }
 
-// resolvePath confines userPath to Root and returns the absolute path plus the workspace-relative,
-// forward-slashed target the gate checks. A path that escapes the workspace (via .. or an absolute
-// path outside Root) is a hard error — enforced HERE, before the gate, so confinement never depends
-// on a rule being present.
-func (f files) resolvePath(userPath string) (abs, target string, err error) {
+// confine returns the workspace-relative, forward-slashed target for userPath and rejects an obvious
+// lexical escape (via .. or an absolute path outside Root) as a fast, gate-independent pre-check. It
+// is NOT the security boundary — os.Root is, at each operation — but it yields the clean target the
+// gate matches and fails early on the common case.
+func (f files) confine(userPath string) (target string, err error) {
 	if strings.TrimSpace(userPath) == "" {
-		return "", "", errors.New("missing required field: path")
+		return "", errors.New("missing required field: path")
 	}
 	rootAbs, err := filepath.Abs(f.root)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	abs = filepath.Join(rootAbs, filepath.FromSlash(userPath))
+	abs := filepath.Join(rootAbs, filepath.FromSlash(userPath))
 	rel, err := filepath.Rel(rootAbs, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("path %q escapes the workspace", userPath)
+		return "", fmt.Errorf("path %q escapes the workspace", userPath)
 	}
-	return abs, filepath.ToSlash(rel), nil
+	return filepath.ToSlash(rel), nil
 }
 
 // pathMatch reports whether a granted path pattern covers a target path, using path.Match glob
