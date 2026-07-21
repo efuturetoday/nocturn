@@ -60,18 +60,19 @@ func cronMatches(spec string, t time.Time) bool {
 		fieldMatch(f[4], int(t.Weekday()), 0, 6)
 }
 
-// fieldMatch matches one cron field (a comma list of parts) against val within [min,max].
-func fieldMatch(field string, val, min, max int) bool {
+// fieldMatch matches one cron field (a comma list of parts) against val within [lo,hi].
+func fieldMatch(field string, val, lo, hi int) bool {
 	for part := range strings.SplitSeq(field, ",") {
-		if partMatch(part, val, min, max) {
+		if partMatch(part, val, lo, hi) {
 			return true
 		}
 	}
 	return false
 }
 
-// partMatch matches one cron part: "*", "n", "a-b", or any of those with a "/step" suffix.
-func partMatch(part string, val, min, max int) bool {
+// partMatch matches one cron part: "*", "n", "a-b", or any of those with a "/step" suffix, within
+// the field's [lo,hi] bounds.
+func partMatch(part string, val, lo, hi int) bool {
 	step := 1
 	if base, stepStr, ok := strings.Cut(part, "/"); ok {
 		s, err := strconv.Atoi(stepStr)
@@ -82,28 +83,28 @@ func partMatch(part string, val, min, max int) bool {
 		part = base
 	}
 
-	lo, hi := min, max
+	from, to := lo, hi
 	switch {
 	case part == "*":
 		// full range
 	case strings.ContainsRune(part, '-'):
 		a, b, ok := strings.Cut(part, "-")
-		loN, err1 := strconv.Atoi(a)
-		hiN, err2 := strconv.Atoi(b)
+		fromN, err1 := strconv.Atoi(a)
+		toN, err2 := strconv.Atoi(b)
 		if !ok || err1 != nil || err2 != nil {
 			return false
 		}
-		lo, hi = loN, hiN
+		from, to = fromN, toN
 	default:
 		n, err := strconv.Atoi(part)
 		if err != nil {
 			return false
 		}
-		lo, hi = n, n
+		from, to = n, n
 	}
 
-	if val < lo || val > hi {
+	if val < from || val > to {
 		return false
 	}
-	return (val-lo)%step == 0
+	return (val-from)%step == 0
 }

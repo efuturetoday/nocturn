@@ -50,9 +50,12 @@ func (m *Manager) Transcript(id string) ([]agentkit.Message, error) { return m.s
 // Delete removes a chat's transcript.
 func (m *Manager) Delete(id string) error { return m.store.Delete(id) }
 
-// NewID mints a short random chat id.
+// NewID mints a short random chat id. A crypto/rand failure would yield a colliding all-zero id, so
+// it panics instead — the failure is catastrophic and near-impossible, not a case to paper over.
 func NewID() string {
 	b := make([]byte, 6)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("chat: crypto/rand failed: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }

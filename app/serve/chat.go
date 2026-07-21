@@ -81,23 +81,29 @@ func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 	switch cmd {
 	case "chat.submit":
 		var m ChatSubmit
-		_ = json.Unmarshal(data, &m)
+		if err := json.Unmarshal(data, &m); err != nil {
+			c.send(ctx, newError("bad chat.submit"))
+			return
+		}
 		c.chatSubmit(ctx, m)
 	case "chat.open":
 		var m ChatOpen
-		_ = json.Unmarshal(data, &m)
+		if err := json.Unmarshal(data, &m); err != nil {
+			c.send(ctx, newError("bad chat.open"))
+			return
+		}
 		c.chatOpen(ctx, m)
 	case "chat.list":
-		c.chatList()
+		c.chatList(ctx)
 	default:
-		c.send(Error{Type: "error", Text: "unknown action: " + cmd})
+		c.send(ctx, newError("unknown action: "+cmd))
 	}
 }
 
 func (c *conn) chatSubmit(ctx context.Context, m ChatSubmit) {
 	if c.active == nil {
 		_, sess := c.space.Chats().Start(ctx, m.Text)
-		c.activate(sess)
+		c.activate(ctx, sess)
 		return
 	}
 	c.active.Submit(m.Text)
@@ -106,46 +112,47 @@ func (c *conn) chatSubmit(ctx context.Context, m ChatSubmit) {
 func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 	msgs, err := c.space.Chats().Transcript(m.ID)
 	if err != nil {
-		c.send(Error{Type: "error", Text: "open: " + err.Error()})
+		c.send(ctx, newError("open: "+err.Error()))
 		return
 	}
-	c.send(ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs})
-	c.activate(c.space.Chats().Open(ctx, m.ID))
+	c.send(ctx, ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs})
+	c.activate(ctx, c.space.Chats().Open(ctx, m.ID))
 }
 
-func (c *conn) chatList() {
+func (c *conn) chatList(ctx context.Context) {
 	metas, err := c.space.Chats().List()
 	if err != nil {
-		c.send(Error{Type: "error", Text: "list: " + err.Error()})
+		c.send(ctx, newError("list: "+err.Error()))
 		return
 	}
-	c.send(ChatListResult{Type: "chat.list", Chats: metas})
+	c.send(ctx, ChatListResult{Type: "chat.list", Chats: metas})
 }
 
 // activate makes sess the connection's live chat: the previous one is closed (its transcript is
-// persisted and reloads on open), and a render goroutine forwards the new session's events.
-func (c *conn) activate(sess *agentkit.Session) {
+// persisted and reloads on open), and a render goroutine forwards the new session's events until
+// the session or the connection ends.
+func (c *conn) activate(ctx context.Context, sess *agentkit.Session) {
 	if c.active != nil {
 		c.active.Close()
 	}
 	c.active = sess
-	go c.render(sess)
+	go c.render(ctx, sess)
 }
 
 // render forwards one session's event stream to the client as chat.* events until it closes.
-func (c *conn) render(sess *agentkit.Session) {
+func (c *conn) render(ctx context.Context, sess *agentkit.Session) {
 	for ev := range sess.Subscribe() {
 		switch e := ev.(type) {
 		case agentkit.Token:
-			c.send(ChatToken{Type: "chat.token", Frame: e.Frame, Text: e.Text})
+			c.send(ctx, ChatToken{Type: "chat.token", Frame: e.Frame, Text: e.Text})
 		case agentkit.Thinking:
-			c.send(ChatThinking{Type: "chat.thinking", Frame: e.Frame, Text: e.Text})
+			c.send(ctx, ChatThinking{Type: "chat.thinking", Frame: e.Frame, Text: e.Text})
 		case agentkit.ToolStart:
-			c.send(ChatTool{Type: "chat.tool", Phase: "start", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args})
+			c.send(ctx, ChatTool{Type: "chat.tool", Phase: "start", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args})
 		case agentkit.ToolEnd:
-			c.send(ChatTool{Type: "chat.tool", Phase: "end", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args, Result: e.Result, Err: errText(e.Err)})
+			c.send(ctx, ChatTool{Type: "chat.tool", Phase: "end", Frame: e.Frame, ID: e.ID, Tool: e.Tool, Args: e.Args, Result: e.Result, Err: errText(e.Err)})
 		case agentkit.TurnEnd:
-			c.send(ChatTurnEnd{Type: "chat.turnEnd", Frame: e.Frame, Err: errText(e.Err), Tokens: e.Tokens.Total})
+			c.send(ctx, ChatTurnEnd{Type: "chat.turnEnd", Frame: e.Frame, Err: errText(e.Err), Tokens: e.Tokens.Total})
 		}
 	}
 }

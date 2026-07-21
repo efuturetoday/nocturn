@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -27,10 +28,15 @@ func Serve(ctx context.Context, addr string, space *workspace.Workspace, log *sl
 	})
 
 	srv := &http.Server{Addr: addr, Handler: mux}
-	go func() {
-		<-ctx.Done()
-		srv.Close()
-	}()
+	// Graceful shutdown on cancel; stop() cancels the hook if ListenAndServe returns first, so the
+	// watcher never leaks.
+	stop := context.AfterFunc(ctx, func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	})
+	defer stop()
+
 	log.Info("ws daemon listening", "addr", addr)
 	return srv.ListenAndServe()
 }

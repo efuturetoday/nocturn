@@ -23,6 +23,9 @@ type Error struct {
 	Text string `json:"text"`
 }
 
+// newError builds an Error event with the discriminator set.
+func newError(text string) Error { return Error{Type: "error", Text: text} }
+
 // conn is one WebSocket client. It drives the workspace's chat manager and streams a single active
 // chat's events back. Every outbound message goes through out — coder/websocket forbids concurrent
 // writes, so one writer goroutine owns the socket's write side.
@@ -74,11 +77,13 @@ func (c *conn) writer(ctx context.Context) {
 	}
 }
 
-// send queues a message for the writer (dropped if the buffer is full and the conn is dying).
-func (c *conn) send(msg any) {
+// send hands a message to the writer, applying backpressure: it blocks until the writer takes it or
+// the connection is torn down (ctx cancelled). It never silently drops — a slow client slows the
+// producer instead of losing stream events.
+func (c *conn) send(ctx context.Context, msg any) {
 	select {
 	case c.out <- msg:
-	default:
+	case <-ctx.Done():
 	}
 }
 
@@ -88,7 +93,7 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		Cmd string `json:"cmd"`
 	}
 	if err := json.Unmarshal(data, &env); err != nil {
-		c.send(Error{Type: "error", Text: "bad command"})
+		c.send(ctx, newError("bad command"))
 		return
 	}
 	domain, _, _ := strings.Cut(env.Cmd, ".")
@@ -96,7 +101,7 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 	case "chat":
 		c.chat(ctx, env.Cmd, data)
 	default:
-		c.send(Error{Type: "error", Text: "unknown domain: " + env.Cmd})
+		c.send(ctx, newError("unknown domain: "+env.Cmd))
 	}
 }
 
