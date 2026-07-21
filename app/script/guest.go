@@ -6,7 +6,7 @@
 // a dispatcher over an agentkit.ToolSet: the guest calls nocturn.call(tool, args), the dispatcher
 // looks the tool up and runs its Call. That toolset is the same gated set the model dispatches
 // through, so a script reaches an action through the identical authorization path (the gate +
-// out-of-band HITL). One gate is the reference monitor; adding a capability is a Go-side change and
+// out-of-band HITL). One gate is the reference monitor; adding a tool is a Go-side change and
 // never rebuilds the interpreter.
 //
 // Pure compute needs no approval: a script that never calls the gate performs no action. Each action
@@ -43,6 +43,10 @@ var interpreterEngine = sync.OnceValues(func() (*sandbox.Engine, error) {
 		HostNames: []string{gateName},
 	})
 })
+
+// Engine returns the process-wide QuickJS interpreter engine (compiled once, shared). A plugin whose
+// artifact is JavaScript runs on this same engine — one interpreter for every code_run and JS plugin.
+func Engine() (*sandbox.Engine, error) { return interpreterEngine() }
 
 // New builds a Runner over the shared QuickJS interpreter engine and the given tools — the same set
 // the model dispatches through, so script actions are gated and observed identically. This is the

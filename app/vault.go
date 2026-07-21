@@ -117,11 +117,11 @@ func loadBindings(inj *secret.Injector, path string, log *slog.Logger) {
 	}
 	for _, b := range raw {
 		inj.AddBinding("", secret.Binding{
-			Secret:     b.Secret,
-			Capability: tools.NetAxis, // a network credential
-			Host:       b.Host,
-			Header:     b.Header,
-			Prefix:     b.Prefix,
+			Secret: b.Secret,
+			Kind:   tools.NetAxis, // a network credential
+			Host:   b.Host,
+			Header: b.Header,
+			Prefix: b.Prefix,
 		})
 	}
 	log.Info("secret: bindings loaded", "count", len(raw))

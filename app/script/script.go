@@ -13,7 +13,7 @@ import (
 
 const (
 	// gateName is the single host import the interpreter declares and the only HostFunc we register.
-	// The guest reaches every capability through it.
+	// The guest reaches every tool through it.
 	gateName = "call"
 	// codeRunName is the model tool that runs a script. Underscore, not a dot: strict tool-call
 	// providers only accept ^[a-zA-Z0-9_-]{1,64}$.

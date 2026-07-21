@@ -114,7 +114,7 @@ func New(srv Server, guard *gateway.Guard, creds *secret.Injector, scanner *secr
 	c.client = mcp.New(c.transport)
 	if (srv.OAuth != nil || srv.Auth == "token") && creds != nil {
 		creds.AddBinding(Owner(srv.Name), secret.Binding{
-			Secret: SecretName(srv.Name, c.host), Capability: "http", Host: c.host,
+			Secret: SecretName(srv.Name, c.host), Kind: "http", Host: c.host,
 			Header: "Authorization", Prefix: "Bearer ",
 		})
 	}

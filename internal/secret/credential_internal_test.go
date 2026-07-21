@@ -2,7 +2,7 @@ package secret
 
 import "testing"
 
-func TestCapMatches(t *testing.T) {
+func TestKindMatches(t *testing.T) {
 	cases := []struct {
 		pattern, cap string
 		want         bool
@@ -14,8 +14,8 @@ func TestCapMatches(t *testing.T) {
 		{"", "http.read", false}, // empty matches nothing (fail closed)
 	}
 	for _, c := range cases {
-		if got := capMatches(c.pattern, c.cap); got != c.want {
-			t.Errorf("capMatches(%q, %q) = %v, want %v", c.pattern, c.cap, got, c.want)
+		if got := kindMatches(c.pattern, c.cap); got != c.want {
+			t.Errorf("kindMatches(%q, %q) = %v, want %v", c.pattern, c.cap, got, c.want)
 		}
 	}
 }

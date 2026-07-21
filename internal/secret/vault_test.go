@@ -143,7 +143,7 @@ func TestVault_TamperFailsClosed(t *testing.T) {
 }
 
 // The vault-backed store is a regular Store: the injector stamps a vault secret at
-// the border exactly as before (owner scoping, capability and host matching all
+// the border exactly as before (owner scoping, kind and host matching all
 // unchanged — those semantics are covered in secret_test.go).
 func TestVault_InjectorOverVaultStore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "secrets.vault")
@@ -154,7 +154,7 @@ func TestVault_InjectorOverVaultStore(t *testing.T) {
 
 	in := secret.NewInjector(v.Store())
 	in.AddBinding("mcp:github", secret.Binding{
-		Secret: "mcp:github/oauth", Capability: "http.write", Host: "api.github.com",
+		Secret: "mcp:github/oauth", Kind: "http.write", Host: "api.github.com",
 		Header: "Authorization", Prefix: "Bearer ",
 	})
 

@@ -254,8 +254,8 @@ func TestConn_CredentialInjection_OwnerScoped(t *testing.T) {
 	owner := mcpcap.Owner("test")
 	own := mcpcap.SecretName("test", conn.Host())
 	store.Set(own, []byte("own-token-123"))
-	inj.AddBinding(owner, secret.Binding{Secret: own, Capability: "http", Host: conn.Host(), Header: "Authorization", Prefix: "Bearer "})
-	inj.AddBinding("plugin:x", secret.Binding{Secret: "plugin:x/oauth", Capability: "http", Host: conn.Host(), Header: "X-Api-Key", Prefix: ""})
+	inj.AddBinding(owner, secret.Binding{Secret: own, Kind: "http", Host: conn.Host(), Header: "Authorization", Prefix: "Bearer "})
+	inj.AddBinding("plugin:x", secret.Binding{Secret: "plugin:x/oauth", Kind: "http", Host: conn.Host(), Header: "X-Api-Key", Prefix: ""})
 
 	if err := conn.Connect(context.Background()); err != nil {
 		t.Fatalf("connect: %v", err)

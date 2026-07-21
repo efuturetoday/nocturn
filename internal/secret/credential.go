@@ -20,25 +20,25 @@ var ErrNotFound = errors.New("secret not found")
 // credential package once this grows); the store stays a plain byte store.
 
 // Binding declares that a stored secret rides along on a request: which secret
-// (by name), for which Capability, to which destination Host, into which Header
+// (by name), for which Kind, to which destination Host, into which Header
 // (with an optional Prefix like "Bearer ").
 //
-// Capability and Host both scope the credential (least privilege — both must
-// match). Capability is matched by capMatches: an exact capability name
-// ("net.write"), "*" (any capability), or "" (nothing — fail closed). A normal
-// token uses Capability "*" (host-scoped like a cookie); tighten to a specific
-// capability for e.g. a read-only token. Host is matched by hostMatches: an
+// Kind and Host both scope the credential (least privilege — both must
+// match). Kind is matched by kindMatches: an exact kind name
+// ("net.write"), "*" (any kind), or "" (nothing — fail closed). A normal
+// token uses Kind "*" (host-scoped like a cookie); tighten to a specific
+// kind for e.g. a read-only token. Host is matched by hostMatches: an
 // exact host or "*.suffix"; empty/"*" matches nothing (cookie-domain rule).
 //
 // Placement is Header-only today. Query/path/body targets are a planned
 // extension; the placement is isolated in applyTo so Header+Prefix can later
 // become a Target sum type without disturbing Binding or its callers.
 type Binding struct {
-	Secret     string
-	Capability string
-	Host       string
-	Header     string
-	Prefix     string
+	Secret string
+	Kind   string
+	Host   string
+	Header string
+	Prefix string
 }
 
 // Request is an outgoing HTTP request the host performs on the guest's behalf.
@@ -160,7 +160,7 @@ func (in *Injector) SetResolver(name string, src Resolver) {
 	in.resolvers[name] = src
 }
 
-// InjectMatching stamps every binding matching the capability, the destination
+// InjectMatching stamps every binding matching the kind, the destination
 // host, AND the calling owner into req, host-side (the guest never saw the
 // value). Owner scoping (via WithOwner on ctx) keeps a plugin's credential on
 // its OWN calls only: a binding rides along iff it is unowned (an app default) or
@@ -170,7 +170,7 @@ func (in *Injector) SetResolver(name string, src Resolver) {
 // any Resolver error is fail-closed: no half-authenticated request leaves. It
 // returns the names of the injected secrets, so a later leak scan can redact them
 // if they echo back. A nil Injector injects nothing.
-func (in *Injector) InjectMatching(ctx context.Context, req *Request, capability, host string) ([]string, error) {
+func (in *Injector) InjectMatching(ctx context.Context, req *Request, kind, host string) ([]string, error) {
 	if in == nil {
 		return nil, nil
 	}
@@ -184,7 +184,7 @@ func (in *Injector) InjectMatching(ctx context.Context, req *Request, capability
 	var matches []match
 	in.mu.Lock()
 	for _, ob := range in.bindings {
-		if !ownerMatches(ob.owner, caller) || !capMatches(ob.Capability, capability) || !hostMatches(ob.Host, host) {
+		if !ownerMatches(ob.owner, caller) || !kindMatches(ob.Kind, kind) || !hostMatches(ob.Host, host) {
 			continue
 		}
 		src, ok := in.resolvers[ob.Secret]
@@ -243,17 +243,17 @@ func ownerMatches(bindingOwner, caller string) bool {
 	return bindingOwner == "" || bindingOwner == caller
 }
 
-// capMatches reports whether a call's capability is covered by a binding's
-// Capability pattern: an exact name, "*" (any capability), or "" (nothing —
-// fail closed, so a forgotten field never grants to every capability).
-func capMatches(pattern, capability string) bool {
+// kindMatches reports whether a call's kind is covered by a binding's
+// Kind pattern: an exact name, "*" (any kind), or "" (nothing —
+// fail closed, so a forgotten field never grants to every kind).
+func kindMatches(pattern, kind string) bool {
 	switch pattern {
 	case "":
 		return false
 	case "*":
 		return true
 	default:
-		return pattern == capability
+		return pattern == kind
 	}
 }
 

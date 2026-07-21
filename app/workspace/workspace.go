@@ -17,6 +17,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
 	"github.com/efuturetoday/nocturn/app/agent"
 	"github.com/efuturetoday/nocturn/app/chat"
+	"github.com/efuturetoday/nocturn/app/plugin"
 	"github.com/efuturetoday/nocturn/app/tools"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
@@ -63,7 +64,11 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: agents: %w", name, err)
 	}
 
-	toolset, err := buildTools(h.LLM, agents, h.Secrets, h.Scanner)
+	baseTools, err := tools.Base(h.Secrets, h.Scanner)
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: tools: %w", name, err)
+	}
+	base, err := agentkit.NewToolSet(baseTools...)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
 	}
@@ -71,6 +76,17 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	gs, err := newGrantStore(filepath.Join(dir, "grants.json"))
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: grants: %w", name, err)
+	}
+
+	toolset, err := buildTools(base, h.LLM, agents)
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
+	}
+
+	// Discover + install plugins as top-level tools, each caged to a subset of the base tools and
+	// gated exactly like the model's own calls. Their credentials are bound host-side on the injector.
+	if err := installPlugins(dir, base, toolset, h.Secrets); err != nil {
+		return nil, fmt.Errorf("workspace %q: plugins: %w", name, err)
 	}
 
 	rt := runtime.New(h.LLM,
@@ -161,16 +177,7 @@ func (w *Workspace) MarkRead(id string) {
 // and each declared agent exposed as a sub-agent tool scoped to its OWN cage — its filtered subset of
 // the base tools, plus code_run only if the agent declares it, dispatching over that same subset.
 // code_run is woven per cage (tools.Compose), so a script never reaches past the cage it runs in.
-func buildTools(llm agentkit.LLM, agents agent.Set, creds *secret.Injector, scanner *secret.Scanner) (agentkit.ToolSet, error) {
-	baseTools, err := tools.Base(creds, scanner)
-	if err != nil {
-		return agentkit.ToolSet{}, err
-	}
-	base, err := agentkit.NewToolSet(baseTools...)
-	if err != nil {
-		return agentkit.ToolSet{}, err
-	}
-
+func buildTools(base agentkit.ToolSet, llm agentkit.LLM, agents agent.Set) (agentkit.ToolSet, error) {
 	// Root chat cage: every base tool + code_run dispatching over them.
 	rootSet, err := tools.Compose(base, true)
 	if err != nil {
@@ -195,6 +202,46 @@ func buildTools(llm agentkit.LLM, agents agent.Set, creds *secret.Injector, scan
 		all = append(all, sub)
 	}
 	return agentkit.NewToolSet(all...)
+}
+
+// installPlugins discovers the plugins under <dir>/plugins and folds each one's tools into the
+// workspace toolset (as top-level <plugin>_<tool> tools, refusing a name collision), then binds its
+// declared credentials host-side on the injector under the plugin's owner. A plugin's guest can only
+// dispatch to the base tools its manifest lists — its cage — and every action it takes is gated the
+// same way the model's own calls are. A credential value lives in the vault under the (lowercased)
+// credential name; a missing value simply means the plugin runs unauthenticated.
+func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Injector) error {
+	plugins, err := plugin.LoadAll(filepath.Join(dir, "plugins"), base)
+	if err != nil {
+		return err
+	}
+	for _, p := range plugins {
+		pts, err := p.Tools()
+		if err != nil {
+			return err
+		}
+		for _, t := range pts {
+			n := t.Spec().Name
+			if _, dup := toolset[n]; dup {
+				return fmt.Errorf("plugin %q tool %q collides with an existing tool", p.Name(), n)
+			}
+			toolset[n] = t
+		}
+		if inj == nil {
+			continue
+		}
+		owner := plugin.Owner(p.Name())
+		for _, c := range p.Credentials() {
+			inj.AddBinding(owner, secret.Binding{
+				Secret: strings.ToLower(c.Name),
+				Kind:   c.Axis,
+				Host:   c.Host,
+				Header: c.Header,
+				Prefix: c.Prefix,
+			})
+		}
+	}
+	return nil
 }
 
 // policy is the workspace-root policy: the net axis asks the human (remembered for the session);

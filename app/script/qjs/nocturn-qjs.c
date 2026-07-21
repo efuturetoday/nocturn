@@ -10,7 +10,7 @@
  *   - exports: malloc/free so the host can allocate the gate's response inside
  *              guest memory (the standard packed-ptr ABI in sandbox.go).
  *
- * The script reaches every capability through nocturn.call(tool, args): it
+ * The script reaches every tool through nocturn.call(tool, args): it
  * serialises {tool, args} to JSON, hands it to the host gate, and the host
  * dispatches to the same brain.Tool registry the model uses (Guard.Authorize +
  * HITL). A pure-compute script never calls the gate and performs no action.
