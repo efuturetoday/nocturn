@@ -13,7 +13,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
-	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/app/secret"
 )
 
 // NetKind is the shared gate Kind every network tool checks, so one host allowlist spans them all.

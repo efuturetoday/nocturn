@@ -18,8 +18,8 @@ import (
 	"github.com/efuturetoday/nocturn/app/agent"
 	"github.com/efuturetoday/nocturn/app/chat"
 	"github.com/efuturetoday/nocturn/app/plugin"
+	"github.com/efuturetoday/nocturn/app/secret"
 	"github.com/efuturetoday/nocturn/app/tools"
-	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
 const turnTimeout = 2 * time.Minute

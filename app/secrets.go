@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/app/secret"
 )
 
 const (

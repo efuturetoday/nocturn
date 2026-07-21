@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
-	"github.com/efuturetoday/nocturn/internal/sandbox"
+	"github.com/efuturetoday/nocturn/app/sandbox"
 )
 
 const (

@@ -9,7 +9,7 @@ package tools
 import (
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/app/script"
-	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/app/secret"
 )
 
 // Base builds nocturn's base tools — the set every chat and agent draws from before a per-agent cage

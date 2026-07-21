@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/app/sandbox"
 	"github.com/efuturetoday/nocturn/app/script"
-	"github.com/efuturetoday/nocturn/internal/sandbox"
-	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/app/secret"
 )
 
 // defaultTimeout bounds one plugin tool-call (a single guest run).

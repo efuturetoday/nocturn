@@ -19,7 +19,7 @@ import (
 	"sync"
 
 	"github.com/efuturetoday/nocturn/agentkit"
-	"github.com/efuturetoday/nocturn/internal/sandbox"
+	"github.com/efuturetoday/nocturn/app/sandbox"
 )
 
 // interpreterGuest is the QuickJS interpreter compiled to a WASI command (quickjs-ng core +
