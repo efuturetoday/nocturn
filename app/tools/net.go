@@ -1,8 +1,4 @@
-// Package net is nocturn's HTTP tool. Before any request it asks the gate to authorize the target
-// host on the shared "net" axis, so a single host allowlist covers every network tool. The
-// host-matching semantics (a "*.example.com" grant covering subdomains) live here, in the tool that
-// owns them — the gate stays target-agnostic.
-package net
+package tools
 
 import (
 	"context"
@@ -18,8 +14,10 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 )
 
-// Axis is the shared gate Kind every network tool checks, so one host allowlist spans them all.
-const Axis = "net"
+// NetAxis is the shared gate Kind every network tool checks, so one host allowlist spans them all.
+// The host-matching semantics (a "*.example.com" grant covering subdomains) live in this file, with
+// the tool that owns them — the gate stays target-agnostic.
+const NetAxis = "net"
 
 const maxBody = 1 << 16 // 64 KiB of body handed back to the model
 
@@ -57,7 +55,7 @@ func (n *Net) get(ctx context.Context, args string) (string, error) {
 
 	// Gate the host on the net axis; the tool supplies both the matcher and the widenings a human
 	// may pick (the parent-domain wildcard), because only the tool knows what a host pattern means.
-	if err := gate.Check(ctx, gate.Action{Kind: Axis, Target: u.Host}, hostMatch, suggestions(u.Host)...); err != nil {
+	if err := gate.Check(ctx, gate.Action{Kind: NetAxis, Target: u.Host}, hostMatch, suggestions(u.Host)...); err != nil {
 		return "", err
 	}
 
@@ -96,7 +94,7 @@ func hostMatch(pattern, host string) bool {
 // "api.example.com" -> a "*.example.com" grant. A bare "example.com" yields no widening.
 func suggestions(host string) []gate.Grant {
 	if d := parentDomain(host); d != "" {
-		return []gate.Grant{{Kind: Axis, Target: "*." + d}}
+		return []gate.Grant{{Kind: NetAxis, Target: "*." + d}}
 	}
 	return nil
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
 	"github.com/efuturetoday/nocturn/app/agent"
 	"github.com/efuturetoday/nocturn/app/chat"
-	"github.com/efuturetoday/nocturn/app/net"
+	"github.com/efuturetoday/nocturn/app/tools"
 )
 
 const turnTimeout = 2 * time.Minute
@@ -55,17 +55,12 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: %w", name, err)
 	}
 
-	httpTool, err := net.New().Tool()
-	if err != nil {
-		return nil, fmt.Errorf("workspace %q: net tool: %w", name, err)
-	}
-
 	agents, err := agent.Discover(filepath.Join(dir, "agents"))
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: agents: %w", name, err)
 	}
 
-	tools, err := buildTools(h.LLM, httpTool, agents)
+	toolset, err := buildTools(h.LLM, agents)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
 	}
@@ -76,7 +71,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	}
 
 	rt := runtime.New(h.LLM,
-		runtime.WithTools(tools),
+		runtime.WithTools(toolset),
 		runtime.WithGate(policy(), gs, h.Approver),
 		runtime.WithSession(
 			agentkit.WithSystem(resolvePersona(dir)),
@@ -98,7 +93,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		name:       name,
 		dir:        dir,
 		llm:        h.LLM,
-		tools:      tools,
+		tools:      toolset,
 		grants:     gs,
 		chats:      chat.NewManager(rt, userStore),
 		userStore:  userStore,
@@ -161,12 +156,16 @@ func (w *Workspace) MarkRead(id string) {
 
 // buildTools assembles the workspace toolset: the base tools, plus each declared agent exposed as a
 // sub-agent tool the model can delegate to, scoped to its own filtered subset of the base tools.
-func buildTools(llm agentkit.LLM, httpTool agentkit.Tool, agents agent.Set) (agentkit.ToolSet, error) {
-	base, err := agentkit.NewToolSet(httpTool)
+func buildTools(llm agentkit.LLM, agents agent.Set) (agentkit.ToolSet, error) {
+	baseTools, err := tools.Base()
 	if err != nil {
-		return nil, err
+		return agentkit.ToolSet{}, err
 	}
-	all := []agentkit.Tool{httpTool}
+	base, err := agentkit.NewToolSet(baseTools...)
+	if err != nil {
+		return agentkit.ToolSet{}, err
+	}
+	all := append([]agentkit.Tool{}, baseTools...)
 	for _, a := range agents.All() {
 		sub := agentkit.AgentTool(
 			agentkit.Agent{Name: a.Name, Instructions: a.Instructions, Effort: a.Effort},
@@ -182,7 +181,7 @@ func buildTools(llm agentkit.LLM, httpTool agentkit.Tool, agents agent.Set) (age
 func policy() gate.Policy {
 	return gate.PolicyFunc(func(a gate.Action) gate.Ruling {
 		switch a.Kind {
-		case net.Axis:
+		case tools.NetAxis:
 			return gate.AskWith(gate.RecallSession)
 		default:
 			return gate.Allowed()
