@@ -42,8 +42,9 @@ type Session struct {
 	out  chan Event
 	done chan struct{}
 
-	mu      sync.Mutex
-	history []Message
+	mu         sync.Mutex
+	history    []Message
+	turnCancel context.CancelFunc // cancels the in-flight turn (Cancel); nil when idle
 }
 
 // Option configures a Session.
@@ -158,6 +159,24 @@ func (s *Session) Close() {
 	}
 }
 
+// Cancel aborts the in-flight turn (if any) without stopping the session: the turn ends with a
+// context.Canceled error, its partial output is still appended and persisted, and the next Submit
+// runs normally. A no-op when no turn is running.
+func (s *Session) Cancel() {
+	s.mu.Lock()
+	cancel := s.turnCancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *Session) setTurnCancel(cancel context.CancelFunc) {
+	s.mu.Lock()
+	s.turnCancel = cancel
+	s.mu.Unlock()
+}
+
 // loop is the session's single worker: it processes submitted inputs one at a time until ctx is
 // cancelled, then closes the output stream (it is the sole sender) and signals done.
 func (s *Session) loop(ctx context.Context) {
@@ -177,6 +196,12 @@ func (s *Session) loop(ctx context.Context) {
 // the produced messages to history, persists, and brackets the whole thing with TurnStart/TurnEnd.
 func (s *Session) turn(ctx context.Context, input string) {
 	ctx = WithSink(ctx, s.sink(ctx))
+	ctx, cancelTurn := context.WithCancel(ctx)
+	s.setTurnCancel(cancelTurn)
+	defer func() {
+		s.setTurnCancel(nil)
+		cancelTurn()
+	}()
 	ctx, cancel := s.decorate(ctx)
 	defer cancel()
 

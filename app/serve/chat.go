@@ -10,20 +10,28 @@ import (
 
 // ── client → server (cmd) ────────────────────────────────────────────────────
 
-// ChatSubmit sends a message to the active chat (starting a new one if none is active).
+// ChatSubmit sends a message to the active chat (starting a new one in workspace Ws if none is active).
 type ChatSubmit struct {
 	Cmd  string `json:"cmd"`
+	Ws   string `json:"ws"`
 	Text string `json:"text"`
 }
 
-// ChatOpen resumes a chat: the server replies with a ChatSnapshot, then streams its turns.
+// ChatOpen resumes a chat in workspace Ws: the server replies with a ChatSnapshot, then streams turns.
 type ChatOpen struct {
 	Cmd string `json:"cmd"`
+	Ws  string `json:"ws"`
 	ID  string `json:"id"`
 }
 
-// ChatList requests the workspace's chat list.
+// ChatList requests a workspace's chat list.
 type ChatList struct {
+	Cmd string `json:"cmd"`
+	Ws  string `json:"ws"`
+}
+
+// ChatCancel aborts the active chat's running turn (the chat and session stay open).
+type ChatCancel struct {
 	Cmd string `json:"cmd"`
 }
 
@@ -70,9 +78,10 @@ type ChatSnapshot struct {
 	Messages []agentkit.Message `json:"messages"`
 }
 
-// ChatListResult is the chat list, replying to chat.list.
+// ChatListResult is a workspace's chat list, replying to chat.list.
 type ChatListResult struct {
 	Type  string      `json:"type"`
+	Ws    string      `json:"ws"`
 	Chats []chat.Meta `json:"chats"`
 }
 
@@ -94,38 +103,59 @@ func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 		}
 		c.chatOpen(ctx, m)
 	case "chat.list":
-		c.chatList(ctx)
+		var m ChatList
+		if err := json.Unmarshal(data, &m); err != nil {
+			c.send(ctx, newError("bad chat.list"))
+			return
+		}
+		c.chatList(ctx, m.Ws)
+	case "chat.cancel":
+		if c.active != nil {
+			c.active.Cancel()
+		}
 	default:
 		c.send(ctx, newError("unknown action: "+cmd))
 	}
 }
 
 func (c *conn) chatSubmit(ctx context.Context, m ChatSubmit) {
-	if c.active == nil {
-		_, sess := c.space.Chats().Start(ctx, m.Text)
-		c.activate(ctx, sess)
+	if c.active != nil {
+		c.active.Submit(m.Text)
 		return
 	}
-	c.active.Submit(m.Text)
+	ws, ok := c.workspace(ctx, m.Ws)
+	if !ok {
+		return
+	}
+	_, sess := ws.Chats().Start(ctx, m.Text)
+	c.activate(ctx, sess)
 }
 
 func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
-	msgs, err := c.space.Chats().Transcript(m.ID)
+	ws, ok := c.workspace(ctx, m.Ws)
+	if !ok {
+		return
+	}
+	msgs, err := ws.Chats().Transcript(m.ID)
 	if err != nil {
 		c.send(ctx, newError("open: "+err.Error()))
 		return
 	}
 	c.send(ctx, ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs})
-	c.activate(ctx, c.space.Chats().Open(ctx, m.ID))
+	c.activate(ctx, ws.Chats().Open(ctx, m.ID))
 }
 
-func (c *conn) chatList(ctx context.Context) {
-	metas, err := c.space.Chats().List()
+func (c *conn) chatList(ctx context.Context, wsName string) {
+	ws, ok := c.workspace(ctx, wsName)
+	if !ok {
+		return
+	}
+	metas, err := ws.Chats().List()
 	if err != nil {
 		c.send(ctx, newError("list: "+err.Error()))
 		return
 	}
-	c.send(ctx, ChatListResult{Type: "chat.list", Chats: metas})
+	c.send(ctx, ChatListResult{Type: "chat.list", Ws: wsName, Chats: metas})
 }
 
 // activate makes sess the connection's live chat: the previous one is closed (its transcript is

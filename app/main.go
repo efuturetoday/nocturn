@@ -91,7 +91,8 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("nocturn daemon — ws on %s (model %q)\n", *serveAddr, model)
-		if err := serve.Serve(ctx, *serveAddr, ws, devices, broker, logger); err != nil && err != http.ErrServerClosed {
+		spaces := map[string]*workspace.Workspace{"main": ws} // a workspace registry is a later slice
+		if err := serve.Serve(ctx, *serveAddr, spaces, devices, broker, logger); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintln(os.Stderr, "serve:", err)
 			os.Exit(1)
 		}

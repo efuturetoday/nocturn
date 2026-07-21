@@ -33,7 +33,7 @@ func newError(text string) Error { return Error{Type: "error", Text: text} }
 // writes, so one writer goroutine owns the socket's write side.
 type conn struct {
 	ws      *websocket.Conn
-	space   *workspace.Workspace
+	spaces  map[string]*workspace.Workspace // the daemon's workspaces, by name
 	devices *auth.Store
 	broker  *hitl.Broker
 	log     *slog.Logger
@@ -42,8 +42,17 @@ type conn struct {
 	active *agentkit.Session
 }
 
-func newConn(ws *websocket.Conn, space *workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger) *conn {
-	return &conn{ws: ws, space: space, devices: devices, broker: broker, log: log, out: make(chan any, 64)}
+func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger) *conn {
+	return &conn{ws: ws, spaces: spaces, devices: devices, broker: broker, log: log, out: make(chan any, 64)}
+}
+
+// workspace resolves a workspace by name, writing an error and returning false if unknown.
+func (c *conn) workspace(ctx context.Context, name string) (*workspace.Workspace, bool) {
+	w, ok := c.spaces[name]
+	if !ok {
+		c.send(ctx, newError("unknown workspace: "+name))
+	}
+	return w, ok
 }
 
 // serve runs the connection until ctx is cancelled or the socket closes: a writer goroutine drains
@@ -116,6 +125,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.approval(ctx, env.Cmd, data)
 	case "presence":
 		c.presence(ctx, env.Cmd, data)
+	case "workspace":
+		c.workspaceCmd(ctx, env.Cmd)
 	default:
 		c.send(ctx, newError("unknown domain: "+env.Cmd))
 	}

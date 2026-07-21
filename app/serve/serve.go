@@ -20,7 +20,7 @@ const bootstrapTTL = 5 * time.Minute
 // connection must carry a paired device's bearer; the first device pairs via POST /pair with the
 // bootstrap code logged at startup, further devices via POST /join + /join/confirm. One backend,
 // many fronts — the backend is the truth.
-func Serve(ctx context.Context, addr string, space *workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger) error {
+func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger) error {
 	if code := devices.Bootstrap(bootstrapTTL); code != "" {
 		log.Info("no devices paired — pair one with POST /pair", "code", code, "validFor", bootstrapTTL)
 	}
@@ -45,7 +45,7 @@ func Serve(ctx context.Context, addr string, space *workspace.Workspace, devices
 			return
 		}
 		defer ws.CloseNow()
-		newConn(ws, space, devices, broker, log.With("remote", r.RemoteAddr)).serve(r.Context())
+		newConn(ws, spaces, devices, broker, log.With("remote", r.RemoteAddr)).serve(r.Context())
 	})
 
 	srv := &http.Server{Addr: addr, Handler: mux}
