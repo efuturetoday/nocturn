@@ -30,7 +30,7 @@ import (
 	"github.com/efuturetoday/nocturn/app/workspace"
 )
 
-const wsDir = "./nocturn-data/workspaces/main"
+const wsRoot = "./nocturn-data/workspaces"
 
 func main() {
 	serveAddr := flag.String("serve", "", "run a WebSocket daemon at this address instead of the terminal (e.g. :8080)")
@@ -77,12 +77,14 @@ func main() {
 	}
 	host := workspace.Host{LLM: llm, Approver: approver, Log: logger}
 
-	ws, err := workspace.Open(host, "main", wsDir)
+	spaces, err := workspace.OpenAll(host, wsRoot)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	go ws.StartAgents(ctx) // cron scheduler for declared agents
+	for _, ws := range spaces {
+		go ws.StartAgents(ctx) // cron scheduler per workspace
+	}
 
 	if *serveAddr != "" {
 		devices, err := auth.New("./nocturn-data/devices.json")
@@ -90,8 +92,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "auth:", err)
 			os.Exit(1)
 		}
-		fmt.Printf("nocturn daemon — ws on %s (model %q)\n", *serveAddr, model)
-		spaces := map[string]*workspace.Workspace{"main": ws} // a workspace registry is a later slice
+		fmt.Printf("nocturn daemon — ws on %s (%d workspaces, model %q)\n", *serveAddr, len(spaces), model)
 		if err := serve.Serve(ctx, *serveAddr, spaces, devices, broker, logger); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintln(os.Stderr, "serve:", err)
 			os.Exit(1)
@@ -99,7 +100,7 @@ func main() {
 		return
 	}
 
-	run(ctx, ws, stdin, model)
+	run(ctx, spaces["main"], stdin, model)
 }
 
 // run is the terminal loop: the first message (or one after /new) starts a chat; /chats lists,

@@ -108,6 +108,34 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	return w, nil
 }
 
+// OpenAll opens every workspace under root (each subdirectory is one, by name), always including a
+// "main" so a fresh install and the terminal have a default. It is the daemon's workspace registry.
+func OpenAll(h Host, root string) (map[string]*Workspace, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	spaces := map[string]*Workspace{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		ws, err := Open(h, e.Name(), filepath.Join(root, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		spaces[e.Name()] = ws
+	}
+	if _, ok := spaces["main"]; !ok {
+		ws, err := Open(h, "main", filepath.Join(root, "main"))
+		if err != nil {
+			return nil, err
+		}
+		spaces["main"] = ws
+	}
+	return spaces, nil
+}
+
 // Name returns the workspace name.
 func (w *Workspace) Name() string { return w.name }
 
