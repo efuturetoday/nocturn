@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -41,6 +42,7 @@ const (
 type files struct {
 	root    string
 	scanner *secret.Scanner // ingress leak scanner; nil = no redaction of read content
+	log     *slog.Logger    // confinement-event trace; nil = silent
 }
 
 // Tools exposes the filesystem tools. read/list/stat/search are observations (ungated within Root);
@@ -397,6 +399,9 @@ func (f files) confine(userPath string) (target string, err error) {
 	abs := filepath.Join(rootAbs, filepath.FromSlash(userPath))
 	rel, err := filepath.Rel(rootAbs, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if f.log != nil {
+			f.log.Warn("file path escapes the workspace", "path", userPath) // confinement boundary rejected the target
+		}
 		return "", fmt.Errorf("path %q escapes the workspace", userPath)
 	}
 	return filepath.ToSlash(rel), nil

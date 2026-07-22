@@ -98,7 +98,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// tools by Base; it is bound to the chat manager below (Bind) so a fired wake resolves the
 	// invoking chat by id.
 	waker := tools.NewWaker(tools.WithWakeLogger(h.Log))
-	baseTools, err := tools.Base(tools.Config{Secrets: injector, Scanner: scanner, Root: mnt, Notifier: h.Notifier, Waker: waker})
+	baseTools, err := tools.Base(tools.Config{Secrets: injector, Scanner: scanner, Root: mnt, Notifier: h.Notifier, Waker: waker, Logger: wslog.With("component", "tool")})
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: tools: %w", name, err)
 	}
@@ -108,6 +108,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	var reminders *tools.Reminders
 	if h.Notifier != nil {
 		reminders = tools.NewReminders(filepath.Join(dir, "reminders.json"), h.Notifier, scanner)
+		reminders.SetLogger(wslog.With("component", "remind"))
 		remindTools, err := reminders.Tools()
 		if err != nil {
 			return nil, fmt.Errorf("workspace %q: reminders: %w", name, err)
@@ -350,7 +351,7 @@ func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scan
 	}
 	installed := 0
 	for _, srv := range servers {
-		conn, err := mcp.NewConn(srv, inj, scanner)
+		conn, err := mcp.NewConn(srv, inj, scanner, log)
 		if err != nil {
 			log.Warn("mcp server skipped (bad config)", "server", srv.Name, "err", err)
 			continue

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -37,6 +38,7 @@ type Reminders struct {
 	path     string
 	notifier Notifier
 	scanner  *secret.Scanner
+	log      *slog.Logger
 
 	mu     sync.Mutex
 	items  map[string]Reminder
@@ -52,11 +54,19 @@ func NewReminders(path string, notifier Notifier, scanner *secret.Scanner) *Remi
 		path:     path,
 		notifier: notifier,
 		scanner:  scanner,
+		log:      slog.New(slog.DiscardHandler),
 		items:    map[string]Reminder{},
 		timers:   map[string]*time.Timer{},
 	}
 	r.load()
 	return r
+}
+
+// SetLogger attaches a logger so a fire dropped by the re-scan is not silent. nil is ignored.
+func (r *Reminders) SetLogger(l *slog.Logger) {
+	if l != nil {
+		r.log = l
+	}
 }
 
 // Tools exposes remind / remind_list / remind_cancel.
@@ -229,6 +239,7 @@ func (r *Reminders) fire(id string) {
 	// grew) — drop silently rather than deliver a leak.
 	if r.scanner != nil {
 		if err := r.scanner.ScanEgress(rem.Title, rem.Message); err != nil {
+			r.log.Warn("reminder dropped — egress scan flagged its text", "id", id)
 			return
 		}
 	}

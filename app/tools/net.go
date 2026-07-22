@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,14 +32,18 @@ type Net struct {
 	client  *http.Client
 	secrets *secret.Injector // host-owned, host-bound credential jar; nil = no injection
 	scanner *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
+	log     *slog.Logger     // effect trace; nil = silent (gate/scanner log deny/egress themselves)
 }
 
 // New builds a Net with a bounded HTTP client, an optional credential injector and an optional leak
 // scanner (nil = that feature off). The client re-gates every redirect hop (see checkRedirect): a 3xx
 // is a fresh request to a possibly-different host, so it must clear the same host allowlist and egress
 // scan as the original — otherwise a redirect is a gate/exfil bypass.
-func New(secrets *secret.Injector, scanner *secret.Scanner) *Net {
-	n := &Net{secrets: secrets, scanner: scanner}
+func New(secrets *secret.Injector, scanner *secret.Scanner, log *slog.Logger) *Net {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	n := &Net{secrets: secrets, scanner: scanner, log: log}
 	n.client = &http.Client{Timeout: 30 * time.Second, CheckRedirect: n.checkRedirect}
 	return n
 }
@@ -196,9 +201,11 @@ func (n *Net) do(ctx context.Context, method, rawURL, body, contentType string) 
 
 	resp, err := n.client.Do(req)
 	if err != nil {
+		n.log.Warn("http request failed", "method", method, "host", u.Host, "err", err)
 		return "", fmt.Errorf("fetch: %w", err)
 	}
 	defer resp.Body.Close()
+	n.log.Debug("http request", "method", method, "host", u.Host, "status", resp.StatusCode)
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {

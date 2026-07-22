@@ -86,7 +86,7 @@ func (p *mcpProbe) start() *httptest.Server {
 // must not prompt, mirroring installMCP.
 func dialTool(t *testing.T, srv mcp.Server, creds *secret.Injector, scanner *secret.Scanner) agentkit.Tool {
 	t.Helper()
-	conn, err := mcp.NewConn(srv, creds, scanner)
+	conn, err := mcp.NewConn(srv, creds, scanner, nil)
 	if err != nil {
 		t.Fatalf("NewConn: %v", err)
 	}

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -60,6 +61,7 @@ type Conn struct {
 	creds   *secret.Injector // host-owned credential jar; nil = no injection
 	scanner *secret.Scanner  // bidirectional leak scanner; nil = no scanning
 	http    *http.Client
+	log     *slog.Logger // protocol/transport trace; nil = silent
 
 	host   string
 	client *Client
@@ -72,15 +74,18 @@ type Conn struct {
 // static token the operator seeded in the vault). No I/O happens here; Connect
 // performs the handshake. The HTTP client re-gates every redirect hop
 // (checkRedirect), so single-host confinement survives a 3xx.
-func NewConn(srv Server, creds *secret.Injector, scanner *secret.Scanner) (*Conn, error) {
+func NewConn(srv Server, creds *secret.Injector, scanner *secret.Scanner, log *slog.Logger) (*Conn, error) {
 	u, err := url.Parse(srv.URL)
 	if err != nil || u.Hostname() == "" {
 		return nil, fmt.Errorf("mcp: server %q: bad url %q", srv.Name, srv.URL)
 	}
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
 	// host carries the port when the URL states one, exactly like net.go's u.Host — so an MCP server
 	// and http_read/http_write share ONE grant target (ADR-9). For a normal https URL (implicit 443)
 	// u.Host == u.Hostname(), so the common case is identical either way.
-	c := &Conn{server: srv, creds: creds, scanner: scanner, host: u.Host}
+	c := &Conn{server: srv, creds: creds, scanner: scanner, log: log.With("server", srv.Name), host: u.Host}
 	c.http = &http.Client{Timeout: 30 * time.Second, CheckRedirect: c.checkRedirect}
 	c.client = New(c.transport)
 	if (srv.OAuth != nil || srv.Auth == "token") && creds != nil {
@@ -100,6 +105,7 @@ func (c *Conn) checkRedirect(req *http.Request, via []*http.Request) error {
 		return errors.New("stopped after 10 redirects")
 	}
 	ctx := req.Context()
+	c.log.Debug("mcp redirect", "to", req.URL.Host, "hop", len(via))
 	if err := gate.Check(ctx, gate.Action{Kind: tools.NetKind, Target: req.URL.Host}, tools.HostMatch, tools.NetSuggestions(req.URL.Host)...); err != nil {
 		return err
 	}
@@ -150,15 +156,19 @@ func (c *Conn) transport(ctx context.Context, body []byte, header http.Header) (
 	for k, v := range req.Headers {
 		httpReq.Header.Set(k, v)
 	}
+	c.log.Debug("mcp request", "host", c.host, "req_bytes", len(body))
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
+		c.log.Warn("mcp request failed", "host", c.host, "err", err)
 		return nil, err
 	}
 	// 5. A non-2xx is a server rejection (distinct from a network failure, where no response arrived).
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
+		c.log.Warn("mcp server rejected", "host", c.host, "status", resp.StatusCode)
 		return nil, fmt.Errorf("mcp: %s: server rejected the request (HTTP %d)", c.server.Name, resp.StatusCode)
 	}
+	c.log.Debug("mcp response", "status", resp.StatusCode, "content_type", resp.Header.Get("Content-Type"))
 	// 6. Ingress redaction at the boundary, BEFORE protocol parsing — a stored secret echoed back
 	// never reaches the model, whichever shape the server chose. Both shapes are line-oriented (one
 	// JSON object, or SSE data: frames each on one line), so per-line redaction is loss-free and

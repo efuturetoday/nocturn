@@ -13,6 +13,7 @@ import (
 // Connect performs the MCP handshake (initialize + notifications/initialized)
 // through the gated transport.
 func (c *Conn) Connect(ctx context.Context) error {
+	c.log.Debug("mcp connect", "url", c.server.URL)
 	if err := c.client.Initialize(ctx); err != nil {
 		return fmt.Errorf("mcp: connect %s: %w", c.server.Name, err)
 	}
@@ -34,6 +35,7 @@ func (c *Conn) Tools(ctx context.Context) ([]agentkit.Tool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mcp: list %s: %w", c.server.Name, err)
 	}
+	c.log.Debug("mcp tools listed", "count", len(infos))
 	out := make([]agentkit.Tool, 0, len(infos))
 	seen := map[string]bool{}
 	for _, info := range infos {

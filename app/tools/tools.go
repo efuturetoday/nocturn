@@ -7,6 +7,8 @@
 package tools
 
 import (
+	"log/slog"
+
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/app/script"
 	"github.com/efuturetoday/nocturn/app/secret"
@@ -20,6 +22,7 @@ type Config struct {
 	Root     string           // workspace root; file tools are confined here (empty = no file tools)
 	Notifier Notifier         // out-of-band user notification; nil = no notify tool
 	Waker    *Waker           // self-continuation scheduler; nil = no wake tool (caller Binds it to the chat manager)
+	Logger   *slog.Logger     // effect-trace (http request / path-escape); nil = silent. gate/scanner log their own events.
 }
 
 // Base builds nocturn's base tools — the set every chat and agent draws from before a per-agent cage
@@ -28,7 +31,7 @@ type Config struct {
 // slice so the caller can both form the base ToolSet and scope per-agent subsets from it. code_run is
 // NOT here: it is woven per cage by Compose, so a script's reach is bounded to the tools of its cage.
 func Base(cfg Config) ([]agentkit.Tool, error) {
-	netTools, err := New(cfg.Secrets, cfg.Scanner).Tools()
+	netTools, err := New(cfg.Secrets, cfg.Scanner, cfg.Logger).Tools()
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +41,7 @@ func Base(cfg Config) ([]agentkit.Tool, error) {
 	}
 	out := append(netTools, timeNow)
 	if cfg.Root != "" {
-		fileTools, err := files{root: cfg.Root, scanner: cfg.Scanner}.Tools()
+		fileTools, err := files{root: cfg.Root, scanner: cfg.Scanner, log: cfg.Logger}.Tools()
 		if err != nil {
 			return nil, err
 		}
