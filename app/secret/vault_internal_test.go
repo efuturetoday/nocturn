@@ -39,11 +39,11 @@ func TestSeal_UsesAAD_CrossVersionRejected(t *testing.T) {
 	}
 
 	// Control: sealed under the real AAD opens.
-	if _, err := openSealed(frame(vaultAAD), key); err != nil {
+	if _, err := openSealed(frame(vaultAAD), key, vaultAAD); err != nil {
 		t.Fatalf("control (correct AAD) failed to open: %v", err)
 	}
 	// Cross-version: sealed under a different AAD must fail closed.
-	if _, err := openSealed(frame([]byte("nocturn-vault-v2")), key); !errors.Is(err, ErrWrongPassphrase) {
+	if _, err := openSealed(frame([]byte("nocturn-vault-v2")), key, vaultAAD); !errors.Is(err, ErrWrongPassphrase) {
 		t.Fatalf("wrong AAD: got %v, want ErrWrongPassphrase", err)
 	}
 }
@@ -57,7 +57,7 @@ func TestOpenVault_UnknownVersion_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	blob, err := seal(plaintext, key)
+	blob, err := seal(plaintext, key, vaultAAD)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
@@ -91,11 +91,11 @@ func TestOpenVault_OversizeCiphertext_Rejected(t *testing.T) {
 func TestSeal_NonceUniquePerSeal(t *testing.T) {
 	key := make([]byte, 32)
 	pt := []byte("same-plaintext")
-	b1, err := seal(pt, key)
+	b1, err := seal(pt, key, vaultAAD)
 	if err != nil {
 		t.Fatalf("seal 1: %v", err)
 	}
-	b2, err := seal(pt, key)
+	b2, err := seal(pt, key, vaultAAD)
 	if err != nil {
 		t.Fatalf("seal 2: %v", err)
 	}

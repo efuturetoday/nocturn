@@ -65,9 +65,21 @@ type vaultFile struct {
 type Vault struct {
 	path string
 	key  []byte // 32-byte AES-256 key (the workspace key derived from the master)
+	aad  []byte // GCM additional data: the fixed format tag, or a shard's relative path
 
 	mu    sync.Mutex // serializes mutate+persist
 	store *Store
+}
+
+// Option configures a Vault at open time.
+type Option func(*Vault)
+
+// WithAAD binds the vault's AES-GCM additional-authenticated-data to a caller value
+// instead of the fixed format tag — used by a secret shard to bind its ciphertext to
+// its workspace-relative path, so a shard file copied into another folder fails to
+// authenticate even before the (path-derived) key mismatch would catch it.
+func WithAAD(aad []byte) Option {
+	return func(v *Vault) { v.aad = append([]byte(nil), aad...) }
 }
 
 // OpenVault loads the encrypted vault at path with a 32-byte key. A missing file is a
@@ -75,11 +87,14 @@ type Vault struct {
 // authenticates against it. An existing file the key does not authenticate is
 // ErrWrongPassphrase; a corrupt, oversized, or unknown-version file is an error — all
 // fail-closed, never a silent empty vault over a real one.
-func OpenVault(path string, key []byte) (*Vault, error) {
+func OpenVault(path string, key []byte, opts ...Option) (*Vault, error) {
 	if len(key) != 32 {
 		return nil, fmt.Errorf("vault: key must be 32 bytes, got %d", len(key))
 	}
-	v := &Vault{path: path, key: key, store: NewStore()}
+	v := &Vault{path: path, key: key, aad: vaultAAD, store: NewStore()}
+	for _, o := range opts {
+		o(v)
+	}
 
 	ciphertext, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -95,7 +110,7 @@ func OpenVault(path string, key []byte) (*Vault, error) {
 		return nil, fmt.Errorf("vault: %s exceeds %d bytes", path, maxVaultBytes)
 	}
 
-	plaintext, err := openSealed(ciphertext, key)
+	plaintext, err := openSealed(ciphertext, key, v.aad)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +172,7 @@ func (v *Vault) persistSnapshot(secrets map[string][]byte) error {
 	if err != nil {
 		return err
 	}
-	ciphertext, err := seal(plaintext, v.key)
+	ciphertext, err := seal(plaintext, v.key, v.aad)
 	if err != nil {
 		return err
 	}
@@ -171,8 +186,8 @@ func (v *Vault) persistSnapshot(secrets map[string][]byte) error {
 	return os.Rename(tmp, v.path)
 }
 
-// seal encrypts plaintext with AES-256-GCM under key: magic | format | nonce | ct+tag.
-func seal(plaintext, key []byte) ([]byte, error) {
+// seal encrypts plaintext with AES-256-GCM under key + aad: magic | format | nonce | ct+tag.
+func seal(plaintext, key, aad []byte) ([]byte, error) {
 	gcm, err := newGCM(key)
 	if err != nil {
 		return nil, err
@@ -181,7 +196,7 @@ func seal(plaintext, key []byte) ([]byte, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("vault: nonce: %w", err)
 	}
-	ct := gcm.Seal(nil, nonce, plaintext, vaultAAD)
+	ct := gcm.Seal(nil, nonce, plaintext, aad)
 	out := make([]byte, 0, len(vaultMagic)+1+len(nonce)+len(ct))
 	out = append(out, vaultMagic...)
 	out = append(out, vaultFormat)
@@ -193,7 +208,7 @@ func seal(plaintext, key []byte) ([]byte, error) {
 // openSealed authenticates and decrypts a sealed blob. A GCM tag mismatch (wrong key
 // or tampered ciphertext) maps to ErrWrongPassphrase; a bad frame is a plain error —
 // all fail-closed.
-func openSealed(ciphertext, key []byte) ([]byte, error) {
+func openSealed(ciphertext, key, aad []byte) ([]byte, error) {
 	if len(ciphertext) < len(vaultMagic)+1 || !bytes.Equal(ciphertext[:len(vaultMagic)], vaultMagic) {
 		return nil, errors.New("vault: not a nocturn vault file")
 	}
@@ -210,7 +225,7 @@ func openSealed(ciphertext, key []byte) ([]byte, error) {
 		return nil, errors.New("vault: truncated vault file")
 	}
 	nonce, ct := body[:ns], body[ns:]
-	plaintext, err := gcm.Open(nil, nonce, ct, vaultAAD)
+	plaintext, err := gcm.Open(nil, nonce, ct, aad)
 	if err != nil {
 		return nil, ErrWrongPassphrase // auth fail = wrong key or tamper, fail closed
 	}

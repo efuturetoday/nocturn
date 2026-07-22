@@ -74,6 +74,17 @@ func (m *Master) WorkspaceKey(name string) []byte {
 	return m.subKey("nocturn:workspace:" + name)
 }
 
+// ShardKey derives the 32-byte AES key for a per-item secret shard (a plugin/mcp folder's
+// secrets.enc), domain-separated by the WORKSPACE-RELATIVE path so the key is bound to the item's
+// filesystem PLACEMENT: moving or renaming the folder re-keys it (its old shard no longer opens),
+// while the workspace as a whole stays movable on disk. The components are NUL-delimited under a
+// versioned tag so no two (wsName, relPath) pairs can collide into one key — a NUL cannot occur in
+// a path segment. Callers MUST pass validated components (discovery.ValidName): a name carrying a
+// path separator, ":", NUL, or whitespace is rejected at discovery, before it reaches here.
+func (m *Master) ShardKey(wsName, relPath string) []byte {
+	return m.subKey("nocturn:shard:v1\x00" + wsName + "\x00" + relPath)
+}
+
 // subKey derives a 32-byte HKDF sub-key for info, domain-separated from every other.
 func (m *Master) subKey(info string) []byte {
 	// HKDF-Expand only errors on an absurd length (255*HashLen max); 32 never does.
@@ -92,7 +103,7 @@ const masterVerifierPlaintext = "nocturn-master-verifier-v1"
 // Verifier returns a sealed blob to store in the master salt file. CheckVerifier(blob)
 // later returns true only for the same passphrase (via the same derived master).
 func (m *Master) Verifier() []byte {
-	blob, err := seal([]byte(masterVerifierPlaintext), m.subKey("nocturn:master-verifier"))
+	blob, err := seal([]byte(masterVerifierPlaintext), m.subKey("nocturn:master-verifier"), vaultAAD)
 	if err != nil {
 		panic("secret: verifier seal: " + err.Error()) // AES-GCM over 26 bytes cannot fail
 	}
@@ -102,7 +113,7 @@ func (m *Master) Verifier() []byte {
 // CheckVerifier reports whether blob was produced by this master (i.e. the entered
 // passphrase is correct). A mismatch (wrong passphrase) fails the GCM tag → false.
 func (m *Master) CheckVerifier(blob []byte) bool {
-	pt, err := openSealed(blob, m.subKey("nocturn:master-verifier"))
+	pt, err := openSealed(blob, m.subKey("nocturn:master-verifier"), vaultAAD)
 	return err == nil && string(pt) == masterVerifierPlaintext
 }
 
