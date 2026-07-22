@@ -9,8 +9,9 @@ import type { PendingApproval } from './chat-view';
  * and NOT on any per-chat service that chat navigation would reset. The daemon re-presents every open
  * approval on each (re)connect and on `presence.set active=true`, so the reducer dedupes by id.
  *
- * The prompt is surfaced app-globally by ApprovalPromptService (an auto-presented sheet), so a request
- * shows on any route — including one raised by a background agent run while you are elsewhere.
+ * The prompt is surfaced app-globally by ApprovalOverlayComponent (mounted in the app root), whose
+ * visibility is a pure `@if (pending().length)` binding — so a request shows on any route (including
+ * one raised by a background agent run while you are elsewhere) and never lingers empty.
  */
 @Injectable({ providedIn: 'root' })
 export class ApprovalService {

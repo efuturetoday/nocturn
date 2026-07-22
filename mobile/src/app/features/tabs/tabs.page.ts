@@ -3,13 +3,12 @@ import { IonTabs, IonTabBar, IonTabButton, IonIcon, IonLabel, IonBadge } from '@
 import { addIcons } from 'ionicons';
 import { homeOutline, chatbubblesOutline, hardwareChipOutline, settingsOutline } from 'ionicons/icons';
 import { ChatListService } from '../../core/services/chat-list.service';
-import { ConnectionService } from '../../core/services/connection.service';
 import { KeyboardService } from '../../core/services/keyboard.service';
 
 /**
  * The tab shell: Home · Chat · Agents · Settings. In Ionic 8 the router config is the single
  * source of truth for what each tab loads (no <ion-tab> needed); each tab keeps its own
- * navigation stack. A connection-status pill floats above the tab bar while not connected.
+ * navigation stack.
  */
 @Component({
   selector: 'app-tabs',
@@ -17,12 +16,6 @@ import { KeyboardService } from '../../core/services/keyboard.service';
   imports: [IonTabs, IonTabBar, IonTabButton, IonIcon, IonLabel, IonBadge],
   template: `
     <ion-tabs>
-      @if (!connection.connected()) {
-        <div class="conn-pill" [class.warn]="connection.state() !== 'disconnected'" [class.kb-open]="keyboard.open()">
-          {{ connection.state() === 'disconnected' ? 'Disconnected' : 'Reconnecting…' }}
-        </div>
-      }
-
       <ion-tab-bar slot="bottom" [class.kb-hidden]="keyboard.open()">
         <ion-tab-button tab="home">
           <ion-icon name="home-outline" />
@@ -50,32 +43,12 @@ import { KeyboardService } from '../../core/services/keyboard.service';
     </ion-tabs>
   `,
   styles: `
-    /* Fixed pill just above the tab bar (which is ~50px + the home-indicator inset). */
-    .conn-pill {
-      position: fixed;
-      left: 50%;
-      transform: translateX(-50%);
-      bottom: calc(56px + var(--ion-safe-area-bottom, 0px));
-      z-index: 20;
-      padding: 0.3125rem 0.875rem;
-      border-radius: 999px;
-      font-size: 0.78rem;
-      font-weight: 600;
-      color: var(--ion-color-medium-contrast);
-      background: var(--ion-color-medium);
-      box-shadow: 0 0.25rem 0.875rem rgb(0 0 0 / 0.35);
-      pointer-events: none;
-    }
-    .conn-pill.warn { background: var(--ion-color-warning); color: var(--ion-color-warning-contrast); }
-    .conn-pill.kb-open { bottom: calc(8px + var(--ion-safe-area-bottom, 0px)); }
-
     /* Keyboard open → hide the tab bar outright (no animation) so the input docks on the keyboard. */
     ion-tab-bar.kb-hidden { display: none; }
   `,
 })
 export class TabsPage {
   protected readonly chatList = inject(ChatListService);
-  protected readonly connection = inject(ConnectionService);
   protected readonly keyboard = inject(KeyboardService);
 
   constructor() {
