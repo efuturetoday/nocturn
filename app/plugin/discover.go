@@ -32,11 +32,14 @@ func Discover(root string, base agentkit.ToolSet, diag *agentkit.Diagnostics) Se
 			discovery.Diagnose(diag, "plugin:"+e.Name(), err.Error())
 			continue
 		}
-		// Identity is the folder; a manifest name that overrides it warns (Load already
-		// defaulted an omitted name to the folder, so this fires only on an explicit mismatch).
-		if l.Manifest.Name != e.Name() {
-			discovery.Diagnose(diag, "plugin:"+l.Manifest.Name, "name "+l.Manifest.Name+" differs from its folder "+e.Name()+" (using "+l.Manifest.Name+")")
+		// Identity is the FOLDER — it fixes the credential owner + shard key, so a manifest
+		// name cannot forge it. Overwrite the (advisory) manifest name with the folder; a
+		// mismatch warns. This makes p.Name()/Owner/SecretName/tool-prefix all folder-pinned.
+		name, ok := discovery.ResolveName(diag, "plugin", e.Name(), l.Manifest.Name)
+		if !ok {
+			continue // folder name not a valid identifier
 		}
+		l.Manifest.Name = name
 		p := New(l, base)
 		if _, dup := set[p.Name()]; dup {
 			discovery.Diagnose(diag, "plugin:"+p.Name(), "skipped (duplicate name; first wins)")

@@ -104,9 +104,13 @@ func loadOne(skillDir, dirName string, diag *agentkit.Diagnostics) (agentkit.Ski
 		return agentkit.Skill{}, false
 	}
 
-	// A SKILL.md name is authoritative (the agentskills.io standard — a skill keeps its
-	// canonical name when vendored under a different folder); the folder is the fallback.
-	name := discovery.ResolveName(diag, "skill", dirName, strings.TrimSpace(m.Name))
+	// Skills are the deliberate exception to folder-is-identity: the agentskills.io standard
+	// puts the canonical name in SKILL.md and a skill carries ZERO authority (no credential
+	// owner, no shard key), so the frontmatter name wins and the folder is only the fallback.
+	name := strings.TrimSpace(m.Name)
+	if name == "" {
+		name = dirName
+	}
 	body = strings.TrimSpace(body)
 	if listing := resourceListing(skillDir); listing != "" {
 		body += listing

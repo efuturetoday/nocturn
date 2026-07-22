@@ -131,7 +131,11 @@ func Discover(dir string, diag *agentkit.Diagnostics) Set {
 			discovery.Diagnose(diag, "mcp:"+e.Name(), err.Error())
 			continue
 		}
-		srv.Name = discovery.ResolveName(diag, "mcp", e.Name(), srv.Name)
+		name, ok := discovery.ResolveName(diag, "mcp", e.Name(), srv.Name)
+		if !ok {
+			continue // folder name not a valid identifier
+		}
+		srv.Name = name
 		if err := srv.Validate(); err != nil {
 			discovery.Diagnose(diag, "mcp:"+srv.Name, err.Error())
 			continue

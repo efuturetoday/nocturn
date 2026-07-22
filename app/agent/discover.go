@@ -38,8 +38,12 @@ func Discover(dir string, diag *agentkit.Diagnostics) Set {
 		if a == nil {
 			continue // subfolder without an agent.md — not an agent
 		}
-		// Identity is the folder; a frontmatter name may override it (mismatch warns).
-		a.Name = discovery.ResolveName(diag, "agent", e.Name(), a.Name)
+		// Identity is the folder; a frontmatter name is advisory (mismatch warns, folder wins).
+		name, ok := discovery.ResolveName(diag, "agent", e.Name(), a.Name)
+		if !ok {
+			continue // folder name not a valid identifier
+		}
+		a.Name = name
 		if _, dup := set[a.Name]; dup {
 			discovery.Diagnose(diag, "agent:"+a.Name, "skipped (duplicate name; first wins)")
 			continue

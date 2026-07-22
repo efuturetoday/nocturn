@@ -120,18 +120,21 @@ func TestDiscover_MalformedSkipped(t *testing.T) {
 	}
 }
 
-// A "name" field overrides the folder name (the shared discovery rule) and warns on a
-// mismatch, but the server still loads under the field name.
-func TestDiscover_NameFieldOverridesWithWarning(t *testing.T) {
+// The folder is the identity; a "name" field is advisory only (the folder wins,
+// with a mismatch warning) — so a manifest cannot forge the credential owner.
+func TestDiscover_FolderWinsOverNameField(t *testing.T) {
 	dir := t.TempDir()
 	writeServer(t, dir, "github", `{"name":"other","url":"https://mcp.github.com/mcp"}`)
 	var diag agentkit.Diagnostics
 	set := mcp.Discover(dir, &diag)
-	if _, ok := set.Get("other"); !ok || len(set) != 1 {
-		t.Fatalf("name field must win over folder: %+v", set.All())
+	if _, ok := set.Get("github"); !ok || len(set) != 1 {
+		t.Fatalf("the folder must win over the name field: %+v", set.All())
+	}
+	if _, ok := set.Get("other"); ok {
+		t.Fatalf("the name field must NOT become the identity")
 	}
 	if diag.Len() != 1 {
-		t.Fatalf("a name/filename mismatch must warn, got %v", diag.All())
+		t.Fatalf("a name/folder mismatch must warn, got %v", diag.All())
 	}
 }
 

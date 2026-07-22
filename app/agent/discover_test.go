@@ -60,22 +60,25 @@ func TestDiscover_ReadsAgentMd_PerSubdir(t *testing.T) {
 	}
 }
 
-// The name defaults to the folder when the frontmatter omits it; a frontmatter name
-// overrides the folder and warns on a mismatch (the shared discovery rule).
-func TestDiscover_NameDefaultsAndOverrides(t *testing.T) {
+// The name is the folder; a frontmatter name is advisory only (the folder wins,
+// with a mismatch warning) — identity is placement, not what the file claims.
+func TestDiscover_NameIsFolder(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	writeAgent(t, dir, "nameless", "---\ntools: [file_read]\n---\nbody\n")           // → folder name
-	writeAgent(t, dir, "folder", "---\nname: canonical\ntools: [file_read]\n---\nx") // name wins, mismatch warns
+	writeAgent(t, dir, "folder", "---\nname: canonical\ntools: [file_read]\n---\nx") // folder wins, mismatch warns
 
 	var diag agentkit.Diagnostics
 	set := agent.Discover(dir, &diag)
 	if _, ok := set.Get("nameless"); !ok {
 		t.Errorf("a nameless agent.md must take its folder name")
 	}
-	if _, ok := set.Get("canonical"); !ok {
-		t.Errorf("a frontmatter name must override the folder name")
+	if _, ok := set.Get("folder"); !ok {
+		t.Errorf("the folder must win over the frontmatter name")
+	}
+	if _, ok := set.Get("canonical"); ok {
+		t.Errorf("the frontmatter name must NOT become the identity")
 	}
 	if diag.Len() != 1 {
 		t.Errorf("the name/folder mismatch must warn once, got %v", diag.All())
