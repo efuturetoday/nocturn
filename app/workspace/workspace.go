@@ -18,6 +18,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
 	"github.com/efuturetoday/nocturn/app/agent"
 	"github.com/efuturetoday/nocturn/app/chat"
+	"github.com/efuturetoday/nocturn/app/mcp"
 	"github.com/efuturetoday/nocturn/app/plugin"
 	"github.com/efuturetoday/nocturn/app/secret"
 	"github.com/efuturetoday/nocturn/app/skill"
@@ -140,6 +141,13 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: plugins: %w", name, err)
 	}
 
+	// Discover + connect the remote MCP servers declared in <dir>/mcp.json and fold their tools in
+	// (as <server>_<tool>), each gated on the net host-allowlist like http_read/http_write (ADR-9).
+	nMCP, err := installMCP(dir, toolset, h.Secrets, h.Scanner, wslog.With("component", "mcp"))
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: mcp: %w", name, err)
+	}
+
 	rt := runtime.New(h.LLM,
 		runtime.WithTools(toolset),
 		runtime.WithSkills(skills),
@@ -191,7 +199,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// stack (agents/skills/plugins/tools) at a glance instead of inferring it from behavior. Per-item
 	// detail (invalid skills, each plugin) is logged at Warn/Debug where it happens.
 	wslog.With("component", "workspace").Info("workspace opened",
-		"agents", len(agents), "skills", len(skillDirs), "plugins", nPlugins, "tools", len(toolset))
+		"agents", len(agents), "skills", len(skillDirs), "plugins", nPlugins, "mcp", nMCP, "tools", len(toolset))
 	return w, nil
 }
 
@@ -310,6 +318,64 @@ func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Inje
 		log.Debug("plugin installed", "plugin", p.Name(), "tools", len(pts))
 	}
 	return len(plugins), nil
+}
+
+// mcpSetupTimeout bounds the startup handshake + tools/list for one MCP server.
+const mcpSetupTimeout = 30 * time.Second
+
+// installMCP connects the remote MCP servers declared in <dir>/mcp.json and folds each server's
+// tools into the workspace toolset (as <server>_<tool>, refusing a name collision). Discovery
+// (Connect + tools/list) runs on a bounded context with NO gate machinery installed — so the
+// startup handshake never prompts; the runtime chat turn installs the gate, so a later
+// model-invoked MCP call asks the human on the net axis exactly like http_read/http_write. A server
+// that fails to load/connect/list is logged and skipped, never bricking the workspace (like a flaky
+// plugin). Credentials are token (a bearer the operator seeded in the vault under mcp.SecretName)
+// or public; interactive credential entry and OAuth wiring are a later slice.
+func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scanner *secret.Scanner, log *slog.Logger) (int, error) {
+	servers, err := mcp.LoadConfig(filepath.Join(dir, "mcp.json"))
+	if err != nil {
+		return 0, err // a malformed control-plane config fails startup, like a bad plugin.json
+	}
+	installed := 0
+	for _, srv := range servers {
+		conn, err := mcp.NewConn(srv, inj, scanner)
+		if err != nil {
+			log.Warn("mcp server skipped (bad config)", "server", srv.Name, "err", err)
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), mcpSetupTimeout)
+		mtools, err := connectMCP(ctx, conn)
+		cancel()
+		if err != nil {
+			log.Warn("mcp server skipped", "server", srv.Name, "err", err)
+			continue
+		}
+		clash := false
+		for _, t := range mtools {
+			if _, dup := toolset[t.Spec().Name]; dup {
+				log.Warn("mcp tool name collides, skipping server", "server", srv.Name, "tool", t.Spec().Name)
+				clash = true
+				break
+			}
+		}
+		if clash {
+			continue
+		}
+		for _, t := range mtools {
+			toolset[t.Spec().Name] = t
+		}
+		installed++
+		log.Debug("mcp server connected", "server", srv.Name, "tools", len(mtools))
+	}
+	return installed, nil
+}
+
+// connectMCP performs one server's discovery (handshake + tools/list) on the setup ctx.
+func connectMCP(ctx context.Context, conn *mcp.Conn) ([]agentkit.Tool, error) {
+	if err := conn.Connect(ctx); err != nil {
+		return nil, err
+	}
+	return conn.Tools(ctx)
 }
 
 // policy is the workspace-root policy: the net kind asks the human (remembered for the session);

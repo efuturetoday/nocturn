@@ -43,7 +43,7 @@ func (n *Net) resolve(ctx context.Context, args string) (string, error) {
 		return "", errors.New("missing required field: host")
 	}
 	typ := normalizeRecordType(a.Type)
-	if err := gate.Check(ctx, gate.Action{Kind: NetKind, Target: a.Host}, hostMatch, suggestions(a.Host)...); err != nil {
+	if err := gate.Check(ctx, gate.Action{Kind: NetKind, Target: a.Host}, HostMatch, NetSuggestions(a.Host)...); err != nil {
 		return "", err
 	}
 	// Egress: the queried NAME is the exfiltration surface. Ingress: records (TXT above all) are

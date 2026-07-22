@@ -52,7 +52,7 @@ func (n *Net) ping(ctx context.Context, args string) (string, error) {
 	if a.Host == "" {
 		return "", errors.New("missing required field: host")
 	}
-	if err := gate.Check(ctx, gate.Action{Kind: NetKind, Target: a.Host}, hostMatch, suggestions(a.Host)...); err != nil {
+	if err := gate.Check(ctx, gate.Action{Kind: NetKind, Target: a.Host}, HostMatch, NetSuggestions(a.Host)...); err != nil {
 		return "", err
 	}
 	if n.scanner != nil {

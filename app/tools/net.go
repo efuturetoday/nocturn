@@ -52,7 +52,7 @@ func (n *Net) checkRedirect(req *http.Request, via []*http.Request) error {
 		return errors.New("stopped after 10 redirects")
 	}
 	ctx := req.Context()
-	if err := gate.Check(ctx, gate.Action{Kind: NetKind, Target: req.URL.Host}, hostMatch, suggestions(req.URL.Host)...); err != nil {
+	if err := gate.Check(ctx, gate.Action{Kind: NetKind, Target: req.URL.Host}, HostMatch, NetSuggestions(req.URL.Host)...); err != nil {
 		return err
 	}
 	if n.scanner != nil {
@@ -152,7 +152,7 @@ func (n *Net) do(ctx context.Context, method, rawURL, body, contentType string) 
 
 	// Gate the host on the net kind; the tool supplies both the matcher and the widenings a human may
 	// pick (the parent-domain wildcard), because only the tool knows what a host pattern means.
-	if err := gate.Check(ctx, gate.Action{Kind: NetKind, Target: u.Host}, hostMatch, suggestions(u.Host)...); err != nil {
+	if err := gate.Check(ctx, gate.Action{Kind: NetKind, Target: u.Host}, HostMatch, NetSuggestions(u.Host)...); err != nil {
 		return "", err
 	}
 
@@ -263,9 +263,10 @@ func (n *Net) safeHeaders(h http.Header) map[string]string {
 	return out
 }
 
-// hostMatch reports whether a granted host pattern covers a target host: "*" any, an exact host, or
-// a "*.domain" wildcard over that domain and its subdomains.
-func hostMatch(pattern, host string) bool {
+// HostMatch reports whether a granted host pattern covers a target host: "*" any, an exact host, or
+// a "*.domain" wildcard over that domain and its subdomains. Exported so other net-axis tools (e.g.
+// the gated MCP transport) gate on the SAME allowlist with the SAME target semantics.
+func HostMatch(pattern, host string) bool {
 	switch {
 	case pattern == "*" || pattern == host:
 		return true
@@ -277,9 +278,10 @@ func hostMatch(pattern, host string) bool {
 	}
 }
 
-// suggestions offers the human one widening beyond the exact host: allow the whole parent domain.
-// "api.example.com" -> a "*.example.com" grant. A bare "example.com" yields no widening.
-func suggestions(host string) []gate.Grant {
+// NetSuggestions offers the human one widening beyond the exact host: allow the whole parent domain.
+// "api.example.com" -> a "*.example.com" grant. A bare "example.com" yields no widening. Exported
+// alongside HostMatch so the MCP transport offers the same widening on the net axis.
+func NetSuggestions(host string) []gate.Grant {
 	if d := parentDomain(host); d != "" {
 		return []gate.Grant{{Kind: NetKind, Target: "*." + d}}
 	}
