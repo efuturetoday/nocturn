@@ -16,6 +16,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
+	"github.com/efuturetoday/nocturn/app/tools"
 )
 
 // approvalTimeout bounds how long an Ask waits before failing closed (deny).
@@ -32,8 +33,9 @@ type Sink interface {
 	// Approval presents a pending approval: an intent to render and choice labels (index 0.. are
 	// approvals, a client answers with the chosen index or -1 to deny). frame is the id of the tool
 	// call this approval belongs to (opaque correlation — the connection forwards it so the UI can tie
-	// the prompt to the exact call; 0 = not tool-scoped).
-	Approval(ctx context.Context, id string, frame uint64, intent string, options []string)
+	// the prompt to the exact call; 0 = not tool-scoped). chatID is the chat/agent run whose turn
+	// raised it, for provenance ("" = not chat-scoped).
+	Approval(ctx context.Context, id string, frame uint64, chatID, intent string, options []string)
 	// Resolved tells the connection an approval is concluded (answered anywhere, timed out, or no
 	// longer needed) so it clears the prompt.
 	Resolved(ctx context.Context, id string)
@@ -56,6 +58,7 @@ type pendingApproval struct {
 	intent  string
 	options []string
 	frame   uint64 // the tool call this approval is for (for re-present on attach)
+	chatID  string // the chat/agent run whose turn raised it (for provenance on re-present)
 	ch      chan int
 }
 
@@ -106,7 +109,7 @@ func (b *Broker) presentPending(ctx context.Context, s Sink) {
 	maps.Copy(open, b.pending)
 	b.mu.Unlock()
 	for id, p := range open {
-		s.Approval(ctx, id, p.frame, p.intent, p.options)
+		s.Approval(ctx, id, p.frame, p.chatID, p.intent, p.options)
 	}
 }
 
@@ -136,10 +139,11 @@ func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (
 	id := newID()
 	intent := intentOf(a)
 	frame := agentkit.FrameFrom(ctx) // the tool call asking — for the UI to tie the prompt to it
+	chatID := tools.ChatID(ctx)      // the chat/agent run whose turn raised it — for provenance
 	ch := make(chan int, 1)
 
 	b.mu.Lock()
-	b.pending[id] = &pendingApproval{intent: intent, options: labels, frame: frame, ch: ch}
+	b.pending[id] = &pendingApproval{intent: intent, options: labels, frame: frame, chatID: chatID, ch: ch}
 	b.mu.Unlock()
 
 	active := b.activeSinks()
@@ -156,7 +160,7 @@ func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (
 		}
 	} else {
 		for _, s := range active {
-			s.Approval(ctx, id, frame, intent, labels)
+			s.Approval(ctx, id, frame, chatID, intent, labels)
 		}
 	}
 
@@ -203,15 +207,16 @@ func (b *Broker) activeSinks() []Sink {
 }
 
 // decision builds the human choice labels for an action and the mapper from a chosen index back to
-// (approved, grant, recall). Index 0 = allow this session, 1 = allow always, 2.. = a suggested
-// widening (always); anything else denies.
+// (approved, grant, recall). Index 0 = allow once (RecallNever — nothing remembered, asks again next
+// time), 1 = allow this session, 2 = allow always, 3.. = a suggested widening (always); anything else
+// (e.g. -1) denies.
 func decision(a gate.Action, suggest []gate.Grant) (labels []string, resolve func(choice int) (bool, gate.Grant, gate.Recall, error)) {
 	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
-	grants := []gate.Grant{exact, exact}
-	recalls := []gate.Recall{gate.RecallSession, gate.RecallAlways}
-	labels = []string{"allow once (session)", "allow always"}
+	grants := []gate.Grant{exact, exact, exact}
+	recalls := []gate.Recall{gate.RecallNever, gate.RecallSession, gate.RecallAlways}
+	labels = []string{"Once", "Session", "Always"}
 	for _, s := range suggest {
-		labels = append(labels, "always allow "+s.Target)
+		labels = append(labels, "Always: "+s.Target)
 		grants = append(grants, s)
 		recalls = append(recalls, gate.RecallAlways)
 	}

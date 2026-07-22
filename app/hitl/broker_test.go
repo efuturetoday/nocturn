@@ -12,6 +12,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/app/hitl"
+	"github.com/efuturetoday/nocturn/app/tools"
 )
 
 // discard returns a logger that drops everything, keeping test output quiet.
@@ -41,6 +42,7 @@ func runAsk(b *hitl.Broker, ctx context.Context, a gate.Action, suggest []gate.G
 type sinkApproval struct {
 	id      string
 	frame   uint64
+	chatID  string
 	intent  string
 	options []string
 }
@@ -70,8 +72,8 @@ func newFakeSink() *fakeSink {
 	}
 }
 
-func (s *fakeSink) Approval(_ context.Context, id string, frame uint64, intent string, options []string) {
-	call := sinkApproval{id: id, frame: frame, intent: intent, options: slices.Clone(options)}
+func (s *fakeSink) Approval(_ context.Context, id string, frame uint64, chatID, intent string, options []string) {
+	call := sinkApproval{id: id, frame: frame, chatID: chatID, intent: intent, options: slices.Clone(options)}
 	s.mu.Lock()
 	s.approvals = append(s.approvals, call)
 	s.mu.Unlock()
@@ -196,7 +198,7 @@ func TestAsk_NoActiveDevice_PushesThenAwaits(t *testing.T) {
 	b.Attach(context.Background(), sink)
 	call := <-sink.gotApproval
 
-	b.Resolve(call.id, 0) // approve once (session)
+	b.Resolve(call.id, 0) // approve once (RecallNever)
 	got := <-res
 
 	if pusher.count() != 1 {
@@ -205,8 +207,8 @@ func TestAsk_NoActiveDevice_PushesThenAwaits(t *testing.T) {
 	if !got.approved {
 		t.Errorf("approved = false, want true after resolve")
 	}
-	if got.recall != gate.RecallSession {
-		t.Errorf("recall = %v, want RecallSession", got.recall)
+	if got.recall != gate.RecallNever {
+		t.Errorf("recall = %v, want RecallNever", got.recall)
 	}
 }
 
@@ -247,7 +249,7 @@ func TestAsk_HumanDeny_NilError(t *testing.T) {
 	}
 }
 
-// TestAsk_ApproveIndexMapping: index 0 = allow this session, 1 = allow always, 2.. = a suggested
+// TestAsk_ApproveIndexMapping: index 0 = once (RecallNever), 1 = session, 2 = always, 3.. = a suggested
 // widening (always).
 func TestAsk_ApproveIndexMapping(t *testing.T) {
 	action := gate.Action{Kind: "net", Target: "api.github.com"}
@@ -261,9 +263,10 @@ func TestAsk_ApproveIndexMapping(t *testing.T) {
 		wantGrant  gate.Grant
 		wantRecall gate.Recall
 	}{
-		{name: "approve once maps to session grant", choice: 0, wantGrant: exact, wantRecall: gate.RecallSession},
-		{name: "approve always", choice: 1, wantGrant: exact, wantRecall: gate.RecallAlways},
-		{name: "approve suggestion returns widened grant", choice: 2, suggest: []gate.Grant{suggestion}, wantGrant: suggestion, wantRecall: gate.RecallAlways},
+		{name: "approve once maps to no-recall grant", choice: 0, wantGrant: exact, wantRecall: gate.RecallNever},
+		{name: "approve session", choice: 1, wantGrant: exact, wantRecall: gate.RecallSession},
+		{name: "approve always", choice: 2, wantGrant: exact, wantRecall: gate.RecallAlways},
+		{name: "approve suggestion returns widened grant", choice: 3, suggest: []gate.Grant{suggestion}, wantGrant: suggestion, wantRecall: gate.RecallAlways},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -334,15 +337,15 @@ func TestAsk_FirstAnswerWins(t *testing.T) {
 			synctest.Wait() // Ask has presented and is durably blocked in its select
 			call := <-sink.gotApproval
 
-			b.Resolve(call.id, 0) // first answer: allow once (session) — lands in the buffered channel
+			b.Resolve(call.id, 0) // first answer: allow once (RecallNever) — lands in the buffered channel
 			b.Resolve(call.id, 1) // later answer: channel full, dropped by select-default
 
 			got := <-res
 			if !got.approved {
 				t.Fatalf("approved = false, want true")
 			}
-			if got.recall != gate.RecallSession {
-				t.Errorf("recall = %v, want RecallSession (first answer, index 0, won)", got.recall)
+			if got.recall != gate.RecallNever {
+				t.Errorf("recall = %v, want RecallNever (first answer, index 0, won)", got.recall)
 			}
 		})
 	})
@@ -561,6 +564,25 @@ func TestAsk_FrameFromCtx_PropagatedToSink(t *testing.T) {
 
 	if want := agentkit.FrameFrom(ctx); call.frame != want {
 		t.Errorf("presented frame = %d, want %d (= FrameFrom(ctx))", call.frame, want)
+	}
+
+	b.Resolve(call.id, 0)
+	<-res
+}
+
+// TestAsk_ChatIDFromCtx_PropagatedToSink: Ask reads the raising chat id from ctx (stamped by the chat
+// manager via tools.WithChatID) and forwards it to the sink for provenance.
+func TestAsk_ChatIDFromCtx_PropagatedToSink(t *testing.T) {
+	ctx := tools.WithChatID(context.Background(), "chat42")
+	b := hitl.NewBroker(nil, discard())
+	sink := newFakeSink()
+	b.Attach(ctx, sink)
+
+	res := runAsk(b, ctx, gate.Action{Kind: "net", Target: "api.example.com"}, nil)
+	call := <-sink.gotApproval
+
+	if call.chatID != "chat42" {
+		t.Errorf("presented chatID = %q, want %q", call.chatID, "chat42")
 	}
 
 	b.Resolve(call.id, 0)

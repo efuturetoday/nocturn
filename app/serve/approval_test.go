@@ -14,7 +14,7 @@ import (
 // fakeSink captures the id the broker presents so a test can resolve that exact approval.
 type fakeSink struct{ gotID chan string }
 
-func (s *fakeSink) Approval(_ context.Context, id string, _ uint64, _ string, _ []string) {
+func (s *fakeSink) Approval(_ context.Context, id string, _ uint64, _, _ string, _ []string) {
 	select {
 	case s.gotID <- id:
 	default:
@@ -85,16 +85,17 @@ func TestApproval_UnknownAction_Error(t *testing.T) {
 	recvError(t, c, "unknown action")
 }
 
-// conn.Approval (hitl.Sink) forwards a pending approval to the client, preserving the tool-call frame.
+// conn.Approval (hitl.Sink) forwards a pending approval to the client, preserving the tool-call frame
+// and the raising chat id (provenance).
 func TestConn_Approval_SendsRequestWithFrame(t *testing.T) {
 	c := testConn()
-	c.Approval(context.Background(), "id1", 7, "net → example.com", []string{"allow", "deny"})
+	c.Approval(context.Background(), "id1", 7, "chat42", "net → example.com", []string{"allow", "deny"})
 
 	req, ok := recv(t, c).(ApprovalRequest)
 	if !ok {
 		t.Fatalf("want ApprovalRequest")
 	}
-	if req.Type != "approval.request" || req.ID != "id1" || req.Frame != 7 {
+	if req.Type != "approval.request" || req.ID != "id1" || req.Frame != 7 || req.ChatID != "chat42" {
 		t.Errorf("got %+v", req)
 	}
 	if req.Intent != "net → example.com" || len(req.Options) != 2 {
