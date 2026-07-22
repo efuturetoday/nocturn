@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"net/url"
-	"os"
 	"path/filepath"
 )
 
@@ -20,44 +19,39 @@ type OAuthProvider struct {
 	Scopes       []string
 }
 
-// DiscoverOAuth scans <root>/<ws>/mcp.json in every workspace and returns the OAuth-declaring
-// servers as OAuthProviders. A missing or invalid config yields none (LoadConfig already validated
-// the servers on the startup path; here we only collect providers, never connect).
+// DiscoverOAuth reads one workspace's <wsDir>/mcp.json and returns the OAuth-declaring servers as
+// OAuthProviders. A missing or invalid config yields none (LoadConfig already validated the servers
+// on the startup path; here we only collect providers, never connect). The caller (per-workspace
+// secret assembly) owns scoping to a single workspace, so credentials never leak across vaults.
 //
 // The vault key is SecretName(srv.Name, u.Host) — the host carries the port, exactly like NewConn's
 // binding — so a token authorized here injects into that connection and nowhere else. A plugin and an
 // MCP server may share a provider name (both answer `nocturn auth <name>`); their keys still differ
 // (the MCP key is owner-namespaced and host-bound), so no credential can cross.
-func DiscoverOAuth(root string) []OAuthProvider {
+func DiscoverOAuth(wsDir string) []OAuthProvider {
 	var out []OAuthProvider
-	spaces, _ := os.ReadDir(root)
-	for _, ws := range spaces {
-		if !ws.IsDir() {
+	servers, err := LoadConfig(filepath.Join(wsDir, "mcp.json"))
+	if err != nil {
+		return nil // a broken config is surfaced on the real startup path, not here
+	}
+	for _, srv := range servers {
+		if srv.OAuth == nil {
 			continue
 		}
-		servers, err := LoadConfig(filepath.Join(root, ws.Name(), "mcp.json"))
+		u, err := url.Parse(srv.URL)
 		if err != nil {
-			continue // a broken config is surfaced on the real startup path, not here
+			continue
 		}
-		for _, srv := range servers {
-			if srv.OAuth == nil {
-				continue
-			}
-			u, err := url.Parse(srv.URL)
-			if err != nil {
-				continue
-			}
-			o := srv.OAuth
-			out = append(out, OAuthProvider{
-				Name:         srv.Name,
-				SecretName:   SecretName(srv.Name, u.Host),
-				AuthURL:      o.AuthURL,
-				TokenURL:     o.TokenURL,
-				ClientID:     o.ClientID,
-				ClientSecret: o.ClientSecret,
-				Scopes:       o.Scopes,
-			})
-		}
+		o := srv.OAuth
+		out = append(out, OAuthProvider{
+			Name:         srv.Name,
+			SecretName:   SecretName(srv.Name, u.Host),
+			AuthURL:      o.AuthURL,
+			TokenURL:     o.TokenURL,
+			ClientID:     o.ClientID,
+			ClientSecret: o.ClientSecret,
+			Scopes:       o.Scopes,
+		})
 	}
 	return out
 }

@@ -19,37 +19,31 @@ type OAuthProvider struct {
 	Scopes       []string
 }
 
-// DiscoverOAuth scans <root>/<ws>/plugins in every workspace and returns the plugins' declared OAuth
-// providers. A plugin that fails to load is skipped (its own load path reports it on the real startup
-// path); this is only about collecting providers, never running them.
-func DiscoverOAuth(root string) []OAuthProvider {
+// DiscoverOAuth scans one workspace's <wsDir>/plugins for declared OAuth providers. A plugin that
+// fails to load is skipped (its own load path reports it on the real startup path); this is only
+// about collecting providers, never running them. The caller (per-workspace secret assembly) owns
+// scoping to a single workspace, so credentials never leak across workspace vaults.
+func DiscoverOAuth(wsDir string) []OAuthProvider {
 	var out []OAuthProvider
-	spaces, _ := os.ReadDir(root)
-	for _, ws := range spaces {
-		if !ws.IsDir() {
+	entries, _ := os.ReadDir(filepath.Join(wsDir, "plugins"))
+	for _, e := range entries {
+		if !e.IsDir() {
 			continue
 		}
-		pluginsDir := filepath.Join(root, ws.Name(), "plugins")
-		entries, _ := os.ReadDir(pluginsDir)
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			loaded, err := Load(filepath.Join(pluginsDir, e.Name()))
-			if err != nil {
-				continue
-			}
-			for _, o := range loaded.Manifest.OAuth {
-				out = append(out, OAuthProvider{
-					Name:         o.Name,
-					SecretName:   SecretName(loaded.Manifest.Name, o.Name),
-					AuthURL:      o.AuthURL,
-					TokenURL:     o.TokenURL,
-					ClientID:     o.ClientID,
-					ClientSecret: o.ClientSecret,
-					Scopes:       o.Scopes,
-				})
-			}
+		loaded, err := Load(filepath.Join(wsDir, "plugins", e.Name()))
+		if err != nil {
+			continue
+		}
+		for _, o := range loaded.Manifest.OAuth {
+			out = append(out, OAuthProvider{
+				Name:         o.Name,
+				SecretName:   SecretName(loaded.Manifest.Name, o.Name),
+				AuthURL:      o.AuthURL,
+				TokenURL:     o.TokenURL,
+				ClientID:     o.ClientID,
+				ClientSecret: o.ClientSecret,
+				Scopes:       o.Scopes,
+			})
 		}
 	}
 	return out

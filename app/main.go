@@ -48,10 +48,14 @@ func main() {
 		defer stop()
 		name := flag.Arg(1)
 		if name == "" {
-			fmt.Fprintln(os.Stderr, "usage: nocturn auth <name>")
+			fmt.Fprintln(os.Stderr, "usage: nocturn auth <name> [workspace]")
 			os.Exit(1)
 		}
-		if err := runAuth(ctx, name); err != nil {
+		ws := flag.Arg(2)
+		if ws == "" {
+			ws = workspace.DefaultWorkspace // the token lands in this workspace's own vault
+		}
+		if err := runAuth(ctx, name, ws); err != nil {
 			fmt.Fprintln(os.Stderr, "auth:", err)
 			os.Exit(1)
 		}
@@ -108,8 +112,8 @@ func main() {
 		approver = broker
 		notifier = &pushNotifier{devices: devices, sender: sender, log: pushLog}
 	}
-	injector, scanner := buildSecrets(logger)
-	host := workspace.Host{LLM: llm, Approver: approver, Secrets: injector, Scanner: scanner, Notifier: notifier, Log: logger}
+	master := buildMaster(logger)
+	host := workspace.Host{LLM: llm, Approver: approver, Master: master, Notifier: notifier, Log: logger}
 
 	spaces, err := workspace.OpenAll(host, wsRoot)
 	if err != nil {

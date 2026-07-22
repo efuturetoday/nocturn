@@ -9,11 +9,11 @@ import (
 )
 
 // writePlugin lays down a minimal loadable plugin dir (manifest + a plugin.js stub) under
-// <root>/<ws>/plugins/<name> and returns root.
+// <wsDir>/plugins/<name> and returns wsDir (a single workspace directory).
 func writePlugin(t *testing.T, name, manifest string) string {
 	t.Helper()
-	root := t.TempDir()
-	dir := filepath.Join(root, "main", "plugins", name)
+	wsDir := t.TempDir()
+	dir := filepath.Join(wsDir, "plugins", name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func writePlugin(t *testing.T, name, manifest string) string {
 	if err := os.WriteFile(filepath.Join(dir, "plugin.js"), []byte("// stub"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return root
+	return wsDir
 }
 
 func TestSecretName(t *testing.T) {
@@ -39,7 +39,7 @@ func TestSecretName(t *testing.T) {
 // DiscoverOAuth returns each plugin's OAuth providers keyed by the owner-namespaced SecretName
 // (plugin:<plugin>/<cred>), with the endpoints/scopes copied.
 func TestDiscoverOAuth(t *testing.T) {
-	root := writePlugin(t, "gmail", `{
+	wsDir := writePlugin(t, "gmail", `{
 		"name":"gmail","version":"1",
 		"tools":[{"name":"send","parameters":{"type":"object"}}],
 		"uses":["http_write"],
@@ -48,7 +48,7 @@ func TestDiscoverOAuth(t *testing.T) {
 			"auth_url":"https://auth.example.com/a","token_url":"https://token.example.com/t","scopes":["send"]}]
 	}`)
 
-	got := plugin.DiscoverOAuth(root)
+	got := plugin.DiscoverOAuth(wsDir)
 	if len(got) != 1 {
 		t.Fatalf("DiscoverOAuth = %d providers, want 1", len(got))
 	}

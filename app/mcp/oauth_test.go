@@ -12,11 +12,7 @@ import (
 // NewConn's binding names (host WITH port), and copies the endpoints/scopes. token-auth and public
 // servers contribute nothing.
 func TestDiscoverOAuth(t *testing.T) {
-	root := t.TempDir()
-	wsDir := filepath.Join(root, "main")
-	if err := os.MkdirAll(wsDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	wsDir := t.TempDir()
 	// One OAuth server (on an explicit port, to guard the host-with-port invariant), one token
 	// server, one public — only the first is an OAuth provider.
 	cfg := `{"servers":[
@@ -30,7 +26,7 @@ func TestDiscoverOAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := mcp.DiscoverOAuth(root)
+	got := mcp.DiscoverOAuth(wsDir)
 	if len(got) != 1 {
 		t.Fatalf("DiscoverOAuth = %d providers, want 1 (only the oauth server)", len(got))
 	}

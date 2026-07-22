@@ -35,9 +35,8 @@ const DefaultWorkspace = "main"
 type Host struct {
 	LLM      agentkit.LLM
 	Approver gate.Approver
-	Secrets  *secret.Injector // host-owned credential jar the network tool injects from; nil = none
-	Scanner  *secret.Scanner  // bidirectional secret leak scanner; nil = no scanning
-	Notifier tools.Notifier   // out-of-band user notification for the notify tool; nil = no notify
+	Master   *secret.Master // root of the per-workspace vault keys (one passphrase); nil = vaults locked
+	Notifier tools.Notifier // out-of-band user notification for the notify tool; nil = no notify
 	Log      *slog.Logger
 }
 
@@ -55,6 +54,7 @@ type Workspace struct {
 	sched      *agent.Scheduler
 	reminders  *tools.Reminders // persistent reminder timers; nil when no notifier
 	waker      *tools.Waker     // self-continuation timers, bound to the chat manager
+	vault      *secret.Vault    // this workspace's own encrypted credential vault; nil when locked
 	log        *slog.Logger
 }
 
@@ -79,6 +79,16 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// session self-tags its lines (component=turn/tool/llm); app subsystems tag their own.
 	wslog := h.Log.With("ws", name)
 
+	// This workspace's OWN credential stack: its own encrypted vault (dir/vault.enc, keyed by the
+	// master's per-workspace sub-key), injector, and scanner. Isolation is by construction — a token
+	// authorized in another workspace is under a different key, file, and injector. A locked vault
+	// (nil master) yields nil injector/scanner: the workspace runs without host-owned credentials.
+	// The old global dataDir/vault.enc is orphaned by this move (greenfield; re-provision per ws).
+	injector, scanner, vault, err := buildWorkspaceSecrets(h.Master, dir, name, wslog)
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: secrets: %w", name, err)
+	}
+
 	agents, err := agent.Discover(filepath.Join(dir, "agents"))
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: agents: %w", name, err)
@@ -88,7 +98,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// tools by Base; it is bound to the chat manager below (Bind) so a fired wake resolves the
 	// invoking chat by id.
 	waker := tools.NewWaker(tools.WithWakeLogger(h.Log))
-	baseTools, err := tools.Base(tools.Config{Secrets: h.Secrets, Scanner: h.Scanner, Root: mnt, Notifier: h.Notifier, Waker: waker})
+	baseTools, err := tools.Base(tools.Config{Secrets: injector, Scanner: scanner, Root: mnt, Notifier: h.Notifier, Waker: waker})
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: tools: %w", name, err)
 	}
@@ -97,7 +107,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// timer lifecycle (Restore below, Close on shutdown).
 	var reminders *tools.Reminders
 	if h.Notifier != nil {
-		reminders = tools.NewReminders(filepath.Join(dir, "reminders.json"), h.Notifier, h.Scanner)
+		reminders = tools.NewReminders(filepath.Join(dir, "reminders.json"), h.Notifier, scanner)
 		remindTools, err := reminders.Tools()
 		if err != nil {
 			return nil, fmt.Errorf("workspace %q: reminders: %w", name, err)
@@ -136,14 +146,14 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 
 	// Discover + install plugins as top-level tools, each caged to a subset of the base tools and
 	// gated exactly like the model's own calls. Their credentials are bound host-side on the injector.
-	nPlugins, err := installPlugins(dir, base, toolset, h.Secrets, wslog.With("component", "plugin"))
+	nPlugins, err := installPlugins(dir, base, toolset, injector, wslog.With("component", "plugin"))
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: plugins: %w", name, err)
 	}
 
 	// Discover + connect the remote MCP servers declared in <dir>/mcp.json and fold their tools in
 	// (as <server>_<tool>), each gated on the net host-allowlist like http_read/http_write (ADR-9).
-	nMCP, err := installMCP(dir, toolset, h.Secrets, h.Scanner, wslog.With("component", "mcp"))
+	nMCP, err := installMCP(dir, toolset, injector, scanner, wslog.With("component", "mcp"))
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: mcp: %w", name, err)
 	}
@@ -180,6 +190,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		agents:     agents,
 		reminders:  reminders,
 		waker:      waker,
+		vault:      vault,
 		log:        wslog,
 	}
 	// Bind wake to the live chat manager now it exists: a fired wake resolves its chat by id via Open.
