@@ -12,6 +12,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/app/agent"
+	"github.com/efuturetoday/nocturn/app/plugin"
 	"github.com/efuturetoday/nocturn/app/secret"
 	"github.com/efuturetoday/nocturn/app/tools"
 )
@@ -234,7 +235,9 @@ func TestInstallPlugins_BindsCredentialsUnderOwner(t *testing.T) {
 	writePlugin(t, dir, "creds", "noop", []secret.Binding{cred})
 
 	store := secret.NewStore()
-	store.Set("mytoken", []byte("s3cr3t"))
+	// installPlugins binds the credential under the owner-namespaced key plugin.SecretName(plugin,
+	// cred), so the stored value must live there too (not the bare credential name).
+	store.Set(plugin.SecretName("creds", "mytoken"), []byte("s3cr3t"))
 	inj := secret.NewInjector(store)
 
 	base, err := agentkit.NewToolSet()
