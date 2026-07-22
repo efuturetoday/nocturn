@@ -5,40 +5,56 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/app/mcp"
 )
 
-func writeConfig(t *testing.T, content string) string {
+// writeServer writes <dir>/<file> — one server declaration per file.
+func writeServer(t *testing.T, dir, file, content string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "mcp.json")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return path
 }
 
-func TestLoadConfig_Valid(t *testing.T) {
-	path := writeConfig(t, `{"servers":[
-		{"name":"github","url":"https://mcp.github.com/mcp"},
-		{"name":"cal","url":"https://cal.example.com/mcp","oauth":{
-			"auth_url":"https://auth.example.com/authorize","token_url":"https://auth.example.com/token",
-			"client_id":"abc","scopes":["calendar.read"]}}
-	]}`)
-	servers, err := mcp.LoadConfig(path)
-	if err != nil || len(servers) != 2 {
-		t.Fatalf("servers = %+v, err=%v", servers, err)
+func TestDiscover_Valid(t *testing.T) {
+	dir := t.TempDir()
+	writeServer(t, dir, "github.json", `{"url":"https://mcp.github.com/mcp"}`)
+	writeServer(t, dir, "cal.json", `{"url":"https://cal.example.com/mcp","oauth":{
+		"auth_url":"https://auth.example.com/authorize","token_url":"https://auth.example.com/token",
+		"client_id":"abc","scopes":["calendar.read"]}}`)
+
+	var diag agentkit.Diagnostics
+	set := mcp.Discover(dir, &diag)
+	if len(set) != 2 || diag.Len() != 0 {
+		t.Fatalf("servers = %+v, diags = %v", set.All(), diag.All())
 	}
-	if servers[0].Name != "github" || servers[1].OAuth == nil || servers[1].OAuth.ClientID != "abc" {
-		t.Fatalf("parsed wrong: %+v", servers)
+	// The name IS the filename stem — never a JSON field.
+	gh, ok := set.Get("github")
+	if !ok || gh.URL != "https://mcp.github.com/mcp" {
+		t.Fatalf("github parsed wrong: %+v", gh)
+	}
+	cal, _ := set.Get("cal")
+	if cal.OAuth == nil || cal.OAuth.ClientID != "abc" {
+		t.Fatalf("cal oauth parsed wrong: %+v", cal)
 	}
 }
 
-// A missing config file means "no servers", not an error — the assistant runs
-// fine without any MCP configured.
-func TestLoadConfig_MissingFile(t *testing.T) {
-	servers, err := mcp.LoadConfig(filepath.Join(t.TempDir(), "absent.json"))
-	if err != nil || servers != nil {
-		t.Fatalf("servers=%v err=%v, want nil,nil", servers, err)
+// A missing dir means "no servers", not an error.
+func TestDiscover_MissingDir(t *testing.T) {
+	var diag agentkit.Diagnostics
+	set := mcp.Discover(filepath.Join(t.TempDir(), "absent"), &diag)
+	if len(set) != 0 || diag.Len() != 0 {
+		t.Fatalf("missing dir yielded %d servers, %d diags", len(set), diag.Len())
+	}
+}
+
+// A nil collector is tolerated (the OAuth aggregator discovers without one).
+func TestDiscover_NilCollector(t *testing.T) {
+	dir := t.TempDir()
+	writeServer(t, dir, "github.json", `{"url":"https://mcp.github.com/mcp"}`)
+	if set := mcp.Discover(dir, nil); len(set) != 1 {
+		t.Fatalf("nil collector must still discover: %+v", set.All())
 	}
 }
 
@@ -69,26 +85,46 @@ func TestServer_Validate_TokenOAuthMatrix(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_FailClosed(t *testing.T) {
+// A malformed server file is SKIPPED with an Error diagnostic — never aborts the
+// scan, never half-loads (its tools + token wiring are simply absent). The other
+// servers in the same dir still load.
+func TestDiscover_MalformedSkipped(t *testing.T) {
 	cases := map[string]string{
-		"http url":        `{"servers":[{"name":"a","url":"http://mcp.example.com/mcp"}]}`,
-		"no url":          `{"servers":[{"name":"a"}]}`,
-		"bad name":        `{"servers":[{"name":"Bad Name!","url":"https://x.example.com"}]}`,
-		"dotted name":     `{"servers":[{"name":"a.b","url":"https://x.example.com"}]}`, // dot rejected: exposed <server>_<tool> must satisfy OpenAI ^[a-zA-Z0-9_-]{1,64}$
-		"duplicate name":  `{"servers":[{"name":"a","url":"https://x.example.com"},{"name":"a","url":"https://y.example.com"}]}`,
-		"unknown field":   `{"servers":[{"name":"a","url":"https://x.example.com","exec":"/bin/sh"}]}`,
-		"oauth no client": `{"servers":[{"name":"a","url":"https://x.example.com","oauth":{"auth_url":"https://a.example.com","token_url":"https://t.example.com","scopes":["s"]}}]}`,
-		"token and oauth": `{"servers":[{"name":"a","url":"https://x.example.com","auth":"token","oauth":{"auth_url":"https://a.example.com","token_url":"https://t.example.com","client_id":"c","scopes":["s"]}}]}`,
-		"bad auth mode":   `{"servers":[{"name":"a","url":"https://x.example.com","auth":"env"}]}`,
-		"oauth http":      `{"servers":[{"name":"a","url":"https://x.example.com","oauth":{"auth_url":"http://a.example.com","token_url":"https://t.example.com","client_id":"c","scopes":["s"]}}]}`,
+		"http url":        `{"url":"http://mcp.example.com/mcp"}`,
+		"no url":          `{}`,
+		"stray name":      `{"name":"other","url":"https://x.example.com"}`, // identity is the filename, not the file
+		"unknown field":   `{"url":"https://x.example.com","exec":"/bin/sh"}`,
+		"oauth no client": `{"url":"https://x.example.com","oauth":{"auth_url":"https://a.example.com","token_url":"https://t.example.com","scopes":["s"]}}`,
+		"token and oauth": `{"url":"https://x.example.com","auth":"token","oauth":{"auth_url":"https://a.example.com","token_url":"https://t.example.com","client_id":"c","scopes":["s"]}}`,
+		"bad auth mode":   `{"url":"https://x.example.com","auth":"env"}`,
+		"oauth http":      `{"url":"https://x.example.com","oauth":{"auth_url":"http://a.example.com","token_url":"https://t.example.com","client_id":"c","scopes":["s"]}}`,
 		"not json":        `servers: [yaml]`,
 	}
 	for label, content := range cases {
 		t.Run(label, func(t *testing.T) {
-			if _, err := mcp.LoadConfig(writeConfig(t, content)); err == nil {
-				t.Fatalf("LoadConfig accepted a config with %s", label)
+			dir := t.TempDir()
+			writeServer(t, dir, "bad.json", content)
+			writeServer(t, dir, "good.json", `{"url":"https://good.example.com/mcp"}`)
+			var diag agentkit.Diagnostics
+			set := mcp.Discover(dir, &diag)
+			if _, ok := set.Get("good"); !ok || len(set) != 1 {
+				t.Fatalf("a malformed server must not stop the good one: %+v", set.All())
+			}
+			if diag.Len() != 1 {
+				t.Fatalf("want 1 diagnostic for %s, got %v", label, diag.All())
 			}
 		})
+	}
+}
+
+// A filename that is not a valid server name is skipped (Validate checks the stem).
+func TestDiscover_BadFilenameSkipped(t *testing.T) {
+	dir := t.TempDir()
+	writeServer(t, dir, "Bad Name!.json", `{"url":"https://x.example.com/mcp"}`)
+	var diag agentkit.Diagnostics
+	set := mcp.Discover(dir, &diag)
+	if len(set) != 0 || diag.Len() != 1 {
+		t.Fatalf("a bad filename must be skipped: %+v diags=%v", set.All(), diag.All())
 	}
 }
 

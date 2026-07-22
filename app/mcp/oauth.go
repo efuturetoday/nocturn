@@ -19,10 +19,10 @@ type OAuthProvider struct {
 	Scopes       []string
 }
 
-// DiscoverOAuth reads one workspace's <wsDir>/mcp.json and returns the OAuth-declaring servers as
-// OAuthProviders. A missing or invalid config yields none (LoadConfig already validated the servers
-// on the startup path; here we only collect providers, never connect). The caller (per-workspace
-// secret assembly) owns scoping to a single workspace, so credentials never leak across vaults.
+// DiscoverOAuth reads one workspace's <wsDir>/mcp/*.json and returns the OAuth-declaring servers as
+// OAuthProviders. A missing or invalid config yields none (Discover already surfaced any bad file on
+// the startup path via diagnostics; here we only collect providers, never connect). The caller
+// (per-workspace secret assembly) owns scoping to a single workspace, so credentials never leak.
 //
 // The vault key is SecretName(srv.Name, u.Host) — the host carries the port, exactly like NewConn's
 // binding — so a token authorized here injects into that connection and nowhere else. A plugin and an
@@ -30,11 +30,8 @@ type OAuthProvider struct {
 // (the MCP key is owner-namespaced and host-bound), so no credential can cross.
 func DiscoverOAuth(wsDir string) []OAuthProvider {
 	var out []OAuthProvider
-	servers, err := LoadConfig(filepath.Join(wsDir, "mcp.json"))
-	if err != nil {
-		return nil // a broken config is surfaced on the real startup path, not here
-	}
-	for _, srv := range servers {
+	servers := Discover(filepath.Join(wsDir, "mcp"), nil) // a broken file is surfaced on the real startup path
+	for _, srv := range servers.All() {
 		if srv.OAuth == nil {
 			continue
 		}

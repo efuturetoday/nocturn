@@ -21,18 +21,19 @@ as everything else.
 
 ## Add a server
 
-List the servers in a file named `mcp.json` in your workspace:
+Give each server its own file in an `mcp/` folder in your workspace, named after the server —
+`mcp/github.json`:
 
 ```json
 {
-  "servers": [
-    { "name": "github", "url": "https://api.example.com/mcp/", "auth": "token" }
-  ]
+  "url": "https://api.example.com/mcp/",
+  "auth": "token"
 }
 ```
 
-Each server needs a `name` and an `https` `url`. Its tools then appear to the assistant as
-`github.*`, alongside the built-in ones.
+The server's name is the filename (`github.json` → `github`), so there is no `name` field —
+just an `https` `url`. Its tools then appear to the assistant as `github_*`, alongside the
+built-in ones. To remove a server, delete its file.
 
 ## Signing in
 

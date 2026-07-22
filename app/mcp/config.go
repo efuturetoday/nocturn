@@ -8,27 +8,37 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
+
+	"github.com/efuturetoday/nocturn/agentkit"
 )
 
-// The server config (mcp.json) lives in the workspace CONTROL-PLANE
-// (<ws>/mcp.json — host-managed, a sibling of the model's mnt/ mount) because it
-// is authority-relevant (ADR-10): declaring a server grants the model that
-// server's tools and wires YOUR token to its host. The model can neither read
-// nor write it; presence in mcp.json IS the authorization (admin-authored), like
-// the plugins/ directory.
+// A server declaration lives in the workspace CONTROL-PLANE as one file per
+// server (<ws>/mcp/<name>.json — host-managed, a sibling of the model's mnt/
+// mount) because it is authority-relevant (ADR-10): declaring a server grants
+// the model that server's tools and wires YOUR token to its host. The model can
+// neither read nor write it; presence IS the authorization (admin-authored),
+// like the plugins/ directory. One file per server is the portable/purgeable
+// unit: dropping <name>.json removes exactly that server (mirroring a plugin or
+// agent folder).
 
 // Server is one declared remote MCP server.
+//
+// Name is NOT a config field: it comes from the file's basename (<name>.json),
+// the single source of identity — so it can never drift from the filename, and a
+// stray "name" key in the JSON is rejected (DisallowUnknownFields).
 //
 // Auth selects how the connection's Bearer is obtained; it never carries a
 // secret value. "token": the operator seeds the Bearer into the encrypted vault
 // out of band under the connection's owner-namespaced secret
 // ("mcp:<server>@<host>/oauth"), and it is injected host-side — nothing secret
-// ever touches mcp.json or the environment. "" with an OAuth block runs the
+// ever touches the file or the environment. "" with an OAuth block runs the
 // OAuth flow instead; "" with no block means no credential (a public server).
 // "token" and an OAuth block are mutually exclusive (one credential, one source).
 type Server struct {
-	Name  string     `json:"name"`
+	Name  string     `json:"-"` // from the filename, not the file
 	URL   string     `json:"url"`
 	Auth  string     `json:"auth,omitempty"`
 	OAuth *OAuthDecl `json:"oauth,omitempty"`
@@ -89,35 +99,62 @@ func isHTTPSURL(s string) bool {
 	return err == nil && u.Scheme == "https" && u.Host != ""
 }
 
-// LoadConfig reads the declared servers from path WITHOUT connecting to any of
-// them. A missing file means no servers (nil, nil). Unknown fields, invalid
-// entries, and duplicate names are rejected fail-closed: the workspace never
-// half-loads a config the code only partly understood.
-func LoadConfig(path string) ([]Server, error) {
-	data, err := os.ReadFile(path)
+// Discover reads every <dir>/<name>.json server declaration into a Set WITHOUT
+// connecting to any of them. A missing dir yields an empty Set. A malformed file
+// (unknown fields including a stray "name", an invalid entry) is SKIPPED with an
+// Error diagnostic rather than failing the whole scan — its tools and token
+// wiring are then simply absent (fail-closed), and the other servers still load.
+// The server's name IS the filename stem — the single source of identity.
+func Discover(dir string, diag *agentkit.Diagnostics) Set {
+	set := Set{}
+	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return set
 	}
 	if err != nil {
-		return nil, fmt.Errorf("mcpcap: read config: %w", err)
+		diagnose(diag, "mcp", fmt.Sprintf("read dir %s: %v", dir, err))
+		return set
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue // only <name>.json files are server declarations
+		}
+		name := strings.TrimSuffix(e.Name(), ".json")
+		srv, err := loadServer(filepath.Join(dir, e.Name()), name)
+		if err != nil {
+			diagnose(diag, "mcp:"+name, err.Error())
+			continue
+		}
+		set[srv.Name] = srv
+	}
+	return set
+}
+
+// loadServer reads and validates one <name>.json server declaration. The name is
+// the filename stem, never a field — Validate rejects a stem that is not a valid
+// server name.
+func loadServer(path, name string) (Server, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Server{}, fmt.Errorf("read: %w", err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	var cfg struct {
-		Servers []Server `json:"servers"`
+	var s Server
+	if err := dec.Decode(&s); err != nil {
+		return Server{}, fmt.Errorf("parse: %w", err)
 	}
-	if err := dec.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("mcpcap: parse %s: %w", path, err)
+	s.Name = name
+	if err := s.Validate(); err != nil {
+		return Server{}, err
 	}
-	seen := map[string]bool{}
-	for _, s := range cfg.Servers {
-		if err := s.Validate(); err != nil {
-			return nil, err
-		}
-		if seen[s.Name] {
-			return nil, fmt.Errorf("mcpcap: duplicate server %q", s.Name)
-		}
-		seen[s.Name] = true
+	return s, nil
+}
+
+// diagnose feeds one discovery finding into the collector if present (nil-safe:
+// the OAuth aggregator discovers without a collector).
+func diagnose(diag *agentkit.Diagnostics, subject, msg string) {
+	if diag != nil {
+		diag.Error(subject, msg)
 	}
-	return cfg.Servers, nil
 }

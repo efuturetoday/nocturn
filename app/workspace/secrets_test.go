@@ -34,11 +34,13 @@ func TestDiscoverOAuth_AggregatesSources(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// An MCP server with an OAuth block.
-	if err := os.WriteFile(filepath.Join(wsDir, "mcp.json"), []byte(`{"servers":[
-		{"name":"cal","url":"https://cal.example.com/mcp","oauth":{
-			"auth_url":"https://a/x","token_url":"https://t/y","client_id":"c","scopes":["s"]}}
-	]}`), 0o600); err != nil {
+	// An MCP server with an OAuth block — one file per server, name from the filename.
+	mcpDir := filepath.Join(wsDir, "mcp")
+	if err := os.MkdirAll(mcpDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mcpDir, "cal.json"), []byte(`{"url":"https://cal.example.com/mcp","oauth":{
+		"auth_url":"https://a/x","token_url":"https://t/y","client_id":"c","scopes":["s"]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

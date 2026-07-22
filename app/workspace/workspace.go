@@ -336,7 +336,7 @@ func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Inje
 // mcpSetupTimeout bounds the startup handshake + tools/list for one MCP server.
 const mcpSetupTimeout = 30 * time.Second
 
-// installMCP connects the remote MCP servers declared in <dir>/mcp.json and folds each server's
+// installMCP connects the remote MCP servers declared in <dir>/mcp/*.json and folds each server's
 // tools into the workspace toolset (as <server>_<tool>, refusing a name collision). Discovery
 // (Connect + tools/list) runs on a bounded context with NO gate machinery installed — so the
 // startup handshake never prompts; the runtime chat turn installs the gate, so a later
@@ -345,12 +345,13 @@ const mcpSetupTimeout = 30 * time.Second
 // plugin). Credentials are token (a bearer the operator seeded in the vault under mcp.SecretName)
 // or public; interactive credential entry and OAuth wiring are a later slice.
 func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scanner *secret.Scanner, log *slog.Logger) (int, error) {
-	servers, err := mcp.LoadConfig(filepath.Join(dir, "mcp.json"))
-	if err != nil {
-		return 0, err // a malformed control-plane config fails startup, like a bad plugin.json
+	var diag agentkit.Diagnostics
+	servers := mcp.Discover(filepath.Join(dir, "mcp"), &diag)
+	for _, d := range diag.All() {
+		log.Warn("mcp server skipped (bad file)", "subject", d.Subject, "err", d.Message)
 	}
 	installed := 0
-	for _, srv := range servers {
+	for _, srv := range servers.All() {
 		conn, err := mcp.NewConn(srv, inj, scanner)
 		if err != nil {
 			log.Warn("mcp server skipped (bad config)", "server", srv.Name, "err", err)
