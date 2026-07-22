@@ -66,8 +66,9 @@ func main() {
 	// value (read from stdin) into a plugin/mcp folder's encrypted shard. Like auth, it needs only the
 	// vault. The value never appears in argv — pipe it in: `op read op://... | nocturn secret set ...`.
 	if flag.Arg(0) == "secret" {
-		if flag.Arg(1) != "set" || flag.Arg(2) == "" || flag.Arg(3) == "" || flag.Arg(4) == "" {
-			fmt.Fprintln(os.Stderr, "usage: nocturn secret set <workspace> <plugins/NAME|mcp/NAME> <secret-key>   (value on stdin)")
+		if flag.Arg(1) != "set" || flag.Arg(2) == "" || flag.Arg(3) == "" {
+			fmt.Fprintln(os.Stderr, "usage: nocturn secret set <workspace> plugins/NAME <credential>   (value on stdin)")
+			fmt.Fprintln(os.Stderr, "       nocturn secret set <workspace> mcp/NAME                    (value on stdin)")
 			os.Exit(1)
 		}
 		if err := runSecretSet(flag.Arg(2), flag.Arg(3), flag.Arg(4)); err != nil {

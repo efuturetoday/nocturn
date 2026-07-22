@@ -60,11 +60,16 @@ or renaming a folder makes its old secrets unreadable. Seed a static credential 
 bearer token) with:
 
 ```sh
-printf %s "$TOKEN" | nocturn secret set <workspace> plugins/<name> plugin:<name>/<credential>
+# a plugin credential (named in the plugin's manifest):
+printf %s "$TOKEN" | nocturn secret set <workspace> plugins/<name> <credential>
+
+# an MCP server's bearer token (one per server):
+printf %s "$TOKEN" | nocturn secret set <workspace> mcp/<name>
 ```
 
-(The value is read from stdin, so it never lands in your shell history or the process list.)
-OAuth accounts are connected with `nocturn auth <name>` instead.
+The value is read from stdin, so it never lands in your shell history or the process list, and
+Nocturn works out the exact vault key for you. OAuth accounts are connected with
+`nocturn auth <name>` instead.
 
 A single workspace can hold several agents. They share this one folder — the same `mnt/`
 data and the same connected accounts. What each agent keeps to itself is its own
