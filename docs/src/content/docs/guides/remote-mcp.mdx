@@ -21,8 +21,8 @@ as everything else.
 
 ## Add a server
 
-Give each server its own file in an `mcp/` folder in your workspace, named after the server —
-`mcp/github.json`:
+Give each server its own folder under `mcp/` in your workspace, named after the server, with an
+`mcp.json` inside — `mcp/github/mcp.json`:
 
 ```json
 {
@@ -31,11 +31,12 @@ Give each server its own file in an `mcp/` folder in your workspace, named after
 }
 ```
 
-The server's name comes from the filename (`github.json` → `github`), so all you need is an
+The server's name comes from the folder (`mcp/github/` → `github`), so all you need is an
 `https` `url`. Its tools then appear to the assistant as `github_*`, alongside the built-in
-ones. To remove a server, delete its file. (You can add a `"name"` field to override the
-filename — the same way skills, agents and plugins work — but Nocturn warns if it disagrees
-with the file, since that is usually a mistake.)
+ones. To remove a server, delete its folder. (You can add a `"name"` field to override the
+folder — the same way skills, agents and plugins work — but Nocturn warns if it disagrees with
+the folder, since that is usually a mistake.) The folder also holds the server's encrypted
+credentials, so everything for one server lives in one place.
 
 ## Signing in
 

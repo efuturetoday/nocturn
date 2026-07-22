@@ -9,18 +9,22 @@ import (
 	"github.com/efuturetoday/nocturn/app/mcp"
 )
 
-// writeServer writes <dir>/<file> — one server declaration per file.
-func writeServer(t *testing.T, dir, file, content string) {
+// writeServer writes <dir>/<name>/mcp.json — one folder per server.
+func writeServer(t *testing.T, dir, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o600); err != nil {
+	folder := filepath.Join(dir, name)
+	if err := os.MkdirAll(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "mcp.json"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestDiscover_Valid(t *testing.T) {
 	dir := t.TempDir()
-	writeServer(t, dir, "github.json", `{"url":"https://mcp.github.com/mcp"}`)
-	writeServer(t, dir, "cal.json", `{"url":"https://cal.example.com/mcp","oauth":{
+	writeServer(t, dir, "github", `{"url":"https://mcp.github.com/mcp"}`)
+	writeServer(t, dir, "cal", `{"url":"https://cal.example.com/mcp","oauth":{
 		"auth_url":"https://auth.example.com/authorize","token_url":"https://auth.example.com/token",
 		"client_id":"abc","scopes":["calendar.read"]}}`)
 
@@ -29,7 +33,7 @@ func TestDiscover_Valid(t *testing.T) {
 	if len(set) != 2 || diag.Len() != 0 {
 		t.Fatalf("servers = %+v, diags = %v", set.All(), diag.All())
 	}
-	// The name IS the filename stem — never a JSON field.
+	// The name is the folder name; a JSON "name" may override it.
 	gh, ok := set.Get("github")
 	if !ok || gh.URL != "https://mcp.github.com/mcp" {
 		t.Fatalf("github parsed wrong: %+v", gh)
@@ -52,7 +56,7 @@ func TestDiscover_MissingDir(t *testing.T) {
 // A nil collector is tolerated (the OAuth aggregator discovers without one).
 func TestDiscover_NilCollector(t *testing.T) {
 	dir := t.TempDir()
-	writeServer(t, dir, "github.json", `{"url":"https://mcp.github.com/mcp"}`)
+	writeServer(t, dir, "github", `{"url":"https://mcp.github.com/mcp"}`)
 	if set := mcp.Discover(dir, nil); len(set) != 1 {
 		t.Fatalf("nil collector must still discover: %+v", set.All())
 	}
@@ -85,7 +89,7 @@ func TestServer_Validate_TokenOAuthMatrix(t *testing.T) {
 	}
 }
 
-// A malformed server file is SKIPPED with an Error diagnostic — never aborts the
+// A malformed server manifest is SKIPPED with an Error diagnostic — never aborts the
 // scan, never half-loads (its tools + token wiring are simply absent). The other
 // servers in the same dir still load.
 func TestDiscover_MalformedSkipped(t *testing.T) {
@@ -102,8 +106,8 @@ func TestDiscover_MalformedSkipped(t *testing.T) {
 	for label, content := range cases {
 		t.Run(label, func(t *testing.T) {
 			dir := t.TempDir()
-			writeServer(t, dir, "bad.json", content)
-			writeServer(t, dir, "good.json", `{"url":"https://good.example.com/mcp"}`)
+			writeServer(t, dir, "bad", content)
+			writeServer(t, dir, "good", `{"url":"https://good.example.com/mcp"}`)
 			var diag agentkit.Diagnostics
 			set := mcp.Discover(dir, &diag)
 			if _, ok := set.Get("good"); !ok || len(set) != 1 {
@@ -116,29 +120,29 @@ func TestDiscover_MalformedSkipped(t *testing.T) {
 	}
 }
 
-// A "name" field overrides the filename (the shared discovery rule) and warns on a
+// A "name" field overrides the folder name (the shared discovery rule) and warns on a
 // mismatch, but the server still loads under the field name.
 func TestDiscover_NameFieldOverridesWithWarning(t *testing.T) {
 	dir := t.TempDir()
-	writeServer(t, dir, "github.json", `{"name":"other","url":"https://mcp.github.com/mcp"}`)
+	writeServer(t, dir, "github", `{"name":"other","url":"https://mcp.github.com/mcp"}`)
 	var diag agentkit.Diagnostics
 	set := mcp.Discover(dir, &diag)
 	if _, ok := set.Get("other"); !ok || len(set) != 1 {
-		t.Fatalf("name field must win over filename: %+v", set.All())
+		t.Fatalf("name field must win over folder: %+v", set.All())
 	}
 	if diag.Len() != 1 {
 		t.Fatalf("a name/filename mismatch must warn, got %v", diag.All())
 	}
 }
 
-// A filename that is not a valid server name is skipped (Validate checks the resolved name).
+// A folder name that is not a valid server name is skipped (Validate checks the resolved name).
 func TestDiscover_BadFilenameSkipped(t *testing.T) {
 	dir := t.TempDir()
-	writeServer(t, dir, "Bad Name!.json", `{"url":"https://x.example.com/mcp"}`)
+	writeServer(t, dir, "Bad Name!", `{"url":"https://x.example.com/mcp"}`)
 	var diag agentkit.Diagnostics
 	set := mcp.Discover(dir, &diag)
 	if len(set) != 0 || diag.Len() != 1 {
-		t.Fatalf("a bad filename must be skipped: %+v diags=%v", set.All(), diag.All())
+		t.Fatalf("a bad folder name must be skipped: %+v diags=%v", set.All(), diag.All())
 	}
 }
 

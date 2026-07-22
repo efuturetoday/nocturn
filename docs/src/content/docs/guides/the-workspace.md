@@ -46,7 +46,7 @@ workspaces/work/
 ├─ PERSONA.md      ← the assistant's persona (its system prompt) — optional
 ├─ secrets.vault   ← encrypted vault (connected accounts, tokens)
 ├─ grants.json     ← the standing permissions you have granted
-├─ mcp/            ← remote MCP servers you have connected (one file per server)
+├─ mcp/            ← remote MCP servers you have connected (one folder per server)
 ├─ agents/         ← the agents defined in this workspace
 ├─ skills/         ← bundled know-how
 └─ plugins/        ← installed capabilities

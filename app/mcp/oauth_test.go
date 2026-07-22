@@ -18,13 +18,13 @@ func TestDiscoverOAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	// One OAuth server (on an explicit port, to guard the host-with-port invariant), one token
-	// server, one public — only the first is an OAuth provider. One file per server; the name is
-	// the filename stem.
-	writeServer(t, mcpDir, "cal.json", `{"url":"https://cal.example.com:8443/mcp","oauth":{
+	// server, one public — only the first is an OAuth provider. One folder per server; the name is
+	// the folder name.
+	writeServer(t, mcpDir, "cal", `{"url":"https://cal.example.com:8443/mcp","oauth":{
 		"auth_url":"https://auth.example.com/authorize","token_url":"https://auth.example.com/token",
 		"client_id":"abc","client_secret":"shh","scopes":["calendar.read","calendar.write"]}}`)
-	writeServer(t, mcpDir, "tok.json", `{"url":"https://tok.example.com/mcp","auth":"token"}`)
-	writeServer(t, mcpDir, "pub.json", `{"url":"https://pub.example.com/mcp"}`)
+	writeServer(t, mcpDir, "tok", `{"url":"https://tok.example.com/mcp","auth":"token"}`)
+	writeServer(t, mcpDir, "pub", `{"url":"https://pub.example.com/mcp"}`)
 
 	got := mcp.DiscoverOAuth(wsDir)
 	if len(got) != 1 {
