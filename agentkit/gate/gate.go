@@ -8,10 +8,22 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit"
 )
 
-// ErrDenied is returned by Check when an action is not permitted — a policy Deny, an Ask with no
-// covering grant and no Approver (or an unattended session), or a human declining. It is surfaced to
-// the model as the tool result, so the model adjusts instead of the turn crashing.
+// ErrDenied is the umbrella "not permitted" error: every deny below wraps it, so
+// errors.Is(err, ErrDenied) still matches any denial. The reason-specific sentinels let a caller
+// branch on WHY — e.g. an unattended deny might be retried attended, a policy deny never should. The
+// error is surfaced to the model as the tool result, so the model adjusts instead of the turn crashing.
 var ErrDenied = errors.New("gate: denied")
+
+// Reason-specific denials, each wrapping ErrDenied:
+var (
+	// ErrDeniedPolicy — the policy returned Deny for this action.
+	ErrDeniedPolicy = fmt.Errorf("policy deny: %w", ErrDenied)
+	// ErrDeniedUnattended — an Ask with no covering grant and no approver (a fired/background agent
+	// has no human to approve), so it fails closed.
+	ErrDeniedUnattended = fmt.Errorf("unattended, no approver: %w", ErrDenied)
+	// ErrDeniedDeclined — a human was asked and declined.
+	ErrDeniedDeclined = fmt.Errorf("declined by human: %w", ErrDenied)
+)
 
 type permsKey struct{}
 type gateLogKey struct{}
@@ -80,7 +92,7 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 		return nil
 	case decisionDeny:
 		lg.Warn("gate deny", "reason", "policy")
-		return ErrDenied
+		return ErrDeniedPolicy
 	}
 
 	// Ask. A standing grant covers it — unless this Kind is never remembered, in which case the cache
@@ -91,7 +103,7 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 	}
 	if p.approver == nil {
 		lg.Warn("gate deny", "reason", "unattended") // no human to approve — fail closed
-		return ErrDenied
+		return ErrDeniedUnattended
 	}
 
 	lg.Debug("gate ask", "recall", ruling.recall)
@@ -104,7 +116,7 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 	}
 	if !approved {
 		lg.Warn("gate deny", "reason", "declined")
-		return ErrDenied
+		return ErrDeniedDeclined
 	}
 
 	// Remember the (possibly widened) grant at the more restrictive of the policy's ceiling and the

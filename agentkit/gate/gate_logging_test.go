@@ -2,6 +2,7 @@ package gate_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -71,6 +72,29 @@ func TestCheck_LogsDeny(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no Warn 'gate deny' logged; records=%+v", *cap.recs)
+	}
+}
+
+// TestCheck_DenyReasons: each deny returns its reason-specific sentinel, and every one still matches
+// the ErrDenied umbrella so existing callers are unaffected.
+func TestCheck_DenyReasons(t *testing.T) {
+	deny := gate.PolicyFunc(func(gate.Action) gate.Ruling { return gate.Denied() })
+	ask := gate.PolicyFunc(func(gate.Action) gate.Ruling { return gate.AskWith(gate.RecallSession) })
+	act := gate.Action{Kind: "net", Target: "x"}
+
+	// Policy deny.
+	err := gate.Check(gate.With(context.Background(), deny, gate.NewMemGrants(), nil), act, nil)
+	if !errors.Is(err, gate.ErrDeniedPolicy) || !errors.Is(err, gate.ErrDenied) {
+		t.Fatalf("policy deny = %v, want ErrDeniedPolicy (⊂ ErrDenied)", err)
+	}
+	// Ask with no grant and no approver → unattended.
+	err = gate.Check(gate.With(context.Background(), ask, gate.NewMemGrants(), nil), act, nil)
+	if !errors.Is(err, gate.ErrDeniedUnattended) || !errors.Is(err, gate.ErrDenied) {
+		t.Fatalf("unattended deny = %v, want ErrDeniedUnattended (⊂ ErrDenied)", err)
+	}
+	// Distinct: a policy deny is NOT an unattended deny.
+	if errors.Is(gate.ErrDeniedPolicy, gate.ErrDeniedUnattended) {
+		t.Fatal("deny sentinels are not distinguishable")
 	}
 }
 
