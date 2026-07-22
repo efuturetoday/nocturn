@@ -58,30 +58,9 @@ func TestForest_End_FillsResult_MissingStartIgnored(t *testing.T) {
 	}
 }
 
-func TestForest_Inflight_RunningFlagReflectsEnded(t *testing.T) {
-	f := newForest()
-	f.start(1, 0, "done", "{}")
-	f.start(2, 0, "still-going", "{}")
-	f.end(1, "r", "", 1) // 1 finished; 2 still running
-
-	fl := f.inflight()
-	if len(fl) != 2 {
-		t.Fatalf("inflight len = %d, want 2", len(fl))
-	}
-	if fl[0].Running {
-		t.Error("node 1 ended but is flagged Running")
-	}
-	if !fl[1].Running {
-		t.Error("node 2 has no end but is not flagged Running")
-	}
-}
-
 func TestForest_Snapshot_EmptyForest(t *testing.T) {
 	if snap := newForest().snapshot(); len(snap) != 0 {
 		t.Fatalf("empty forest snapshot = %+v, want empty", snap)
-	}
-	if fl := newForest().inflight(); len(fl) != 0 {
-		t.Fatalf("empty forest inflight = %+v, want empty", fl)
 	}
 }
 
@@ -107,25 +86,39 @@ func newObserveManager(t *testing.T) (*Manager, *Store) {
 	return &Manager{store: st, log: slog.New(slog.DiscardHandler)}, st
 }
 
-func TestManager_observe_IgnoresNonZeroFrameForAnswerThinking(t *testing.T) {
+// observe buffers the running turn's events verbatim (any frame) for a mid-turn reopen — it does not
+// interpret them into a render model; the client folds them. Events before TurnStart (no running turn)
+// are dropped; TurnEnd(frame 0) clears the buffer (tested elsewhere via Inflight going zero).
+func TestManager_observe_BuffersRunningTurnEvents(t *testing.T) {
 	m, _ := newObserveManager(t)
-	lv := &live{forest: newForest()}
-	m.observe("id", lv, agentkit.TurnStart{Frame: 0}) // opens the turn (frame 0)
-	m.observe("id", lv, agentkit.Token{Frame: 1, Text: "sub-agent token"})
-	m.observe("id", lv, agentkit.Thinking{Frame: 2, Text: "sub-agent reasoning"})
+	lv := &live{}
 
-	if lv.answer.String() != "" {
-		t.Errorf("answer = %q, want empty (frame != 0 must not accumulate)", lv.answer.String())
-	}
-	if lv.thinking.String() != "" {
-		t.Errorf("thinking = %q, want empty (frame != 0 must not accumulate)", lv.thinking.String())
+	// Before any TurnStart there is no running turn — this event is not buffered.
+	m.observe("id", lv, agentkit.Token{Frame: 0, Text: "stray"})
+	if len(lv.events) != 0 {
+		t.Fatalf("events = %+v, want empty before TurnStart", lv.events)
 	}
 
-	// The top-level (frame 0) deltas do accumulate.
+	// From TurnStart(frame 0) on, every event (top-level AND sub-agent frames) is buffered in order.
+	m.observe("id", lv, agentkit.TurnStart{Frame: 0})
 	m.observe("id", lv, agentkit.Token{Frame: 0, Text: "top"})
-	m.observe("id", lv, agentkit.Thinking{Frame: 0, Text: "think"})
-	if lv.answer.String() != "top" || lv.thinking.String() != "think" {
-		t.Errorf("frame-0 deltas not accumulated: answer=%q thinking=%q", lv.answer.String(), lv.thinking.String())
+	m.observe("id", lv, agentkit.Thinking{Frame: 1, Text: "sub-agent reasoning"})
+	m.observe("id", lv, agentkit.ToolStart{Frame: 0, ID: 1, Tool: "probe"})
+
+	if len(lv.events) != 4 {
+		t.Fatalf("buffered %d events, want 4 (TurnStart + token + thinking + toolStart)", len(lv.events))
+	}
+	if _, ok := lv.events[0].(agentkit.TurnStart); !ok {
+		t.Errorf("events[0] = %T, want TurnStart (the buffer opens with the turn)", lv.events[0])
+	}
+	if tk, ok := lv.events[1].(agentkit.Token); !ok || tk.Text != "top" {
+		t.Errorf("events[1] = %+v, want Token{top}", lv.events[1])
+	}
+
+	// A fresh TurnStart(frame 0) resets the buffer for the next turn.
+	m.observe("id", lv, agentkit.TurnStart{Frame: 0})
+	if len(lv.events) != 1 {
+		t.Fatalf("events after a new TurnStart = %d, want 1 (buffer reset)", len(lv.events))
 	}
 }
 

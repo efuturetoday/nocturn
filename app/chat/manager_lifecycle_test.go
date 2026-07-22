@@ -118,8 +118,9 @@ func TestManager_Submit_OpensIfNeeded(t *testing.T) {
 	}
 }
 
-// A client reopening mid-turn is handed the RUNNING turn: its own input, the partial answer/reasoning
-// streamed so far, and the tool forest with the still-open tool flagged Running.
+// A client reopening mid-turn is handed the RUNNING turn: its own input plus the raw events streamed
+// so far (partial reasoning/answer + the still-open tool call), which the client replays through the
+// same fold as the live stream — no server-side render model.
 func TestManager_ReopenMidTurn_HandedRunningTurn(t *testing.T) {
 	release := make(chan struct{})
 	llm := funcLLM{next: func(ctx context.Context, conv []agentkit.Message) (agentkit.Step, error) {
@@ -137,9 +138,10 @@ func TestManager_ReopenMidTurn_HandedRunningTurn(t *testing.T) {
 	id := "d00d01"
 	m.Submit(id, "the question")
 
+	// Wait until the buffered events carry the partial reasoning + answer + the (open) tool start.
 	if !eventually(func() bool {
 		fl := m.Inflight(id)
-		return fl.Answer == "partial" && fl.Thinking == "pondering" && len(fl.Tools) == 1
+		return hasThinking(fl.Events, "pondering") && hasToken(fl.Events, "partial") && toolOpen(fl.Events)
 	}) {
 		t.Fatalf("in-flight turn not handed over: %+v", m.Inflight(id))
 	}
@@ -147,9 +149,40 @@ func TestManager_ReopenMidTurn_HandedRunningTurn(t *testing.T) {
 	if !fl.Running || fl.Input != "the question" {
 		t.Fatalf("Inflight = %+v, want Running with the caller's own input", fl)
 	}
-	if !fl.Tools[0].Running {
-		t.Error("the open tool must be flagged Running in the handed-over forest")
+}
+
+func hasToken(events []agentkit.Event, text string) bool {
+	for _, e := range events {
+		if t, ok := e.(agentkit.Token); ok && t.Text == text {
+			return true
+		}
 	}
+	return false
+}
+
+func hasThinking(events []agentkit.Event, text string) bool {
+	for _, e := range events {
+		if t, ok := e.(agentkit.Thinking); ok && t.Text == text {
+			return true
+		}
+	}
+	return false
+}
+
+// toolOpen reports whether the buffer has a ToolStart with no matching ToolEnd — a still-running call.
+func toolOpen(events []agentkit.Event) bool {
+	ended := map[uint64]bool{}
+	for _, e := range events {
+		if te, ok := e.(agentkit.ToolEnd); ok {
+			ended[te.ID] = true
+		}
+	}
+	for _, e := range events {
+		if ts, ok := e.(agentkit.ToolStart); ok && !ended[ts.ID] {
+			return true
+		}
+	}
+	return false
 }
 
 // After a turn ends, the in-flight state is cleared (TurnEnd frame 0) — Inflight is the zero value.

@@ -123,8 +123,8 @@ func (c *saveCounter) count() int {
 	return c.n
 }
 
-// zeroInflight reports whether fl is the empty read-model (no running turn). Inflight holds a slice,
-// so it is not == comparable — check the fields.
-func zeroInflight(fl chat.Inflight) bool {
-	return !fl.Running && fl.Input == "" && fl.Answer == "" && fl.Thinking == "" && len(fl.Tools) == 0
+// zeroInflight reports whether fl is the empty in-flight turn (no running turn). InflightTurn holds a
+// slice, so it is not == comparable — check the fields.
+func zeroInflight(fl chat.InflightTurn) bool {
+	return !fl.Running && fl.Input == "" && len(fl.Events) == 0
 }

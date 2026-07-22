@@ -86,28 +86,22 @@ describe('buildSnapshotMessages', () => {
 });
 
 describe('buildForestTools', () => {
-  const nodes: Array<ToolNode & { running?: boolean }> = [
-    { id: 1, parent: 0, tool: 'code_run', args: '{}', running: true },
+  const nodes: ToolNode[] = [
+    { id: 1, parent: 0, tool: 'code_run', args: '{}' },
     { id: 2, parent: 1, tool: 'http_read', args: '{}', durationMs: 42 },
   ];
 
-  it('uses snapshot `s` keys and is never running when live=false', () => {
+  it('uses snapshot `s` keys, is never running, restores depth + duration', () => {
     const tools = buildForestTools(nodes);
     expect(tools.map((t) => t.key)).toEqual(['s1', 's2']);
     expect(tools.every((t) => t.running === false)).toBe(true);
+    expect(tools.map((t) => t.depth)).toEqual([0, 1]);
     expect(tools[1].durationMs).toBe(42);
-  });
-
-  it('uses live `l` keys and honours the running flag when live=true', () => {
-    const tools = buildForestTools(nodes, true);
-    expect(tools.map((t) => t.key)).toEqual(['l1', 'l2']);
-    expect(tools[0].running).toBe(true);
-    expect(tools[1].running).toBe(false);
   });
 });
 
 describe('seed', () => {
-  it('appends the running turn (user + pending assistant) after the transcript', () => {
+  it('replays the running turn (input + events) onto the transcript with live-keyed tools', () => {
     const snap: ChatSnapshot = {
       type: 'chat.snapshot',
       id: 'c1',
@@ -116,25 +110,43 @@ describe('seed', () => {
         { role: 'assistant', content: 'reply' },
       ],
       tools: [[], []],
-      inflight: {
-        running: true,
-        input: 'now',
-        answer: 'partial',
-        thinking: 'hmm',
-        tools: [{ id: 5, parent: 0, tool: 'http_read', args: '{}', running: true }],
-      },
+      inflightRunning: true,
+      inflightInput: 'now',
+      inflightEvents: [
+        { type: 'chat.turnStart', chatId: 'c1', frame: 0 },
+        { type: 'chat.thinking', chatId: 'c1', frame: 0, text: 'hmm' },
+        { type: 'chat.token', chatId: 'c1', frame: 0, text: 'partial' },
+        { type: 'chat.tool', chatId: 'c1', phase: 'start', frame: 0, id: 5, tool: 'http_read', args: '{}' },
+      ],
     };
-    const v = seed(snap);
+    const v = seed(snap, 1000);
     expect(v.running).toBe(true);
     expect(v.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
     const pending = v.messages[3];
     expect(pending).toMatchObject({ content: 'partial', thinking: 'hmm', pending: true });
-    expect(pending.tools[0]).toMatchObject({ key: 'l5', running: true }); // live-keyed so ToolEnd updates it
+    expect(pending.tools[0]).toMatchObject({ key: 'l5', running: true }); // live-keyed so a live ToolEnd updates it
   });
 
-  it('is idle with no inflight', () => {
+  it('shows a pending assistant bubble in the Submit→turnStart window (input, no events yet)', () => {
+    const snap: ChatSnapshot = {
+      type: 'chat.snapshot',
+      id: 'c1',
+      messages: [],
+      tools: [],
+      inflightRunning: true,
+      inflightInput: 'just sent',
+    };
+    const v = seed(snap, 1000);
+    expect(v.running).toBe(true);
+    expect(v.messages.map((m) => [m.role, m.pending])).toEqual([
+      ['user', false],
+      ['assistant', true], // opened even before the first event streams, so the composer shows running
+    ]);
+  });
+
+  it('is idle with no running turn', () => {
     const snap: ChatSnapshot = { type: 'chat.snapshot', id: 'c1', messages: [], tools: [] };
-    expect(seed(snap)).toEqual(EMPTY);
+    expect(seed(snap, 1000)).toEqual(EMPTY);
   });
 });
 
@@ -206,7 +218,7 @@ describe('convergence: live fold vs snapshot seed', () => {
       ],
       tools: [[{ id: 1, parent: 0, tool: 'http_read', args: '{}', result: 'ok', durationMs: 7 }]],
     };
-    const seeded = seed(snap);
+    const seeded = seed(snap, 0);
 
     // Keys differ by namespace (live `l` vs snapshot `s`) and live tools carry startedAt — normalize
     // those away; everything that renders (roles, text, nesting, durations) must match.

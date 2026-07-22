@@ -104,15 +104,22 @@ type ChatTurnEnd struct {
 
 // ChatSnapshot is a chat's persisted transcript plus its per-turn tool forest, sent on open so the
 // client can render both the conversation and the nested tool calls (Tools[k] belongs to the k-th
-// turn). Tools reconstructs nesting the flat transcript can't — nested and sub-agent calls. Inflight
-// (present only when a turn is running) carries the CURRENT turn, which is not yet in the transcript —
-// so a client that reopens mid-turn sees its message + the working state, not a stale snapshot.
+// turn). Tools reconstructs nesting the flat transcript can't — nested and sub-agent calls.
+//
+// The running turn (if any) is NOT yet in the transcript. Rather than ship a server-materialized
+// render model, the snapshot carries it as raw material the client folds with its ONE reducer:
+// InflightInput is the user's message (recorded on submit, not a stream event) and InflightEvents are
+// the turn's wire events so far — the same events the live broadcast delivers. The client replays them
+// so a reopen mid-turn renders by the same path as the live stream. InflightRunning gates it (a turn
+// can be running with input recorded before its first event streams).
 type ChatSnapshot struct {
-	Type     string             `json:"type"`
-	ID       string             `json:"id"`
-	Messages []agentkit.Message `json:"messages"`
-	Tools    [][]chat.ToolNode  `json:"tools"`
-	Inflight *chat.Inflight     `json:"inflight,omitempty"`
+	Type            string             `json:"type"`
+	ID              string             `json:"id"`
+	Messages        []agentkit.Message `json:"messages"`
+	Tools           [][]chat.ToolNode  `json:"tools"`
+	InflightRunning bool               `json:"inflightRunning,omitempty"`
+	InflightInput   string             `json:"inflightInput,omitempty"`
+	InflightEvents  []any              `json:"inflightEvents,omitempty"`
 }
 
 // ChatActivity is pushed to every device when a chat changes (a turn ends, a markRead) so their
@@ -217,10 +224,19 @@ func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 	}
 	// The persisted transcript + forest are finished turns; the in-flight turn (if any) is NOT yet in
 	// them, so hand it over separately — else a reopen mid-turn would drop the client's own message and
-	// the working state. Live tokens keep streaming via the Manager's broadcast on top of this.
+	// the working state. Its events are rendered to the SAME wire form as the live broadcast (chatEvent),
+	// so the client folds reopen + live by one path. Live events keep streaming on top of this.
 	snap := ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs, Tools: tools}
 	if inf := ws.Chats().Inflight(m.ID); inf.Running {
-		snap.Inflight = &inf
+		snap.InflightRunning = true
+		snap.InflightInput = inf.Input
+		events := make([]any, 0, len(inf.Events))
+		for _, ev := range inf.Events {
+			if wire, ok := chatEvent(m.ID, ev); ok {
+				events = append(events, wire)
+			}
+		}
+		snap.InflightEvents = events
 	}
 	c.send(ctx, snap)
 }

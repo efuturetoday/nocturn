@@ -171,7 +171,7 @@ func TestChatSubmit_UnknownWorkspace_Errors(t *testing.T) {
 // ── chatOpen / chatList / markRead / cancel against a real, empty workspace ───────────────────────
 
 // An idle (unknown) chat opens to a snapshot whose Messages and Tools are empty ARRAYS (not null) and
-// whose Inflight is nil — the reopen-mid-turn state only appears for a running turn.
+// whose in-flight fields are absent — the reopen-mid-turn state only appears for a running turn.
 func TestChatOpen_IdleSnapshot_EmptyArrays_NilInflight(t *testing.T) {
 	c := connWith(openWorkspace(t))
 	c.chatOpen(context.Background(), ChatOpen{Ws: "main", ID: "deadbeef"})
@@ -189,8 +189,8 @@ func TestChatOpen_IdleSnapshot_EmptyArrays_NilInflight(t *testing.T) {
 	if snap.Tools == nil || len(snap.Tools) != 0 {
 		t.Errorf("Tools = %v, want non-nil empty", snap.Tools)
 	}
-	if snap.Inflight != nil {
-		t.Errorf("Inflight = %+v, want nil for an idle chat", snap.Inflight)
+	if snap.InflightRunning || snap.InflightInput != "" || snap.InflightEvents != nil {
+		t.Errorf("in-flight fields = %v/%q/%v, want zero for an idle chat", snap.InflightRunning, snap.InflightInput, snap.InflightEvents)
 	}
 
 	// The wire form carries [] not null.

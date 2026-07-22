@@ -140,7 +140,7 @@ export class ChatService {
   private reduce(e: ServerEvent): void {
     if (e.type === 'chat.snapshot') {
       this._activeChatId.set(e.id);
-      this._view.set(seed(e));
+      this._view.set(seed(e, Date.now()));
       return;
     }
     if (!('chatId' in e) || e.chatId !== this._activeChatId()) return;

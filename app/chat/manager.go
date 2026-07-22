@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -41,20 +40,21 @@ type Manager struct {
 }
 
 // live is one running/idle session plus the idle bookkeeping the reaper reads AND the IN-FLIGHT turn
-// state (input/answer/thinking/forest), so a client that reopens the chat mid-turn can be handed the
-// running turn instead of a stale transcript that ends before it. The in-flight fields are the render
-// read-model for the current turn; they are the daemon's single source of truth for "what is running
-// now" (the transcript only holds finished turns). All fields are guarded by Manager.mu.
+// state, so a client that reopens the chat mid-turn can be handed the running turn instead of a stale
+// transcript that ends before it. The daemon does NOT materialize a render model of the running turn:
+// it buffers the turn's raw events and replays them, so the answer/reasoning/tool nesting are folded
+// by the ONE client-side reducer that also drives the live stream (no server-side second fold to keep
+// in sync). `forest` stays because it structures the turn's tool calls for PERSISTENCE at close (an
+// observability artifact beside the transcript), not to render. All fields are guarded by Manager.mu.
 type live struct {
 	sess      *agentkit.Session
 	running   bool
 	idleSince time.Time
 
 	// in-flight turn (guarded by Manager.mu); cleared on TurnEnd(frame 0)
-	input    string          // the current turn's user message — not yet persisted
-	answer   strings.Builder // partial top-level (frame 0) answer streamed so far
-	thinking strings.Builder // partial top-level reasoning streamed so far
-	forest   *forest         // the turn's tool calls captured so far (nested; incl. sub-agents)
+	input  string           // the current turn's user message — not yet persisted, not a stream event
+	events []agentkit.Event // the turn's events so far, replayed to a client reopening mid-turn
+	forest *forest          // the turn's tool calls (nested) — for PERSISTING the forest group at close
 }
 
 // NewManager builds a Manager over a Runtime and a Store and starts its idle-session reaper. Call
@@ -135,9 +135,9 @@ func (m *Manager) Cancel(id string) {
 }
 
 // pump drains one session's event stream — ALWAYS, whether or not a client is watching, so a turn
-// never blocks on a full channel — updates the in-flight turn state (running/answer/thinking/forest),
-// flushes the tool forest at each turn's close, and forwards each event to emit. It exits when the
-// session is closed (Delete / reaper / CloseAll), which closes the stream.
+// never blocks on a full channel — buffers the in-flight turn's events (see observe), flushes the
+// tool forest at each turn's close, and forwards each event to emit. It exits when the session is
+// closed (Delete / reaper / CloseAll), which closes the stream.
 func (m *Manager) pump(id string, lv *live) {
 	defer m.wg.Done()
 	m.mu.Lock()
@@ -151,51 +151,32 @@ func (m *Manager) pump(id string, lv *live) {
 	}
 }
 
-// observe maintains the live session's in-flight state from its OWN event stream — the single source
-// of truth for "what is running now" (the transcript only holds finished turns). Only the top-level
-// turn (Frame 0) opens/closes the turn; sub-agent frames belong to it. It accumulates the partial
-// answer/reasoning and the tool forest (incl. nested + sub-agent calls, any frame), so a reopen mid-
-// turn can be handed the running turn. On TurnEnd(frame 0) it flushes the forest group to the store
-// (best-effort: a persist error is swallowed — observability, not authority) and clears the in-flight
-// state. State mutation is under m.mu; the disk write happens outside the lock.
+// observe maintains the live session's in-flight state from its OWN event stream. Only the top-level
+// turn (Frame 0) opens/closes the turn; sub-agent frames belong to it. It does NOT interpret the
+// stream into a render model: it buffers the running turn's raw events (any frame) so a reopening
+// client replays them through the same client-side fold as the live stream. It also structures the
+// tool calls into `forest` — for PERSISTENCE only. On TurnEnd(frame 0) it flushes the forest group to
+// the store (best-effort: a persist error is swallowed — observability, not authority) and clears the
+// in-flight state. State mutation is under m.mu; the disk write happens outside the lock.
 func (m *Manager) observe(id string, lv *live, ev agentkit.Event) {
+	m.mu.Lock()
 	switch e := ev.(type) {
 	case agentkit.TurnStart:
 		if e.Frame == 0 {
-			m.mu.Lock()
 			lv.running = true
-			lv.answer.Reset()
-			lv.thinking.Reset()
+			lv.events = nil
 			lv.forest = newForest()
-			m.mu.Unlock()
-		}
-	case agentkit.Token:
-		if e.Frame == 0 {
-			m.mu.Lock()
-			lv.answer.WriteString(e.Text)
-			m.mu.Unlock()
-		}
-	case agentkit.Thinking:
-		if e.Frame == 0 {
-			m.mu.Lock()
-			lv.thinking.WriteString(e.Text)
-			m.mu.Unlock()
 		}
 	case agentkit.ToolStart:
-		m.mu.Lock()
 		if lv.forest != nil {
 			lv.forest.start(e.ID, e.Frame, e.Tool, e.Args)
 		}
-		m.mu.Unlock()
 	case agentkit.ToolEnd:
-		m.mu.Lock()
 		if lv.forest != nil {
 			lv.forest.end(e.ID, e.Result, errText(e.Err), e.Duration.Milliseconds())
 		}
-		m.mu.Unlock()
 	case agentkit.TurnEnd:
 		if e.Frame == 0 {
-			m.mu.Lock()
 			var nodes []ToolNode
 			if lv.forest != nil {
 				nodes = lv.forest.snapshot()
@@ -203,8 +184,7 @@ func (m *Manager) observe(id string, lv *live, ev agentkit.Event) {
 			lv.running = false
 			lv.idleSince = time.Now()
 			lv.input = ""
-			lv.answer.Reset()
-			lv.thinking.Reset()
+			lv.events = nil
 			lv.forest = nil
 			m.mu.Unlock()
 			if err := m.store.AppendTools(id, nodes); err != nil { // outside the lock (disk I/O)
@@ -216,49 +196,47 @@ func (m *Manager) observe(id string, lv *live, ev agentkit.Event) {
 			if e.Err != nil {
 				m.log.Warn("turn ended with error", "chat", id, "err", e.Err)
 			}
+			return
 		}
 	}
+	// Buffer the running turn's events for a mid-turn reopen — the SAME stream the live broadcast
+	// delivers, so a reopen and a live turn render by one client-side fold. Skipped once TurnEnd(frame
+	// 0) has cleared the turn (it returns above).
+	if lv.running {
+		lv.events = append(lv.events, ev)
+	}
+	m.mu.Unlock()
 }
 
 // Tools returns a chat's persisted per-turn tool forest, for rebuilding the nested forest on snapshot.
 func (m *Manager) Tools(id string) ([][]ToolNode, error) { return m.store.LoadTools(id) }
 
-// InflightTool is one tool call of the RUNNING turn (a ToolNode plus whether it is still executing),
-// for reconstructing the live forest on a reopen. A finished-turn forest uses ToolNode (no Running).
-type InflightTool struct {
-	ToolNode
-	Running bool `json:"running"`
+// InflightTurn is the running turn handed to a client reopening mid-turn: the user's input (recorded
+// on submit, not yet persisted, not a stream event) plus the raw events streamed so far. The client
+// replays the events through the SAME fold as the live stream, so a reopen and a live turn render by
+// one path — no server-side render model to keep in sync. Running is false (zero value) when no turn
+// is active; then the transcript alone is current.
+type InflightTurn struct {
+	Running bool
+	Input   string
+	Events  []agentkit.Event
 }
 
-// Inflight is the render read-model of a chat's RUNNING turn, handed to a client that reopens mid-turn
-// so it sees its own message + the working state + progress, not a transcript that ends before the
-// turn. Running is false (zero value) when no turn is active — then the transcript alone is current.
-type Inflight struct {
-	Running  bool           `json:"running"`
-	Input    string         `json:"input,omitempty"`
-	Answer   string         `json:"answer,omitempty"`
-	Thinking string         `json:"thinking,omitempty"`
-	Tools    []InflightTool `json:"tools,omitempty"`
-}
-
-// Inflight returns the running turn's state for id (zero value if the chat is not live or idle).
-func (m *Manager) Inflight(id string) Inflight {
+// Inflight returns the running turn's state for id (zero value if the chat is not live or idle). The
+// events slice is copied under the lock — the live turn keeps appending to lv.events after we return.
+func (m *Manager) Inflight(id string) InflightTurn {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	lv := m.active[id]
 	if lv == nil || (!lv.running && lv.input == "") {
-		return Inflight{}
+		return InflightTurn{}
 	}
-	var toolsOut []InflightTool
-	if lv.forest != nil {
-		toolsOut = lv.forest.inflight()
-	}
-	return Inflight{
-		Running:  true, // input recorded or turn started — a turn is in progress
-		Input:    lv.input,
-		Answer:   lv.answer.String(),
-		Thinking: lv.thinking.String(),
-		Tools:    toolsOut,
+	events := make([]agentkit.Event, len(lv.events))
+	copy(events, lv.events)
+	return InflightTurn{
+		Running: true, // input recorded or turn started — a turn is in progress
+		Input:   lv.input,
+		Events:  events,
 	}
 }
 
@@ -272,15 +250,14 @@ func errText(err error) string {
 }
 
 // forest accumulates one turn's tool calls from the live event stream, keyed by call id, in first-seen
-// (start) order so parents precede children. `ended` marks calls that have returned, so an in-flight
-// reopen can show still-running calls. It is mutated only under Manager.mu (pump writes, Inflight reads).
+// (start) order so parents precede children — the structure persisted as the turn's forest group at
+// close. It is mutated only under Manager.mu (the pump writes it via observe).
 type forest struct {
 	order []uint64
 	nodes map[uint64]*ToolNode
-	ended map[uint64]bool
 }
 
-func newForest() *forest { return &forest{nodes: map[uint64]*ToolNode{}, ended: map[uint64]bool{}} }
+func newForest() *forest { return &forest{nodes: map[uint64]*ToolNode{}} }
 
 // start records a call's opening (create-if-absent); parent is the enclosing call id (0 = top level).
 func (f *forest) start(id, parent uint64, tool, args string) {
@@ -295,7 +272,6 @@ func (f *forest) start(id, parent uint64, tool, args string) {
 func (f *forest) end(id uint64, result, errText string, durationMs int64) {
 	if n := f.nodes[id]; n != nil {
 		n.Result, n.Err, n.DurationMs = result, errText, durationMs
-		f.ended[id] = true
 	}
 }
 
@@ -304,16 +280,6 @@ func (f *forest) snapshot() []ToolNode {
 	out := make([]ToolNode, 0, len(f.order))
 	for _, id := range f.order {
 		out = append(out, *f.nodes[id])
-	}
-	return out
-}
-
-// inflight returns the turn's nodes so far, each flagged with whether it is still executing — for
-// handing a reopened client the running forest (calls without a recorded end still show as running).
-func (f *forest) inflight() []InflightTool {
-	out := make([]InflightTool, 0, len(f.order))
-	for _, id := range f.order {
-		out = append(out, InflightTool{ToolNode: *f.nodes[id], Running: !f.ended[id]})
 	}
 	return out
 }

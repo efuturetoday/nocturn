@@ -25,25 +25,23 @@ export const EMPTY: ChatView = { messages: [], running: false };
 
 /**
  * Build the initial view from a `chat.snapshot`: the finished turns from the transcript + forest,
- * then the running turn (if any) appended. The in-flight turn is NOT in the transcript yet — its
- * partial answer/reasoning + running forest come from `inflight`, keyed in the live `l` namespace so
- * the following live events update the SAME entries in place. Without it the running turn would
- * vanish on reopen.
+ * then the running turn (if any) folded on top. The in-flight turn is NOT in the transcript yet — it
+ * arrives as its raw material (`inflightInput` + `inflightEvents`) which we replay through the SAME
+ * `applyEvent` as the live stream, so a reopen mid-turn and a live turn render identically (its tools
+ * get live `l` keys, so a following live ToolEnd updates them in place). `now` seeds a still-open
+ * call's live timer. A running turn always shows its assistant bubble even before its first event
+ * streams (the Submit→turnStart window), so the composer state matches.
  */
-export function seed(snap: ChatSnapshot): ChatView {
-  const messages = buildSnapshotMessages(snap.messages, snap.tools ?? []);
-  const inf = snap.inflight;
-  if (inf?.running) {
-    if (inf.input) messages.push(userBubble(inf.input));
-    messages.push({
-      role: 'assistant',
-      content: inf.answer ?? '',
-      thinking: inf.thinking ?? '',
-      tools: buildForestTools(inf.tools ?? [], true),
-      pending: true,
-    });
+export function seed(snap: ChatSnapshot, now: number): ChatView {
+  let view: ChatView = { messages: buildSnapshotMessages(snap.messages, snap.tools ?? []), running: false };
+  if (!snap.inflightRunning) return view;
+  if (snap.inflightInput) view = pushUser(view, snap.inflightInput);
+  for (const e of snap.inflightEvents ?? []) view = applyEvent(view, e, now);
+  const last = view.messages[view.messages.length - 1];
+  if (!last || last.role !== 'assistant' || !last.pending) {
+    view = { ...view, messages: [...view.messages, { role: 'assistant', content: '', thinking: '', tools: [], pending: true }] };
   }
-  return { messages, running: !!inf?.running };
+  return { ...view, running: true };
 }
 
 // ── live event → next state ──────────────────────────────────────────────────
@@ -175,12 +173,12 @@ export function buildSnapshotMessages(messages: Message[], forest: ToolNode[][])
 }
 
 /**
- * Build the rendered tool forest from captured nodes: depth is the length of the parent chain, and
- * id/parentId are restored so the render nests exactly like the live path. Nodes are in start order,
- * so parents precede children. `live=true` keys them in the live `l` namespace and honours each
- * node's `running` flag; a finished-turn forest uses `s` keys and is never running.
+ * Build the rendered tool forest for a FINISHED turn from its persisted nodes: depth is the length of
+ * the parent chain, id/parentId are restored so the render nests exactly like the live path. Nodes are
+ * in start order, so parents precede children. Snapshot (`s`) keys, never running — a running turn's
+ * tools come from the replayed live events (`applyEvent`), not from here.
  */
-export function buildForestTools(nodes: Array<ToolNode & { running?: boolean }>, live = false): ToolView[] {
+export function buildForestTools(nodes: ToolNode[]): ToolView[] {
   const byId = new Map<number, ToolNode>(nodes.map((n) => [n.id, n]));
   const depthOf = (n: ToolNode): number => {
     let d = 0;
@@ -196,12 +194,12 @@ export function buildForestTools(nodes: Array<ToolNode & { running?: boolean }>,
     return d;
   };
   return nodes.map((n) => ({
-    key: `${live ? 'l' : 's'}${n.id}`,
+    key: `s${n.id}`,
     tool: n.tool,
     args: n.args,
     result: n.result,
     err: n.err,
-    running: live && !!n.running,
+    running: false,
     depth: depthOf(n),
     id: n.id,
     parentId: n.parent || undefined,
