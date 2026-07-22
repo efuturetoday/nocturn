@@ -2,16 +2,18 @@ import { Injectable, inject, signal, computed, effect, untracked } from '@angula
 import { ConnectionService } from './connection.service';
 import { WorkspaceService } from './workspace.service';
 import { ApprovalService } from './approval.service';
-import type { ChatTool, ServerEvent } from '../protocol/nocturn-protocol';
-import type { ChatMessageView, ToolView } from './chat-view';
-import { buildForestTools, buildSnapshotMessages } from './chat-snapshot';
+import type { ServerEvent } from '../protocol/nocturn-protocol';
+import type { ToolView } from './chat-view';
+import { ChatView, EMPTY, seed, applyEvent, pushUser } from './chat-model';
 
 /**
- * ChatService owns the ONE active chat's assembled state. It reduces that chat's stream
- * (snapshot/token/thinking/tool/turnEnd) into `messages`. A chat is message-first: submitting with no
- * active chat starts one (an unknown client-minted id creates it on the daemon). `chat.snapshot` is
- * the wholesale resync primitive; on (re)connect it re-opens the active chat to pull a fresh one. The
- * chat LIST + unread state live in ChatListService; the app-global out-of-band approval state lives in
+ * ChatService owns the ONE active chat's assembled state — a thin signal shell over the pure
+ * `chat-model` fold. Both entry points reduce into the same `ChatView` by the same builders: a
+ * `chat.snapshot` seeds it (`seed`), each live event folds onto it (`applyEvent`), so the snapshot
+ * path and the live-stream path cannot drift. A chat is message-first: submitting with no active chat
+ * starts one (an unknown client-minted id creates it on the daemon). `chat.snapshot` is the wholesale
+ * resync primitive; on (re)connect it re-opens the active chat to pull a fresh one. The chat LIST +
+ * unread state live in ChatListService; the app-global out-of-band approval state lives in
  * ApprovalService (an approval carries no chat id) — this service only reads its `frames()` to freeze
  * the parked branch's timers.
  */
@@ -24,11 +26,9 @@ export class ChatService {
   private readonly _activeChatId = signal<string | null>(null);
   readonly activeChatId = this._activeChatId.asReadonly();
 
-  private readonly _messages = signal<ChatMessageView[]>([]);
-  readonly messages = this._messages.asReadonly();
-
-  private readonly _running = signal(false);
-  readonly running = this._running.asReadonly();
+  private readonly _view = signal<ChatView>(EMPTY);
+  readonly messages = computed(() => this._view().messages);
+  readonly running = computed(() => this._view().running);
 
   // First message to auto-send once the composer opens a fresh chat (consumed by the chat page).
   private readonly _pendingFirst = signal<string | null>(null);
@@ -46,7 +46,11 @@ export class ChatService {
     const out = new Set<number>();
     if (frames.size === 0) return out;
     const byId = new Map<number, ToolView>();
-    for (const m of this._messages()) for (const t of m.tools) if (t.id != null) byId.set(t.id, t);
+    for (const m of this._view().messages) {
+      for (const t of m.tools) {
+        if (t.id != null) byId.set(t.id, t);
+      }
+    }
     for (const frame of frames) {
       let id: number | undefined = frame;
       while (id != null && !out.has(id)) {
@@ -115,8 +119,7 @@ export class ChatService {
     const ws = this.ws.active();
     const id = this._activeChatId();
     if (!text || !ws || !id) return;
-    this.pushUser(text);
-    this._running.set(true);
+    this._view.update((v) => ({ ...pushUser(v, text), running: true }));
     this.conn.send({ cmd: 'chat.submit', ws, text, id });
   }
 
@@ -128,124 +131,24 @@ export class ChatService {
 
   // ── event reduction ──────────────────────────────────────────────────────────
 
+  /**
+   * Route one server event onto the active chat's view. `chat.snapshot` seeds wholesale; the streaming
+   * events are broadcast for EVERY live chat, so drop those for a chat not on screen, then fold the
+   * rest through the pure `applyEvent`. Approval events are app-global (no chat scope) — owned by
+   * ApprovalService. The unread dot updates from the daemon's chat.activity push (ChatListService).
+   */
   private reduce(e: ServerEvent): void {
-    switch (e.type) {
-      case 'chat.snapshot': {
-        this._activeChatId.set(e.id);
-        const msgs = buildSnapshotMessages(e.messages, e.tools ?? []);
-        // The in-flight turn is NOT in the transcript yet — append it so a reopen mid-turn shows the
-        // user's own message + a pending assistant (partial answer/reasoning + running forest). Live
-        // events then stream onto this same pending bubble (its tools use live `l` keys, so a following
-        // ToolEnd updates them in place). Without this the running turn would vanish on reopen.
-        const inf = e.inflight;
-        if (inf?.running) {
-          if (inf.input) msgs.push({ role: 'user', content: inf.input, thinking: '', tools: [], pending: false });
-          msgs.push({
-            role: 'assistant',
-            content: inf.answer ?? '',
-            thinking: inf.thinking ?? '',
-            tools: buildForestTools(inf.tools ?? [], true),
-            pending: true,
-          });
-        }
-        this._messages.set(msgs);
-        this._running.set(!!inf?.running);
-        break;
-      }
-
-      // Streaming events broadcast for EVERY live chat; apply only those for the chat on screen.
-      // The assistant bubble is opened by chat.turnStart (below), NOT inferred here — so a locally
-      // sent turn and a backend-initiated one (wake resume, agent run, another device) render the
-      // same, straight from the stream.
-      case 'chat.turnStart':
-        if (e.chatId !== this._activeChatId()) break;
-        if (e.frame === 0) this.openAssistant();
-        break;
-
-      case 'chat.token':
-        if (e.chatId !== this._activeChatId()) break;
-        if (e.frame === 0) this.appendAssistant((m) => ({ ...m, content: m.content + e.text }));
-        break;
-
-      case 'chat.thinking':
-        if (e.chatId !== this._activeChatId()) break;
-        if (e.frame === 0) this.appendAssistant((m) => ({ ...m, thinking: m.thinking + e.text }));
-        break;
-
-      case 'chat.tool':
-        if (e.chatId !== this._activeChatId()) break;
-        this.applyTool(e);
-        break;
-
-      case 'chat.turnEnd':
-        if (e.chatId !== this._activeChatId()) break;
-        if (e.frame === 0) {
-          this.appendAssistant((m) => ({ ...m, error: e.err, pending: false }));
-          this._running.set(false);
-          // The unread dot updates from the daemon's chat.activity push (handled by ChatListService).
-        }
-        break;
-
-      // approval.request / approval.resolved are app-global (no chat scope) — owned by ApprovalService.
+    if (e.type === 'chat.snapshot') {
+      this._activeChatId.set(e.id);
+      this._view.set(seed(e));
+      return;
     }
+    if (!('chatId' in e) || e.chatId !== this._activeChatId()) return;
+    this._view.update((v) => applyEvent(v, e, Date.now()));
   }
 
   private resetLocal(): void {
-    this._messages.set([]);
-    this._running.set(false);
-  }
-
-  private pushUser(content: string): void {
-    this._messages.update((ms) => [...ms, { role: 'user', content, thinking: '', tools: [], pending: false }]);
-  }
-
-  private openAssistant(): void {
-    this._messages.update((ms) => {
-      const last = ms[ms.length - 1];
-      if (last && last.role === 'assistant' && last.pending) return ms;
-      return [...ms, { role: 'assistant', content: '', thinking: '', tools: [], pending: true }];
-    });
-  }
-
-  private appendAssistant(fn: (m: ChatMessageView) => ChatMessageView): void {
-    this._messages.update((ms) => {
-      if (!ms.length) return ms;
-      const i = ms.length - 1;
-      if (ms[i].role !== 'assistant') return ms;
-      const next = ms.slice();
-      next[i] = fn(next[i]);
-      return next;
-    });
-  }
-
-  /** Match tool start/end by id on the active assistant turn; nesting comes from the enclosing frame. */
-  private applyTool(e: ChatTool): void {
-    const now = Date.now();
-    this.appendAssistant((m) => {
-      const parent = e.frame ? m.tools.find((t) => t.key === `l${e.frame}`) : undefined;
-      const key = `l${e.id}`;
-      const prev = m.tools.find((t) => t.key === key);
-      const running = e.phase === 'start';
-      const view: ToolView = {
-        key,
-        tool: e.tool,
-        args: e.args,
-        result: e.result,
-        err: e.err,
-        running,
-        depth: parent ? parent.depth + 1 : 0,
-        id: e.id,
-        parentId: e.frame || undefined, // the enclosing call (0 = top-level); lets the parked branch reach its ancestors
-
-        // startedAt drives the live ticking timer WHILE running; on end the daemon's exact durationMs
-        // freezes it (more accurate than a client clock, and it matches the reloaded snapshot).
-        startedAt: prev?.startedAt ?? (running ? now : undefined),
-        durationMs: running ? undefined : e.durationMs,
-      };
-      const idx = m.tools.findIndex((t) => t.key === key);
-      const tools = idx >= 0 ? m.tools.map((t, i) => (i === idx ? view : t)) : [...m.tools, view];
-      return { ...m, tools };
-    });
+    this._view.set(EMPTY);
   }
 }
 
