@@ -28,10 +28,8 @@ func TestDiscover_ReadsAgentMd_PerSubdir(t *testing.T) {
 	writeAgent(t, dir, "researcher", "---\nname: researcher\ntools:\n  - http\n  - file_read\nwhen: \"*/5 * * * *\"\neffort: high\n---\nYou are a researcher.\nDig deep.\n")
 	writeAgent(t, dir, "greeter", "---\nname: greeter\n---\nSay hello.\n")
 
-	set, err := agent.Discover(dir)
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
+	var diag agentkit.Diagnostics
+	set := agent.Discover(dir, &diag)
 	if len(set) != 2 {
 		t.Fatalf("Discover found %d agents, want 2: %v", len(set), set)
 	}
@@ -65,12 +63,10 @@ func TestDiscover_ReadsAgentMd_PerSubdir(t *testing.T) {
 func TestDiscover_MissingDir_EmptySet(t *testing.T) {
 	t.Parallel()
 
-	set, err := agent.Discover(filepath.Join(t.TempDir(), "does-not-exist"))
-	if err != nil {
-		t.Fatalf("Discover on missing dir returned error: %v", err)
-	}
-	if len(set) != 0 {
-		t.Errorf("Discover on missing dir = %v, want empty set", set)
+	var diag agentkit.Diagnostics
+	set := agent.Discover(filepath.Join(t.TempDir(), "does-not-exist"), &diag)
+	if len(set) != 0 || diag.Len() != 0 {
+		t.Errorf("Discover on missing dir = %v (%d diags), want empty set", set, diag.Len())
 	}
 }
 
@@ -88,10 +84,8 @@ func TestDiscover_NonDirEntries_Skipped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	set, err := agent.Discover(dir)
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
+	var diag agentkit.Diagnostics
+	set := agent.Discover(dir, &diag)
 	if len(set) != 1 {
 		t.Fatalf("Discover = %d agents, want 1 (only 'real'): %v", len(set), set)
 	}
@@ -100,13 +94,20 @@ func TestDiscover_NonDirEntries_Skipped(t *testing.T) {
 	}
 }
 
-func TestDiscover_MissingName_PropagatesError(t *testing.T) {
+// A malformed agent.md is skipped with a diagnostic — never aborts the scan, never half-loads.
+func TestDiscover_MalformedSkipped(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	writeAgent(t, dir, "broken", "---\ntools:\n  - http\n---\nno name here\n")
+	writeAgent(t, dir, "broken", "---\ntools: [unclosed\n---\nbad yaml\n")
+	writeAgent(t, dir, "good", "---\nname: good\n---\nbody\n")
 
-	if _, err := agent.Discover(dir); err == nil {
-		t.Fatal("Discover with a nameless agent.md = nil error, want error")
+	var diag agentkit.Diagnostics
+	set := agent.Discover(dir, &diag)
+	if _, ok := set.Get("good"); !ok || len(set) != 1 {
+		t.Fatalf("a malformed agent must not stop the good one: %v", set)
+	}
+	if diag.Len() != 1 {
+		t.Fatalf("want 1 diagnostic for the malformed agent, got %d: %v", diag.Len(), diag.All())
 	}
 }

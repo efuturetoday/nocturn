@@ -2,27 +2,26 @@ package skill_test
 
 import (
 	"context"
-	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/app/skill"
 )
 
-func quietLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func TestDiscover(t *testing.T) {
+	var diag agentkit.Diagnostics
+	set, dirs := skill.Discover("testdata/skills", &diag)
 
-func TestLoad(t *testing.T) {
-	set, dirs, err := skill.Load("testdata/skills", quietLog())
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	// Valid skills load; invalid (bad-name, no-desc) and non-skill dirs (notaskill) are skipped.
+	// Valid skills load; invalid (bad-name, no-desc) and non-skill dirs (notaskill) are skipped,
+	// each with a diagnostic.
 	if len(set) != 2 {
 		t.Fatalf("loaded %d skills, want 2 (text-stats, summarize-url); got %v", len(set), keys(dirs))
+	}
+	if diag.Len() < 2 {
+		t.Errorf("want >=2 diagnostics for the skipped skills (Bad_Name, no-desc), got %d: %v", diag.Len(), diag.All())
 	}
 	for _, want := range []string{"text-stats", "summarize-url"} {
 		if _, ok := set[want]; !ok {
@@ -54,21 +53,17 @@ func TestLoad(t *testing.T) {
 	}
 }
 
-func TestLoad_MissingDir(t *testing.T) {
-	set, dirs, err := skill.Load("testdata/does-not-exist", quietLog())
-	if err != nil {
-		t.Fatalf("Load of missing dir should not error: %v", err)
-	}
-	if len(set) != 0 || len(dirs) != 0 {
-		t.Fatalf("missing dir should yield no skills, got %d/%d", len(set), len(dirs))
+func TestDiscover_MissingDir(t *testing.T) {
+	var diag agentkit.Diagnostics
+	set, dirs := skill.Discover("testdata/does-not-exist", &diag)
+	if len(set) != 0 || len(dirs) != 0 || diag.Len() != 0 {
+		t.Fatalf("missing dir should yield no skills, got %d/%d, %d diags", len(set), len(dirs), diag.Len())
 	}
 }
 
 func TestReadTool(t *testing.T) {
-	_, dirs, err := skill.Load("testdata/skills", quietLog())
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	var diag agentkit.Diagnostics
+	_, dirs := skill.Discover("testdata/skills", &diag)
 	tool, err := skill.ReadTool(dirs)
 	if err != nil {
 		t.Fatalf("ReadTool: %v", err)

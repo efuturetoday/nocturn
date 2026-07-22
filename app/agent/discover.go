@@ -12,29 +12,45 @@ import (
 )
 
 // Discover reads dir/<name>/agent.md for every subdirectory into a Set. A missing dir yields an
-// empty Set (not an error).
-func Discover(dir string) (Set, error) {
+// empty Set. A malformed agent.md is SKIPPED with a diagnostic rather than aborting the scan — a
+// broken agent's authority is then simply absent (fail-closed), and the other agents still load. A
+// duplicate name keeps the first (shadowing).
+func Discover(dir string, diag *agentkit.Diagnostics) Set {
+	set := Set{}
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
-		return Set{}, nil
+		return set
 	}
 	if err != nil {
-		return nil, err
+		diagnose(diag, "agent", "read dir "+dir+": "+err.Error())
+		return set
 	}
-	set := Set{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		a, err := loadAgent(filepath.Join(dir, e.Name(), "agent.md"))
 		if err != nil {
-			return nil, err
+			diagnose(diag, "agent:"+e.Name(), err.Error())
+			continue
 		}
-		if a != nil {
-			set[a.Name] = *a
+		if a == nil {
+			continue // subfolder without an agent.md — not an agent
 		}
+		if _, dup := set[a.Name]; dup {
+			diagnose(diag, "agent:"+a.Name, "skipped (duplicate name; first wins)")
+			continue
+		}
+		set[a.Name] = *a
 	}
-	return set, nil
+	return set
+}
+
+// diagnose feeds one discovery finding into the collector if present (nil-safe).
+func diagnose(diag *agentkit.Diagnostics, subject, msg string) {
+	if diag != nil {
+		diag.Warn(subject, msg)
+	}
 }
 
 // frontmatter is the YAML head of an agent.md; the markdown body below it is the Instructions.

@@ -222,7 +222,7 @@ func TestInstallPlugins_NameCollision_Refused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := installPlugins(dir, base, toolset, nil, slog.New(slog.DiscardHandler)); err == nil {
+	if _, err := installPlugins(dir, base, toolset, nil, nil); err == nil {
 		t.Fatal("installPlugins must refuse a plugin tool that collides with an existing tool")
 	}
 }
@@ -248,7 +248,7 @@ func TestInstallPlugins_BindsCredentialsUnderOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, err := installPlugins(dir, base, toolset, inj, slog.New(slog.DiscardHandler)); err != nil || n != 1 {
+	if n, err := installPlugins(dir, base, toolset, inj, nil); err != nil || n != 1 {
 		t.Fatalf("installPlugins = %d, %v; want 1, nil", n, err)
 	}
 

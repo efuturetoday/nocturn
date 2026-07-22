@@ -89,10 +89,12 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: secrets: %w", name, err)
 	}
 
-	agents, err := agent.Discover(filepath.Join(dir, "agents"))
-	if err != nil {
-		return nil, fmt.Errorf("workspace %q: agents: %w", name, err)
-	}
+	// One diagnostics collector drains every kind's discovery — agents, skills, plugins, MCP all feed
+	// their skipped/shadowed items here, and it is logged once below. A malformed item is skipped
+	// (fail-closed: its authority is simply absent), never fatal.
+	var diag agentkit.Diagnostics
+
+	agents := agent.Discover(filepath.Join(dir, "agents"), &diag)
 
 	// wake lets a chat schedule its own continuation. One Waker per workspace, folded into the base
 	// tools by Base; it is bound to the chat manager below (Bind) so a fired wake resolves the
@@ -119,10 +121,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// catalog (system prompt) and skill_load per top-level session; skill_read (for a skill's bundled
 	// files) is a base tool, so it flows into the cages like the file tools. An invalid skill is
 	// skipped inside Load with a logged warning — never blocks the workspace.
-	skills, skillDirs, err := skill.Load(filepath.Join(dir, "skills"), h.Log)
-	if err != nil {
-		return nil, fmt.Errorf("workspace %q: skills: %w", name, err)
-	}
+	skills, skillDirs := skill.Discover(filepath.Join(dir, "skills"), &diag)
 	if len(skillDirs) > 0 {
 		readTool, err := skill.ReadTool(skillDirs)
 		if err != nil {
@@ -147,17 +146,14 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 
 	// Discover + install plugins as top-level tools, each caged to a subset of the base tools and
 	// gated exactly like the model's own calls. Their credentials are bound host-side on the injector.
-	nPlugins, err := installPlugins(dir, base, toolset, injector, wslog.With("component", "plugin"))
+	nPlugins, err := installPlugins(dir, base, toolset, injector, &diag)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: plugins: %w", name, err)
 	}
 
-	// Discover + connect the remote MCP servers declared in <dir>/mcp.json and fold their tools in
+	// Discover + connect the remote MCP servers declared in <dir>/mcp/*.json and fold their tools in
 	// (as <server>_<tool>), each gated on the net host-allowlist like http_read/http_write (ADR-9).
-	nMCP, err := installMCP(dir, toolset, injector, scanner, wslog.With("component", "mcp"))
-	if err != nil {
-		return nil, fmt.Errorf("workspace %q: mcp: %w", name, err)
-	}
+	nMCP := installMCP(dir, toolset, injector, scanner, &diag, wslog.With("component", "mcp"))
 
 	rt := runtime.New(h.LLM,
 		runtime.WithTools(toolset),
@@ -208,11 +204,16 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	if reminders != nil {
 		reminders.Restore()
 	}
+	// Every kind's discovery skips (bad agent/skill/plugin/server) drained through the one collector,
+	// logged uniformly here — a single place an operator scans for what did NOT load and why.
+	for _, d := range diag.All() {
+		wslog.With("component", "discovery").Warn("skipped", "subject", d.Subject, "detail", d.Message)
+	}
 	// One readiness line stating what the workspace discovered — so an operator sees the assembled
-	// stack (agents/skills/plugins/tools) at a glance instead of inferring it from behavior. Per-item
-	// detail (invalid skills, each plugin) is logged at Warn/Debug where it happens.
+	// stack (agents/skills/plugins/tools) at a glance instead of inferring it from behavior.
 	wslog.With("component", "workspace").Info("workspace opened",
-		"agents", len(agents), "skills", len(skillDirs), "plugins", nPlugins, "mcp", nMCP, "tools", len(toolset))
+		"agents", len(agents), "skills", len(skillDirs), "plugins", nPlugins, "mcp", nMCP,
+		"tools", len(toolset), "skipped", diag.Len())
 	return w, nil
 }
 
@@ -300,12 +301,9 @@ func buildTools(base agentkit.ToolSet, llm agentkit.LLM, agents agent.Set) (agen
 // dispatch to the base tools its manifest lists — its cage — and every action it takes is gated the
 // same way the model's own calls are. A credential value lives in the vault under the (lowercased)
 // credential name; a missing value simply means the plugin runs unauthenticated.
-func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Injector, log *slog.Logger) (int, error) {
-	plugins, err := plugin.LoadAll(filepath.Join(dir, "plugins"), base)
-	if err != nil {
-		return 0, err
-	}
-	for _, p := range plugins {
+func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Injector, diag *agentkit.Diagnostics) (int, error) {
+	plugins := plugin.Discover(filepath.Join(dir, "plugins"), base, diag)
+	for _, p := range plugins.All() {
 		pts, err := p.Tools()
 		if err != nil {
 			return 0, err
@@ -328,7 +326,6 @@ func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Inje
 				})
 			}
 		}
-		log.Debug("plugin installed", "plugin", p.Name(), "tools", len(pts))
 	}
 	return len(plugins), nil
 }
@@ -344,12 +341,8 @@ const mcpSetupTimeout = 30 * time.Second
 // that fails to load/connect/list is logged and skipped, never bricking the workspace (like a flaky
 // plugin). Credentials are token (a bearer the operator seeded in the vault under mcp.SecretName)
 // or public; interactive credential entry and OAuth wiring are a later slice.
-func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scanner *secret.Scanner, log *slog.Logger) (int, error) {
-	var diag agentkit.Diagnostics
-	servers := mcp.Discover(filepath.Join(dir, "mcp"), &diag)
-	for _, d := range diag.All() {
-		log.Warn("mcp server skipped (bad file)", "subject", d.Subject, "err", d.Message)
-	}
+func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scanner *secret.Scanner, diag *agentkit.Diagnostics, log *slog.Logger) int {
+	servers := mcp.Discover(filepath.Join(dir, "mcp"), diag)
 	installed := 0
 	for _, srv := range servers.All() {
 		conn, err := mcp.NewConn(srv, inj, scanner)
@@ -382,7 +375,7 @@ func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scan
 		installed++
 		log.Debug("mcp server connected", "server", srv.Name, "tools", len(mtools))
 	}
-	return installed, nil
+	return installed
 }
 
 // connectMCP performs one server's discovery (handshake + tools/list) on the setup ctx.

@@ -152,9 +152,10 @@ func loadServer(path, name string) (Server, error) {
 }
 
 // diagnose feeds one discovery finding into the collector if present (nil-safe:
-// the OAuth aggregator discovers without a collector).
+// the OAuth aggregator discovers without a collector). A skipped server is a Warn,
+// not an Error — non-fatal, matching agent/skill/plugin discovery.
 func diagnose(diag *agentkit.Diagnostics, subject, msg string) {
 	if diag != nil {
-		diag.Error(subject, msg)
+		diag.Warn(subject, msg)
 	}
 }

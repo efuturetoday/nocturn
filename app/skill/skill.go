@@ -8,7 +8,6 @@ package skill
 
 import (
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,63 +32,71 @@ const (
 // errNoFrontmatter is returned when a SKILL.md lacks a --- delimited frontmatter.
 var errNoFrontmatter = errors.New("skill: no frontmatter (expected a leading --- block)")
 
-// Load scans dir (a workspace's skills/ folder) for immediate subdirectories that contain a
+// Discover scans dir (a workspace's skills/ folder) for immediate subdirectories that contain a
 // SKILL.md, and returns an agentkit.SkillSet plus a name->absolute-directory map used by skill_read.
-// Loading is FAIL-CLOSED but lenient about the set: a skill that is unparseable, invalid against the
-// agentkit rules (name pattern, missing description), or a duplicate name is skipped with a logged
-// warning rather than failing the whole load — one bad skill never blocks a workspace. A missing
-// skills directory is not an error (no skills). The returned SkillSet only ever holds valid,
-// deduplicated skills.
-func Load(dir string, log *slog.Logger) (agentkit.SkillSet, map[string]string, error) {
+// Discovery is lenient: a skill that is unparseable, invalid against the agentkit rules (name
+// pattern, missing description), or a duplicate name is SKIPPED with a diagnostic rather than failing
+// the whole scan — one bad skill never blocks a workspace, and its absence is fail-closed (a skill
+// carries no authority anyway). A missing skills directory yields no skills. The returned SkillSet
+// only ever holds valid, deduplicated skills.
+func Discover(dir string, diag *agentkit.Diagnostics) (agentkit.SkillSet, map[string]string) {
+	dirs := make(map[string]string)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return agentkit.SkillSet{}, map[string]string{}, nil
+		if !errors.Is(err, os.ErrNotExist) {
+			diagnose(diag, "skill", "read dir "+dir+": "+err.Error())
 		}
-		return nil, nil, err
+		return agentkit.SkillSet{}, dirs
 	}
 
 	var skills []agentkit.Skill
-	dirs := make(map[string]string)
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue // skip files and hidden dirs (.git, …)
 		}
 		skillDir := filepath.Join(dir, e.Name())
-		sk, ok := loadOne(skillDir, e.Name(), log)
+		sk, ok := loadOne(skillDir, e.Name(), diag)
 		if !ok {
 			continue
 		}
 		if err := sk.Validate(); err != nil {
-			log.Warn("skill: skipped (invalid)", "dir", skillDir, "err", err)
+			diagnose(diag, "skill:"+sk.Name, "skipped (invalid): "+err.Error())
 			continue
 		}
 		if _, dup := dirs[sk.Name]; dup {
-			log.Warn("skill: skipped (duplicate name; first wins)", "name", sk.Name, "dir", skillDir)
+			diagnose(diag, "skill:"+sk.Name, "skipped (duplicate name; first wins): "+skillDir)
 			continue
 		}
 		abs, err := filepath.Abs(skillDir)
 		if err != nil {
-			log.Warn("skill: skipped (abs path)", "dir", skillDir, "err", err)
+			diagnose(diag, "skill:"+sk.Name, "skipped (abs path): "+err.Error())
 			continue
 		}
 		skills = append(skills, sk)
 		dirs[sk.Name] = abs
 	}
 
-	// skills are already validated + deduped, so NewSkillSet cannot error — but propagate if it does.
+	// skills are already validated + deduped, so NewSkillSet cannot error — but surface it if it does.
 	set, err := agentkit.NewSkillSet(skills...)
 	if err != nil {
-		return nil, nil, err
+		diagnose(diag, "skill", "build set: "+err.Error())
+		return agentkit.SkillSet{}, map[string]string{}
 	}
-	return set, dirs, nil
+	return set, dirs
+}
+
+// diagnose feeds one discovery finding into the collector if present (nil-safe).
+func diagnose(diag *agentkit.Diagnostics, subject, msg string) {
+	if diag != nil {
+		diag.Warn(subject, msg)
+	}
 }
 
 // loadOne reads one candidate skill directory into an agentkit.Skill. ok is false (silently) when the
 // directory has no SKILL.md, or (with a logged warning) when its frontmatter is unparseable. The
 // skill's bundled-file listing is folded into the body so skill_load surfaces it — the model learns
 // what it can skill_read only after loading the skill.
-func loadOne(skillDir, dirName string, log *slog.Logger) (agentkit.Skill, bool) {
+func loadOne(skillDir, dirName string, diag *agentkit.Diagnostics) (agentkit.Skill, bool) {
 	data, err := os.ReadFile(filepath.Join(skillDir, SkillFile))
 	if err != nil {
 		return agentkit.Skill{}, false // no SKILL.md → not a skill directory, silently ignore
@@ -99,7 +106,7 @@ func loadOne(skillDir, dirName string, log *slog.Logger) (agentkit.Skill, bool) 
 	}
 	m, body, err := parseFrontmatter(data)
 	if err != nil {
-		log.Warn("skill: skipped (unparseable SKILL.md)", "dir", skillDir, "err", err)
+		diagnose(diag, "skill:"+dirName, "skipped (unparseable SKILL.md): "+err.Error())
 		return agentkit.Skill{}, false
 	}
 
