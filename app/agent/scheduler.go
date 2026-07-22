@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -13,11 +14,12 @@ import (
 type Scheduler struct {
 	agents Set
 	fire   func(ctx context.Context, a Agent)
+	log    *slog.Logger
 }
 
 // NewScheduler builds a Scheduler over a Set, calling fire for each agent whose schedule matches.
-func NewScheduler(agents Set, fire func(ctx context.Context, a Agent)) *Scheduler {
-	return &Scheduler{agents: agents, fire: fire}
+func NewScheduler(agents Set, log *slog.Logger, fire func(ctx context.Context, a Agent)) *Scheduler {
+	return &Scheduler{agents: agents, fire: fire, log: log.With("component", "scheduler")}
 }
 
 // Start runs the tick loop until ctx is cancelled. It aligns to the next minute so a "* * * * *"
@@ -42,6 +44,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 func (s *Scheduler) tick(ctx context.Context, t time.Time) {
 	for _, a := range s.agents {
 		if a.When != "" && cronMatches(a.When, t) {
+			s.log.Info("agent fired", "agent", a.Name, "when", a.When)
 			go s.fire(ctx, a)
 		}
 	}

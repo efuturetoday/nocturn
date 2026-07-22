@@ -72,6 +72,12 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: mnt: %w", name, err)
 	}
 
+	// One per-workspace logger with ws=name baked in, shared by the session loop, chat manager,
+	// scheduler and fired agents — so every line from this workspace carries its identity (the chat
+	// id is folded in per-turn by the ctxHandler on top of this). Kept component-less: the agentkit
+	// session self-tags its lines (component=turn/tool/llm); app subsystems tag their own.
+	wslog := h.Log.With("ws", name)
+
 	agents, err := agent.Discover(filepath.Join(dir, "agents"))
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: agents: %w", name, err)
@@ -129,7 +135,8 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 
 	// Discover + install plugins as top-level tools, each caged to a subset of the base tools and
 	// gated exactly like the model's own calls. Their credentials are bound host-side on the injector.
-	if err := installPlugins(dir, base, toolset, h.Secrets); err != nil {
+	nPlugins, err := installPlugins(dir, base, toolset, h.Secrets, wslog.With("component", "plugin"))
+	if err != nil {
 		return nil, fmt.Errorf("workspace %q: plugins: %w", name, err)
 	}
 
@@ -140,7 +147,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		runtime.WithSession(
 			agentkit.WithSystem(resolvePersona(dir, h.Log)),
 			agentkit.WithTimeout(turnTimeout),
-			agentkit.WithLogger(agentkit.SlogLogger(h.Log)),
+			agentkit.WithLogger(agentkit.SlogLogger(wslog)),
 		),
 	)
 
@@ -159,23 +166,32 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		llm:        h.LLM,
 		tools:      toolset,
 		grants:     gs,
-		chats:      chat.NewManager(rt, userStore),
+		chats:      chat.NewManager(rt, userStore, wslog),
 		userStore:  userStore,
 		agentStore: agentStore,
 		agents:     agents,
 		reminders:  reminders,
 		waker:      waker,
-		log:        h.Log,
+		log:        wslog,
 	}
 	// Bind wake to the live chat manager now it exists: a fired wake resolves its chat by id via Open.
 	waker.Bind(w.chats)
-	w.sched = agent.NewScheduler(agents, func(ctx context.Context, a agent.Agent) {
-		_, _ = w.FireAgent(ctx, a.Name, "Run your scheduled task now.")
+	w.sched = agent.NewScheduler(agents, wslog, func(ctx context.Context, a agent.Agent) {
+		// A scheduled firing is unattended — nobody sees a returned error, so surface it here or it
+		// vanishes. The answer is intentionally dropped (the transcript is persisted by FireAgent).
+		if _, err := w.FireAgent(ctx, a.Name, "Run your scheduled task now."); err != nil {
+			wslog.With("component", "scheduler").Error("scheduled agent failed", "agent", a.Name, "err", err)
+		}
 	})
 	// Re-arm persisted reminders (overdue ones fire promptly) now the workspace is wired.
 	if reminders != nil {
 		reminders.Restore()
 	}
+	// One readiness line stating what the workspace discovered — so an operator sees the assembled
+	// stack (agents/skills/plugins/tools) at a glance instead of inferring it from behavior. Per-item
+	// detail (invalid skills, each plugin) is logged at Warn/Debug where it happens.
+	wslog.With("component", "workspace").Info("workspace opened",
+		"agents", len(agents), "skills", len(skillDirs), "plugins", nPlugins, "tools", len(toolset))
 	return w, nil
 }
 
@@ -263,37 +279,37 @@ func buildTools(base agentkit.ToolSet, llm agentkit.LLM, agents agent.Set) (agen
 // dispatch to the base tools its manifest lists — its cage — and every action it takes is gated the
 // same way the model's own calls are. A credential value lives in the vault under the (lowercased)
 // credential name; a missing value simply means the plugin runs unauthenticated.
-func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Injector) error {
+func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Injector, log *slog.Logger) (int, error) {
 	plugins, err := plugin.LoadAll(filepath.Join(dir, "plugins"), base)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, p := range plugins {
 		pts, err := p.Tools()
 		if err != nil {
-			return err
+			return 0, err
 		}
 		for _, t := range pts {
 			n := t.Spec().Name
 			if _, dup := toolset[n]; dup {
-				return fmt.Errorf("plugin %q tool %q collides with an existing tool", p.Name(), n)
+				return 0, fmt.Errorf("plugin %q tool %q collides with an existing tool", p.Name(), n)
 			}
 			toolset[n] = t
 		}
-		if inj == nil {
-			continue
+		if inj != nil {
+			owner := plugin.Owner(p.Name())
+			for _, c := range p.Credentials() {
+				inj.AddBinding(owner, secret.Binding{
+					Secret: strings.ToLower(c.Name),
+					Host:   c.Host,
+					Header: c.Header,
+					Prefix: c.Prefix,
+				})
+			}
 		}
-		owner := plugin.Owner(p.Name())
-		for _, c := range p.Credentials() {
-			inj.AddBinding(owner, secret.Binding{
-				Secret: strings.ToLower(c.Name),
-				Host:   c.Host,
-				Header: c.Header,
-				Prefix: c.Prefix,
-			})
-		}
+		log.Debug("plugin installed", "plugin", p.Name(), "tools", len(pts))
 	}
-	return nil
+	return len(plugins), nil
 }
 
 // policy is the workspace-root policy: the net kind asks the human (remembered for the session);

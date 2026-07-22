@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ const idleTTL = 10 * time.Minute
 type Manager struct {
 	rt    *runtime.Runtime
 	store *Store
+	log   *slog.Logger
 
 	mu     sync.Mutex
 	active map[string]*live // by chat id
@@ -57,8 +59,8 @@ type live struct {
 
 // NewManager builds a Manager over a Runtime and a Store and starts its idle-session reaper. Call
 // CloseAll on shutdown to stop the reaper and close every live session.
-func NewManager(rt *runtime.Runtime, store *Store) *Manager {
-	m := &Manager{rt: rt, store: store, active: map[string]*live{}, stop: make(chan struct{})}
+func NewManager(rt *runtime.Runtime, store *Store, log *slog.Logger) *Manager {
+	m := &Manager{rt: rt, store: store, log: log.With("component", "chat"), active: map[string]*live{}, stop: make(chan struct{})}
 	go m.reap()
 	return m
 }
@@ -92,6 +94,7 @@ func (m *Manager) openLocked(id string) *agentkit.Session {
 	m.active[id] = lv
 	m.wg.Add(1)
 	go m.pump(id, lv)
+	m.log.Debug("session opened", "chat", id)
 	return lv.sess
 }
 
@@ -101,6 +104,7 @@ func (m *Manager) Start(text string) (string, *agentkit.Session) {
 	m.mu.Lock()
 	sess := m.openLocked(id)
 	m.mu.Unlock()
+	m.log.Info("chat started", "chat", id)
 	sess.Submit(text)
 	return id, sess
 }
@@ -125,6 +129,7 @@ func (m *Manager) Cancel(id string) {
 	lv := m.active[id]
 	m.mu.Unlock()
 	if lv != nil {
+		m.log.Info("turn cancelled", "chat", id)
 		lv.sess.Cancel()
 	}
 }
@@ -202,7 +207,15 @@ func (m *Manager) observe(id string, lv *live, ev agentkit.Event) {
 			lv.thinking.Reset()
 			lv.forest = nil
 			m.mu.Unlock()
-			_ = m.store.AppendTools(id, nodes) // outside the lock (disk I/O)
+			if err := m.store.AppendTools(id, nodes); err != nil { // outside the lock (disk I/O)
+				m.log.Warn("tool forest persist failed", "chat", id, "err", err)
+			}
+			// The single server-side handle for an interactive turn's stop reason: agentkit returns it
+			// (doesn't log) and the client gets it via the TurnEnd event, but the operator sees nothing
+			// unless we log it here. Agent runs take a different path (the scheduler logs those).
+			if e.Err != nil {
+				m.log.Warn("turn ended with error", "chat", id, "err", e.Err)
+			}
 		}
 	}
 }
@@ -322,16 +335,19 @@ func (m *Manager) reap() {
 func (m *Manager) reapIdle() {
 	now := time.Now()
 	var dead []*agentkit.Session
+	var reaped []string
 	m.mu.Lock()
 	for id, lv := range m.active {
 		if !lv.running && now.Sub(lv.idleSince) > idleTTL {
 			dead = append(dead, lv.sess)
+			reaped = append(reaped, id)
 			delete(m.active, id) // remove FIRST so a concurrent Open spins a fresh one
 		}
 	}
 	m.mu.Unlock()
-	for _, s := range dead {
+	for i, s := range dead {
 		s.Close() // closes the stream → its pump exits
+		m.log.Debug("session reaped", "chat", reaped[i])
 	}
 }
 
@@ -350,6 +366,7 @@ func (m *Manager) Delete(id string) error {
 	if lv != nil {
 		lv.sess.Close()
 	}
+	m.log.Info("chat deleted", "chat", id)
 	return m.store.Delete(id)
 }
 
@@ -369,6 +386,7 @@ func (m *Manager) CloseAll() {
 		delete(m.active, id)
 	}
 	m.mu.Unlock()
+	m.log.Info("closing all sessions", "count", len(sessions))
 	for _, s := range sessions {
 		s.Close()
 	}

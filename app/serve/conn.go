@@ -27,6 +27,21 @@ type Error struct {
 // newError builds an Error event with the discriminator set.
 func newError(text string) Error { return Error{Type: "error", Text: text} }
 
+// badRequest logs a CLIENT-fault (Warn) and returns the reason to the client — a malformed or
+// unroutable command. Previously these vanished: the client saw the error, the operator saw nothing.
+func (c *conn) badRequest(ctx context.Context, text string) {
+	c.log.Warn("bad request", "reason", text)
+	c.send(ctx, newError(text))
+}
+
+// failed logs a SERVER-fault (Error, with the underlying cause) and returns a reason to the client —
+// an operation the server owns (transcript/list load) failed. The client gets the message; the
+// operator gets the wrapped cause.
+func (c *conn) failed(ctx context.Context, what string, err error) {
+	c.log.Error(what+" failed", "err", err)
+	c.send(ctx, newError(what+": "+err.Error()))
+}
+
 // conn is one WebSocket client. It is STATELESS w.r.t. chats: commands are id-addressed and routed to
 // the Manager, and live chat events arrive via the daemon-wide hub (the Manager broadcasts every
 // session's events to every device). A connection never owns or closes a session. Every outbound
@@ -50,7 +65,7 @@ func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices
 func (c *conn) workspace(ctx context.Context, name string) (*workspace.Workspace, bool) {
 	w, ok := c.spaces[name]
 	if !ok {
-		c.send(ctx, newError("unknown workspace: "+name))
+		c.badRequest(ctx, "unknown workspace: "+name)
 	}
 	return w, ok
 }
@@ -121,7 +136,7 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		Cmd string `json:"cmd"`
 	}
 	if err := json.Unmarshal(data, &env); err != nil {
-		c.send(ctx, newError("bad command"))
+		c.badRequest(ctx, "bad command")
 		return
 	}
 	domain, _, _ := strings.Cut(env.Cmd, ".")
@@ -137,7 +152,7 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 	case "workspace":
 		c.workspaceCmd(ctx, env.Cmd)
 	default:
-		c.send(ctx, newError("unknown domain: "+env.Cmd))
+		c.badRequest(ctx, "unknown domain: "+env.Cmd)
 	}
 }
 

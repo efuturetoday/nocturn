@@ -33,6 +33,6 @@ func (c *conn) workspaceCmd(ctx context.Context, cmd string) {
 		slices.SortFunc(items, func(a, b WorkspaceInfo) int { return strings.Compare(a.Name, b.Name) })
 		c.send(ctx, WorkspaceListResult{Type: "workspace.list", Items: items})
 	default:
-		c.send(ctx, newError("unknown action: "+cmd))
+		c.badRequest(ctx, "unknown action: "+cmd)
 	}
 }

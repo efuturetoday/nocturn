@@ -255,18 +255,36 @@ func (s *Session) run(ctx context.Context, tools ToolSet, conv []Message) (answe
 		steps = defaultMaxSteps
 	}
 	specs := tools.Specs()
+	log := s.log.WithContext(ctx).With("component", "turn")
+	depth, _ := ctx.Value(spawnDepthKey{}).(int) // 0 = top-level; >0 = sub-agent
+	log.Info("turn start", "depth", depth, "tools", len(specs))
+	var used int
+	defer func() {
+		// A clean answer is Info; any other stop (max steps/tokens, timeout, model error) is Warn so an
+		// error turn pops in the log without agentkit re-logging the returned error itself.
+		lvl := log.Info
+		if err != nil {
+			lvl = log.Warn
+		}
+		lvl("turn end", "stop", stopReason(err), "steps", used, "tokens", total.Total, "depth", depth)
+	}()
 	for i := 0; i < steps; i++ {
 		if e := ctx.Err(); e != nil {
 			return answer, produced, total, e
 		}
+		used = i + 1
 		step, e := s.llm.Next(ctx, conv, specs)
 		if e != nil {
+			// Return, don't also log: the consumer handles it once (scheduler logs a fired agent's
+			// failure; an interactive turn's error rides TurnEnd to the client + the manager). The
+			// turn-end breadcrumb below records the stop category regardless.
 			return answer, produced, total, fmt.Errorf("agentkit: model call: %w", e)
 		}
 		if step.Tokens.Total == 0 && s.tokenizer != nil {
 			step.Tokens = s.estimate(ctx, conv, step)
 		}
 		total.add(step.Tokens)
+		log.Debug("step", "n", used, "tool_calls", len(step.ToolCalls), "tokens", step.Tokens.Total)
 
 		if len(step.ToolCalls) == 0 {
 			answer = step.Answer
@@ -296,14 +314,17 @@ func (s *Session) run(ctx context.Context, tools ToolSet, conv []Message) (answe
 // runTools executes a turn's tool calls concurrently and returns their results as role=tool messages
 // in call order. A tool error is not fatal — it becomes the tool result so the model can adjust.
 func (s *Session) runTools(ctx context.Context, tools ToolSet, calls []ToolCall) []Message {
+	log := s.log.WithContext(ctx).With("component", "tool")
 	results := make([]Message, len(calls))
 	var wg sync.WaitGroup
 	for i, tc := range calls {
 		wg.Go(func() {
+			log.Debug("tool dispatch", "tool", tc.Tool, "args_len", len(tc.Args))
 			start := time.Now()
 			pausedStart := pausedNanos(ctx)
 			out, err := tools.Call(ctx, tc.Tool, tc.Args)
 			if err != nil {
+				log.Warn("tool failed", "tool", tc.Tool, "err", err)
 				out = "error: " + err.Error()
 			}
 			// Persist the call's ACTIVE wall-clock (excluding any out-of-band approval wait) so the
@@ -315,6 +336,29 @@ func (s *Session) runTools(ctx context.Context, tools ToolSet, calls []ToolCall)
 	}
 	wg.Wait()
 	return results
+}
+
+// stopReason renders a turn's terminating error as a short, greppable log token (not the raw error
+// string), so "turn end" lines aggregate cleanly by outcome.
+func stopReason(err error) string {
+	switch {
+	case err == nil:
+		return "answer"
+	case errors.Is(err, ErrMaxSteps):
+		return "max_steps"
+	case errors.Is(err, ErrTokenLimit):
+		return "token_limit"
+	case errors.Is(err, ErrMaxDepth):
+		return "max_depth"
+	case errors.Is(err, ErrMaxSpawns):
+		return "max_spawns"
+	case errors.Is(err, ErrTurnTimeout), errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "error"
+	}
 }
 
 // toolset returns the tools the model sees: the session's tools plus, when the session has skills,

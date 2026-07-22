@@ -28,6 +28,7 @@ const (
 // feeds the same passphrase here instead of the env. Both returns are nil when the vault stays
 // locked — the assistant runs without credentials and without scanning.
 func buildSecrets(log *slog.Logger) (*secret.Injector, *secret.Scanner) {
+	log = log.With("component", "secret")
 	vault, err := openVault()
 	if err != nil {
 		log.Warn("secret: vault stays locked", "err", err)

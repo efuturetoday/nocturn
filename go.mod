@@ -60,6 +60,7 @@ require (
 	github.com/efuturetoday/nocturn/agentkit/gate v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/openai v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/runtime v0.0.0
+	github.com/lmittmann/tint v1.2.0
 )
 
 replace (

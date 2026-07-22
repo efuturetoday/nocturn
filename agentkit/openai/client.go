@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	goopenai "github.com/sashabaranov/go-openai"
 
@@ -92,8 +93,14 @@ func (c *Client) Next(ctx context.Context, conv []agentkit.Message, tools []agen
 		})
 	}
 
+	log := c.log.WithContext(ctx).With("component", "llm")
+	log.Debug("llm request", "model", c.model, "effort", effort, "messages", len(conv), "tools", len(tools))
+	start := time.Now()
+
 	stream, err := c.api.CreateChatCompletionStream(ctx, req)
 	if err != nil {
+		// Return, don't also log: the caller (session.run → turn) owns this error and surfaces it once
+		// (the turn-end line / TurnEnd event carry the full %w chain). Logging here too would double it.
 		return agentkit.Step{}, fmt.Errorf("openai: create stream: %w", err)
 	}
 	defer stream.Close()
@@ -142,6 +149,9 @@ func (c *Client) Next(ctx context.Context, conv []agentkit.Message, tools []agen
 	} else {
 		step.Answer = strings.TrimSpace(content.String())
 	}
+	log.Debug("llm response", "model", c.model, "latency", time.Since(start),
+		"prompt_tokens", usage.Prompt, "completion_tokens", usage.Completion, "total_tokens", usage.Total,
+		"tool_calls", len(step.ToolCalls))
 	return step, nil
 }
 

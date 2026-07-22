@@ -63,7 +63,7 @@ type pendingApproval struct {
 func NewBroker(pusher Pusher, log *slog.Logger) *Broker {
 	return &Broker{
 		pusher:  pusher,
-		log:     log,
+		log:     log.With("component", "hitl"),
 		sinks:   map[Sink]bool{},
 		pending: map[string]*pendingApproval{},
 	}

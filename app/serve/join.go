@@ -24,6 +24,6 @@ func (c *conn) join(ctx context.Context, cmd string) {
 	case "join.list":
 		c.send(ctx, JoinListResult{Type: "join.list", Joins: c.devices.PendingJoins()})
 	default:
-		c.send(ctx, newError("unknown action: "+cmd))
+		c.badRequest(ctx, "unknown action: "+cmd)
 	}
 }

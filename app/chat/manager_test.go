@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func newManager(t *testing.T) *chat.Manager {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	m := chat.NewManager(runtime.New(fakeLLM{}), store)
+	m := chat.NewManager(runtime.New(fakeLLM{}), store, slog.New(slog.DiscardHandler))
 	t.Cleanup(m.CloseAll)
 	return m
 }

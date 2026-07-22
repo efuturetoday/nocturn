@@ -136,28 +136,28 @@ func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 	case "chat.submit":
 		var m ChatSubmit
 		if err := json.Unmarshal(data, &m); err != nil {
-			c.send(ctx, newError("bad chat.submit"))
+			c.badRequest(ctx, "bad chat.submit")
 			return
 		}
 		c.chatSubmit(ctx, m)
 	case "chat.open":
 		var m ChatOpen
 		if err := json.Unmarshal(data, &m); err != nil {
-			c.send(ctx, newError("bad chat.open"))
+			c.badRequest(ctx, "bad chat.open")
 			return
 		}
 		c.chatOpen(ctx, m)
 	case "chat.list":
 		var m ChatList
 		if err := json.Unmarshal(data, &m); err != nil {
-			c.send(ctx, newError("bad chat.list"))
+			c.badRequest(ctx, "bad chat.list")
 			return
 		}
 		c.chatList(ctx, m.Ws)
 	case "chat.cancel":
 		var m ChatCancel
 		if err := json.Unmarshal(data, &m); err != nil {
-			c.send(ctx, newError("bad chat.cancel"))
+			c.badRequest(ctx, "bad chat.cancel")
 			return
 		}
 		if ws, ok := c.workspace(ctx, m.Ws); ok {
@@ -166,14 +166,14 @@ func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 	case "chat.markRead":
 		var m ChatMarkRead
 		if err := json.Unmarshal(data, &m); err != nil {
-			c.send(ctx, newError("bad chat.markRead"))
+			c.badRequest(ctx, "bad chat.markRead")
 			return
 		}
 		if ws, ok := c.workspace(ctx, m.Ws); ok {
 			ws.MarkRead(m.ID)
 		}
 	default:
-		c.send(ctx, newError("unknown action: "+cmd))
+		c.badRequest(ctx, "unknown action: "+cmd)
 	}
 }
 
@@ -186,7 +186,7 @@ func (c *conn) chatSubmit(ctx context.Context, m ChatSubmit) {
 	// unknown id starts a fresh chat, a known one appends. The turn's events reach every device via
 	// the Manager's broadcast, so this handler touches NO connection state and owns no session.
 	if !chat.ValidID(m.ID) {
-		c.send(ctx, newError("bad chat id"))
+		c.badRequest(ctx, "bad chat id")
 		return
 	}
 	// Submit (not Open().Submit) so the Manager records the input as the in-flight turn's user message —
@@ -201,7 +201,7 @@ func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 	}
 	msgs, err := ws.Chats().Transcript(m.ID)
 	if err != nil {
-		c.send(ctx, newError("open: "+err.Error()))
+		c.failed(ctx, "open", err)
 		return
 	}
 	if msgs == nil {
@@ -209,7 +209,7 @@ func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 	}
 	tools, err := ws.Chats().Tools(m.ID)
 	if err != nil {
-		c.send(ctx, newError("open: "+err.Error()))
+		c.failed(ctx, "open", err)
 		return
 	}
 	if tools == nil {
@@ -232,7 +232,7 @@ func (c *conn) chatList(ctx context.Context, wsName string) {
 	}
 	metas, err := ws.Chats().List()
 	if err != nil {
-		c.send(ctx, newError("list: "+err.Error()))
+		c.failed(ctx, "list", err)
 		return
 	}
 	c.send(ctx, ChatListResult{Type: "chat.list", Ws: wsName, Chats: metas})

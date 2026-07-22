@@ -19,11 +19,11 @@ func (c *conn) presence(ctx context.Context, cmd string, data []byte) {
 	case "presence.set":
 		var m PresenceSet
 		if err := json.Unmarshal(data, &m); err != nil {
-			c.send(ctx, newError("bad presence.set"))
+			c.badRequest(ctx, "bad presence.set")
 			return
 		}
 		c.broker.SetActive(ctx, c, m.Active)
 	default:
-		c.send(ctx, newError("unknown action: "+cmd))
+		c.badRequest(ctx, "unknown action: "+cmd)
 	}
 }

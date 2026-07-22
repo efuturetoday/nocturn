@@ -90,6 +90,7 @@ func runAuth(ctx context.Context, name string) error {
 // stored JSON. A refresh persists the new token back to the vault. Providers not yet authorized are
 // left alone — their requests fail closed until `nocturn auth <name>` runs.
 func registerOAuth(injector *secret.Injector, vault *secret.Vault, root string, log *slog.Logger) {
+	log = log.With("component", "oauth")
 	for _, e := range discoverOAuth(root) {
 		raw, ok := vault.Get(e.secretName)
 		if !ok {

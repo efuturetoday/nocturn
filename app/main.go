@@ -77,8 +77,9 @@ func main() {
 	stdin := bufio.NewReader(os.Stdin)
 
 	// Logs go to stderr (structured); the terminal UI keeps stdout. In daemon mode, stderr is the
-	// operator's window into the running backend.
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// operator's window into the running backend. tint-tinted on a TTY, JSON when piped; level via
+	// NOCTURN_LOG. See newLogger.
+	logger := newLogger(os.Stderr)
 
 	llm := openai.New(baseURL, apiKey, model,
 		openai.WithEffort(agentkit.Effort(os.Getenv("FREELLM_REASONING_EFFORT"))),
@@ -98,28 +99,29 @@ func main() {
 		var err error
 		devices, err = auth.New("./nocturn-data/devices.json")
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "auth:", err)
+			logger.Error("device store", "err", err)
 			os.Exit(1)
 		}
-		sender := apnsSender(logger) // nil when APNs is not configured
-		broker = hitl.NewBroker(pusherFor(sender, devices, logger), logger)
+		pushLog := logger.With("component", "push")
+		sender := apnsSender(pushLog) // nil when APNs is not configured
+		broker = hitl.NewBroker(pusherFor(sender, devices, pushLog), logger)
 		approver = broker
-		notifier = &pushNotifier{devices: devices, sender: sender, log: logger}
+		notifier = &pushNotifier{devices: devices, sender: sender, log: pushLog}
 	}
 	injector, scanner := buildSecrets(logger)
 	host := workspace.Host{LLM: llm, Approver: approver, Secrets: injector, Scanner: scanner, Notifier: notifier, Log: logger}
 
 	spaces, err := workspace.OpenAll(host, wsRoot)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		logger.Error("open workspaces", "err", err)
 		os.Exit(1)
 	}
 	if *serveAddr != "" {
-		fmt.Printf("nocturn daemon — ws on %s (%d workspaces, model %q)\n", *serveAddr, len(spaces), model)
+		logger.Info("nocturn daemon starting", "addr", *serveAddr, "workspaces", len(spaces), "model", model)
 		// serve.Serve wires each workspace's chat subscriptions and only then starts its agent
 		// schedulers, so a scheduled firing can never race the subscription wiring.
 		if err := serve.Serve(ctx, *serveAddr, spaces, devices, broker, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintln(os.Stderr, "serve:", err)
+			logger.Error("serve", "err", err)
 			os.Exit(1)
 		}
 		return

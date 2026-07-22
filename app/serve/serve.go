@@ -64,6 +64,7 @@ func cors(h http.Handler) http.Handler {
 // bootstrap code logged at startup, further devices via POST /join + /join/confirm. One backend,
 // many fronts — the backend is the truth.
 func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger) error {
+	log = log.With("component", "serve")
 	if code := devices.Bootstrap(bootstrapTTL); code != "" {
 		log.Info("no devices paired — pair one with POST /pair", "code", code, "validFor", bootstrapTTL)
 	}

@@ -58,6 +58,10 @@ func chatIDFrom(ctx context.Context) string {
 	return id
 }
 
+// ChatID returns the chat id carried by ctx, or "" — the exported accessor used for log correlation
+// (the diagnostic logger's ctxHandler folds it into every line).
+func ChatID(ctx context.Context) string { return chatIDFrom(ctx) }
+
 // Waker schedules self-wakes for whichever chat invoked wake. Min/Max clamp the delay; MaxPending
 // caps concurrent pending wakes (zero values fall back to 1s / 1h / 3). It holds the Sessions seam
 // (bound after the manager exists, see Bind) and resolves the firing chat by id — so one

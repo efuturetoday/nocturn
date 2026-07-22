@@ -39,12 +39,12 @@ func (c *conn) approval(ctx context.Context, cmd string, data []byte) {
 	case "approval.resolve":
 		var m ApprovalResolve
 		if err := json.Unmarshal(data, &m); err != nil {
-			c.send(ctx, newError("bad approval.resolve"))
+			c.badRequest(ctx, "bad approval.resolve")
 			return
 		}
 		c.broker.Resolve(m.ID, m.Choice)
 	default:
-		c.send(ctx, newError("unknown action: "+cmd))
+		c.badRequest(ctx, "unknown action: "+cmd)
 	}
 }
 
