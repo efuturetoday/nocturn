@@ -108,12 +108,17 @@ func (c *Client) Next(ctx context.Context, conv []agentkit.Message, tools []agen
 	var content strings.Builder
 	acc := newToolAcc()
 	var usage agentkit.TokenCount
+	var finish string
 	for {
 		chunk, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
+			// Unlike the create error (caller-owned), a MID-stream failure loses context the caller
+			// can't see — how far the answer got. Log that context (the classic "why did it cut off"),
+			// then return the error for the owner to surface once.
+			log.Warn("llm stream interrupted", "elapsed", time.Since(start).Round(time.Millisecond), "partial_len", content.Len())
 			return agentkit.Step{}, fmt.Errorf("openai: stream recv: %w", err)
 		}
 		if chunk.Usage != nil {
@@ -125,6 +130,9 @@ func (c *Client) Next(ctx context.Context, conv []agentkit.Message, tools []agen
 		}
 		if len(chunk.Choices) == 0 {
 			continue
+		}
+		if fr := string(chunk.Choices[0].FinishReason); fr != "" {
+			finish = fr // last non-empty wins; "length" means the provider truncated the output
 		}
 		delta := chunk.Choices[0].Delta
 		if delta.Content != "" {
@@ -149,9 +157,17 @@ func (c *Client) Next(ctx context.Context, conv []agentkit.Message, tools []agen
 	} else {
 		step.Answer = strings.TrimSpace(content.String())
 	}
-	log.Debug("llm response", "model", c.model, "latency", time.Since(start),
+	log.Debug("llm response", "model", c.model, "latency", time.Since(start).Round(time.Millisecond),
 		"prompt_tokens", usage.Prompt, "completion_tokens", usage.Completion, "total_tokens", usage.Total,
-		"tool_calls", len(step.ToolCalls))
+		"tool_calls", len(step.ToolCalls), "finish", finish)
+	// A truncated output (finish=length) and a wholly empty step are silent failures at Debug; surface
+	// them at Warn so a cut-off or blank answer is diagnosable.
+	if finish == "length" {
+		log.Warn("llm output truncated by the provider (finish=length)", "completion_tokens", usage.Completion)
+	}
+	if len(step.ToolCalls) == 0 && step.Answer == "" {
+		log.Warn("llm returned an empty step (no content, no tool calls)", "finish", finish)
+	}
 	return step, nil
 }
 

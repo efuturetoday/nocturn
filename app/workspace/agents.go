@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
@@ -30,9 +31,15 @@ func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, e
 		return "", fmt.Errorf("workspace %q: no agent %q", w.name, name)
 	}
 
+	runID := chat.NewID()
+	log := w.log.With("component", "agent", "agent", name, "run", runID)
+	log.Info("agent run started", "unattended", true)
+	start := time.Now()
+
 	rt := runtime.New(w.llm,
 		runtime.WithTools(w.tools.Select(a.Matches)),
-		runtime.WithGate(policy(), w.grants, nil), // nil approver = unattended
+		runtime.WithGate(policy(), w.grants, nil),          // nil approver = unattended
+		runtime.WithGateLogger(agentkit.SlogLogger(w.log)), // trace the unattended fail-closed denials
 		runtime.WithSession(
 			agentkit.WithSystem(a.Instructions),
 			agentkit.WithEffort(a.Effort),
@@ -41,7 +48,7 @@ func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, e
 		),
 	)
 
-	sess := rt.Session(ctx, agentkit.WithStore(w.agentStore, chat.NewID()))
+	sess := rt.Session(ctx, agentkit.WithStore(w.agentStore, runID))
 	defer sess.Close()
 
 	var answer strings.Builder
@@ -63,12 +70,14 @@ func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, e
 	sess.Submit(task)
 	select {
 	case err := <-done:
+		log.Info("agent run finished", "dur", time.Since(start).Round(time.Millisecond), "answer_len", answer.Len(), "err", err)
 		return answer.String(), err
 	case <-ctx.Done():
 		// Stop the stream and wait for the goroutine to stop writing answer before
 		// we read it — strings.Builder is not concurrency-safe.
 		sess.Close()
 		<-done
+		log.Warn("agent run interrupted", "dur", time.Since(start).Round(time.Millisecond), "err", ctx.Err())
 		return answer.String(), ctx.Err()
 	}
 }

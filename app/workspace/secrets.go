@@ -29,10 +29,11 @@ const vaultFile = "vault.enc"
 // without host-owned credentials or leak scanning, exactly as before. The returned vault is held for
 // its lifetime — an OAuth refresh persists the new token back through it.
 func buildWorkspaceSecrets(master *secret.Master, dir, name string, log *slog.Logger) (*secret.Injector, *secret.Scanner, *secret.Vault, error) {
+	log = log.With("component", "secret")
 	if master == nil {
+		log.Info("vault locked (no master passphrase) — running without host-owned credentials")
 		return nil, nil, nil, nil
 	}
-	log = log.With("component", "secret")
 	vault, err := secret.OpenVault(filepath.Join(dir, vaultFile), master.WorkspaceKey(name))
 	if err != nil {
 		return nil, nil, nil, err

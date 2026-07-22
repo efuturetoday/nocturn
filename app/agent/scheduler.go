@@ -25,6 +25,20 @@ func NewScheduler(agents Set, log *slog.Logger, fire func(ctx context.Context, a
 // Start runs the tick loop until ctx is cancelled. It aligns to the next minute so a "* * * * *"
 // agent fires at :00, then every minute.
 func (s *Scheduler) Start(ctx context.Context) {
+	// Validate every schedule once at startup: a typo'd cron silently never matches, so surface it
+	// here rather than let the agent quietly never fire.
+	active := 0
+	for _, a := range s.agents {
+		if a.When == "" {
+			continue
+		}
+		active++
+		if !validCron(a.When) {
+			s.log.Warn("agent schedule is invalid — it will never fire", "agent", a.Name, "when", a.When)
+		}
+	}
+	s.log.Info("scheduler started", "scheduled_agents", active)
+
 	for {
 		next := time.Now().Truncate(time.Minute).Add(time.Minute)
 		timer := time.NewTimer(time.Until(next))
@@ -33,8 +47,55 @@ func (s *Scheduler) Start(ctx context.Context) {
 			timer.Stop()
 			return
 		case <-timer.C:
+			// A late tick (system sleep, GC, clock jump) means the minutes in the gap were never
+			// evaluated — their schedules missed. Surface it; the loop realigns to the next minute.
+			if late := time.Since(next); late > 30*time.Second {
+				s.log.Warn("scheduler tick late — schedules in the gap were missed", "late", late.Round(time.Second))
+			}
+			s.log.Debug("scheduler tick", "minute", next.Format("15:04"))
 			s.tick(ctx, next)
 		}
+	}
+}
+
+// validCron reports whether spec is a well-formed 5-field cron (so an invalid one can be flagged
+// rather than silently never matching). It mirrors cronMatches' grammar without a value to match.
+func validCron(spec string) bool {
+	f := strings.Fields(spec)
+	if len(f) != 5 {
+		return false
+	}
+	bounds := [5][2]int{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 6}}
+	for i, field := range f {
+		for part := range strings.SplitSeq(field, ",") {
+			if !validPart(part, bounds[i][0], bounds[i][1]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// validPart reports whether one cron part ("*", "n", "a-b", any with "/step") is well-formed within
+// [lo,hi].
+func validPart(part string, lo, hi int) bool {
+	if base, stepStr, ok := strings.Cut(part, "/"); ok {
+		if s, err := strconv.Atoi(stepStr); err != nil || s <= 0 {
+			return false
+		}
+		part = base
+	}
+	switch {
+	case part == "*":
+		return true
+	case strings.ContainsRune(part, '-'):
+		a, b, ok := strings.Cut(part, "-")
+		x, e1 := strconv.Atoi(a)
+		y, e2 := strconv.Atoi(b)
+		return ok && e1 == nil && e2 == nil && x >= lo && y <= hi && x <= y
+	default:
+		n, err := strconv.Atoi(part)
+		return err == nil && n >= lo && n <= hi
 	}
 }
 
