@@ -351,11 +351,12 @@ func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scan
 	}
 	installed := 0
 	for _, srv := range servers {
-		conn, err := mcp.NewConn(srv, inj, scanner, log)
+		conn, err := mcp.NewConn(srv, inj, scanner)
 		if err != nil {
 			log.Warn("mcp server skipped (bad config)", "server", srv.Name, "err", err)
 			continue
 		}
+		conn.SetLogger(log)
 		ctx, cancel := context.WithTimeout(context.Background(), mcpSetupTimeout)
 		mtools, err := connectMCP(ctx, conn)
 		cancel()

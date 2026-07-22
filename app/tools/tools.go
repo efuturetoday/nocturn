@@ -31,7 +31,15 @@ type Config struct {
 // slice so the caller can both form the base ToolSet and scope per-agent subsets from it. code_run is
 // NOT here: it is woven per cage by Compose, so a script's reach is bounded to the tools of its cage.
 func Base(cfg Config) ([]agentkit.Tool, error) {
-	netTools, err := New(cfg.Secrets, cfg.Scanner, cfg.Logger).Tools()
+	// One effect-trace logger for the base tools; default to a no-op so every tool logs unconditionally
+	// (no nil checks). gate/scanner log their own security events under component=secret/gate.
+	log := cfg.Logger
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	net := New(cfg.Secrets, cfg.Scanner)
+	net.SetLogger(log)
+	netTools, err := net.Tools()
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +49,7 @@ func Base(cfg Config) ([]agentkit.Tool, error) {
 	}
 	out := append(netTools, timeNow)
 	if cfg.Root != "" {
-		fileTools, err := files{root: cfg.Root, scanner: cfg.Scanner, log: cfg.Logger}.Tools()
+		fileTools, err := files{root: cfg.Root, scanner: cfg.Scanner, log: log}.Tools()
 		if err != nil {
 			return nil, err
 		}

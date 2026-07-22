@@ -399,9 +399,7 @@ func (f files) confine(userPath string) (target string, err error) {
 	abs := filepath.Join(rootAbs, filepath.FromSlash(userPath))
 	rel, err := filepath.Rel(rootAbs, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		if f.log != nil {
-			f.log.Warn("file path escapes the workspace", "path", userPath) // confinement boundary rejected the target
-		}
+		f.log.Warn("file path escapes the workspace", "path", userPath) // confinement boundary rejected the target
 		return "", fmt.Errorf("path %q escapes the workspace", userPath)
 	}
 	return filepath.ToSlash(rel), nil

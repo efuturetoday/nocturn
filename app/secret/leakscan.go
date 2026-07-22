@@ -90,11 +90,21 @@ type Scanner struct {
 
 // SetLogger attaches a logger for security events — a blocked egress (Warn) and an ingress
 // redaction (Info). The caller passes a logger already tagged (e.g. component=secret, ws); the
-// Scanner logs only rule ids / tiers / counts, never a secret value. nil disables it.
+// Scanner logs only rule ids / tiers / counts, never a secret value. A nil logger is ignored (the
+// no-op default stays). Call at construction, before the Scanner is shared across concurrent scans.
 func (sc *Scanner) SetLogger(l *slog.Logger) {
-	if sc != nil {
+	if sc != nil && l != nil {
 		sc.log = l
 	}
+}
+
+// logger returns the scanner's logger, or a no-op — so a directly-constructed Scanner (bypassing
+// NewScanner) never nil-panics on a log call.
+func (sc *Scanner) logger() *slog.Logger {
+	if sc.log != nil {
+		return sc.log
+	}
+	return slog.New(slog.DiscardHandler)
 }
 
 // NewScanner builds a scanner over store with the embedded gitleaks ruleset.
@@ -142,7 +152,7 @@ func newScanner(store *Store, rules []rule) *Scanner {
 		kws = append(kws, kw)
 		kwToRules = append(kwToRules, ris)
 	}
-	sc := &Scanner{store: store, rules: rules, kwToRules: kwToRules}
+	sc := &Scanner{store: store, rules: rules, kwToRules: kwToRules, log: slog.New(slog.DiscardHandler)}
 	if len(kws) > 0 {
 		builder := aho.NewAhoCorasickBuilder(aho.Opts{AsciiCaseInsensitive: true, MatchKind: aho.StandardMatch})
 		sc.ac = builder.Build(kws)
@@ -169,16 +179,12 @@ func (sc *Scanner) ScanEgress(parts ...string) error {
 		// let a fully percent-encoded vault value slip past the load-bearing tier.
 		for _, text := range decodeVariants(p) {
 			if len(sc.scanExact(text)) > 0 {
-				if sc.log != nil {
-					sc.log.Warn("egress blocked", "tier", "vault") // a stored value tried to leave; never log the value
-				}
+				sc.logger().Warn("egress blocked", "tier", "vault") // a stored value tried to leave; never log the value
 				return fmt.Errorf("%w: a stored vault secret in the outbound request", ErrLeaked)
 			}
 			for _, h := range sc.scanPatterns(text) {
 				if h.action == actionBlock {
-					if sc.log != nil {
-						sc.log.Warn("egress blocked", "tier", "pattern", "rule", h.rule)
-					}
+					sc.logger().Warn("egress blocked", "tier", "pattern", "rule", h.rule)
 					return fmt.Errorf("%w: %s pattern in the outbound request", ErrLeaked, h.rule)
 				}
 			}
@@ -206,9 +212,7 @@ func (sc *Scanner) RedactIngress(b []byte) []byte {
 	if len(spans) == 0 {
 		return b
 	}
-	if sc.log != nil {
-		sc.log.Info("ingress redacted", "spans", len(spans)) // a secret was echoed back; count only, never the value
-	}
+	sc.logger().Info("ingress redacted", "spans", len(spans)) // a secret was echoed back; count only, never the value
 	return []byte(applyRedactions(text, spans))
 }
 

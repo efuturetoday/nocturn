@@ -101,6 +101,9 @@ type Injector struct {
 // an already-tagged logger (component=secret, ws); only the secret NAME and host are logged, never
 // the value. nil disables it.
 func (in *Injector) SetLogger(l *slog.Logger) {
+	if l == nil {
+		return // keep the no-op default
+	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	in.log = l
@@ -110,7 +113,7 @@ func (in *Injector) SetLogger(l *slog.Logger) {
 // ""). Every referenced secret is seeded with a static store-backed Resolver; use
 // SetResolver to override one with a dynamic (refreshing) source.
 func NewInjector(store *Store, bindings ...Binding) *Injector {
-	in := &Injector{store: store, resolvers: make(map[string]Resolver)}
+	in := &Injector{store: store, resolvers: make(map[string]Resolver), log: slog.New(slog.DiscardHandler)}
 	for _, b := range bindings {
 		in.addBindingLocked("", b)
 	}
@@ -195,6 +198,9 @@ func (in *Injector) InjectMatching(ctx context.Context, req *Request, host strin
 	var matches []match
 	in.mu.Lock()
 	lg := in.log // snapshot under the lock; used unlocked below
+	if lg == nil {
+		lg = slog.New(slog.DiscardHandler) // a directly-constructed Injector may not have set one
+	}
 	for _, ob := range in.bindings {
 		if !ownerMatches(ob.owner, caller) || !hostMatches(ob.Host, host) {
 			continue
@@ -202,9 +208,7 @@ func (in *Injector) InjectMatching(ctx context.Context, req *Request, host strin
 		src, ok := in.resolvers[ob.Secret]
 		if !ok { // a binding with no registered source is fail-closed
 			in.mu.Unlock()
-			if lg != nil {
-				lg.Warn("credential unavailable — request goes out unauthenticated", "secret", ob.Secret, "host", host)
-			}
+			lg.Warn("credential unavailable — request goes out unauthenticated", "secret", ob.Secret, "host", host)
 			return nil, fmt.Errorf("credential %q for %s: %w", ob.Secret, host, ErrNotFound)
 		}
 		matches = append(matches, match{b: ob.Binding, src: src})
@@ -215,16 +219,12 @@ func (in *Injector) InjectMatching(ctx context.Context, req *Request, host strin
 	for _, m := range matches {
 		value, err := m.src.Value(ctx)
 		if err != nil { // any source error aborts: no half-authenticated request
-			if lg != nil {
-				lg.Warn("credential resolver failed — request aborted", "secret", m.b.Secret, "host", host, "err", err)
-			}
+			lg.Warn("credential resolver failed — request aborted", "secret", m.b.Secret, "host", host, "err", err)
 			return nil, fmt.Errorf("credential %q for %s: %w", m.b.Secret, host, err)
 		}
 		applyTo(req, m.b, value)
 		injected = append(injected, m.b.Secret)
-		if lg != nil {
-			lg.Debug("credential injected", "secret", m.b.Secret, "host", host)
-		}
+		lg.Debug("credential injected", "secret", m.b.Secret, "host", host)
 	}
 	return injected, nil
 }

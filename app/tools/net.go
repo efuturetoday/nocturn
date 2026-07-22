@@ -39,13 +39,18 @@ type Net struct {
 // scanner (nil = that feature off). The client re-gates every redirect hop (see checkRedirect): a 3xx
 // is a fresh request to a possibly-different host, so it must clear the same host allowlist and egress
 // scan as the original — otherwise a redirect is a gate/exfil bypass.
-func New(secrets *secret.Injector, scanner *secret.Scanner, log *slog.Logger) *Net {
-	if log == nil {
-		log = slog.New(slog.DiscardHandler)
-	}
-	n := &Net{secrets: secrets, scanner: scanner, log: log}
+func New(secrets *secret.Injector, scanner *secret.Scanner) *Net {
+	n := &Net{secrets: secrets, scanner: scanner, log: slog.New(slog.DiscardHandler)}
 	n.client = &http.Client{Timeout: 30 * time.Second, CheckRedirect: n.checkRedirect}
 	return n
+}
+
+// SetLogger attaches the effect-trace logger (nil ignored). Call at construction, before the Net is
+// shared across tool calls.
+func (n *Net) SetLogger(l *slog.Logger) {
+	if l != nil {
+		n.log = l
+	}
 }
 
 // checkRedirect authorizes each redirect the client is about to follow. The redirected request carries

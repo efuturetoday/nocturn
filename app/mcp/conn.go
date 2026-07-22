@@ -74,18 +74,15 @@ type Conn struct {
 // static token the operator seeded in the vault). No I/O happens here; Connect
 // performs the handshake. The HTTP client re-gates every redirect hop
 // (checkRedirect), so single-host confinement survives a 3xx.
-func NewConn(srv Server, creds *secret.Injector, scanner *secret.Scanner, log *slog.Logger) (*Conn, error) {
+func NewConn(srv Server, creds *secret.Injector, scanner *secret.Scanner) (*Conn, error) {
 	u, err := url.Parse(srv.URL)
 	if err != nil || u.Hostname() == "" {
 		return nil, fmt.Errorf("mcp: server %q: bad url %q", srv.Name, srv.URL)
 	}
-	if log == nil {
-		log = slog.New(slog.DiscardHandler)
-	}
 	// host carries the port when the URL states one, exactly like net.go's u.Host — so an MCP server
 	// and http_read/http_write share ONE grant target (ADR-9). For a normal https URL (implicit 443)
 	// u.Host == u.Hostname(), so the common case is identical either way.
-	c := &Conn{server: srv, creds: creds, scanner: scanner, log: log.With("server", srv.Name), host: u.Host}
+	c := &Conn{server: srv, creds: creds, scanner: scanner, log: slog.New(slog.DiscardHandler), host: u.Host}
 	c.http = &http.Client{Timeout: 30 * time.Second, CheckRedirect: c.checkRedirect}
 	c.client = New(c.transport)
 	if (srv.OAuth != nil || srv.Auth == "token") && creds != nil {
@@ -95,6 +92,14 @@ func NewConn(srv Server, creds *secret.Injector, scanner *secret.Scanner, log *s
 		})
 	}
 	return c, nil
+}
+
+// SetLogger attaches the protocol/transport trace logger (nil ignored), tagging every line with the
+// server name. Call at construction, before Connect.
+func (c *Conn) SetLogger(l *slog.Logger) {
+	if l != nil {
+		c.log = l.With("server", c.server.Name)
+	}
 }
 
 // checkRedirect re-gates AND egress-scans every redirect hop, mirroring
