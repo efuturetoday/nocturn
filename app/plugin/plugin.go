@@ -22,6 +22,12 @@ const defaultTimeout = 60 * time.Second
 // colliding — a plugin "github" and an MCP server "github" get distinct owners.
 func Owner(name string) string { return "plugin:" + name }
 
+// SecretName is the vault key (and binding secret name) for a plugin credential, owner-namespaced so
+// two plugins declaring the same credential name never share a stored value or overwrite each other's
+// OAuth resolver: "plugin:<plugin>/<cred>". This mirrors mcp.SecretName; the owner prefix is the same
+// boundary Owner enforces for injection, now reflected in the value's identity too.
+func SecretName(pluginName, credName string) string { return Owner(pluginName) + "/" + credName }
+
 // Plugin is a loaded, sandboxed plugin. Its tools are exposed to the model as <name>_<tool>.
 // Execution is STATELESS — a fresh sandbox instance per tool-call; cross-call state is host-mediated
 // via the workspace filesystem (WorkDir, mounted at /work).

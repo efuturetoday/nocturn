@@ -308,7 +308,7 @@ func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Inje
 			owner := plugin.Owner(p.Name())
 			for _, c := range p.Credentials() {
 				inj.AddBinding(owner, secret.Binding{
-					Secret: strings.ToLower(c.Name),
+					Secret: plugin.SecretName(p.Name(), c.Name), // owner-namespaced: no cross-plugin key collision
 					Host:   c.Host,
 					Header: c.Header,
 					Prefix: c.Prefix,
