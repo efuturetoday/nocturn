@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/app/discovery"
 )
 
 // A server declaration lives in the workspace CONTROL-PLANE as one file per
@@ -26,9 +27,10 @@ import (
 
 // Server is one declared remote MCP server.
 //
-// Name is NOT a config field: it comes from the file's basename (<name>.json),
-// the single source of identity — so it can never drift from the filename, and a
-// stray "name" key in the JSON is rejected (DisallowUnknownFields).
+// Name defaults to the file's basename (<name>.json); a "name" field may override
+// it (the shared discovery rule — see discovery.ResolveName), and a name that
+// disagrees with the filename is surfaced as a warning. The name namespaces the
+// server's tools ("<server>_<tool>") and its credential owner ("mcp:<server>").
 //
 // Auth selects how the connection's Bearer is obtained; it never carries a
 // secret value. "token": the operator seeds the Bearer into the encrypted vault
@@ -38,7 +40,7 @@ import (
 // OAuth flow instead; "" with no block means no credential (a public server).
 // "token" and an OAuth block are mutually exclusive (one credential, one source).
 type Server struct {
-	Name  string     `json:"-"` // from the filename, not the file
+	Name  string     `json:"name,omitempty"` // defaults to the filename; see discovery.ResolveName
 	URL   string     `json:"url"`
 	Auth  string     `json:"auth,omitempty"`
 	OAuth *OAuthDecl `json:"oauth,omitempty"`
@@ -101,10 +103,10 @@ func isHTTPSURL(s string) bool {
 
 // Discover reads every <dir>/<name>.json server declaration into a Set WITHOUT
 // connecting to any of them. A missing dir yields an empty Set. A malformed file
-// (unknown fields including a stray "name", an invalid entry) is SKIPPED with an
-// Error diagnostic rather than failing the whole scan — its tools and token
-// wiring are then simply absent (fail-closed), and the other servers still load.
-// The server's name IS the filename stem — the single source of identity.
+// (unknown fields, an invalid entry) is SKIPPED with a diagnostic rather than
+// failing the whole scan — its tools and token wiring are then simply absent
+// (fail-closed), and the other servers still load. The server's name defaults to
+// the filename stem; a "name" field may override it (discovery.ResolveName).
 func Discover(dir string, diag *agentkit.Diagnostics) Set {
 	set := Set{}
 	entries, err := os.ReadDir(dir)
@@ -112,17 +114,22 @@ func Discover(dir string, diag *agentkit.Diagnostics) Set {
 		return set
 	}
 	if err != nil {
-		diagnose(diag, "mcp", fmt.Sprintf("read dir %s: %v", dir, err))
+		discovery.Diagnose(diag, "mcp", fmt.Sprintf("read dir %s: %v", dir, err))
 		return set
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue // only <name>.json files are server declarations
 		}
-		name := strings.TrimSuffix(e.Name(), ".json")
-		srv, err := loadServer(filepath.Join(dir, e.Name()), name)
+		stem := strings.TrimSuffix(e.Name(), ".json")
+		srv, err := loadServer(filepath.Join(dir, e.Name()))
 		if err != nil {
-			diagnose(diag, "mcp:"+name, err.Error())
+			discovery.Diagnose(diag, "mcp:"+stem, err.Error())
+			continue
+		}
+		srv.Name = discovery.ResolveName(diag, "mcp", stem, srv.Name)
+		if err := srv.Validate(); err != nil {
+			discovery.Diagnose(diag, "mcp:"+srv.Name, err.Error())
 			continue
 		}
 		set[srv.Name] = srv
@@ -130,10 +137,9 @@ func Discover(dir string, diag *agentkit.Diagnostics) Set {
 	return set
 }
 
-// loadServer reads and validates one <name>.json server declaration. The name is
-// the filename stem, never a field — Validate rejects a stem that is not a valid
-// server name.
-func loadServer(path, name string) (Server, error) {
+// loadServer reads and decodes one <name>.json server declaration (name resolved
+// and validated by Discover).
+func loadServer(path string) (Server, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Server{}, fmt.Errorf("read: %w", err)
@@ -144,18 +150,5 @@ func loadServer(path, name string) (Server, error) {
 	if err := dec.Decode(&s); err != nil {
 		return Server{}, fmt.Errorf("parse: %w", err)
 	}
-	s.Name = name
-	if err := s.Validate(); err != nil {
-		return Server{}, err
-	}
 	return s, nil
-}
-
-// diagnose feeds one discovery finding into the collector if present (nil-safe:
-// the OAuth aggregator discovers without a collector). A skipped server is a Warn,
-// not an Error — non-fatal, matching agent/skill/plugin discovery.
-func diagnose(diag *agentkit.Diagnostics, subject, msg string) {
-	if diag != nil {
-		diag.Warn(subject, msg)
-	}
 }

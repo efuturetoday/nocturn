@@ -92,7 +92,6 @@ func TestDiscover_MalformedSkipped(t *testing.T) {
 	cases := map[string]string{
 		"http url":        `{"url":"http://mcp.example.com/mcp"}`,
 		"no url":          `{}`,
-		"stray name":      `{"name":"other","url":"https://x.example.com"}`, // identity is the filename, not the file
 		"unknown field":   `{"url":"https://x.example.com","exec":"/bin/sh"}`,
 		"oauth no client": `{"url":"https://x.example.com","oauth":{"auth_url":"https://a.example.com","token_url":"https://t.example.com","scopes":["s"]}}`,
 		"token and oauth": `{"url":"https://x.example.com","auth":"token","oauth":{"auth_url":"https://a.example.com","token_url":"https://t.example.com","client_id":"c","scopes":["s"]}}`,
@@ -117,7 +116,22 @@ func TestDiscover_MalformedSkipped(t *testing.T) {
 	}
 }
 
-// A filename that is not a valid server name is skipped (Validate checks the stem).
+// A "name" field overrides the filename (the shared discovery rule) and warns on a
+// mismatch, but the server still loads under the field name.
+func TestDiscover_NameFieldOverridesWithWarning(t *testing.T) {
+	dir := t.TempDir()
+	writeServer(t, dir, "github.json", `{"name":"other","url":"https://mcp.github.com/mcp"}`)
+	var diag agentkit.Diagnostics
+	set := mcp.Discover(dir, &diag)
+	if _, ok := set.Get("other"); !ok || len(set) != 1 {
+		t.Fatalf("name field must win over filename: %+v", set.All())
+	}
+	if diag.Len() != 1 {
+		t.Fatalf("a name/filename mismatch must warn, got %v", diag.All())
+	}
+}
+
+// A filename that is not a valid server name is skipped (Validate checks the resolved name).
 func TestDiscover_BadFilenameSkipped(t *testing.T) {
 	dir := t.TempDir()
 	writeServer(t, dir, "Bad Name!.json", `{"url":"https://x.example.com/mcp"}`)

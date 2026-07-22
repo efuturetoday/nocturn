@@ -31,9 +31,11 @@ Give each server its own file in an `mcp/` folder in your workspace, named after
 }
 ```
 
-The server's name is the filename (`github.json` → `github`), so there is no `name` field —
-just an `https` `url`. Its tools then appear to the assistant as `github_*`, alongside the
-built-in ones. To remove a server, delete its file.
+The server's name comes from the filename (`github.json` → `github`), so all you need is an
+`https` `url`. Its tools then appear to the assistant as `github_*`, alongside the built-in
+ones. To remove a server, delete its file. (You can add a `"name"` field to override the
+filename — the same way skills, agents and plugins work — but Nocturn warns if it disagrees
+with the file, since that is usually a mistake.)
 
 ## Signing in
 

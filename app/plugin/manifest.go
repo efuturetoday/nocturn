@@ -161,6 +161,11 @@ func Load(dir string) (Loaded, error) {
 	if err := dec.Decode(&m); err != nil {
 		return Loaded{}, fmt.Errorf("plugin: parse manifest: %w", err)
 	}
+	// The name defaults to the plugin's folder; a manifest name may override it (the shared
+	// discovery rule — Discover warns on a mismatch). Identity is the folder either way.
+	if m.Name == "" {
+		m.Name = filepath.Base(dir)
+	}
 	if err := m.Validate(); err != nil {
 		return Loaded{}, err
 	}

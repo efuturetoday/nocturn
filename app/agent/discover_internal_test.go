@@ -3,11 +3,12 @@ package agent
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-func TestLoadAgent_MissingName_Error(t *testing.T) {
+// loadAgent leaves the name empty when the frontmatter omits it — Discover resolves
+// the name (defaulting to the folder), so a nameless agent.md is no longer an error.
+func TestLoadAgent_MissingName_LeftForDiscover(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "agent.md")
@@ -16,11 +17,11 @@ func TestLoadAgent_MissingName_Error(t *testing.T) {
 	}
 
 	a, err := loadAgent(path)
-	if err == nil {
-		t.Fatalf("loadAgent = (%+v, nil), want missing-name error", a)
+	if err != nil {
+		t.Fatalf("loadAgent = %v, want no error (name defaulting is Discover's job)", err)
 	}
-	if !strings.Contains(err.Error(), "missing name") {
-		t.Errorf("error = %q, want it to mention missing name", err)
+	if a == nil || a.Name != "" {
+		t.Fatalf("loadAgent name = %+v, want empty (resolved by Discover)", a)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/app/discovery"
 )
 
 const (
@@ -44,7 +45,7 @@ func Discover(dir string, diag *agentkit.Diagnostics) (agentkit.SkillSet, map[st
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			diagnose(diag, "skill", "read dir "+dir+": "+err.Error())
+			discovery.Diagnose(diag, "skill", "read dir "+dir+": "+err.Error())
 		}
 		return agentkit.SkillSet{}, dirs
 	}
@@ -60,16 +61,16 @@ func Discover(dir string, diag *agentkit.Diagnostics) (agentkit.SkillSet, map[st
 			continue
 		}
 		if err := sk.Validate(); err != nil {
-			diagnose(diag, "skill:"+sk.Name, "skipped (invalid): "+err.Error())
+			discovery.Diagnose(diag, "skill:"+sk.Name, "skipped (invalid): "+err.Error())
 			continue
 		}
 		if _, dup := dirs[sk.Name]; dup {
-			diagnose(diag, "skill:"+sk.Name, "skipped (duplicate name; first wins): "+skillDir)
+			discovery.Diagnose(diag, "skill:"+sk.Name, "skipped (duplicate name; first wins): "+skillDir)
 			continue
 		}
 		abs, err := filepath.Abs(skillDir)
 		if err != nil {
-			diagnose(diag, "skill:"+sk.Name, "skipped (abs path): "+err.Error())
+			discovery.Diagnose(diag, "skill:"+sk.Name, "skipped (abs path): "+err.Error())
 			continue
 		}
 		skills = append(skills, sk)
@@ -79,17 +80,10 @@ func Discover(dir string, diag *agentkit.Diagnostics) (agentkit.SkillSet, map[st
 	// skills are already validated + deduped, so NewSkillSet cannot error — but surface it if it does.
 	set, err := agentkit.NewSkillSet(skills...)
 	if err != nil {
-		diagnose(diag, "skill", "build set: "+err.Error())
+		discovery.Diagnose(diag, "skill", "build set: "+err.Error())
 		return agentkit.SkillSet{}, map[string]string{}
 	}
 	return set, dirs
-}
-
-// diagnose feeds one discovery finding into the collector if present (nil-safe).
-func diagnose(diag *agentkit.Diagnostics, subject, msg string) {
-	if diag != nil {
-		diag.Warn(subject, msg)
-	}
 }
 
 // loadOne reads one candidate skill directory into an agentkit.Skill. ok is false (silently) when the
@@ -106,14 +100,13 @@ func loadOne(skillDir, dirName string, diag *agentkit.Diagnostics) (agentkit.Ski
 	}
 	m, body, err := parseFrontmatter(data)
 	if err != nil {
-		diagnose(diag, "skill:"+dirName, "skipped (unparseable SKILL.md): "+err.Error())
+		discovery.Diagnose(diag, "skill:"+dirName, "skipped (unparseable SKILL.md): "+err.Error())
 		return agentkit.Skill{}, false
 	}
 
-	name := strings.TrimSpace(m.Name)
-	if name == "" {
-		name = dirName // frontmatter may omit the name; fall back to the directory
-	}
+	// A SKILL.md name is authoritative (the agentskills.io standard — a skill keeps its
+	// canonical name when vendored under a different folder); the folder is the fallback.
+	name := discovery.ResolveName(diag, "skill", dirName, strings.TrimSpace(m.Name))
 	body = strings.TrimSpace(body)
 	if listing := resourceListing(skillDir); listing != "" {
 		body += listing

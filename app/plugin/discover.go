@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/app/discovery"
 )
 
 // Discover builds every plugin under root — each subdirectory holding a plugin.json — into a Set,
@@ -18,7 +19,7 @@ func Discover(root string, base agentkit.ToolSet, diag *agentkit.Diagnostics) Se
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			diagnose(diag, "plugin", "read dir "+root+": "+err.Error())
+			discovery.Diagnose(diag, "plugin", "read dir "+root+": "+err.Error())
 		}
 		return set
 	}
@@ -28,22 +29,20 @@ func Discover(root string, base agentkit.ToolSet, diag *agentkit.Diagnostics) Se
 		}
 		l, err := Load(filepath.Join(root, e.Name()))
 		if err != nil {
-			diagnose(diag, "plugin:"+e.Name(), err.Error())
+			discovery.Diagnose(diag, "plugin:"+e.Name(), err.Error())
 			continue
+		}
+		// Identity is the folder; a manifest name that overrides it warns (Load already
+		// defaulted an omitted name to the folder, so this fires only on an explicit mismatch).
+		if l.Manifest.Name != e.Name() {
+			discovery.Diagnose(diag, "plugin:"+l.Manifest.Name, "name "+l.Manifest.Name+" differs from its folder "+e.Name()+" (using "+l.Manifest.Name+")")
 		}
 		p := New(l, base)
 		if _, dup := set[p.Name()]; dup {
-			diagnose(diag, "plugin:"+p.Name(), "skipped (duplicate name; first wins)")
+			discovery.Diagnose(diag, "plugin:"+p.Name(), "skipped (duplicate name; first wins)")
 			continue
 		}
 		set[p.Name()] = p
 	}
 	return set
-}
-
-// diagnose feeds one discovery finding into the collector if present (nil-safe).
-func diagnose(diag *agentkit.Diagnostics, subject, msg string) {
-	if diag != nil {
-		diag.Warn(subject, msg)
-	}
 }

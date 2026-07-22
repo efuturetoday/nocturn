@@ -35,6 +35,10 @@ The settings you will use most:
 - **`when`** sets when it runs on its own. `cron("…")` schedules it. Leave it out to run the
   agent only when you ask.
 
+The `name` is optional: leave it out and the agent takes its folder's name (the same rule
+skills, plugins and MCP servers follow). Set it only to override the folder — Nocturn warns
+if the two disagree, since that is usually a slip.
+
 Each agent also keeps its own permissions, separate from the chat and from other agents.
 Approving something for one agent never affects another.
 

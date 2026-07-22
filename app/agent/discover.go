@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/app/discovery"
 )
 
 // Discover reads dir/<name>/agent.md for every subdirectory into a Set. A missing dir yields an
@@ -22,7 +23,7 @@ func Discover(dir string, diag *agentkit.Diagnostics) Set {
 		return set
 	}
 	if err != nil {
-		diagnose(diag, "agent", "read dir "+dir+": "+err.Error())
+		discovery.Diagnose(diag, "agent", "read dir "+dir+": "+err.Error())
 		return set
 	}
 	for _, e := range entries {
@@ -31,26 +32,21 @@ func Discover(dir string, diag *agentkit.Diagnostics) Set {
 		}
 		a, err := loadAgent(filepath.Join(dir, e.Name(), "agent.md"))
 		if err != nil {
-			diagnose(diag, "agent:"+e.Name(), err.Error())
+			discovery.Diagnose(diag, "agent:"+e.Name(), err.Error())
 			continue
 		}
 		if a == nil {
 			continue // subfolder without an agent.md — not an agent
 		}
+		// Identity is the folder; a frontmatter name may override it (mismatch warns).
+		a.Name = discovery.ResolveName(diag, "agent", e.Name(), a.Name)
 		if _, dup := set[a.Name]; dup {
-			diagnose(diag, "agent:"+a.Name, "skipped (duplicate name; first wins)")
+			discovery.Diagnose(diag, "agent:"+a.Name, "skipped (duplicate name; first wins)")
 			continue
 		}
 		set[a.Name] = *a
 	}
 	return set
-}
-
-// diagnose feeds one discovery finding into the collector if present (nil-safe).
-func diagnose(diag *agentkit.Diagnostics, subject, msg string) {
-	if diag != nil {
-		diag.Warn(subject, msg)
-	}
 }
 
 // frontmatter is the YAML head of an agent.md; the markdown body below it is the Instructions.
@@ -75,9 +71,8 @@ func loadAgent(path string) (*Agent, error) {
 	if err := yaml.Unmarshal(head, &fm); err != nil {
 		return nil, fmt.Errorf("agent %s: %w", path, err)
 	}
-	if fm.Name == "" {
-		return nil, fmt.Errorf("agent %s: missing name", path)
-	}
+	// The name is optional here: Discover resolves it (a frontmatter name overrides
+	// the folder name, else the folder name is used).
 	return &Agent{
 		Name:         fm.Name,
 		Instructions: strings.TrimSpace(string(body)),
