@@ -5,6 +5,7 @@ import { IonContent, IonList, IonItem, IonLabel, IonIcon, IonNote } from '@ionic
 import { addIcons } from 'ionicons';
 import { chatbubbleOutline } from 'ionicons/icons';
 import { ChatService } from '../../core/services/chat.service';
+import { ChatListService } from '../../core/services/chat-list.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
 import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
 
@@ -39,10 +40,11 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
 })
 export class AgentsPage {
   private readonly chat = inject(ChatService);
+  private readonly chatList = inject(ChatListService);
   private readonly router = inject(Router);
 
   protected readonly runs = computed(() =>
-    [...this.chat.chats()].filter((c) => c.source === 'agent').sort((a, b) => b.updated.localeCompare(a.updated)),
+    [...this.chatList.chats()].filter((c) => c.source === 'agent').sort((a, b) => b.updated.localeCompare(a.updated)),
   );
 
   constructor() {

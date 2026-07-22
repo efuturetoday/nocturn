@@ -3,12 +3,13 @@ import {
 } from '@angular/core';
 import {
   IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonBackButton, IonButton, IonIcon,
-  IonFooter, IonTextarea, IonCard, IonCardHeader, IonCardTitle, IonCardContent, IonFab, IonFabButton,
+  IonFooter, IonTextarea, IonFab, IonFabButton,
   type ViewWillEnter, type ViewDidEnter, type ViewDidLeave,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { sendOutline, stopOutline, refreshOutline, chevronDownOutline } from 'ionicons/icons';
 import { ChatService } from '../../core/services/chat.service';
+import { ChatListService } from '../../core/services/chat-list.service';
 import { ConnectionService } from '../../core/services/connection.service';
 import { KeyboardService } from '../../core/services/keyboard.service';
 import { MessageBubbleComponent } from './components/message-bubble';
@@ -18,7 +19,7 @@ import { MessageBubbleComponent } from './components/message-bubble';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonBackButton, IonButton, IonIcon,
-    IonFooter, IonTextarea, IonCard, IonCardHeader, IonCardTitle, IonCardContent, IonFab, IonFabButton,
+    IonFooter, IonTextarea, IonFab, IonFabButton,
     MessageBubbleComponent,
   ],
   template: `
@@ -49,20 +50,6 @@ import { MessageBubbleComponent } from './components/message-bubble';
         </ion-fab-button>
       </ion-fab>
     </ion-content>
-
-    @if (chat.pendingApproval(); as appr) {
-      <ion-card color="warning">
-        <ion-card-header><ion-card-title>Approval needed</ion-card-title></ion-card-header>
-        <ion-card-content>
-          <p>{{ appr.intent }}</p>
-          <div class="approval-actions">
-            @for (opt of appr.options; track $index) {
-              <ion-button size="small" fill="solid" (click)="chat.resolve($index)">{{ opt }}</ion-button>
-            }
-          </div>
-        </ion-card-content>
-      </ion-card>
-    }
 
     <ion-footer
       class="kb-follow"
@@ -111,7 +98,6 @@ import { MessageBubbleComponent } from './components/message-bubble';
       height: var(--kb-fill, 0);
       background: var(--ion-toolbar-background, var(--ion-background-color-step-100));
     }
-    .approval-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     .composer { --padding-start: 10px; --padding-end: 6px; --padding-top: 6px; --padding-bottom: 6px; }
     .composer-input {
       --background: var(--ion-background-color-step-100);
@@ -144,6 +130,7 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
   readonly id = input<string>();
 
   protected readonly chat = inject(ChatService);
+  private readonly chatList = inject(ChatListService);
   protected readonly connection = inject(ConnectionService);
   protected readonly kb = inject(KeyboardService);
   protected readonly draft = signal('');
@@ -206,7 +193,7 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
   // are NOT viewing then stays unread (raises the dot in the list).
   ionViewWillEnter(): void {
     const i = this.id();
-    if (i) this.chat.startViewing(i);
+    if (i) this.chatList.startViewing(i);
     this.atBottom.set(true); // a freshly opened / returned chat starts pinned to the newest message
   }
 
@@ -220,7 +207,7 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
 
   ionViewDidLeave(): void {
     const i = this.id();
-    if (i) this.chat.stopViewing(i);
+    if (i) this.chatList.stopViewing(i);
   }
 
   /** Track how close the scroll is to the bottom, so live updates only follow when already there. */

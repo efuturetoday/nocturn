@@ -4,6 +4,7 @@ import { IonContent, IonList, IonItem, IonLabel, IonIcon, IonTextarea, IonButton
 import { addIcons } from 'ionicons';
 import { arrowUpOutline } from 'ionicons/icons';
 import { ChatService } from '../../core/services/chat.service';
+import { ChatListService } from '../../core/services/chat-list.service';
 import { WorkspaceService } from '../../core/services/workspace.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
 import { ChatRowComponent } from '../chat/components/chat-row';
@@ -42,8 +43,8 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
           <ion-item button detail="false" (click)="openChat(c)">
             <app-chat-row
               [chat]="c"
-              [unread]="chat.unreadIds().has(c.id)"
-              [approval]="chat.approvalWaiting().has(c.id)"
+              [unread]="chatList.unreadIds().has(c.id)"
+              [approval]="chatList.approvalWaiting().has(c.id)"
             />
           </ion-item>
         } @empty {
@@ -69,20 +70,21 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
 })
 export class ChatsPage {
   protected readonly chat = inject(ChatService);
+  protected readonly chatList = inject(ChatListService);
   protected readonly workspaces = inject(WorkspaceService);
   private readonly router = inject(Router);
 
   protected readonly draft = signal('');
   // User chats only — agent runs live under the Agents tab, not here.
   protected readonly sorted = computed(() =>
-    [...this.chat.chats()].filter((c) => c.source !== 'agent').sort((a, b) => b.updated.localeCompare(a.updated)),
+    [...this.chatList.chats()].filter((c) => c.source !== 'agent').sort((a, b) => b.updated.localeCompare(a.updated)),
   );
 
   constructor() {
     addIcons({ arrowUpOutline });
     // Load the active workspace's chats whenever it resolves/changes.
     effect(() => {
-      if (this.workspaces.active()) this.chat.listChats();
+      if (this.workspaces.active()) this.chatList.listChats();
     });
   }
 

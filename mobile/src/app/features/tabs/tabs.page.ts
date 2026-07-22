@@ -2,7 +2,7 @@ import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import { IonTabs, IonTabBar, IonTabButton, IonIcon, IonLabel, IonBadge } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { homeOutline, chatbubblesOutline, hardwareChipOutline, settingsOutline } from 'ionicons/icons';
-import { ChatService } from '../../core/services/chat.service';
+import { ChatListService } from '../../core/services/chat-list.service';
 import { ConnectionService } from '../../core/services/connection.service';
 import { KeyboardService } from '../../core/services/keyboard.service';
 
@@ -31,15 +31,15 @@ import { KeyboardService } from '../../core/services/keyboard.service';
         <ion-tab-button tab="chat">
           <ion-icon name="chatbubbles-outline" />
           <ion-label>Chat</ion-label>
-          @if (chat.unreadUserCount() > 0) {
-            <ion-badge color="primary">{{ chat.unreadUserCount() }}</ion-badge>
+          @if (chatList.unreadUserCount() > 0) {
+            <ion-badge color="primary">{{ chatList.unreadUserCount() }}</ion-badge>
           }
         </ion-tab-button>
         <ion-tab-button tab="agents">
           <ion-icon name="hardware-chip-outline" />
           <ion-label>Agents</ion-label>
-          @if (chat.unreadAgentCount() > 0) {
-            <ion-badge color="tertiary">{{ chat.unreadAgentCount() }}</ion-badge>
+          @if (chatList.unreadAgentCount() > 0) {
+            <ion-badge color="tertiary">{{ chatList.unreadAgentCount() }}</ion-badge>
           }
         </ion-tab-button>
         <ion-tab-button tab="settings">
@@ -74,7 +74,7 @@ import { KeyboardService } from '../../core/services/keyboard.service';
   `,
 })
 export class TabsPage {
-  protected readonly chat = inject(ChatService);
+  protected readonly chatList = inject(ChatListService);
   protected readonly connection = inject(ConnectionService);
   protected readonly keyboard = inject(KeyboardService);
 

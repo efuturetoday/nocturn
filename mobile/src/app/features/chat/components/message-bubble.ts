@@ -6,7 +6,8 @@ import { addIcons } from 'ionicons';
 import { construct, chevronForward, closeOutline } from 'ionicons/icons';
 import { ToolFrameComponent } from './tool-frame';
 import { MarkdownComponent } from '../../../shared/markdown';
-import { ChatService, type ChatMessageView } from '../../../core/services/chat.service';
+import { ApprovalService } from '../../../core/services/approval.service';
+import type { ChatMessageView } from '../../../core/services/chat-view';
 
 /** One conversation message: user bubble, or assistant turn with dim reasoning + tool forest. */
 @Component({
@@ -124,16 +125,16 @@ import { ChatService, type ChatMessageView } from '../../../core/services/chat.s
 })
 export class MessageBubbleComponent {
   readonly message = input.required<ChatMessageView>();
-  private readonly chat = inject(ChatService);
+  private readonly approvals = inject(ApprovalService);
   protected readonly open = signal(false);
 
   protected readonly isUser = computed(() => this.message().role === 'user');
   protected readonly anyRunning = computed(() => this.message().tools.some((t) => t.running));
 
-  // A pending approval belongs to this turn if its frame matches any of the turn's tool calls.
+  // An open approval belongs to this turn if its frame matches any of the turn's tool calls.
   protected readonly anyWaiting = computed(() => {
-    const frame = this.chat.pendingApproval()?.frame;
-    return frame != null && this.message().tools.some((t) => t.id === frame);
+    const frames = this.approvals.frames();
+    return this.message().tools.some((t) => t.id != null && frames.has(t.id));
   });
 
   // A compact one-line list of the tool names — the trigger's label (e.g. `code_run · http_read +1`).

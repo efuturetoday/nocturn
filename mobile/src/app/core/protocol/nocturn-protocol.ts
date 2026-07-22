@@ -201,6 +201,7 @@ export interface ApprovalRequest {
   type: "approval.request";
   id: string;
   frame?: number; // the tool call this approval is for (freeze that tool's timer); absent = not tool-scoped
+  chatId?: string; // the chat/agent run whose turn raised this — for provenance; absent = not chat-scoped
   intent: string;
   options: string[];
 }

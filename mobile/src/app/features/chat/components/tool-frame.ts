@@ -2,7 +2,9 @@ import { Component, ChangeDetectionStrategy, input, inject, computed, signal, ef
 import { IonIcon, IonAccordion, IonAccordionGroup, IonItem } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { checkmarkCircle, alertCircle, ellipsisHorizontalCircle } from 'ionicons/icons';
-import { ChatService, type ToolView } from '../../../core/services/chat.service';
+import { ChatService } from '../../../core/services/chat.service';
+import { ApprovalService } from '../../../core/services/approval.service';
+import type { ToolView } from '../../../core/services/chat-view';
 import { highlightCode } from '../../../shared/highlight';
 
 /**
@@ -95,15 +97,16 @@ import { highlightCode } from '../../../shared/highlight';
 export class ToolFrameComponent {
   readonly tool = input.required<ToolView>();
   private readonly chat = inject(ChatService);
+  private readonly approvals = inject(ApprovalService);
 
   // Highlight only once the accordion is expanded (lazy — hljs loads on first expand).
   private readonly expanded = signal(false);
 
-  // The LABEL „needs approval" sits on the EXACT tool the daemon named (approval.request.frame) — no
-  // guessing which one is waiting.
+  // The LABEL „needs approval" sits on the EXACT tool the daemon named (an approval's frame) — no
+  // guessing which one is waiting. Approval state is app-global (ApprovalService).
   protected readonly waiting = computed(() => {
-    const p = this.chat.pendingApproval();
-    return p?.frame != null && p.frame === this.tool().id;
+    const id = this.tool().id;
+    return id != null && this.approvals.frames().has(id);
   });
 
   // The TIMER freezes for the whole PARKED BRANCH: the waiting tool plus its ancestors (e.g. the

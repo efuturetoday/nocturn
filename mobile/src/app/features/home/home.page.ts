@@ -2,6 +2,7 @@ import { Component, ChangeDetectionStrategy, inject, computed } from '@angular/c
 import { Router } from '@angular/router';
 import { IonContent, IonList, IonItem, IonLabel, IonListHeader } from '@ionic/angular/standalone';
 import { ChatService } from '../../core/services/chat.service';
+import { ChatListService } from '../../core/services/chat-list.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
 import { ChatRowComponent } from '../chat/components/chat-row';
 import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
@@ -23,8 +24,8 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
           <ion-item button detail="false" (click)="openChat(c)">
             <app-chat-row
               [chat]="c"
-              [unread]="chat.unreadIds().has(c.id)"
-              [approval]="chat.approvalWaiting().has(c.id)"
+              [unread]="chatList.unreadIds().has(c.id)"
+              [approval]="chatList.approvalWaiting().has(c.id)"
             />
           </ion-item>
         } @empty {
@@ -39,8 +40,8 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
             <ion-item button detail="false" (click)="openChat(c)">
               <app-chat-row
                 [chat]="c"
-                [unread]="chat.unreadIds().has(c.id)"
-                [approval]="chat.approvalWaiting().has(c.id)"
+                [unread]="chatList.unreadIds().has(c.id)"
+                [approval]="chatList.approvalWaiting().has(c.id)"
               />
             </ion-item>
           }
@@ -51,6 +52,7 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
 })
 export class HomePage {
   protected readonly chat = inject(ChatService);
+  protected readonly chatList = inject(ChatListService);
   private readonly router = inject(Router);
 
   // Three most-recent of each kind: human chats and agent runs.
@@ -58,7 +60,7 @@ export class HomePage {
   protected readonly agentRuns = computed(() => this.latest((c) => c.source === 'agent'));
 
   private latest(keep: (c: ChatMeta) => boolean): ChatMeta[] {
-    return [...this.chat.chats()]
+    return [...this.chatList.chats()]
       .filter(keep)
       .sort((a, b) => b.updated.localeCompare(a.updated))
       .slice(0, 3);

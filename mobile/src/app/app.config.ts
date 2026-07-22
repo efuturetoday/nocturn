@@ -8,6 +8,7 @@ import { routes } from './app.routes';
 import { ToastService } from './core/services/toast.service';
 import { KeyboardService } from './core/services/keyboard.service';
 import { JoinPromptService } from './core/services/join-prompt.service';
+import { ApprovalPromptService } from './core/services/approval-prompt.service';
 import { PresenceService } from './core/services/presence.service';
 import { PushService } from './core/services/push.service';
 
@@ -23,6 +24,7 @@ export const appConfig: ApplicationConfig = {
       inject(ToastService);
       inject(KeyboardService);
       inject(JoinPromptService);
+      inject(ApprovalPromptService);
       inject(PresenceService);
       inject(PushService); // registers the APNs token once connected (native only)
       if (Capacitor.isNativePlatform()) {
