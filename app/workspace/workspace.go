@@ -162,6 +162,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		runtime.WithTools(toolset),
 		runtime.WithSkills(skills),
 		runtime.WithGate(policy(), gs, h.Approver),
+		runtime.WithGateLogger(agentkit.SlogLogger(wslog)), // trace gate allow/deny/ask with ws+chat
 		runtime.WithSession(
 			agentkit.WithSystem(resolvePersona(dir, h.Log)),
 			agentkit.WithTimeout(turnTimeout),

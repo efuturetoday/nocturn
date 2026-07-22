@@ -39,6 +39,10 @@ func buildWorkspaceSecrets(master *secret.Master, dir, name string, log *slog.Lo
 	}
 	injector := secret.NewInjector(vault.Store())
 	scanner := secret.NewScanner(vault.Store())
+	// Trace injection + leak-scan security events (names/rule-ids only, never a secret value) under
+	// this workspace's component=secret logger.
+	injector.SetLogger(log)
+	scanner.SetLogger(log)
 	seedEnvSecrets(vault, log)
 	loadBindings(injector, filepath.Join(dir, "bindings.json"), log)
 	registerOAuth(injector, vault, dir, log)

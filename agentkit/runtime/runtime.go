@@ -19,6 +19,7 @@ type Runtime struct {
 	policy   gate.Policy
 	grants   gate.Grants
 	approver gate.Approver
+	gateLog  agentkit.Logger   // traces gate decisions; nil = no-op
 	base     []agentkit.Option // default session options
 }
 
@@ -37,6 +38,12 @@ func WithSkills(ss agentkit.SkillSet) Option { return func(r *Runtime) { r.skill
 // (nil = unattended, so any Ask is denied). Without it, tools run ungated.
 func WithGate(policy gate.Policy, grants gate.Grants, approver gate.Approver) Option {
 	return func(r *Runtime) { r.policy, r.grants, r.approver = policy, grants, approver }
+}
+
+// WithGateLogger sets the logger that traces gate decisions (allow/deny/ask/grant). Pass the same
+// logger the sessions use so the lines carry ws/chat/component; nil (the default) traces nothing.
+func WithGateLogger(log agentkit.Logger) Option {
+	return func(r *Runtime) { r.gateLog = log }
 }
 
 // WithSession adds default agentkit session options (system prompt, timeout, token limit, tokenizer,
@@ -79,7 +86,8 @@ func (r *Runtime) prepare(ctx context.Context) context.Context {
 	if r.policy == nil {
 		return ctx
 	}
-	return gate.With(ctx, r.policy, r.grants, r.approver)
+	ctx = gate.With(ctx, r.policy, r.grants, r.approver)
+	return gate.WithLogger(ctx, r.gateLog)
 }
 
 func (r *Runtime) sessionOpts(extra []agentkit.Option) []agentkit.Option {

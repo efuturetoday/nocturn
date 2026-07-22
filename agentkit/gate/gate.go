@@ -14,6 +14,7 @@ import (
 var ErrDenied = errors.New("gate: denied")
 
 type permsKey struct{}
+type gateLogKey struct{}
 
 // perms is the installed machinery, carried in ctx.
 type perms struct {
@@ -27,6 +28,20 @@ type perms struct {
 // whole tree; a nested run inherits it and cannot widen it (only a human, via the Approver, widens).
 func With(ctx context.Context, p Policy, g Grants, a Approver) context.Context {
 	return context.WithValue(ctx, permsKey{}, &perms{policy: p, grants: g, approver: a})
+}
+
+// WithLogger installs the logger that Check traces every decision through — kept separate from With
+// so the permission signature stays stable. A nil logger (the default when unset) traces nothing.
+func WithLogger(ctx context.Context, log agentkit.Logger) context.Context {
+	return context.WithValue(ctx, gateLogKey{}, log)
+}
+
+// loggerFrom returns the installed gate logger, or a no-op when none is set.
+func loggerFrom(ctx context.Context) agentkit.Logger {
+	if l, ok := ctx.Value(gateLogKey{}).(agentkit.Logger); ok && l != nil {
+		return l
+	}
+	return agentkit.NopLogger()
 }
 
 func from(ctx context.Context) *perms {
@@ -51,6 +66,9 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 	if p == nil {
 		return nil // no machinery installed = open
 	}
+	// Decision tracing: every allow/deny/ask/remember is logged so the human-in-the-loop core is not
+	// a black box. Only the action's Kind/Target (never any secret) reach the log.
+	lg := loggerFrom(ctx).WithContext(ctx).With("component", "gate", "kind", a.Kind, "target", a.Target)
 
 	ruling := Allowed()
 	if p.policy != nil {
@@ -58,27 +76,34 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 	}
 	switch ruling.decision {
 	case decisionAllow:
+		lg.Debug("gate allow", "source", "policy")
 		return nil
 	case decisionDeny:
+		lg.Warn("gate deny", "reason", "policy")
 		return ErrDenied
 	}
 
 	// Ask. A standing grant covers it — unless this Kind is never remembered, in which case the cache
 	// is skipped and a human must approve every time.
 	if ruling.recall != RecallNever && p.grants != nil && p.grants.Allowed(a, match) {
+		lg.Debug("gate allow", "source", "grant")
 		return nil
 	}
 	if p.approver == nil {
-		return ErrDenied // unattended: no human to approve
+		lg.Warn("gate deny", "reason", "unattended") // no human to approve — fail closed
+		return ErrDenied
 	}
 
+	lg.Debug("gate ask", "recall", ruling.recall)
 	resume := agentkit.Pause(ctx) // a human deciding must not consume the turn's wall-clock
 	approved, g, chosen, err := p.approver.Ask(ctx, a, suggest)
 	resume()
 	if err != nil {
+		lg.Warn("gate deny", "reason", "approver-error", "err", err)
 		return fmt.Errorf("gate: approver: %w", err)
 	}
 	if !approved {
+		lg.Warn("gate deny", "reason", "declined")
 		return ErrDenied
 	}
 
@@ -86,6 +111,8 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 	// human's choice; RecallNever means don't remember (asks again next time).
 	if effective := min(ruling.recall, chosen); effective != RecallNever && p.grants != nil {
 		p.grants.Remember(g, effective)
+		lg.Info("gate grant remembered", "grant_target", g.Target, "recall", effective)
 	}
+	lg.Debug("gate allow", "source", "approved")
 	return nil
 }

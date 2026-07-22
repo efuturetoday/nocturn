@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"math"
 	"net/url"
 	"regexp"
@@ -84,6 +85,16 @@ type Scanner struct {
 	ac        aho.AhoCorasick
 	kwToRules [][]int // keyword (Aho-Corasick pattern index) -> rule indices
 	hasAC     bool
+	log       *slog.Logger // security-event trace; nil = silent (never logs a secret value)
+}
+
+// SetLogger attaches a logger for security events — a blocked egress (Warn) and an ingress
+// redaction (Info). The caller passes a logger already tagged (e.g. component=secret, ws); the
+// Scanner logs only rule ids / tiers / counts, never a secret value. nil disables it.
+func (sc *Scanner) SetLogger(l *slog.Logger) {
+	if sc != nil {
+		sc.log = l
+	}
 }
 
 // NewScanner builds a scanner over store with the embedded gitleaks ruleset.
@@ -158,10 +169,16 @@ func (sc *Scanner) ScanEgress(parts ...string) error {
 		// let a fully percent-encoded vault value slip past the load-bearing tier.
 		for _, text := range decodeVariants(p) {
 			if len(sc.scanExact(text)) > 0 {
+				if sc.log != nil {
+					sc.log.Warn("egress blocked", "tier", "vault") // a stored value tried to leave; never log the value
+				}
 				return fmt.Errorf("%w: a stored vault secret in the outbound request", ErrLeaked)
 			}
 			for _, h := range sc.scanPatterns(text) {
 				if h.action == actionBlock {
+					if sc.log != nil {
+						sc.log.Warn("egress blocked", "tier", "pattern", "rule", h.rule)
+					}
 					return fmt.Errorf("%w: %s pattern in the outbound request", ErrLeaked, h.rule)
 				}
 			}
@@ -188,6 +205,9 @@ func (sc *Scanner) RedactIngress(b []byte) []byte {
 	}
 	if len(spans) == 0 {
 		return b
+	}
+	if sc.log != nil {
+		sc.log.Info("ingress redacted", "spans", len(spans)) // a secret was echoed back; count only, never the value
 	}
 	return []byte(applyRedactions(text, spans))
 }
