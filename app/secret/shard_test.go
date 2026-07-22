@@ -3,11 +3,34 @@ package secret_test
 import (
 	"bytes"
 	"errors"
+	"io"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/efuturetoday/nocturn/app/secret"
 )
+
+func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+func anyName(string) bool { return true }
+
+// writeShard seals one secret into <wsDir>/<relPath>/secrets.enc under the path-derived key.
+func writeShard(t *testing.T, m *secret.Master, wsDir, wsName, relPath, key, value string) {
+	t.Helper()
+	dir := filepath.Join(wsDir, relPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	v, err := secret.OpenVault(filepath.Join(dir, "secrets.enc"), m.ShardKey(wsName, relPath), secret.WithAAD([]byte(relPath)))
+	if err != nil {
+		t.Fatalf("open shard %s: %v", relPath, err)
+	}
+	if err := v.Set(key, []byte(value)); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+}
 
 func master(t *testing.T) *secret.Master {
 	t.Helper()
@@ -86,5 +109,51 @@ func TestShardVault_FailsClosedCrossFolder(t *testing.T) {
 	// Right key but wrong AAD (as if the file were copied to another folder path).
 	if _, err := secret.OpenVault(gmailPath, m.ShardKey("ws", "plugins/gmail"), secret.WithAAD([]byte("plugins/evil"))); !errors.Is(err, secret.ErrWrongPassphrase) {
 		t.Fatalf("wrong AAD: got %v, want ErrWrongPassphrase", err)
+	}
+}
+
+// LoadShardsInto folds each folder's secret into the resolution store; a shard that
+// will not open is skipped fail-closed (no panic, no workspace-vault fallback), and
+// the good shards still load.
+func TestLoadShardsInto_LoadsAndFailsClosed(t *testing.T) {
+	m := master(t)
+	wsDir := t.TempDir()
+
+	writeShard(t, m, wsDir, "ws", "plugins/gmail", "plugin:gmail/acct", "s3cr3t")
+	writeShard(t, m, wsDir, "ws", "mcp/github", "mcp:github@api.github.com/oauth", "tok")
+
+	// A corrupt/foreign shard: bytes that are not a valid vault → must be skipped, not fatal.
+	badDir := filepath.Join(wsDir, "plugins", "broken")
+	if err := os.MkdirAll(badDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "secrets.enc"), []byte("not a vault"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := secret.NewStore()
+	secret.LoadShardsInto(res, m, wsDir, "ws", anyName, quiet())
+
+	if !res.Exists("plugin:gmail/acct") {
+		t.Error("gmail shard secret must be loaded into the resolution store")
+	}
+	if !res.Exists("mcp:github@api.github.com/oauth") {
+		t.Error("mcp github shard secret must be loaded")
+	}
+	// The broken shard contributed nothing — and did not crash or abort the load.
+}
+
+// A shard is only decryptable from its OWN folder path: pointing LoadShardsInto at a
+// workspace whose NAME differs derives different keys, so nothing loads (fail-closed).
+func TestLoadShardsInto_WrongWorkspaceName_NothingLoads(t *testing.T) {
+	m := master(t)
+	wsDir := t.TempDir()
+	writeShard(t, m, wsDir, "ws", "plugins/gmail", "plugin:gmail/acct", "s3cr3t")
+
+	res := secret.NewStore()
+	secret.LoadShardsInto(res, m, wsDir, "OTHER-WS", anyName, quiet()) // wrong ws name → wrong key
+
+	if res.Exists("plugin:gmail/acct") {
+		t.Error("a shard sealed for workspace 'ws' must not decrypt under another workspace's key")
 	}
 }

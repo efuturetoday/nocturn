@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/efuturetoday/nocturn/app/discovery"
 	"github.com/efuturetoday/nocturn/app/mcp"
 	"github.com/efuturetoday/nocturn/app/plugin"
 	"github.com/efuturetoday/nocturn/app/secret"
@@ -38,13 +39,21 @@ func buildWorkspaceSecrets(master *secret.Master, dir, name string, log *slog.Lo
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	injector := secret.NewInjector(vault.Store())
-	scanner := secret.NewScanner(vault.Store())
+	seedEnvSecrets(vault, log)
+	// The injector + scanner resolve over a UNION resolution store: the workspace vault's own
+	// secrets PLUS every plugin/mcp shard's (each secrets.enc decrypted with its folder-path key).
+	// This store lives only in memory and is NEVER persisted, so a write to the workspace vault (an
+	// OAuth refresh) can never leak a shard secret into vault.enc — compartmentalization holds on
+	// disk. Shards fail closed: a bad one is absent, not a fallback to the workspace vault.
+	res := secret.NewStore()
+	vault.Store().CopyInto(res)
+	secret.LoadShardsInto(res, master, dir, name, discovery.ValidName, log)
+	injector := secret.NewInjector(res)
+	scanner := secret.NewScanner(res)
 	// Trace injection + leak-scan security events (names/rule-ids only, never a secret value) under
 	// this workspace's component=secret logger.
 	injector.SetLogger(log)
 	scanner.SetLogger(log)
-	seedEnvSecrets(vault, log)
 	loadBindings(injector, filepath.Join(dir, "bindings.json"), log)
 	registerOAuth(injector, vault, dir, log)
 	log.Info("secret: workspace vault unlocked", "ws", name)

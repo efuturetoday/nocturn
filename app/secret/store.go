@@ -76,6 +76,15 @@ func (s *Store) knownValues() [][]byte {
 	return out
 }
 
+// CopyInto copies every secret into dst — a host-only bulk fold, used to assemble the workspace
+// resolution store from the workspace vault plus each plugin/mcp shard. A guest never holds a
+// *Store (its surface is GuestView), so this cannot yield a value to one.
+func (s *Store) CopyInto(dst *Store) {
+	for name, value := range s.snapshot() {
+		dst.Set(name, value)
+	}
+}
+
 // GuestView is the only store surface a guest may hold. It exposes presence and
 // nothing else — there is deliberately no method that returns a secret value,
 // so even a fully compromised guest cannot exfiltrate a credential through it.
