@@ -105,6 +105,7 @@ func (m *Manager) Start(text string) (string, *agentkit.Session) {
 	sess := m.openLocked(id)
 	m.mu.Unlock()
 	m.log.Info("chat started", "chat", id)
+	m.touch(id, text)
 	sess.Submit(text)
 	return id, sess
 }
@@ -119,7 +120,18 @@ func (m *Manager) Submit(id, text string) {
 		lv.input = text
 	}
 	m.mu.Unlock()
+	m.touch(id, text)
 	sess.Submit(text)
+}
+
+// touch bumps the chat's list metadata (Updated + Preview) from the submitted text so the chat rises
+// in every device's list the moment it is sent — not only when the turn ends. Best-effort: a failure
+// here must not scuttle the turn (the transcript persists at close regardless), so it is logged and
+// swallowed. Called OUTSIDE m.mu — Store.Touch takes its own lock and broadcasts the activity.
+func (m *Manager) touch(id, text string) {
+	if err := m.store.Touch(id, text); err != nil {
+		m.log.Warn("chat touch failed", "chat", id, "err", err)
+	}
 }
 
 // Cancel aborts the RUNNING turn of a live chat (the stop button) — turn-scoped: the session stays

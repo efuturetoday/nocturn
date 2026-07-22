@@ -12,7 +12,9 @@ import (
 	"github.com/efuturetoday/nocturn/app/chat"
 )
 
-func userMsg(text string) agentkit.Message { return agentkit.Message{Role: agentkit.RoleUser, Content: text} }
+func userMsg(text string) agentkit.Message {
+	return agentkit.Message{Role: agentkit.RoleUser, Content: text}
+}
 func asstMsg(text string) agentkit.Message {
 	return agentkit.Message{Role: agentkit.RoleAssistant, Content: text}
 }
@@ -166,6 +168,82 @@ func TestStore_Save_WithSource_StampsSource(t *testing.T) {
 	}
 	if got := metaByID(t, st, id).Source; got != chat.SourceAgent {
 		t.Errorf("Source = %q, want %q", got, chat.SourceAgent)
+	}
+}
+
+// Touch on a NEW chat creates the record from the submitted text — Name/Preview from it, Updated set,
+// but Turns 0 and Messages empty (the turn's Save fills those at close). It fires the save callback so
+// the chat.activity broadcast rises the chat in every device's list before the turn ends.
+func TestStore_Touch_NewChat_CreatesFromTextNoTurn(t *testing.T) {
+	st, err := chat.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c saveCounter
+	st.OnSave(c.fn)
+
+	const id = "cc11dd"
+	if err := st.Touch(id, "book me a flight\nsecond line"); err != nil {
+		t.Fatal(err)
+	}
+	if c.count() != 1 {
+		t.Fatalf("OnSave after Touch fired %d times, want 1 (the activity broadcast)", c.count())
+	}
+	m := metaByID(t, st, id)
+	if m.Name != "book me a flight" || m.Preview != "book me a flight" {
+		t.Errorf("Name/Preview = %q/%q, want the first line of the text", m.Name, m.Preview)
+	}
+	if m.Turns != 0 {
+		t.Errorf("Turns = %d, want 0 (a touch is not a turn)", m.Turns)
+	}
+	if m.Updated.IsZero() {
+		t.Error("Updated not set")
+	}
+	msgs, err := st.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("Messages = %+v, want empty (touch does not persist the transcript)", msgs)
+	}
+}
+
+// Touch on an EXISTING chat bumps Updated + Preview (to the new text) but leaves Name, Turns and the
+// transcript untouched — a mid-conversation submit rises the chat without rewriting its history.
+func TestStore_Touch_ExistingChat_BumpsUpdatedAndPreviewOnly(t *testing.T) {
+	st, err := chat.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "cc22dd"
+	if err := st.Save(id, []agentkit.Message{userMsg("original question"), asstMsg("an answer")}); err != nil {
+		t.Fatal(err)
+	}
+	before := metaByID(t, st, id)
+
+	if err := st.Touch(id, "a follow-up"); err != nil {
+		t.Fatal(err)
+	}
+	after := metaByID(t, st, id)
+
+	if after.Name != before.Name {
+		t.Errorf("Name = %q, want it unchanged (%q)", after.Name, before.Name)
+	}
+	if after.Preview != "a follow-up" {
+		t.Errorf("Preview = %q, want the new submitted text", after.Preview)
+	}
+	if after.Turns != before.Turns {
+		t.Errorf("Turns = %d, want it unchanged (%d) — a touch is not a turn", after.Turns, before.Turns)
+	}
+	if after.Updated.Before(before.Updated) {
+		t.Errorf("Updated = %v, want it not before the previous %v", after.Updated, before.Updated)
+	}
+	msgs, err := st.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Errorf("Messages len = %d, want the transcript preserved (2)", len(msgs))
 	}
 }
 

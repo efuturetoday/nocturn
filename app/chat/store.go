@@ -165,6 +165,35 @@ func (s *Store) Save(id string, msgs []agentkit.Message) error {
 	return err
 }
 
+// Touch bumps a chat's Updated + Preview from a just-submitted user message, before its turn ends —
+// so the chat rises in every device's list the moment it is sent, not only when the answer lands. On
+// a new chat it creates the record (Created, the store's Source, Name derived from the text); it never
+// changes Messages or Turns — the turn's Save does that at close (which then overwrites Preview with
+// the answer and does Turns++). Fires the save callback, so the activity broadcast reaches every
+// device through the same path as Save.
+func (s *Store) Touch(id, text string) error {
+	s.mu.Lock()
+	rec, err := s.read(id)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	now := time.Now()
+	msgs := []agentkit.Message{{Role: agentkit.RoleUser, Content: text}} // reuse nameFrom/previewFrom
+	if rec == nil {
+		rec = &record{Meta: Meta{ID: id, Name: nameFrom(msgs), Source: s.source, Created: now}}
+	}
+	rec.Meta.Updated = now
+	rec.Meta.Preview = previewFrom(msgs) // the latest message is the user's own, until the turn answers
+	err = s.write(rec)
+	meta := rec.Meta
+	s.mu.Unlock()
+	if err == nil {
+		s.fireSaved(meta)
+	}
+	return err
+}
+
 // AppendTools appends one turn's captured tool forest (may be empty, to stay index-aligned with the
 // turns). A no-op if the chat has no transcript yet. It shares s.mu with Save so the read-modify-write
 // never races: Save preserves rec.Tools, AppendTools preserves rec.Messages. It does NOT bump Meta or

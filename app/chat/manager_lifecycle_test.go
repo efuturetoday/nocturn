@@ -107,6 +107,39 @@ func TestManager_Submit_RecordsInflightInput_BeforeTurnEnd(t *testing.T) {
 	}
 }
 
+// Submit touches the store BEFORE the turn ends, so the chat's list metadata (Updated + Preview from
+// the submitted text) exists immediately — the chat rises in every device's list while the answer is
+// still streaming, not only at turn end. Turns is still 0 (the turn has not been saved yet).
+func TestManager_Submit_RisesBeforeTurnEnd(t *testing.T) {
+	release := make(chan struct{})
+	m, _ := newManagerRT(t, runtime.New(blockingLLM(release)))
+	defer m.CloseAll()
+	defer close(release)
+
+	id := "abc1de"
+	m.Submit(id, "plan my week")
+
+	metas, err := m.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *chat.Meta
+	for i := range metas {
+		if metas[i].ID == id {
+			got = &metas[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("chat %q absent from the list before its turn ended, want present (risen on submit)", id)
+	}
+	if got.Preview != "plan my week" {
+		t.Errorf("Preview = %q, want the submitted text before the turn answers", got.Preview)
+	}
+	if got.Turns != 0 {
+		t.Errorf("Turns = %d, want 0 (the turn has not been saved yet)", got.Turns)
+	}
+}
+
 func TestManager_Submit_OpensIfNeeded(t *testing.T) {
 	m, _ := newManagerRT(t, runtime.New(fakeLLM{}))
 	defer m.CloseAll()
