@@ -62,6 +62,21 @@ func main() {
 		return
 	}
 
+	// `nocturn secret set <workspace> <plugins/NAME|mcp/NAME> <secret-key>`: seed a static credential
+	// value (read from stdin) into a plugin/mcp folder's encrypted shard. Like auth, it needs only the
+	// vault. The value never appears in argv — pipe it in: `op read op://... | nocturn secret set ...`.
+	if flag.Arg(0) == "secret" {
+		if flag.Arg(1) != "set" || flag.Arg(2) == "" || flag.Arg(3) == "" || flag.Arg(4) == "" {
+			fmt.Fprintln(os.Stderr, "usage: nocturn secret set <workspace> <plugins/NAME|mcp/NAME> <secret-key>   (value on stdin)")
+			os.Exit(1)
+		}
+		if err := runSecretSet(flag.Arg(2), flag.Arg(3), flag.Arg(4)); err != nil {
+			fmt.Fprintln(os.Stderr, "secret set:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	baseURL := os.Getenv("FREELLM_BASE_URL")
 	apiKey := os.Getenv("FREELLM_API_KEY")
 	model := os.Getenv("FREELLM_MODEL")

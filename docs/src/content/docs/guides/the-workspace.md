@@ -52,6 +52,20 @@ workspaces/work/
 └─ plugins/        ← installed capabilities
 ```
 
+Each plugin and MCP server keeps its own credentials in an encrypted `secrets.enc` inside
+its folder — `plugins/<name>/secrets.enc`, `mcp/<name>/secrets.enc`. That file is locked with
+a key derived from the folder's path, so it can only ever be read for the plugin or server
+that lives there: a plugin cannot reach another's credentials by claiming its name, and moving
+or renaming a folder makes its old secrets unreadable. Seed a static credential (an API key, a
+bearer token) with:
+
+```sh
+printf %s "$TOKEN" | nocturn secret set <workspace> plugins/<name> plugin:<name>/<credential>
+```
+
+(The value is read from stdin, so it never lands in your shell history or the process list.)
+OAuth accounts are connected with `nocturn auth <name>` instead.
+
 A single workspace can hold several agents. They share this one folder — the same `mnt/`
 data and the same connected accounts. What each agent keeps to itself is its own
 instructions, its own list of allowed tools, and its own permissions.
