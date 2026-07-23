@@ -200,6 +200,55 @@ export interface ApprovalResolved {
   id: string;
 }
 
+/**
+ * One pending reminder. `fireAt` is RFC3339 WITH an offset, so it denotes the instant the daemon
+ * intended — parse it, don't read the wall clock off the string.
+ */
+export interface ReminderInfo {
+  id: string;
+  fireAt: string;
+  message: string;
+  title?: string;
+}
+
+/**
+ * A workspace's pending reminders, soonest first, replying to reminder.list. A fired reminder is
+ * gone from this set (it arrives as a push instead) — this is never a history.
+ */
+export interface ReminderList {
+  type: "reminder.list";
+  ws: string;
+  reminders: ReminderInfo[];
+}
+
+/**
+ * Broadcast to every device when a workspace's pending reminders change (the model set one, one was
+ * cancelled, one fired). It carries no payload on purpose: re-list, so devices converge on the
+ * daemon's set rather than on their own optimistic guesses.
+ */
+export interface ReminderChanged {
+  type: "reminder.changed";
+  ws: string;
+}
+
+/**
+ * A proactive message delivered to an AWAKE device over the live connection — a reminder that just
+ * fired, or a `notify` tool call. It is the in-app half of a delivery whose other half is an APNs
+ * push: the push is suppressed or easy to miss while the app is in the foreground, and a fired
+ * reminder leaves the pending list immediately, so without this the phone-in-hand case would show
+ * nothing. Expect to receive BOTH on occasion — show this one and let the OS drop its duplicate.
+ *
+ * `chatId`, when set, is the chat or agent run it came from: what a tap should open.
+ */
+export interface Notification {
+  type: "notification";
+  ws: string;
+  kind: "remind" | "notify";
+  chatId?: string;
+  title?: string;
+  message: string;
+}
+
 /** A control error (e.g. an unknown command). */
 export interface ErrorEvent {
   type: "error";
@@ -220,6 +269,9 @@ export type ServerEvent =
   | JoinList
   | ApprovalRequest
   | ApprovalResolved
+  | ReminderList
+  | ReminderChanged
+  | Notification
   | ErrorEvent;
 
 // ── client → server commands (discriminate on `cmd`) ─────────────────────────
@@ -264,6 +316,23 @@ export interface WorkspaceListCmd {
   cmd: "workspace.list";
 }
 
+/** Request a workspace's pending reminders (→ ReminderList). */
+export interface ReminderListCmd {
+  cmd: "reminder.list";
+  ws: string;
+}
+
+/**
+ * Drop a pending reminder. There is deliberately no create command: reminders are set by the model
+ * through the gated `remind` tool, so a device may view and cancel but never mint one. The daemon
+ * answers with a reminder.changed broadcast, not a direct reply.
+ */
+export interface ReminderCancelCmd {
+  cmd: "reminder.cancel";
+  ws: string;
+  id: string;
+}
+
 /** Request the pending second-device joins with codes (→ JoinList). */
 export interface JoinListCmd {
   cmd: "join.list";
@@ -296,6 +365,8 @@ export type ClientCommand =
   | WorkspaceListCmd
   | JoinListCmd
   | ApprovalResolve
+  | ReminderListCmd
+  | ReminderCancelCmd
   | PresenceSet;
 
 // ── Pairing & Auth (HTTP, NOT the WebSocket) ─────────────────────────────────

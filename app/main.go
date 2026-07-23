@@ -94,7 +94,13 @@ func runApp(serveAddr string) int {
 		notifier = &pushNotifier{devices: devices, sender: sender, log: pushLog}
 	}
 	master := buildMaster(logger)
-	host := workspace.Host{LLM: llm, Approver: approver, Master: master, Notifier: notifier, Log: logger}
+	// Proactive messages route by device presence, the same signal that routes approvals. The broker
+	// holds it; nil in terminal mode (no daemon), where every notification takes the print path.
+	var active func() bool
+	if broker != nil {
+		active = broker.AnyActive
+	}
+	host := workspace.Host{LLM: llm, Approver: approver, Master: master, Notifier: notifier, Active: active, Log: logger}
 
 	spaces, err := workspace.OpenAll(host, wsRoot)
 	if err != nil {
@@ -152,9 +158,11 @@ type pushNotifier struct {
 	log     *slog.Logger
 }
 
-func (p *pushNotifier) Notify(ctx context.Context, title, message string) error {
+func (p *pushNotifier) Notify(ctx context.Context, n tools.Notification) error {
 	if p.sender == nil {
-		p.log.Info("notify (no push configured)", "title", title, "message", message)
+		// Metadata only: APNs being unconfigured is the default in development, so logging the body
+		// here would route every reminder's personal text to the log on the common path.
+		p.log.Info("notify (no push configured)", "kind", n.Kind, "ws", n.Ws, "len", len(n.Message))
 		return nil
 	}
 	var tokens []string
@@ -166,20 +174,36 @@ func (p *pushNotifier) Notify(ctx context.Context, title, message string) error 
 	if len(tokens) == 0 {
 		return nil
 	}
+	title := n.Title
 	if title == "" {
 		title = "Nocturn"
 	}
-	return p.sender.Send(ctx, push.Message{Title: title, Body: message, Data: map[string]string{"type": "notify"}}, tokens)
+	kind := n.Kind
+	if kind == "" {
+		kind = tools.NotifyKind // the app switches on this; never hand it an empty discriminator
+	}
+	// kind + ws + chatId let the app label the notification and open the conversation it came from on
+	// a tap; the push itself carries no authority, only the message the user already agreed to
+	// receive. chatId is omitted when there is nothing to open.
+	data := map[string]string{"type": kind, "ws": n.Ws}
+	if n.ChatID != "" {
+		data["chatId"] = n.ChatID
+	}
+	return p.sender.Send(ctx, push.Message{Title: title, Body: n.Message, Data: data}, tokens)
 }
 
 // printNotifier is the notify tool's terminal fallback: a proactive notification prints inline.
 type printNotifier struct{}
 
-func (printNotifier) Notify(_ context.Context, title, message string) error {
-	if title != "" {
-		fmt.Printf("\n[notify] %s: %s\n", title, message)
+func (printNotifier) Notify(_ context.Context, n tools.Notification) error {
+	label := n.Kind
+	if label == "" {
+		label = tools.NotifyKind
+	}
+	if n.Title != "" {
+		fmt.Printf("\n[%s] %s: %s\n", label, n.Title, n.Message)
 	} else {
-		fmt.Printf("\n[notify] %s\n", message)
+		fmt.Printf("\n[%s] %s\n", label, n.Message)
 	}
 	return nil
 }

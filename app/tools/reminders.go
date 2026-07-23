@@ -23,12 +23,16 @@ import (
 // nothing else), but pass the gate so a stricter policy can tighten them.
 const RemindKind = "remind"
 
-// Reminder is one scheduled notification, persisted so it survives a restart.
+// Reminder is one scheduled notification, persisted so it survives a restart. ChatID is the chat it
+// was set in, captured at creation because a fire has no ctx to read it from — it is what lets a tap
+// on the delivered notification land back in the conversation that asked for it. Empty when the
+// reminder was set outside any chat.
 type Reminder struct {
 	ID      string    `json:"id"`
 	FireAt  time.Time `json:"fireAt"`
 	Message string    `json:"message"`
 	Title   string    `json:"title,omitempty"`
+	ChatID  string    `json:"chatId,omitempty"`
 }
 
 // Reminders is the persistent reminder tool group: it owns a JSON-file store and one time.AfterFunc
@@ -40,10 +44,11 @@ type Reminders struct {
 	scanner  *secret.Scanner
 	log      *slog.Logger
 
-	mu     sync.Mutex
-	items  map[string]Reminder
-	timers map[string]*time.Timer
-	seq    atomic.Uint64
+	mu       sync.Mutex
+	items    map[string]Reminder
+	timers   map[string]*time.Timer
+	onChange func()
+	seq      atomic.Uint64
 }
 
 // NewReminders opens (tolerantly — a missing or malformed file is an empty store) a reminder store at
@@ -66,6 +71,25 @@ func NewReminders(path string, notifier Notifier, scanner *secret.Scanner) *Remi
 func (r *Reminders) SetLogger(l *slog.Logger) {
 	if l != nil {
 		r.log = l
+	}
+}
+
+// OnChange registers the callback run after the pending set changes (a create, a cancel, a fire), so
+// a listing UI can refresh without polling. Set once, at wiring time, before serving. The callback
+// runs OUTSIDE r.mu — it may call back into List.
+func (r *Reminders) OnChange(fn func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onChange = fn
+}
+
+// changed fires the change callback. Callers must NOT hold r.mu.
+func (r *Reminders) changed() {
+	r.mu.Lock()
+	fn := r.onChange
+	r.mu.Unlock()
+	if fn != nil {
+		fn()
 	}
 }
 
@@ -135,12 +159,14 @@ func (r *Reminders) create(ctx context.Context, args string) (string, error) {
 		FireAt:  fireAt,
 		Message: a.Message,
 		Title:   a.Title,
+		ChatID:  ChatID(ctx), // captured now: the fire runs on a timer, with no ctx to read
 	}
 	r.mu.Lock()
 	r.items[rem.ID] = rem
 	r.save()
 	r.enroll(rem)
 	r.mu.Unlock()
+	r.changed()
 	return jsonResult(struct {
 		ID     string `json:"id"`
 		FireAt string `json:"fireAt"`
@@ -148,6 +174,13 @@ func (r *Reminders) create(ctx context.Context, args string) (string, error) {
 }
 
 func (r *Reminders) list(context.Context, string) (string, error) {
+	return jsonResult(r.List())
+}
+
+// List returns the pending reminders, soonest first. A fired reminder is gone (fire removes it), so
+// this is the pending set, never a history. It backs both the model's remind_list tool and the
+// companion app's listing.
+func (r *Reminders) List() []Reminder {
 	r.mu.Lock()
 	out := make([]Reminder, 0, len(r.items))
 	for _, rem := range r.items {
@@ -155,7 +188,23 @@ func (r *Reminders) list(context.Context, string) (string, error) {
 	}
 	r.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].FireAt.Before(out[j].FireAt) })
-	return jsonResult(out)
+	return out
+}
+
+// CancelByID drops a pending reminder and stops its timer, reporting whether it existed. It is the
+// host-side cancel (the companion app); the model cancels through the remind_cancel tool.
+func (r *Reminders) CancelByID(id string) bool {
+	r.mu.Lock()
+	_, ok := r.items[id]
+	if ok {
+		r.stopAndRemove(id)
+		r.save()
+	}
+	r.mu.Unlock()
+	if ok {
+		r.changed()
+	}
+	return ok
 }
 
 func (r *Reminders) cancelTool(_ context.Context, args string) (string, error) {
@@ -168,13 +217,7 @@ func (r *Reminders) cancelTool(_ context.Context, args string) (string, error) {
 	if a.ID == "" {
 		return "", errors.New("missing required field: id")
 	}
-	r.mu.Lock()
-	_, ok := r.items[a.ID]
-	if ok {
-		r.stopAndRemove(a.ID)
-		r.save()
-	}
-	r.mu.Unlock()
+	ok := r.CancelByID(a.ID)
 	return jsonResult(struct {
 		ID        string `json:"id"`
 		Cancelled bool   `json:"cancelled"`
@@ -235,6 +278,8 @@ func (r *Reminders) fire(id string) {
 	if !ok {
 		return
 	}
+	// The pending set shrank whether or not the delivery below succeeds, so refresh any listing now.
+	r.changed()
 	// Re-scan at fire time: a secret may have been stored between creation and now (or the ruleset
 	// grew) — drop silently rather than deliver a leak.
 	if r.scanner != nil {
@@ -243,7 +288,14 @@ func (r *Reminders) fire(id string) {
 			return
 		}
 	}
-	_ = r.notifier.Notify(context.Background(), rem.Title, rem.Message)
+	// The reminder is already out of the store, so a failed delivery loses it for good. fire runs on a
+	// timer and has no caller to return to — log it, or the one thing this feature exists for fails
+	// with no trace at all.
+	if err := r.notifier.Notify(context.Background(), Notification{
+		Kind: RemindKind, ChatID: rem.ChatID, Title: rem.Title, Message: rem.Message,
+	}); err != nil {
+		r.log.Warn("reminder fired but delivery failed — it is no longer pending", "id", id, "err", err)
+	}
 }
 
 // load reads the persisted reminders (tolerant: missing/malformed → empty). Called once at construction.

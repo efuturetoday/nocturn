@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -286,5 +287,99 @@ func TestRemind_Load_MalformedFile_EmptyStore(t *testing.T) {
 	}
 	if !strings.Contains(out, "[]") {
 		t.Fatalf("malformed file did not yield an empty store: %q", out)
+	}
+}
+
+// TestReminders_ListCancelAndOnChange covers the host-side surface a companion app drives: List
+// reports the pending set soonest-first, CancelByID drops one and reports whether it existed, and
+// every mutation fires the change callback so a listing UI never has to poll.
+func TestReminders_ListCancelAndOnChange(t *testing.T) {
+	fn := &fakeNotifier{}
+	r := tools.NewReminders("", fn, nil)
+	defer r.Cancel()
+
+	var changes atomic.Int64
+	r.OnChange(func() { changes.Add(1) })
+
+	create := reminderTool(t, r, "remind")
+	ctx := allowAll(context.Background())
+	// Created out of order: List must sort by FireAt, not by creation.
+	if _, err := create.Call(ctx, `{"when":"in 2h","message":"later","title":"B"}`); err != nil {
+		t.Fatalf("create later: %v", err)
+	}
+	if _, err := create.Call(ctx, `{"when":"in 1h","message":"sooner","title":"A"}`); err != nil {
+		t.Fatalf("create sooner: %v", err)
+	}
+	if got := changes.Load(); got != 2 {
+		t.Errorf("OnChange fired %d times after 2 creates, want 2", got)
+	}
+
+	got := r.List()
+	if len(got) != 2 {
+		t.Fatalf("List returned %d reminders, want 2", len(got))
+	}
+	if got[0].Message != "sooner" || got[1].Message != "later" {
+		t.Errorf("List = [%q %q], want soonest first [\"sooner\" \"later\"]", got[0].Message, got[1].Message)
+	}
+
+	if !r.CancelByID(got[0].ID) {
+		t.Error("CancelByID on a pending reminder = false, want true")
+	}
+	if changes.Load() != 3 {
+		t.Errorf("OnChange fired %d times after a cancel, want 3", changes.Load())
+	}
+	if rest := r.List(); len(rest) != 1 || rest[0].Message != "later" {
+		t.Errorf("after cancel List = %+v, want only \"later\"", rest)
+	}
+
+	// An unknown id changes nothing and must not fire the callback.
+	if r.CancelByID("rem-does-not-exist") {
+		t.Error("CancelByID on an unknown id = true, want false")
+	}
+	if changes.Load() != 3 {
+		t.Errorf("OnChange fired on a no-op cancel (%d), want it silent at 3", changes.Load())
+	}
+}
+
+// TestReminders_Fire_CarriesRemindKindAndChatProvenance proves a fired reminder reaches the notifier
+// tagged with its kind and with the chat it was SET in. The chat id has to be captured at creation:
+// the fire runs on a timer with no ctx to read it from, so a lost capture would silently strip the
+// provenance a tap needs. The fire also refreshes any listing.
+func TestReminders_Fire_CarriesRemindKindAndChatProvenance(t *testing.T) {
+	fn := &fakeNotifier{}
+	r := tools.NewReminders("", fn, nil)
+	defer r.Cancel()
+
+	fired := make(chan struct{}, 4)
+	r.OnChange(func() { fired <- struct{}{} })
+
+	ctx := tools.WithChatID(allowAll(context.Background()), "chat-42")
+	if _, err := reminderTool(t, r, "remind").Call(ctx,
+		`{"when":"in 1ms","message":"stand up","title":"Timer"}`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	<-fired // the create
+
+	select {
+	case <-fired: // the fire
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the reminder to fire")
+	}
+
+	call, ok := fn.last()
+	if !ok {
+		t.Fatal("the reminder fired but no notification was delivered")
+	}
+	if call.kind != tools.RemindKind {
+		t.Errorf("notification kind = %q, want %q", call.kind, tools.RemindKind)
+	}
+	if call.chatID != "chat-42" {
+		t.Errorf("notification chatID = %q, want \"chat-42\" (the chat it was set in)", call.chatID)
+	}
+	if call.message != "stand up" || call.title != "Timer" {
+		t.Errorf("notification = %q/%q, want \"Timer\"/\"stand up\"", call.title, call.message)
+	}
+	if rest := r.List(); len(rest) != 0 {
+		t.Errorf("a fired reminder is still pending: %+v", rest)
 	}
 }

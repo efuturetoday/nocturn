@@ -13,6 +13,7 @@ import (
 	"github.com/efuturetoday/nocturn/app/auth"
 	"github.com/efuturetoday/nocturn/app/chat"
 	"github.com/efuturetoday/nocturn/app/hitl"
+	"github.com/efuturetoday/nocturn/app/tools"
 	"github.com/efuturetoday/nocturn/app/workspace"
 )
 
@@ -81,6 +82,20 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 			if msg, ok := chatEvent(chatID, ev); ok {
 				hub.broadcast(msg)
 			}
+		})
+		// A reminder set, cancelled or fired changes what a device should be listing. Broadcast the
+		// bare fact and let each client re-list, so devices converge on the daemon's set.
+		ws.OnReminderChange(func() {
+			hub.broadcast(ReminderChanged{Type: "reminder.changed", Ws: name})
+		})
+		// The in-app half of a proactive delivery (a fired reminder or a notify): the notifier routes
+		// here when a device is in the foreground, and to the push otherwise — so this fires only in
+		// the former case, never both.
+		ws.OnNotification(func(n tools.Notification) {
+			hub.broadcast(Notification{
+				Type: "notification", Ws: n.Ws, Kind: n.Kind,
+				ChatID: n.ChatID, Title: n.Title, Message: n.Message,
+			})
 		})
 		// On daemon shutdown (Serve returns): stop each Manager's reaper and close every live session.
 		defer ws.Chats().CloseAll()

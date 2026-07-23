@@ -10,6 +10,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
 	"github.com/efuturetoday/nocturn/app/agent"
 	"github.com/efuturetoday/nocturn/app/chat"
+	"github.com/efuturetoday/nocturn/app/tools"
 )
 
 // Agents returns the workspace's declared agents, sorted by name.
@@ -47,6 +48,10 @@ func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, e
 			agentkit.WithLogger(agentkit.SlogLogger(w.log)),
 		),
 	)
+
+	// Stamp the run id as the chat id: an agent run IS an openable transcript, so a notify or a
+	// reminder it sets carries provenance back to it exactly like one from a user chat.
+	ctx = tools.WithChatID(ctx, runID)
 
 	sess := rt.Session(ctx, agentkit.WithStore(w.agentStore, runID))
 	defer sess.Close()

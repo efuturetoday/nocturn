@@ -193,6 +193,21 @@ func (b *Broker) conclude(ctx context.Context, id string) {
 	}
 }
 
+// AnyActive reports whether any attached connection is currently in the foreground. It is the same
+// presence that routes approvals, exposed so proactive notifications route the same either/or way: a
+// message goes over the live connection when a device is watching, and out of band (a push) only when
+// none is.
+func (b *Broker) AnyActive() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, active := range b.sinks {
+		if active {
+			return true
+		}
+	}
+	return false
+}
+
 // activeSinks returns the attached connections currently in the foreground.
 func (b *Broker) activeSinks() []Sink {
 	b.mu.Lock()

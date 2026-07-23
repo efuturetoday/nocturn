@@ -151,6 +151,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.presence(ctx, env.Cmd, data)
 	case "workspace":
 		c.workspaceCmd(ctx, env.Cmd)
+	case "reminder":
+		c.reminder(ctx, env.Cmd, data)
 	default:
 		c.badRequest(ctx, "unknown domain: "+env.Cmd)
 	}

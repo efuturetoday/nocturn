@@ -10,6 +10,7 @@ import { KeyboardService } from './core/services/keyboard.service';
 import { JoinPromptService } from './core/services/join-prompt.service';
 import { PresenceService } from './core/services/presence.service';
 import { PushService } from './core/services/push.service';
+import { NotificationService } from './core/services/notification.service';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -24,6 +25,9 @@ export const appConfig: ApplicationConfig = {
       inject(KeyboardService);
       inject(JoinPromptService);
       inject(PresenceService);
+      // Explicit, not left to PushService's transitive injection: the in-app delivery of a fired
+      // reminder must work on every platform, including where there is no push at all.
+      inject(NotificationService);
       inject(PushService); // registers the APNs token once connected (native only)
       if (Capacitor.isNativePlatform()) {
         // Immersive: webview draws under the status bar (Ionic headers still offset via safe-area).

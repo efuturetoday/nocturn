@@ -37,6 +37,7 @@ type Host struct {
 	Approver gate.Approver
 	Master   *secret.Master // root of the per-workspace vault keys (one passphrase); nil = vaults locked
 	Notifier tools.Notifier // out-of-band user notification for the notify tool; nil = no notify
+	Active   func() bool    // any device in the foreground, for routing proactive messages; nil = none
 	Log      *slog.Logger
 }
 
@@ -52,7 +53,8 @@ type Workspace struct {
 	agentStore *chat.Store   // agent run transcripts (SourceAgent)
 	agents     agent.Set
 	sched      *agent.Scheduler
-	reminders  *tools.Reminders // persistent reminder timers; nil when no notifier
+	reminders  *tools.Reminders // persistent reminder timers
+	notify     *notifier        // the seam every proactive message leaves through
 	waker      *tools.Waker     // self-continuation timers, bound to the chat manager
 	vault      *secret.Vault    // this workspace's own encrypted credential vault; nil when locked
 	log        *slog.Logger
@@ -100,23 +102,26 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// tools by Base; it is bound to the chat manager below (Bind) so a fired wake resolves the
 	// invoking chat by id.
 	waker := tools.NewWaker(tools.WithWakeLogger(h.Log))
-	baseTools, err := tools.Base(tools.Config{Secrets: injector, Scanner: scanner, Root: mnt, Notifier: h.Notifier, Waker: waker, Logger: wslog.With("component", "tool")})
+	// Every proactive message out of THIS workspace passes through here: it gets the workspace name
+	// stamped on, then routes by presence — the live connection when a device is watching, a push
+	// when none is.
+	notify := &notifier{ws: name, next: h.Notifier, active: h.Active}
+
+	baseTools, err := tools.Base(tools.Config{Secrets: injector, Scanner: scanner, Root: mnt, Notifier: notify, Waker: waker, Logger: wslog.With("component", "tool")})
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: tools: %w", name, err)
 	}
-	// Reminders are persistent per-workspace and fire through the notifier, so they only exist when a
-	// notifier does. Their tools fold into the base set like any other; the instance is held for its
-	// timer lifecycle (Restore below, Close on shutdown).
-	var reminders *tools.Reminders
-	if h.Notifier != nil {
-		reminders = tools.NewReminders(filepath.Join(dir, "reminders.json"), h.Notifier, scanner)
-		reminders.SetLogger(wslog.With("component", "remind"))
-		remindTools, err := reminders.Tools()
-		if err != nil {
-			return nil, fmt.Errorf("workspace %q: reminders: %w", name, err)
-		}
-		baseTools = append(baseTools, remindTools...)
+	// Reminders are persistent per-workspace and always offered: a fire reaches an awake device
+	// through the notifier's observer even when no out-of-band sender is configured, so they no
+	// longer depend on one existing. Their tools fold into the base set like any other; the instance
+	// is held for its timer lifecycle (Restore below, Cancel on shutdown).
+	reminders := tools.NewReminders(filepath.Join(dir, "reminders.json"), notify, scanner)
+	reminders.SetLogger(wslog.With("component", "remind"))
+	remindTools, err := reminders.Tools()
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: reminders: %w", name, err)
 	}
+	baseTools = append(baseTools, remindTools...)
 	// Skills: load the workspace's skills/ folder into an agentkit.SkillSet. agentkit surfaces the
 	// catalog (system prompt) and skill_load per top-level session; skill_read (for a skill's bundled
 	// files) is a base tool, so it flows into the cages like the file tools. An invalid skill is
@@ -187,6 +192,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		agentStore: agentStore,
 		agents:     agents,
 		reminders:  reminders,
+		notify:     notify,
 		waker:      waker,
 		vault:      vault,
 		log:        wslog,
@@ -201,9 +207,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		}
 	})
 	// Re-arm persisted reminders (overdue ones fire promptly) now the workspace is wired.
-	if reminders != nil {
-		reminders.Restore()
-	}
+	reminders.Restore()
 	// Every kind's discovery skips (bad agent/skill/plugin/server) drained through the one collector,
 	// logged uniformly here — a single place an operator scans for what did NOT load and why.
 	for _, d := range diag.All() {
@@ -257,6 +261,23 @@ func (w *Workspace) OnChatUpdate(fn func(chat.Meta)) {
 	w.userStore.OnSave(fn)
 	w.agentStore.OnSave(fn)
 }
+
+// Reminders returns this workspace's pending reminders, soonest first — what a companion app lists.
+func (w *Workspace) Reminders() []tools.Reminder { return w.reminders.List() }
+
+// CancelReminder drops a pending reminder, reporting whether it existed. This is the app's cancel;
+// the model has its own remind_cancel tool.
+func (w *Workspace) CancelReminder(id string) bool { return w.reminders.CancelByID(id) }
+
+// OnReminderChange wires a callback fired whenever the pending reminder set changes (a create, a
+// cancel, a fire), for pushing a refresh to connected devices. Set once, at wiring time.
+func (w *Workspace) OnReminderChange(fn func()) { w.reminders.OnChange(fn) }
+
+// OnNotification wires a callback fired for every proactive message leaving this workspace (a notify
+// tool call, a reminder firing), so a device that is already awake receives it over its live
+// connection instead of relying on an out-of-band push it may never see. It runs BEFORE the push and
+// must not block. Set once, at wiring time.
+func (w *Workspace) OnNotification(fn func(tools.Notification)) { w.notify.observe(fn) }
 
 // MarkRead advances a chat's shared read cursor (user chat or agent run; the wrong store no-ops).
 func (w *Workspace) MarkRead(id string) {

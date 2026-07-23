@@ -21,10 +21,30 @@ const NotifyKind = "notify"
 // never the channel.
 const notifyChannel = "user"
 
+// Notification is one proactive message to the user. Kind says which tool produced it (NotifyKind or
+// RemindKind), Ws which workspace it came from, and ChatID the chat or agent run it originated in —
+// together they let a device label it and open the conversation it came out of, instead of receiving
+// an anonymous string. A reminder is rarely an end in itself ("remind me about the meeting" is
+// usually followed by "what was it about"), so landing back in that chat is the useful destination.
+// ChatID is empty when there is nothing to open. The model supplies only Title and Message.
+type Notification struct {
+	Ws      string
+	Kind    string
+	ChatID  string
+	Title   string
+	Message string
+}
+
 // Notifier reaches the user out of band — a phone push, or the terminal. A nil Notifier means the
 // notify tool is not offered at all.
+//
+// Delivery is best-effort and must not block on the user: an implementation sends and returns, it
+// never waits for an acknowledgement (that is what hitl is for). A non-nil error means the message
+// reached NO device; it is not retryable here, and no implementation retries on its own — so a caller
+// that cannot propagate it must log it rather than discard it. Reaching zero devices because none is
+// registered is NOT an error (nothing failed), it simply returns nil.
 type Notifier interface {
-	Notify(ctx context.Context, title, message string) error
+	Notify(ctx context.Context, n Notification) error
 }
 
 // notify is the proactive-notification tool group.
@@ -65,7 +85,10 @@ func (n notify) send(ctx context.Context, args string) (string, error) {
 			return "", fmt.Errorf("egress blocked: %w", err)
 		}
 	}
-	if err := n.notifier.Notify(ctx, a.Title, a.Message); err != nil {
+	// ChatID(ctx) is the chat this turn belongs to — carried so a tap on the push lands back here.
+	if err := n.notifier.Notify(ctx, Notification{
+		Kind: NotifyKind, ChatID: ChatID(ctx), Title: a.Title, Message: a.Message,
+	}); err != nil {
 		return "", fmt.Errorf("notify: %w", err)
 	}
 	return `{"sent":true}`, nil

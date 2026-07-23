@@ -57,12 +57,18 @@ type fakeNotifier struct {
 	err   error
 }
 
-type notifyCall struct{ title, message string }
+type notifyCall struct {
+	title, message string
+	ws, kind       string
+	chatID         string
+}
 
-func (f *fakeNotifier) Notify(_ context.Context, title, message string) error {
+func (f *fakeNotifier) Notify(_ context.Context, n tools.Notification) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, notifyCall{title, message})
+	f.calls = append(f.calls, notifyCall{
+		title: n.Title, message: n.Message, ws: n.Ws, kind: n.Kind, chatID: n.ChatID,
+	})
 	return f.err
 }
 
