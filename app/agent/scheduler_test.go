@@ -12,6 +12,50 @@ import (
 	"github.com/efuturetoday/nocturn/app/agent"
 )
 
+// TestScheduler_Start_NothingSchedulable_ReturnsWithoutWaiting covers the schedules that must never
+// arm a timer at all: a workspace with no cron agents must not hold a goroutine waking on a clock
+// forever, and an agent whose spec can never fire must not keep the loop alive on its behalf.
+func TestScheduler_Start_NothingSchedulable_ReturnsWithoutWaiting(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		agents agent.Set
+	}{
+		{"no agents at all", agent.Set{}},
+		{"manual only", agent.Set{"manual": {Name: "manual", When: ""}}},
+		{"malformed spec", agent.Set{"typo": {Name: "typo", When: "not a cron"}}},
+		{"wrong field count", agent.Set{"short": {Name: "short", When: "* * * *"}}},
+		{"out of range", agent.Set{"bad": {Name: "bad", When: "99 * * * *"}}},
+		{"can never occur", agent.Set{"never": {Name: "never", When: "0 0 30 2 *"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fire := func(_ context.Context, a agent.Agent) {
+				t.Errorf("unschedulable agent %q fired", a.Name)
+			}
+			s := agent.NewScheduler(tt.agents, slog.New(slog.NewTextHandler(io.Discard, nil)), fire)
+
+			done := make(chan struct{})
+			go func() {
+				// t.Context() is NOT cancelled here: Start must return on its own, not because the
+				// context ended. If it armed a timer, this blocks and the test fails on timeout.
+				s.Start(t.Context())
+				close(done)
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("Start did not return — it armed a timer for a schedule that can never fire")
+			}
+		})
+	}
+}
+
 // TestScheduler_Start_AlignsToMinute_StopsOnCtxCancel drives the tick loop under a synthetic clock.
 // It proves the loop fires on minute boundaries (each firing lands exactly on :00) and that
 // cancelling the context stops Start (its goroutine returns).
