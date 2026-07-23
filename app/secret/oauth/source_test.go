@@ -21,7 +21,7 @@ func TestSource_ValueReturnsAccessTokenBytes(t *testing.T) {
 		RefreshToken: "secret-refresh",
 		Expiry:       time.Now().Add(time.Hour), // valid → no refresh, endpoint untouched
 	}
-	src := oauth.NewSource(cfg, initial, nil)
+	src := oauth.NewSource(cfg, initial, "", nil)
 
 	got, err := src.Value(t.Context())
 	if err != nil {
@@ -51,7 +51,7 @@ func TestSource_RefreshYieldsFreshTokenAndOnChange(t *testing.T) {
 
 	var mu sync.Mutex
 	var changed []string
-	src := oauth.NewSource(cfg, initial, func(tok *oauth2.Token) {
+	src := oauth.NewSource(cfg, initial, "", func(tok *oauth2.Token) {
 		mu.Lock()
 		changed = append(changed, tok.AccessToken)
 		mu.Unlock()
@@ -120,7 +120,7 @@ func TestSource_ValuePropagatesRefreshError(t *testing.T) {
 
 	var mu sync.Mutex
 	fires := 0
-	src := oauth.NewSource(cfg, initial, func(*oauth2.Token) {
+	src := oauth.NewSource(cfg, initial, "", func(*oauth2.Token) {
 		mu.Lock()
 		fires++
 		mu.Unlock()
@@ -165,7 +165,7 @@ func TestNewSource_RefreshUsesBackgroundContext(t *testing.T) {
 		RefreshToken: "refresh-1",
 		Expiry:       time.Now().Add(-time.Hour), // expired → forces a refresh
 	}
-	src := oauth.NewSource(cfg, initial, nil)
+	src := oauth.NewSource(cfg, initial, "", nil)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // already canceled before the call

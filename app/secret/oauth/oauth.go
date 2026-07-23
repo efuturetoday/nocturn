@@ -40,15 +40,43 @@ func Provider(authURL, tokenURL, clientID, clientSecret string, scopes ...string
 	}
 }
 
+// authCodeURL builds the authorization-request URL: PKCE S256 challenge, offline
+// access, and — when resource != "" — the RFC 8707 resource indicator naming the
+// MCP server the token is FOR (audience binding; the MCP spec requires it on both
+// the authorization and token requests). A bare "" resource omits it, for a
+// non-MCP provider (a plugin's own OAuth) that does not use resource indicators.
+func authCodeURL(cfg *oauth2.Config, state, verifier, resource string) string {
+	opts := []oauth2.AuthCodeOption{
+		oauth2.AccessTypeOffline,
+		oauth2.SetAuthURLParam("prompt", "consent"),
+		oauth2.S256ChallengeOption(verifier),
+	}
+	if resource != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("resource", resource))
+	}
+	return cfg.AuthCodeURL(state, opts...)
+}
+
+// exchangeOpts are the token-request options: the PKCE verifier and — matching the
+// authorization request — the RFC 8707 resource indicator.
+func exchangeOpts(verifier, resource string) []oauth2.AuthCodeOption {
+	opts := []oauth2.AuthCodeOption{oauth2.VerifierOption(verifier)}
+	if resource != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("resource", resource))
+	}
+	return opts
+}
+
 // Authorize runs the interactive authorization-code flow with PKCE and returns
 // the token. It binds a one-shot loopback listener on 127.0.0.1 — the ONLY
 // inbound socket in nocturn besides the unix socket, alive ONLY for this
 // ceremony (bound to loopback, closed on return) — sets cfg.RedirectURL to it,
 // calls prompt with the consent URL (default: print it; no browser exec), waits
-// for Google to redirect back with the code, and exchanges it. A random single-
-// use state plus PKCE (S256) defend the callback. access_type=offline +
-// prompt=consent are required for Google to return a refresh_token.
-func Authorize(ctx context.Context, cfg *oauth2.Config, prompt func(url string)) (*oauth2.Token, error) {
+// for the provider to redirect back with the code, and exchanges it. A random
+// single-use state plus PKCE (S256) defend the callback. resource is the RFC 8707
+// indicator (the MCP server URI) added to both requests, or "" for a provider
+// that does not use it.
+func Authorize(ctx context.Context, cfg *oauth2.Config, resource string, prompt func(url string)) (*oauth2.Token, error) {
 	if prompt == nil {
 		prompt = func(u string) { fmt.Printf("Open this URL to authorize:\n%s\n", u) }
 	}
@@ -105,11 +133,7 @@ func Authorize(ctx context.Context, cfg *oauth2.Config, prompt func(url string))
 	go func() { _ = srv.Serve(ln) }()
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 
-	prompt(cfg.AuthCodeURL(state,
-		oauth2.AccessTypeOffline,
-		oauth2.SetAuthURLParam("prompt", "consent"),
-		oauth2.S256ChallengeOption(verifier),
-	))
+	prompt(authCodeURL(cfg, state, verifier, resource))
 
 	ctx, cancel := context.WithTimeout(ctx, authTimeout)
 	defer cancel()
@@ -120,7 +144,7 @@ func Authorize(ctx context.Context, cfg *oauth2.Config, prompt func(url string))
 		if res.err != nil {
 			return nil, res.err
 		}
-		tok, err := cfg.Exchange(ctx, res.code, oauth2.VerifierOption(verifier))
+		tok, err := cfg.Exchange(ctx, res.code, exchangeOpts(verifier, resource)...)
 		if err != nil {
 			return nil, fmt.Errorf("oauth: token exchange: %w", err)
 		}

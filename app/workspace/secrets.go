@@ -186,7 +186,7 @@ func registerOAuth(injector *secret.Injector, tokens TokenStore, wsDir string, l
 		}
 		cfg := oauth.Provider(p.AuthURL, p.TokenURL, p.ClientID, p.ClientSecret, p.Scopes...)
 		name := p.SecretName
-		injector.SetResolver(name, oauth.NewSource(cfg, &tok, func(t *oauth2.Token) {
+		injector.SetResolver(name, oauth.NewSource(cfg, &tok, "", func(t *oauth2.Token) {
 			if err := StoreToken(tokens, name, t); err != nil {
 				log.Warn("oauth: persist refreshed token", "provider", name, "err", err)
 			}

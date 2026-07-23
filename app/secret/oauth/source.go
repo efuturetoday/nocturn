@@ -1,8 +1,12 @@
 package oauth
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,6 +15,44 @@ import (
 
 // refreshTimeout bounds a token-refresh HTTP call.
 const refreshTimeout = 15 * time.Second
+
+// resourceInjector appends the RFC 8707 resource indicator to a token-endpoint POST
+// body, so a refresh request carries the SAME audience binding as the initial exchange.
+// x/oauth2's TokenSource offers no hook for extra token-request parameters, so this
+// RoundTripper adds it at the wire. It touches only form-encoded POSTs (the token
+// endpoint) and never overwrites a resource the library might already set.
+type resourceInjector struct {
+	resource string
+	base     http.RoundTripper
+}
+
+func (r resourceInjector) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := r.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if r.resource == "" || req.Method != http.MethodPost || req.Body == nil ||
+		!strings.HasPrefix(req.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+		return base.RoundTrip(req)
+	}
+	body, err := io.ReadAll(req.Body)
+	req.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	form, err := url.ParseQuery(string(body))
+	if err != nil {
+		req.Body = io.NopCloser(bytes.NewReader(body)) // unparseable → send unchanged
+		return base.RoundTrip(req)
+	}
+	if form.Get("resource") == "" {
+		form.Set("resource", r.resource)
+	}
+	enc := form.Encode()
+	req.Body = io.NopCloser(strings.NewReader(enc))
+	req.ContentLength = int64(len(enc))
+	return base.RoundTrip(req)
+}
 
 // Source is the host-side, refreshing credential. It wraps an oauth2.TokenSource
 // (which refreshes on expiry and is concurrency-safe) and yields the current
@@ -26,12 +68,15 @@ type Source struct {
 	last string // last access token handed out, to detect a refresh
 }
 
-// NewSource wraps cfg+initial into a refreshing Source. onChange (may be nil) is
-// called with the fresh token whenever a refresh yields a new access token — wire
-// it to persistence. Refresh I/O uses a background context with its own timeout,
-// so a single request's cancellation can never kill the shared, long-lived token.
-func NewSource(cfg *oauth2.Config, initial *oauth2.Token, onChange func(*oauth2.Token)) *Source {
-	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: refreshTimeout})
+// NewSource wraps cfg+initial into a refreshing Source. resource is the RFC 8707
+// indicator carried onto refresh requests (the MCP server URI, or "" for a provider
+// that does not use it). onChange (may be nil) is called with the fresh token
+// whenever a refresh yields a new access token — wire it to persistence. Refresh I/O
+// uses a background context with its own timeout, so a single request's cancellation
+// can never kill the shared, long-lived token.
+func NewSource(cfg *oauth2.Config, initial *oauth2.Token, resource string, onChange func(*oauth2.Token)) *Source {
+	client := &http.Client{Timeout: refreshTimeout, Transport: resourceInjector{resource: resource}}
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
 	return &Source{
 		ts:       cfg.TokenSource(ctx, initial),
 		onChange: onChange,

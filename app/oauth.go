@@ -52,7 +52,7 @@ func runAuth(ctx context.Context, name, wsName string) error {
 
 	p := matches[0]
 	cfg := oauth.Provider(p.AuthURL, p.TokenURL, p.ClientID, p.ClientSecret, p.Scopes...)
-	tok, err := oauth.Authorize(ctx, cfg, func(u string) {
+	tok, err := oauth.Authorize(ctx, cfg, "", func(u string) {
 		fmt.Printf("\nOpen this URL to authorize %q (workspace %q), then return here:\n\n  %s\n\n", name, wsName, u)
 	})
 	if err != nil {

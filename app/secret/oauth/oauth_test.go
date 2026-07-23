@@ -99,7 +99,7 @@ func launchAuthorize(t *testing.T, ctx context.Context, cfg *oauth2.Config) (con
 	urlCh := make(chan string, 1)
 	res := make(chan authResult, 1)
 	go func() {
-		tok, err := oauth.Authorize(ctx, cfg, func(u string) { urlCh <- u })
+		tok, err := oauth.Authorize(ctx, cfg, "", func(u string) { urlCh <- u })
 		res <- authResult{tok, err}
 	}()
 	select {
@@ -398,7 +398,7 @@ func TestAuthorize_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 
-	tok, err := oauth.Authorize(ctx, cfg, func(string) {}) // never call the callback
+	tok, err := oauth.Authorize(ctx, cfg, "", func(string) {}) // never call the callback
 	if tok != nil {
 		t.Errorf("got token %v, want none on timeout", tok)
 	}
@@ -428,7 +428,7 @@ func TestAuthorize_DefaultPromptPrintsURL(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	res := make(chan authResult, 1)
 	go func() {
-		tok, err := oauth.Authorize(ctx, cfg, nil) // nil prompt → default (print)
+		tok, err := oauth.Authorize(ctx, cfg, "", nil) // nil prompt → default (print)
 		res <- authResult{tok, err}
 	}()
 
