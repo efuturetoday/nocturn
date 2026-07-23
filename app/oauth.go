@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/efuturetoday/nocturn/app/secret"
 	"github.com/efuturetoday/nocturn/app/secret/oauth"
 	"github.com/efuturetoday/nocturn/app/workspace"
 )
@@ -31,10 +30,6 @@ func runAuth(ctx context.Context, name, wsName string) error {
 		return errors.New("set NOCTURN_MASTER_PASSPHRASE to unlock the vault before connecting an account")
 	}
 	wsDir := filepath.Join(wsRoot, wsName)
-	vault, err := secret.OpenVault(filepath.Join(wsDir, "vault.enc"), master.WorkspaceKey(wsName))
-	if err != nil {
-		return fmt.Errorf("open %q vault: %w", wsName, err)
-	}
 
 	var matches []workspace.OAuthProvider
 	for _, p := range workspace.DiscoverOAuth(wsDir) {
@@ -63,7 +58,9 @@ func runAuth(ctx context.Context, name, wsName string) error {
 	if err != nil {
 		return err
 	}
-	if err := workspace.StoreToken(vault, p.SecretName, tok); err != nil {
+	// The token lands in the owning plugin/mcp folder's shard (path-encrypted), not the workspace
+	// vault — the same routing the daemon reads it back through.
+	if err := workspace.StoreToken(workspace.NewShardTokens(master, wsDir, wsName, nil), p.SecretName, tok); err != nil {
 		return fmt.Errorf("store token: %w", err)
 	}
 	fmt.Printf("connected %q in workspace %q — the daemon will inject and refresh its token.\n", name, wsName)

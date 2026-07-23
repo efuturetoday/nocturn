@@ -50,11 +50,8 @@ func runSecretSet(wsName, target string) error {
 		return errors.New("empty secret value on stdin (pipe the value in, e.g. `printf %s $TOKEN | nocturn secret set ...`)")
 	}
 
-	shardDir := filepath.Join(wsDir, relPath)
-	if err := os.MkdirAll(shardDir, 0o700); err != nil {
-		return fmt.Errorf("create %s: %w", shardDir, err)
-	}
-	sv, err := secret.OpenVault(filepath.Join(shardDir, "secrets.enc"), master.ShardKey(wsName, relPath), secret.WithAAD([]byte(relPath)))
+	// OpenShard creates the shard file (and its folder) on first write — no MkdirAll needed here.
+	sv, err := secret.OpenShard(master, wsDir, wsName, relPath)
 	if err != nil {
 		return fmt.Errorf("open shard %s: %w", relPath, err)
 	}

@@ -44,7 +44,8 @@ workspaces/work/
 │
 │  ── everything below is yours, and invisible to the agent ──
 ├─ PERSONA.md      ← the assistant's persona (its system prompt) — optional
-├─ secrets.vault   ← encrypted vault (connected accounts, tokens)
+├─ vault.enc       ← encrypted workspace vault (workspace-level secrets; per-plugin/mcp
+│                    credentials live in each folder's own secrets.enc, not here)
 ├─ grants.json     ← the standing permissions you have granted
 ├─ mcp/            ← remote MCP servers you have connected (one folder per server)
 ├─ agents/         ← the agents defined in this workspace

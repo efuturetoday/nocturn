@@ -19,6 +19,19 @@ var shardKinds = []string{"plugins", "mcp"}
 // shardFile is the encrypted secret file inside a plugin/mcp folder.
 const shardFile = "secrets.enc"
 
+// ShardPath is the encrypted secret file for one item's folder: <wsDir>/<relPath>/secrets.enc
+// (relPath is workspace-relative, e.g. "plugins/gmail" or "mcp/github").
+func ShardPath(wsDir, relPath string) string {
+	return filepath.Join(wsDir, relPath, shardFile)
+}
+
+// OpenShard opens (creating if absent) the secret shard for one plugin/mcp folder: a Vault at
+// ShardPath, keyed by the folder-path-derived key (Master.ShardKey) and AES-GCM AAD-bound to the
+// relative path, so the shard is decryptable only from its own placement.
+func OpenShard(m *Master, wsDir, wsName, relPath string) (*Vault, error) {
+	return OpenVault(ShardPath(wsDir, relPath), m.ShardKey(wsName, relPath), WithAAD([]byte(relPath)))
+}
+
 // LoadShardsInto opens every <wsDir>/{plugins,mcp}/<folder>/secrets.enc, decrypts it
 // with the folder-path-derived key + path-bound AAD, and copies its secrets into dst
 // (the workspace resolution store the injector reads). It is FAIL-CLOSED with NO
@@ -39,11 +52,10 @@ func LoadShardsInto(dst *Store, m *Master, wsDir, wsName string, valid func(stri
 				continue
 			}
 			relPath := kind + "/" + e.Name()
-			shardPath := filepath.Join(root, e.Name(), shardFile)
-			if _, err := os.Stat(shardPath); err != nil {
+			if _, err := os.Stat(ShardPath(wsDir, relPath)); err != nil {
 				continue // no shard → no credentials for this item
 			}
-			sv, err := OpenVault(shardPath, m.ShardKey(wsName, relPath), WithAAD([]byte(relPath)))
+			sv, err := OpenShard(m, wsDir, wsName, relPath)
 			if err != nil {
 				log.Warn("secret: shard skipped (fail-closed, no fallback)", "shard", relPath, "err", err)
 				continue

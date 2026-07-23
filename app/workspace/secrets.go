@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -55,7 +56,9 @@ func buildWorkspaceSecrets(master *secret.Master, dir, name string, log *slog.Lo
 	injector.SetLogger(log)
 	scanner.SetLogger(log)
 	loadBindings(injector, filepath.Join(dir, "bindings.json"), log)
-	registerOAuth(injector, vault, dir, log)
+	// OAuth tokens live in each plugin/mcp folder's shard (path-encrypted), not the workspace vault —
+	// registerOAuth reads and refreshes them through the shard router, keyed by the credential's name.
+	registerOAuth(injector, NewShardTokens(master, dir, name, log), dir, log)
 	log.Info("secret: workspace vault unlocked", "ws", name)
 	return injector, scanner, vault, nil
 }
@@ -89,14 +92,90 @@ func DiscoverOAuth(wsDir string) []OAuthProvider {
 	return out
 }
 
+// TokenStore reads and persists a credential's token by its logical, owner-namespaced SecretName —
+// the OAuth wiring addresses credentials by identity, never by storage location. ShardTokens is the
+// on-disk implementation (per-folder shard); an external vault (1Password) would satisfy the same
+// seam without OAuth learning anything about where the token lives.
+type TokenStore interface {
+	Get(secretName string) ([]byte, bool)
+	Set(secretName string, value []byte) error
+}
+
+// ShardTokens routes a credential's SecretName to the per-owner secret shard it belongs to. It is the
+// composition root's job to know the plugin:/mcp: owner conventions and the sharding; secret stays
+// mechanism-only (secret.OpenShard by relPath) and the oauth package stays flow-only. It holds no
+// open handles — a token read/write opens its shard transiently (auth + refresh are rare).
+type ShardTokens struct {
+	master        *secret.Master
+	wsDir, wsName string
+	log           *slog.Logger // may be nil (a one-shot CLI write does not read)
+}
+
+// NewShardTokens builds the token store for one workspace. Exported so the CLI auth flow uses the
+// same routing the daemon does. log may be nil.
+func NewShardTokens(master *secret.Master, wsDir, wsName string, log *slog.Logger) ShardTokens {
+	return ShardTokens{master: master, wsDir: wsDir, wsName: wsName, log: log}
+}
+
+// relPath maps an owner-namespaced SecretName to its shard folder. ok is false for a name that is not
+// a shard-owned credential (a bare workspace secret), so it is never mis-routed.
+func (s ShardTokens) relPath(secretName string) (string, bool) {
+	if rest, ok := strings.CutPrefix(secretName, "plugin:"); ok {
+		if folder, _, _ := strings.Cut(rest, "/"); folder != "" {
+			return "plugins/" + folder, true
+		}
+	}
+	if rest, ok := strings.CutPrefix(secretName, "mcp:"); ok {
+		if folder, _, _ := strings.Cut(rest, "@"); folder != "" {
+			return "mcp/" + folder, true
+		}
+	}
+	return "", false
+}
+
+// Get reads a token from its shard; ok is false when the name is not shard-owned or its shard/entry
+// is absent (not yet authorized) — fail-closed, never a fallback to another store.
+func (s ShardTokens) Get(secretName string) ([]byte, bool) {
+	rp, ok := s.relPath(secretName)
+	if !ok {
+		return nil, false
+	}
+	if _, err := os.Stat(secret.ShardPath(s.wsDir, rp)); err != nil {
+		return nil, false // no shard file → not authorized (the normal case)
+	}
+	sv, err := secret.OpenShard(s.master, s.wsDir, s.wsName, rp)
+	if err != nil {
+		// The shard EXISTS but won't open — corrupt, tampered, or a wrong key. Distinct from "not
+		// authorized", so surface it; still fail-closed (the credential stays absent, no fallback).
+		if s.log != nil {
+			s.log.Warn("secret: oauth shard unreadable", "shard", rp, "err", err)
+		}
+		return nil, false
+	}
+	return sv.Get(secretName)
+}
+
+// Set writes a token into its shard (creating the shard file if needed).
+func (s ShardTokens) Set(secretName string, value []byte) error {
+	rp, ok := s.relPath(secretName)
+	if !ok {
+		return fmt.Errorf("secret %q is not a shard-owned credential", secretName)
+	}
+	sv, err := secret.OpenShard(s.master, s.wsDir, s.wsName, rp)
+	if err != nil {
+		return err
+	}
+	return sv.Set(secretName, value)
+}
+
 // registerOAuth wires a refreshing token Source for each of the workspace's OAuth providers that
-// already has a stored token, so the injector yields a live access token (refreshing on expiry). A
-// refresh persists the new token back to this workspace's vault. Providers not yet authorized are
-// left alone — their requests fail closed until `nocturn auth <name>` runs.
-func registerOAuth(injector *secret.Injector, vault *secret.Vault, wsDir string, log *slog.Logger) {
+// already has a stored token, so the injector yields a live access token (refreshing on expiry). The
+// token lives in the owning plugin/mcp folder's shard; a refresh persists it back there. Providers
+// not yet authorized are left alone — their requests fail closed until `nocturn auth <name>` runs.
+func registerOAuth(injector *secret.Injector, tokens TokenStore, wsDir string, log *slog.Logger) {
 	log = log.With("component", "oauth")
 	for _, p := range DiscoverOAuth(wsDir) {
-		raw, ok := vault.Get(p.SecretName)
+		raw, ok := tokens.Get(p.SecretName)
 		if !ok {
 			continue // not authorized yet
 		}
@@ -108,7 +187,7 @@ func registerOAuth(injector *secret.Injector, vault *secret.Vault, wsDir string,
 		cfg := oauth.Provider(p.AuthURL, p.TokenURL, p.ClientID, p.ClientSecret, p.Scopes...)
 		name := p.SecretName
 		injector.SetResolver(name, oauth.NewSource(cfg, &tok, func(t *oauth2.Token) {
-			if err := StoreToken(vault, name, t); err != nil {
+			if err := StoreToken(tokens, name, t); err != nil {
 				log.Warn("oauth: persist refreshed token", "provider", name, "err", err)
 			}
 		}))
@@ -116,14 +195,14 @@ func registerOAuth(injector *secret.Injector, vault *secret.Vault, wsDir string,
 	}
 }
 
-// StoreToken persists an OAuth token as JSON in the vault under name (encrypted at rest). Exported so
-// the CLI auth flow (main) stores into the target workspace's vault through the same path.
-func StoreToken(vault *secret.Vault, name string, tok *oauth2.Token) error {
+// StoreToken persists an OAuth token as JSON through a TokenStore under name (encrypted at rest in the
+// credential's shard). Exported so the CLI auth flow stores through the same routing the daemon uses.
+func StoreToken(tokens TokenStore, name string, tok *oauth2.Token) error {
 	b, err := json.Marshal(tok)
 	if err != nil {
 		return err
 	}
-	return vault.Set(name, b)
+	return tokens.Set(name, b)
 }
 
 // seedEnvSecrets stores each NOCTURN_SECRET_<NAME>=value into the vault under <name> (lowercased) —
