@@ -11,6 +11,7 @@ package secret
 
 import (
 	"maps"
+	"sort"
 	"sync"
 )
 
@@ -83,6 +84,19 @@ func (s *Store) CopyInto(dst *Store) {
 	for name, value := range s.snapshot() {
 		dst.Set(name, value)
 	}
+}
+
+// Names returns the names of the stored secrets, sorted. Host-only, and deliberately names ONLY —
+// never a value — so it is safe to surface in a `secret ls`-style listing.
+func (s *Store) Names() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.secrets))
+	for name := range s.secrets {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // GuestView is the only store surface a guest may hold. It exposes presence and

@@ -17,21 +17,16 @@ import (
 )
 
 // runSecretSet seeds a static credential value into a plugin/mcp folder's encrypted secret shard.
-// The shard is <wsRoot>/<workspace>/<relPath>/secrets.enc, sealed with the key derived from the
-// folder's workspace-relative PATH (Master.ShardKey) and AAD bound to that path — so the value is
-// cryptographically tied to the folder's placement, exactly like the daemon reads it (LoadShardsInto).
-// The value is read from stdin (never argv), so it can be piped from a password manager.
+// The target is the owner-namespaced credential the value belongs to — the SAME identifier that shows
+// up in `secret ls`, diagnostics, and the vault:
 //
-// The vault key is DERIVED so the operator never has to spell out the owner-namespacing:
-//   - plugins/<name> <cred>  → plugin.SecretName(name, cred)  = "plugin:<name>/<cred>"
-//   - mcp/<name>             → mcp.SecretName(name, host)     = "mcp:<name>@<host>/oauth"
-//     (a server has one host-bound bearer, so no cred arg; the host comes from its mcp.json)
-func runSecretSet(wsName, relPath, cred string) error {
-	kind, item, ok := strings.Cut(relPath, "/")
-	if !ok || (kind != "plugins" && kind != "mcp") || !discovery.ValidName(item) {
-		return fmt.Errorf("relpath must be plugins/<name> or mcp/<name> with a valid name, got %q", relPath)
-	}
-
+//	plugin:<name>/<credential>   a plugin credential (from the plugin's manifest)
+//	mcp:<name>                   an MCP server's bearer (host-bound; the host comes from its mcp.json)
+//
+// The value is read from stdin (never argv), so it can be piped from a password manager. It is sealed
+// into <wsRoot>/<workspace>/<relPath>/secrets.enc under the folder-path-derived key + path-bound AAD —
+// exactly the shard the daemon reads at startup (LoadShardsInto).
+func runSecretSet(wsName, target string) error {
 	master, err := openMaster()
 	if err != nil {
 		return fmt.Errorf("unlock vault: %w", err)
@@ -41,7 +36,7 @@ func runSecretSet(wsName, relPath, cred string) error {
 	}
 
 	wsDir := filepath.Join(wsRoot, wsName)
-	secretKey, err := shardSecretKey(wsDir, kind, item, cred)
+	relPath, secretKey, err := resolveSecretTarget(wsDir, target)
 	if err != nil {
 		return err
 	}
@@ -66,33 +61,38 @@ func runSecretSet(wsName, relPath, cred string) error {
 	if err := sv.Set(secretKey, value); err != nil {
 		return fmt.Errorf("store %q: %w", secretKey, err)
 	}
-	fmt.Printf("stored secret %q into %s (workspace %q)\n", secretKey, relPath, wsName)
+	fmt.Printf("stored %s in workspace %q\n", secretKey, wsName)
 	return nil
 }
 
-// shardSecretKey builds the owner-namespaced vault key a binding will look the value up under, so it
-// always matches what installPlugins / mcp.NewConn register.
-func shardSecretKey(wsDir, kind, item, cred string) (string, error) {
-	switch kind {
-	case "plugins":
-		if cred == "" {
-			return "", errors.New("plugins/<name> needs a <credential> name (the credential from the plugin's manifest)")
+// resolveSecretTarget maps an owner-form target to its shard folder (relPath) and the vault key a
+// binding looks the value up under, so a seeded value always lands under exactly the key
+// installPlugins / mcp.NewConn register.
+func resolveSecretTarget(wsDir, target string) (relPath, key string, err error) {
+	switch {
+	case strings.HasPrefix(target, "plugin:"):
+		name, cred, ok := strings.Cut(strings.TrimPrefix(target, "plugin:"), "/")
+		if !ok || !discovery.ValidName(name) || cred == "" {
+			return "", "", fmt.Errorf("plugin target must be plugin:<name>/<credential>, got %q", target)
 		}
-		return plugin.SecretName(item, cred), nil
-	case "mcp":
-		if cred != "" {
-			return "", errors.New("mcp/<name> takes no credential argument — a server has one host-bound bearer")
+		return "plugins/" + name, plugin.SecretName(name, cred), nil
+
+	case strings.HasPrefix(target, "mcp:"):
+		name := strings.TrimPrefix(target, "mcp:")
+		if !discovery.ValidName(name) {
+			return "", "", fmt.Errorf("mcp target must be mcp:<name>, got %q", target)
 		}
-		srv, ok := mcp.Discover(filepath.Join(wsDir, "mcp"), nil).Get(item)
+		srv, ok := mcp.Discover(filepath.Join(wsDir, "mcp"), nil).Get(name)
 		if !ok {
-			return "", fmt.Errorf("no MCP server %q in workspace (add mcp/%s/mcp.json first)", item, item)
+			return "", "", fmt.Errorf("no MCP server %q in workspace (add mcp/%s/mcp.json first)", name, name)
 		}
 		u, err := url.Parse(srv.URL)
 		if err != nil {
-			return "", fmt.Errorf("mcp server %q has an unparseable url: %w", item, err)
+			return "", "", fmt.Errorf("mcp server %q has an unparseable url: %w", name, err)
 		}
-		return mcp.SecretName(item, u.Host), nil
+		return "mcp/" + name, mcp.SecretName(name, u.Host), nil
+
 	default:
-		return "", fmt.Errorf("unknown kind %q", kind)
+		return "", "", fmt.Errorf("target must be plugin:<name>/<credential> or mcp:<name>, got %q", target)
 	}
 }

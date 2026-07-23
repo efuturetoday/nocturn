@@ -10,7 +10,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -36,48 +35,14 @@ import (
 const wsRoot = "./nocturn-data/workspaces"
 
 func main() {
-	serveAddr := flag.String("serve", "", "run a WebSocket daemon at this address instead of the terminal (e.g. :8080)")
-	flag.Parse()
-
 	_ = godotenv.Load()
+	os.Exit(dispatch(os.Args[1:]))
+}
 
-	// `nocturn auth <name>`: connect a plugin's OAuth account via the interactive terminal flow. It
-	// needs only the vault (master passphrase), not the LLM endpoint, so it runs before that setup.
-	if flag.Arg(0) == "auth" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer stop()
-		name := flag.Arg(1)
-		if name == "" {
-			fmt.Fprintln(os.Stderr, "usage: nocturn auth <name> [workspace]")
-			os.Exit(1)
-		}
-		ws := flag.Arg(2)
-		if ws == "" {
-			ws = workspace.DefaultWorkspace // the token lands in this workspace's own vault
-		}
-		if err := runAuth(ctx, name, ws); err != nil {
-			fmt.Fprintln(os.Stderr, "auth:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// `nocturn secret set <workspace> <plugins/NAME|mcp/NAME> <secret-key>`: seed a static credential
-	// value (read from stdin) into a plugin/mcp folder's encrypted shard. Like auth, it needs only the
-	// vault. The value never appears in argv — pipe it in: `op read op://... | nocturn secret set ...`.
-	if flag.Arg(0) == "secret" {
-		if flag.Arg(1) != "set" || flag.Arg(2) == "" || flag.Arg(3) == "" {
-			fmt.Fprintln(os.Stderr, "usage: nocturn secret set <workspace> plugins/NAME <credential>   (value on stdin)")
-			fmt.Fprintln(os.Stderr, "       nocturn secret set <workspace> mcp/NAME                    (value on stdin)")
-			os.Exit(1)
-		}
-		if err := runSecretSet(flag.Arg(2), flag.Arg(3), flag.Arg(4)); err != nil {
-			fmt.Fprintln(os.Stderr, "secret set:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
+// runApp opens every workspace and runs either the interactive terminal assistant (serveAddr == "")
+// or the out-of-band WebSocket daemon (serveAddr set). It returns a Unix exit code. Only this path
+// needs the LLM endpoint — the light commands (auth, secret, ls) do not.
+func runApp(serveAddr string) int {
 	baseURL := os.Getenv("FREELLM_BASE_URL")
 	apiKey := os.Getenv("FREELLM_API_KEY")
 	model := os.Getenv("FREELLM_MODEL")
@@ -86,7 +51,7 @@ func main() {
 	}
 	if baseURL == "" && apiKey == "" {
 		fmt.Fprintln(os.Stderr, "set FREELLM_BASE_URL / FREELLM_API_KEY / FREELLM_MODEL (or a .env)")
-		os.Exit(1)
+		return 1
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -112,7 +77,7 @@ func main() {
 	var broker *hitl.Broker
 	var devices *auth.Store
 	var notifier tools.Notifier
-	if *serveAddr == "" {
+	if serveAddr == "" {
 		approver = &terminalApprover{in: stdin}
 		notifier = printNotifier{} // proactive notify prints to the terminal
 	} else {
@@ -120,7 +85,7 @@ func main() {
 		devices, err = auth.New("./nocturn-data/devices.json")
 		if err != nil {
 			logger.Error("device store", "err", err)
-			os.Exit(1)
+			return 1
 		}
 		pushLog := logger.With("component", "push")
 		sender := apnsSender(pushLog) // nil when APNs is not configured
@@ -134,17 +99,17 @@ func main() {
 	spaces, err := workspace.OpenAll(host, wsRoot)
 	if err != nil {
 		logger.Error("open workspaces", "err", err)
-		os.Exit(1)
+		return 1
 	}
-	if *serveAddr != "" {
-		logger.Info("nocturn daemon starting", "addr", *serveAddr, "workspaces", len(spaces), "model", model)
+	if serveAddr != "" {
+		logger.Info("nocturn daemon starting", "addr", serveAddr, "workspaces", len(spaces), "model", model)
 		// serve.Serve wires each workspace's chat subscriptions and only then starts its agent
 		// schedulers, so a scheduled firing can never race the subscription wiring.
-		if err := serve.Serve(ctx, *serveAddr, spaces, devices, broker, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := serve.Serve(ctx, serveAddr, spaces, devices, broker, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("serve", "err", err)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	// Terminal mode has no daemon subscriptions to race against, so start the schedulers here.
@@ -152,6 +117,7 @@ func main() {
 		go ws.StartAgents(ctx)
 	}
 	run(ctx, spaces[workspace.DefaultWorkspace], stdin, model)
+	return 0
 }
 
 // apnsSender builds the APNs sender from NOCTURN_APNS_*; nil when unconfigured or on error, so both

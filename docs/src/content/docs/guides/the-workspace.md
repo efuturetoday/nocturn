@@ -61,15 +61,17 @@ bearer token) with:
 
 ```sh
 # a plugin credential (named in the plugin's manifest):
-printf %s "$TOKEN" | nocturn secret set <workspace> plugins/<name> <credential>
+printf %s "$TOKEN" | nocturn secret set plugin:<name>/<credential>
 
 # an MCP server's bearer token (one per server):
-printf %s "$TOKEN" | nocturn secret set <workspace> mcp/<name>
+printf %s "$TOKEN" | nocturn secret set mcp:<name>
 ```
 
-The value is read from stdin, so it never lands in your shell history or the process list, and
-Nocturn works out the exact vault key for you. OAuth accounts are connected with
-`nocturn auth <name>` instead.
+The target is owner-namespaced — the same name you see in `nocturn secret ls` — and the value
+is read from stdin, so it never lands in your shell history or the process list. Add
+`-w <workspace>` to target a workspace other than the default. OAuth accounts are connected with
+`nocturn auth <name>` instead. `nocturn ls` shows a workspace's plugins, servers, agents, and
+skills; `nocturn secret ls` lists its credential names (never their values).
 
 A single workspace can hold several agents. They share this one folder — the same `mnt/`
 data and the same connected accounts. What each agent keeps to itself is its own
