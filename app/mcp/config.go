@@ -77,11 +77,14 @@ func (s Server) Validate() error {
 	if !isHTTPSURL(s.URL) {
 		return fmt.Errorf("mcpcap: server %q: url must be a https URL (got %q)", s.Name, s.URL)
 	}
-	if s.Auth != "" && s.Auth != "token" {
-		return fmt.Errorf("mcpcap: server %q: unknown auth mode %q (want \"token\" or omit)", s.Name, s.Auth)
+	if s.Auth != "" && s.Auth != "token" && s.Auth != "oauth" {
+		return fmt.Errorf("mcpcap: server %q: unknown auth mode %q (want \"token\", \"oauth\", or omit)", s.Name, s.Auth)
 	}
 	if s.Auth == "token" && s.OAuth != nil {
 		return fmt.Errorf("mcpcap: server %q: auth \"token\" and oauth are mutually exclusive", s.Name)
+	}
+	if s.Auth == "oauth" && s.OAuth != nil {
+		return fmt.Errorf("mcpcap: server %q: auth \"oauth\" (spec discovery) and a manual oauth block are mutually exclusive", s.Name)
 	}
 	if o := s.OAuth; o != nil {
 		if o.ClientID == "" || len(o.Scopes) == 0 {
@@ -92,6 +95,29 @@ func (s Server) Validate() error {
 		}
 	}
 	return nil
+}
+
+// OAuth mode constants report how a server authenticates.
+const (
+	AuthNone     = ""         // public server, no credential
+	AuthToken    = "token"    // a static bearer the operator seeds
+	AuthDiscover = "discover" // auth:"oauth" — spec-driven discovery + dynamic registration
+	AuthManual   = "manual"   // a hand-configured oauth block (endpoints + client_id)
+)
+
+// OAuthMode classifies the server's auth: none, a static token, spec discovery
+// (auth:"oauth"), or a manual oauth block. Validate guarantees these are exclusive.
+func (s Server) OAuthMode() string {
+	switch {
+	case s.Auth == "token":
+		return AuthToken
+	case s.Auth == "oauth":
+		return AuthDiscover
+	case s.OAuth != nil:
+		return AuthManual
+	default:
+		return AuthNone
+	}
 }
 
 // isHTTPSURL reports whether s is a well-formed https:// URL with a host.

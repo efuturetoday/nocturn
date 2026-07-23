@@ -194,6 +194,24 @@ func asMetadataURLs(issuer string) ([]string, error) {
 	return out, nil
 }
 
+// CanonicalResource returns the RFC 8707 canonical resource identifier for an MCP
+// server URL: lowercase scheme + host, no fragment or query, and no trailing slash
+// (the form the MCP spec prefers). It is sent as the resource indicator so the issued
+// token is bound to exactly this server — e.g. https://API.githubcopilot.com/mcp/
+// becomes https://api.githubcopilot.com/mcp.
+func CanonicalResource(serverURL string) (string, error) {
+	u, err := url.Parse(serverURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("bad server URL %q", serverURL)
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.Fragment = ""
+	u.RawQuery = ""
+	u.Path = strings.TrimSuffix(u.Path, "/")
+	return u.String(), nil
+}
+
 func isHTTPS(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	return err == nil && u.Scheme == "https" && u.Host != ""

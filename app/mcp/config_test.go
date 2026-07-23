@@ -171,3 +171,30 @@ func TestOwnerAndSecretName(t *testing.T) {
 		t.Error("owner namespaces collide")
 	}
 }
+
+// The three OAuth-bearing modes are exclusive and classify correctly: a static token,
+// spec discovery (auth:"oauth", no block), and a manual endpoints block.
+func TestServer_OAuthMode(t *testing.T) {
+	const u = "https://x.example.com"
+	block := &mcp.OAuthDecl{AuthURL: "https://a.example.com", TokenURL: "https://t.example.com", ClientID: "c", Scopes: []string{"s"}}
+
+	discover := mcp.Server{Name: "a", URL: u, Auth: "oauth"}
+	if err := discover.Validate(); err != nil {
+		t.Errorf("discover mode (auth:oauth, no block) must validate: %v", err)
+	}
+	if discover.OAuthMode() != mcp.AuthDiscover {
+		t.Errorf("mode = %q, want discover", discover.OAuthMode())
+	}
+	if bad := (mcp.Server{Name: "a", URL: u, Auth: "oauth", OAuth: block}); bad.Validate() == nil {
+		t.Error("auth:oauth WITH a manual block must be rejected (exclusive)")
+	}
+	if m := (mcp.Server{Name: "a", URL: u, OAuth: block}); m.OAuthMode() != mcp.AuthManual {
+		t.Errorf("manual mode = %q", m.OAuthMode())
+	}
+	if tk := (mcp.Server{Name: "a", URL: u, Auth: "token"}); tk.OAuthMode() != mcp.AuthToken {
+		t.Errorf("token mode = %q", tk.OAuthMode())
+	}
+	if none := (mcp.Server{Name: "a", URL: u}); none.OAuthMode() != mcp.AuthNone {
+		t.Errorf("none mode = %q", none.OAuthMode())
+	}
+}

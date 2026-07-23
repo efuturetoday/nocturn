@@ -126,3 +126,22 @@ func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+func TestCanonicalResource(t *testing.T) {
+	cases := map[string]string{
+		"https://API.githubcopilot.com/mcp/": "https://api.githubcopilot.com/mcp",
+		"https://mcp.example.com/":           "https://mcp.example.com",
+		"https://mcp.example.com":            "https://mcp.example.com",
+		"https://mcp.example.com:8443/x":     "https://mcp.example.com:8443/x",
+		"https://mcp.example.com/mcp#frag":   "https://mcp.example.com/mcp",
+	}
+	for in, want := range cases {
+		got, err := authflow.CanonicalResource(in)
+		if err != nil || got != want {
+			t.Errorf("CanonicalResource(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := authflow.CanonicalResource("mcp.example.com"); err == nil {
+		t.Error("a scheme-less URL must error")
+	}
+}
