@@ -286,6 +286,11 @@ func cmdLs(args []string) int {
 	printGroup("mcp", servers)
 	printGroup("agents", agents)
 	printGroup("skills", skillNames(skills))
+	// Anything skipped during discovery goes to stderr, so `ls` never silently hides a broken folder
+	// while its clean listing stays pipeable on stdout.
+	for _, d := range diag.All() {
+		fmt.Fprintf(os.Stderr, "skipped %s: %s\n", d.Subject, d.Message)
+	}
 	return 0
 }
 
