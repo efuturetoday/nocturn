@@ -68,6 +68,26 @@ ion-list-header ion-label {
   letter-spacing: -0.01em;
 }
 
+/* Keyboard-follow footer ([kbFollow], shared/kb-follow.directive.ts). The directive host-binds a
+   translateY(-keyboardHeight) transform + --kb-fill; these global rules carry the transition (matches
+   the ~0.25s iOS curve → slides in sync, no late snap) and the fill strip below the lifted footer
+   (behind the keyboard's rounded corners) so content doesn't leak through. Global because the styled
+   element belongs to the consuming page. NO will-change: it would promote the footer to its own
+   compositor layer that paints over the tab bar for the whole leaving-page transition. */
+.kb-follow {
+  position: relative;
+  transition: transform 0.25s ease-out;
+}
+.kb-follow::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: var(--kb-fill, 0);
+  background: var(--ion-toolbar-background, var(--ion-background-color-step-100));
+}
+
 /* Syntax highlighting: highlight.js emits `.hljs-*` class spans (see shared/highlight.ts); colour
    them from the theme here (global — the highlighted HTML is bound via [innerHTML], so scoped
    component styles can't reach it). A minimal token set, no imported hljs theme. */

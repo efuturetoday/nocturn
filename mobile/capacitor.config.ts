@@ -3,15 +3,15 @@ import { KeyboardResize } from '@capacitor/keyboard';
 
 const config: CapacitorConfig = {
   appId: 'me.itexpert.nocturn',
-  appName: 'mobile',
+  appName: 'Nocturn',
   webDir: 'dist/mobile/browser',
   server: {
     url: 'http://192.168.2.179:4200',
   },
   plugins: {
-    // resize: none — every resize mode (native/body/ionic) adjusts the layout only AFTER the iOS
-    // keyboard animation finishes (the well-known "footer snaps late" bug). Instead we don't resize
-    // at all and move the footer ourselves in sync with keyboardWillShow (see KeyboardService).
+    // resize: none — the resize modes (native/ionic/body) only adjust layout AFTER the iOS keyboard
+    // animation finishes, so the footer snaps up late + the scroll jumps. Instead we don't resize and
+    // lift the footer ourselves, in sync with keyboardWillShow (KeyboardService.height + [kbFollow]).
     Keyboard: { resize: KeyboardResize.None },
   },
 };
