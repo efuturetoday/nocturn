@@ -301,10 +301,12 @@ export interface AuthOpen {
   redirectPrefix: string;
 }
 
-/** The outcome of an auth.callback (correlated by `id`): connected, or an error to show. */
+/** The outcome of a connect attempt: connected, or an error to show. Correlated by `id` once a
+    session exists; a failure during auth.begin carries only `server` (no id minted yet). */
 export interface AuthDone {
   type: "auth.done";
-  id: string;
+  id?: string;
+  server?: string;
   ok: boolean;
   error?: string;
 }

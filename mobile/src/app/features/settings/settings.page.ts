@@ -1,12 +1,13 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import { Router } from '@angular/router';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonIcon,
+  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonIcon, IonSpinner,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { logOutOutline } from 'ionicons/icons';
 import { ConnectionService } from '../../core/services/connection.service';
 import { AuthService } from '../../core/services/auth.service';
+import { AccountsService } from '../../core/services/accounts.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
 
 @Component({
@@ -14,7 +15,7 @@ import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     WorkspaceHeaderComponent, IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote,
-    IonChip, IonIcon,
+    IonChip, IonIcon, IonSpinner,
   ],
   template: `
     <app-workspace-header />
@@ -32,6 +33,27 @@ import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
           </ion-item>
         } @empty {
           <ion-item lines="none"><ion-label color="medium">No pending requests.</ion-label></ion-item>
+        }
+      </ion-list>
+
+      <ion-list inset="true">
+        <ion-list-header><ion-label>Accounts</ion-label></ion-list-header>
+        @for (a of accounts.accounts(); track a.server) {
+          <ion-item [button]="!a.connected" [disabled]="accounts.busy()" (click)="a.connected || connect(a.server)">
+            <ion-label>
+              <h2>{{ a.server }}</h2>
+              <ion-note>MCP account</ion-note>
+            </ion-label>
+            @if (a.connected) {
+              <ion-chip slot="end" color="success">Connected</ion-chip>
+            } @else if (accounts.connecting() === a.server) {
+              <ion-spinner slot="end" name="crescent" />
+            } @else {
+              <ion-note slot="end" color="primary">Connect</ion-note>
+            }
+          </ion-item>
+        } @empty {
+          <ion-item lines="none"><ion-label color="medium">No connectable accounts.</ion-label></ion-item>
         }
       </ion-list>
 
@@ -57,10 +79,15 @@ import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
 export class SettingsPage {
   protected readonly connection = inject(ConnectionService);
   protected readonly auth = inject(AuthService);
+  protected readonly accounts = inject(AccountsService);
   private readonly router = inject(Router);
 
   constructor() {
     addIcons({ logOutOutline });
+  }
+
+  protected connect(server: string): void {
+    this.accounts.connect(server);
   }
 
   protected disconnect(): void {
