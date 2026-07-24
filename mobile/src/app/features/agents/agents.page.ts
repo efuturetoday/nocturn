@@ -1,27 +1,28 @@
 import { Component, ChangeDetectionStrategy, inject, computed } from '@angular/core';
 import { Router } from '@angular/router';
-import { DatePipe } from '@angular/common';
 import {
   IonContent, IonList, IonListHeader, IonItem, IonLabel, IonIcon, IonNote, IonBadge, IonButton,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { chatbubbleOutline, playOutline } from 'ionicons/icons';
+import { playOutline } from 'ionicons/icons';
 import { AgentService } from '../../core/services/agent.service';
 import { ChatListService } from '../../core/services/chat-list.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
+import { ChatRowComponent } from '../chat/components/chat-row';
 import type { AgentInfo, ChatMeta } from '../../core/protocol/nocturn-protocol';
 
 /**
  * Agents tab. Two sections: the ROSTER of declared agents (name, schedule, autonomy, fire button) and
- * the RUNS they have produced (chats an agent owns, source === 'agent'). Firing is fire-and-forget —
- * the run appears under Runs via chat.activity; tapping a run opens it (the reused ChatPage binds
- * AgentRunService via the agents/run route, so the transcript loads and streams like any chat).
+ * the RUNS they have produced (chats an agent owns, source === 'agent'). A run row is the same
+ * app-chat-row the Chat list and Home use — one source of truth for a chat row, unread dot included.
+ * Firing is fire-and-forget — the run appears under Runs via chat.activity; tapping a run opens it
+ * (the reused ChatPage binds AgentRunService via the agents/run route, so it streams like any chat).
  */
 @Component({
   selector: 'app-agents',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    DatePipe, WorkspaceHeaderComponent,
+    WorkspaceHeaderComponent, ChatRowComponent,
     IonContent, IonList, IonListHeader, IonItem, IonLabel, IonIcon, IonNote, IonBadge, IonButton,
   ],
   template: `
@@ -52,12 +53,12 @@ import type { AgentInfo, ChatMeta } from '../../core/protocol/nocturn-protocol';
       <ion-list inset="true">
         <ion-list-header><ion-label>Runs</ion-label></ion-list-header>
         @for (r of runs(); track r.id) {
-          <ion-item button detail="true" (click)="openRun(r)">
-            <ion-icon slot="start" name="chatbubble-outline" color="medium" aria-hidden="true" />
-            <ion-label>
-              <h3>{{ r.name || 'Run' }}</h3>
-              <ion-note>{{ r.turns }} msg · {{ r.updated | date: 'short' }}</ion-note>
-            </ion-label>
+          <ion-item button detail="false" (click)="openRun(r)">
+            <app-chat-row
+              [chat]="r"
+              [unread]="chatList.unreadIds().has(r.id)"
+              [approval]="chatList.approvalWaiting().has(r.id)"
+            />
           </ion-item>
         } @empty {
           <ion-item lines="none"><ion-label color="medium">No agent runs yet.</ion-label></ion-item>
@@ -68,7 +69,7 @@ import type { AgentInfo, ChatMeta } from '../../core/protocol/nocturn-protocol';
 })
 export class AgentsPage {
   private readonly agentsSvc = inject(AgentService);
-  private readonly chatList = inject(ChatListService);
+  protected readonly chatList = inject(ChatListService);
   private readonly router = inject(Router);
 
   protected readonly agents = this.agentsSvc.agents;
@@ -77,7 +78,7 @@ export class AgentsPage {
   );
 
   constructor() {
-    addIcons({ chatbubbleOutline, playOutline });
+    addIcons({ playOutline });
   }
 
   /** Trigger a run now (fire-and-forget); it surfaces under Runs when it starts. */
