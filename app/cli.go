@@ -132,7 +132,8 @@ func workspaceFlag(fs *flag.FlagSet) *string {
 func cmdAuth(args []string) int {
 	fs := flag.NewFlagSet("auth", flag.ContinueOnError)
 	ws := workspaceFlag(fs)
-	fs.Usage = usage(fs, "auth <provider> [-w workspace]", "Connect an OAuth account (opens a browser). <provider> is a plugin or MCP server name.")
+	scope := fs.String("scope", "", "space- or comma-separated OAuth scopes to request (discover mode)")
+	fs.Usage = usage(fs, "auth <provider> [-w workspace] [-scope \"a b\"]", "Connect an OAuth account (opens a browser). <provider> is a plugin or MCP server name.")
 	pos, code, done := parseArgs(fs, args)
 	if done {
 		return code
@@ -143,11 +144,20 @@ func cmdAuth(args []string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if err := runAuth(ctx, pos[0], *ws); err != nil {
+	if err := runAuth(ctx, pos[0], *ws, splitScopes(*scope)); err != nil {
 		fmt.Fprintln(os.Stderr, "auth:", err)
 		return 1
 	}
 	return 0
+}
+
+// splitScopes parses a scope flag that may be space- or comma-separated into a clean list.
+func splitScopes(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r == ',' })
+	if len(fields) == 0 {
+		return nil
+	}
+	return fields
 }
 
 func cmdSecret(args []string) int {

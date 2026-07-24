@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/app/discovery"
 	"github.com/efuturetoday/nocturn/app/mcp"
+	"github.com/efuturetoday/nocturn/app/mcp/authflow"
 	"github.com/efuturetoday/nocturn/app/plugin"
 	"github.com/efuturetoday/nocturn/app/secret"
 	"github.com/efuturetoday/nocturn/app/secret/oauth"
@@ -174,25 +176,78 @@ func (s ShardTokens) Set(secretName string, value []byte) error {
 // not yet authorized are left alone — their requests fail closed until `nocturn auth <name>` runs.
 func registerOAuth(injector *secret.Injector, tokens TokenStore, wsDir string, log *slog.Logger) {
 	log = log.With("component", "oauth")
-	for _, p := range DiscoverOAuth(wsDir) {
-		raw, ok := tokens.Get(p.SecretName)
+	// Plugin OAuth: endpoints from the manifest, no resource indicator (not an MCP resource).
+	for _, p := range plugin.DiscoverOAuth(wsDir) {
+		wireOAuth(injector, tokens, p.SecretName, p.Name, OAuthRecord{
+			AuthURL: p.AuthURL, TokenURL: p.TokenURL, ClientID: p.ClientID, ClientSecret: p.ClientSecret, Scopes: p.Scopes,
+		}, log)
+	}
+	// MCP OAuth: a manual block's endpoints from config, or a persisted record from discovery. Both
+	// carry the RFC 8707 resource (the server's canonical URI) so refresh stays audience-bound.
+	for _, srv := range mcp.Discover(filepath.Join(wsDir, "mcp"), nil).All() {
+		sn, ok := mcpSecretName(srv)
 		if !ok {
-			continue // not authorized yet
-		}
-		var tok oauth2.Token
-		if err := json.Unmarshal(raw, &tok); err != nil {
-			log.Warn("oauth: stored token unreadable", "provider", p.Name, "err", err)
 			continue
 		}
-		cfg := oauth.Provider(p.AuthURL, p.TokenURL, p.ClientID, p.ClientSecret, p.Scopes...)
-		name := p.SecretName
-		injector.SetResolver(name, oauth.NewSource(cfg, &tok, "", func(t *oauth2.Token) {
-			if err := StoreToken(tokens, name, t); err != nil {
-				log.Warn("oauth: persist refreshed token", "provider", name, "err", err)
+		switch srv.OAuthMode() {
+		case mcp.AuthManual:
+			resource, _ := authflow.CanonicalResource(srv.URL)
+			wireOAuth(injector, tokens, sn, srv.Name, OAuthRecord{
+				AuthURL: srv.OAuth.AuthURL, TokenURL: srv.OAuth.TokenURL, ClientID: srv.OAuth.ClientID,
+				ClientSecret: srv.OAuth.ClientSecret, Resource: resource, Scopes: srv.OAuth.Scopes,
+			}, log)
+		case mcp.AuthDiscover:
+			if rec, ok := LoadOAuthRecord(tokens, sn); ok {
+				wireOAuth(injector, tokens, sn, srv.Name, rec, log)
 			}
-		}))
-		log.Info("oauth: token source registered", "provider", p.Name)
+		}
 	}
+}
+
+// wireOAuth installs a refreshing token source for a provider IF a token is stored (else it is not
+// yet authorized and stays fail-closed). A refresh persists the new token back to the same shard.
+func wireOAuth(injector *secret.Injector, tokens TokenStore, secretName, display string, rec OAuthRecord, log *slog.Logger) {
+	raw, ok := tokens.Get(secretName)
+	if !ok {
+		return
+	}
+	var tok oauth2.Token
+	if err := json.Unmarshal(raw, &tok); err != nil {
+		log.Warn("oauth: stored token unreadable", "provider", display, "err", err)
+		return
+	}
+	cfg := oauth.Provider(rec.AuthURL, rec.TokenURL, rec.ClientID, rec.ClientSecret, rec.Scopes...)
+	injector.SetResolver(secretName, oauth.NewSource(cfg, &tok, rec.Resource, func(t *oauth2.Token) {
+		if err := StoreToken(tokens, secretName, t); err != nil {
+			log.Warn("oauth: persist refreshed token", "provider", secretName, "err", err)
+		}
+	}))
+	log.Info("oauth: token source registered", "provider", display)
+}
+
+// mcpSecretName derives the owner+host-bound vault key for a server (nil-safe on a bad URL).
+func mcpSecretName(srv mcp.Server) (string, bool) {
+	u, err := url.Parse(srv.URL)
+	if err != nil || u.Host == "" {
+		return "", false
+	}
+	return mcp.SecretName(srv.Name, u.Host), true
+}
+
+// providerSuffix names the sibling shard key holding a discovered server's resolved OAuth config,
+// next to its token — so the daemon rebuilds the source without re-running discovery at boot.
+const providerSuffix = ".provider"
+
+// OAuthRecord is the resolved OAuth config a refreshing source needs: the endpoints (discovered or
+// configured), the client (dynamically registered or configured), the RFC 8707 resource, and scopes.
+// For a discover-mode server it is persisted at `nocturn auth` time in the server's shard.
+type OAuthRecord struct {
+	AuthURL      string   `json:"auth_url"`
+	TokenURL     string   `json:"token_url"`
+	ClientID     string   `json:"client_id"`
+	ClientSecret string   `json:"client_secret,omitempty"`
+	Resource     string   `json:"resource,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
 }
 
 // StoreToken persists an OAuth token as JSON through a TokenStore under name (encrypted at rest in the
@@ -203,6 +258,29 @@ func StoreToken(tokens TokenStore, name string, tok *oauth2.Token) error {
 		return err
 	}
 	return tokens.Set(name, b)
+}
+
+// StoreOAuthRecord persists a discovered server's resolved OAuth config beside its token, so the
+// daemon can rebuild the refreshing source at boot without re-discovering.
+func StoreOAuthRecord(tokens TokenStore, secretName string, rec OAuthRecord) error {
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	return tokens.Set(secretName+providerSuffix, b)
+}
+
+// LoadOAuthRecord reads the persisted record, or ok=false if none (server not yet authorized).
+func LoadOAuthRecord(tokens TokenStore, secretName string) (OAuthRecord, bool) {
+	raw, ok := tokens.Get(secretName + providerSuffix)
+	if !ok {
+		return OAuthRecord{}, false
+	}
+	var rec OAuthRecord
+	if json.Unmarshal(raw, &rec) != nil {
+		return OAuthRecord{}, false
+	}
+	return rec, true
 }
 
 // seedEnvSecrets stores each NOCTURN_SECRET_<NAME>=value into the vault under <name> (lowercased) —

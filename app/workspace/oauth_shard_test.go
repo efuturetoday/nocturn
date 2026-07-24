@@ -67,3 +67,31 @@ func TestShardTokens_RoutesToFolderShard(t *testing.T) {
 		t.Error("an unauthorized credential must read absent")
 	}
 }
+
+// An OAuth provider record round-trips through the credential's shard beside its token,
+// routed to the same folder, and reads back as absent when never stored.
+func TestOAuthRecord_RoundTripInShard(t *testing.T) {
+	m := mustMaster(t)
+	wsDir := t.TempDir()
+	tok := workspace.NewShardTokens(m, wsDir, "main", nil)
+
+	const sn = "mcp:github@api.githubcopilot.com/oauth"
+	if _, ok := workspace.LoadOAuthRecord(tok, sn); ok {
+		t.Fatal("no record should exist yet")
+	}
+	rec := workspace.OAuthRecord{
+		AuthURL: "https://github.com/login/oauth/authorize", TokenURL: "https://github.com/login/oauth/access_token",
+		ClientID: "dyn-123", Resource: "https://api.githubcopilot.com/mcp", Scopes: []string{"repo"},
+	}
+	if err := workspace.StoreOAuthRecord(tok, sn, rec); err != nil {
+		t.Fatalf("store record: %v", err)
+	}
+	// It lands in the server's own shard, not the workspace vault.
+	if _, err := os.Stat(filepath.Join(wsDir, "mcp", "github", "secrets.enc")); err != nil {
+		t.Fatalf("record must live in mcp/github/secrets.enc: %v", err)
+	}
+	got, ok := workspace.LoadOAuthRecord(tok, sn)
+	if !ok || got.ClientID != "dyn-123" || got.Resource != "https://api.githubcopilot.com/mcp" || len(got.Scopes) != 1 {
+		t.Fatalf("loaded record = %+v, ok=%v", got, ok)
+	}
+}

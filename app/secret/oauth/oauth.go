@@ -77,15 +77,47 @@ func exchangeOpts(verifier, resource string) []oauth2.AuthCodeOption {
 // indicator (the MCP server URI) added to both requests, or "" for a provider
 // that does not use it.
 func Authorize(ctx context.Context, cfg *oauth2.Config, resource string, prompt func(url string)) (*oauth2.Token, error) {
-	if prompt == nil {
-		prompt = func(u string) { fmt.Printf("Open this URL to authorize:\n%s\n", u) }
+	lb, err := NewLoopback()
+	if err != nil {
+		return nil, err
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0") // loopback only, never 0.0.0.0
+	defer lb.Close()
+	return lb.Authorize(ctx, cfg, resource, prompt)
+}
+
+// Loopback is the one-shot 127.0.0.1 redirect endpoint for the authorization-code
+// callback — the ONLY inbound socket in nocturn besides the unix socket. Bind it
+// with NewLoopback BEFORE Dynamic Client Registration (which needs the exact
+// redirect URI), then run Authorize on it.
+type Loopback struct {
+	ln       net.Listener
+	redirect string
+}
+
+// NewLoopback binds an ephemeral 127.0.0.1 port (never 0.0.0.0). Close it when done.
+func NewLoopback() (*Loopback, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("oauth: loopback listen: %w", err)
 	}
-	defer ln.Close()
-	cfg.RedirectURL = "http://" + ln.Addr().String() + "/callback"
+	return &Loopback{ln: ln, redirect: "http://" + ln.Addr().String() + "/callback"}, nil
+}
+
+// RedirectURL is the loopback callback URL to register as the client's redirect URI.
+func (l *Loopback) RedirectURL() string { return l.redirect }
+
+// Close releases the loopback socket.
+func (l *Loopback) Close() error { return l.ln.Close() }
+
+// Authorize runs the interactive authorization-code flow (PKCE + resource indicator)
+// on this loopback: it sets cfg.RedirectURL, calls prompt with the consent URL, waits
+// for the provider to redirect back with the code, and exchanges it. A random single-
+// use state plus PKCE (S256) defend the callback.
+func (l *Loopback) Authorize(ctx context.Context, cfg *oauth2.Config, resource string, prompt func(url string)) (*oauth2.Token, error) {
+	if prompt == nil {
+		prompt = func(u string) { fmt.Printf("Open this URL to authorize:\n%s\n", u) }
+	}
+	cfg.RedirectURL = l.redirect
 
 	state, err := randomState()
 	if err != nil {
@@ -130,7 +162,7 @@ func Authorize(ctx context.Context, cfg *oauth2.Config, resource string, prompt 
 		reply(result{code: code})
 	})
 	srv := &http.Server{Handler: mux}
-	go func() { _ = srv.Serve(ln) }()
+	go func() { _ = srv.Serve(l.ln) }()
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	prompt(authCodeURL(cfg, state, verifier, resource))
