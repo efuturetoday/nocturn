@@ -44,14 +44,31 @@ How the server authenticates you:
 
 - **None** <Badge text="Available now" variant="success" /> Leave `auth` out for a public
   server.
-- **Token** <Badge text="Available now" variant="success" /> Set `"auth": "token"`. Nocturn
-  asks you for the token once at startup and keeps it in the encrypted vault.
-- **OAuth, with automatic discovery and registration** <Badge text="Coming soon" variant="caution" />
-  Sign in with the provider, with no token to copy and endpoints found for you. Until this
-  lands, use token auth.
+- **Token** <Badge text="Available now" variant="success" /> Set `"auth": "token"` and seed a
+  personal access token: `printf %s "$TOKEN" | nocturn secret set mcp:<name>`. Kept encrypted in
+  the server's folder.
+- **OAuth, with automatic discovery and registration** <Badge text="Available now" variant="success" />
+  Set `"auth": "oauth"` — nothing else. Then run `nocturn auth <name>`: Nocturn discovers the
+  server's authorization endpoints, registers a client for you, opens the browser to sign in, and
+  stores the token. No client ID, no endpoints, no token to copy. This follows the MCP
+  authorization spec (protected-resource + authorization-server metadata, dynamic client
+  registration, PKCE, and resource-bound tokens), so it works with servers like GitHub's:
 
-Either way the token stays with Nocturn. The assistant never sees it, and Nocturn only sends
-it to the server it belongs to. See [Secrets and accounts](/guides/connecting-accounts/).
+  ```json
+  { "url": "https://api.githubcopilot.com/mcp/", "auth": "oauth" }
+  ```
+
+  ```sh
+  nocturn auth github            # discovers, registers, opens the browser
+  nocturn auth github -scope repo   # request specific scopes
+  ```
+
+  If a server's authorization server does not support dynamic registration, configure an `oauth`
+  block with the endpoints and a `client_id` instead.
+
+Either way the token stays with Nocturn. The assistant never sees it, Nocturn refreshes it, and it
+is only ever sent to the server it belongs to (bound to that server as its audience). See
+[Secrets and accounts](/guides/connecting-accounts/).
 
 ## You have to trust the server
 
