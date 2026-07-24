@@ -188,19 +188,15 @@ func TestAuthorize_StateCSRFGuard(t *testing.T) {
 	consentURL, done := launchAuthorize(t, t.Context(), cfg)
 
 	q := consentQuery(t, consentURL)
+	// A forged callback (wrong state) must NOT lead to a token exchange. State is verified
+	// by the flow driver (here Loopback.Authorize) after the code is caught, not at the
+	// socket — the same check the workspace applies when the companion app relays a code —
+	// so the load-bearing guarantee is "no exchange on a state mismatch", asserted below.
 	resp := getCallback(t, q.Get("redirect_uri"), url.Values{
 		"state": {"forged-state"},
 		"code":  {"attacker-code"},
 	})
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("callback status = %d, want 400", resp.StatusCode)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "bad state") {
-		t.Errorf("callback body = %q, want to contain \"bad state\"", body)
-	}
+	resp.Body.Close()
 
 	r := <-done
 	if r.tok != nil {

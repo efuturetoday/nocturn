@@ -40,12 +40,17 @@ func Provider(authURL, tokenURL, clientID, clientSecret string, scopes ...string
 	}
 }
 
-// authCodeURL builds the authorization-request URL: PKCE S256 challenge, offline
-// access, and — when resource != "" — the RFC 8707 resource indicator naming the
-// MCP server the token is FOR (audience binding; the MCP spec requires it on both
-// the authorization and token requests). A bare "" resource omits it, for a
-// non-MCP provider (a plugin's own OAuth) that does not use resource indicators.
-func authCodeURL(cfg *oauth2.Config, state, verifier, resource string) string {
+// AuthCodeURL builds the authorization-request URL for redirectURI: PKCE S256
+// challenge, offline access, and — when resource != "" — the RFC 8707 resource
+// indicator naming the MCP server the token is FOR (audience binding; the MCP spec
+// requires it on both the authorization and token requests). A bare "" resource
+// omits it, for a non-MCP provider (a plugin's own OAuth) that does not use resource
+// indicators. It sets cfg.RedirectURL so a later Exchange on the same cfg matches
+// the redirect_uri the authorization server saw. This is the pure first half of the
+// flow: the caller owns state, verifier and the redirect, so it works over a
+// loopback (CLI) or a fixed app redirect (the companion app relays the code back).
+func AuthCodeURL(cfg *oauth2.Config, state, verifier, resource, redirectURI string) string {
+	cfg.RedirectURL = redirectURI
 	opts := []oauth2.AuthCodeOption{
 		oauth2.AccessTypeOffline,
 		oauth2.SetAuthURLParam("prompt", "consent"),
@@ -57,15 +62,27 @@ func authCodeURL(cfg *oauth2.Config, state, verifier, resource string) string {
 	return cfg.AuthCodeURL(state, opts...)
 }
 
-// exchangeOpts are the token-request options: the PKCE verifier and — matching the
-// authorization request — the RFC 8707 resource indicator.
-func exchangeOpts(verifier, resource string) []oauth2.AuthCodeOption {
+// Exchange is the pure second half: it swaps the authorization code for a token,
+// sending the PKCE verifier and — matching the authorization request — the RFC 8707
+// resource indicator. cfg must be the SAME config AuthCodeURL was called on (its
+// RedirectURL has to equal the one the authorization server saw). No inbound socket
+// is involved, so the caller may have obtained the code any way (loopback or app).
+func Exchange(ctx context.Context, cfg *oauth2.Config, code, verifier, resource string) (*oauth2.Token, error) {
 	opts := []oauth2.AuthCodeOption{oauth2.VerifierOption(verifier)}
 	if resource != "" {
 		opts = append(opts, oauth2.SetAuthURLParam("resource", resource))
 	}
-	return opts
+	tok, err := cfg.Exchange(ctx, code, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("oauth: token exchange: %w", err)
+	}
+	return tok, nil
 }
+
+// GenerateState returns a random single-use state parameter (256 bits, URL-safe) that
+// binds an authorization request to its callback. The caller stashes it and rejects a
+// callback whose state does not match.
+func GenerateState() (string, error) { return randomState() }
 
 // Authorize runs the interactive authorization-code flow with PKCE and returns
 // the token. It binds a one-shot loopback listener on 127.0.0.1 — the ONLY
@@ -109,30 +126,17 @@ func (l *Loopback) RedirectURL() string { return l.redirect }
 // Close releases the loopback socket.
 func (l *Loopback) Close() error { return l.ln.Close() }
 
-// Authorize runs the interactive authorization-code flow (PKCE + resource indicator)
-// on this loopback: it sets cfg.RedirectURL, calls prompt with the consent URL, waits
-// for the provider to redirect back with the code, and exchanges it. A random single-
-// use state plus PKCE (S256) defend the callback.
-func (l *Loopback) Authorize(ctx context.Context, cfg *oauth2.Config, resource string, prompt func(url string)) (*oauth2.Token, error) {
-	if prompt == nil {
-		prompt = func(u string) { fmt.Printf("Open this URL to authorize:\n%s\n", u) }
-	}
-	cfg.RedirectURL = l.redirect
-
-	state, err := randomState()
-	if err != nil {
-		return nil, err
-	}
-	verifier := oauth2.GenerateVerifier()
-
+// WaitForCode serves the one-shot callback and returns the raw authorization code and
+// the state the provider echoed back — it does NOT verify state (the caller holds the
+// expected value and rejects a mismatch), so the same primitive backs both the CLI
+// loopback and any other redirect catcher. It bounds the wait by authTimeout. A second
+// duplicate callback is dropped rather than wedging its handler goroutine.
+func (l *Loopback) WaitForCode(ctx context.Context) (code, state string, err error) {
 	type result struct {
-		code string
-		err  error
+		code, state string
+		err         error
 	}
 	results := make(chan result, 1)
-	// reply delivers the first callback's outcome and drops any later duplicate — a
-	// non-blocking send so a second /callback never wedges its handler goroutine (which
-	// would then hang srv.Shutdown, and Authorize, forever).
 	reply := func(res result) {
 		select {
 		case results <- res:
@@ -142,46 +146,58 @@ func (l *Loopback) Authorize(ctx context.Context, cfg *oauth2.Config, resource s
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if q.Get("state") != state { // reject a forged/mismatched callback
-			http.Error(w, "bad state", http.StatusBadRequest)
-			reply(result{err: errors.New("oauth: state mismatch")})
-			return
-		}
 		if e := q.Get("error"); e != "" {
 			http.Error(w, e, http.StatusBadRequest)
 			reply(result{err: fmt.Errorf("oauth: authorization denied: %s", e)})
 			return
 		}
-		code := q.Get("code")
-		if code == "" {
+		c := q.Get("code")
+		if c == "" {
 			http.Error(w, "no code", http.StatusBadRequest)
 			reply(result{err: errors.New("oauth: no code in callback")})
 			return
 		}
 		_, _ = w.Write([]byte("Authorization complete — you may close this tab."))
-		reply(result{code: code})
+		reply(result{code: c, state: q.Get("state")})
 	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(l.ln) }()
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 
-	prompt(authCodeURL(cfg, state, verifier, resource))
-
 	ctx, cancel := context.WithTimeout(ctx, authTimeout)
 	defer cancel()
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("oauth: authorization timed out: %w", ctx.Err())
+		return "", "", fmt.Errorf("oauth: authorization timed out: %w", ctx.Err())
 	case res := <-results:
-		if res.err != nil {
-			return nil, res.err
-		}
-		tok, err := cfg.Exchange(ctx, res.code, exchangeOpts(verifier, resource)...)
-		if err != nil {
-			return nil, fmt.Errorf("oauth: token exchange: %w", err)
-		}
-		return tok, nil
+		return res.code, res.state, res.err
 	}
+}
+
+// Authorize runs the whole interactive flow on this loopback: build the consent URL
+// (PKCE + resource indicator), prompt the operator, wait for the redirect, verify
+// state, and exchange the code. It is the convenience for the manual-provider CLI
+// path; the MCP discover flow drives AuthCodeURL/WaitForCode/Exchange through the
+// workspace so the app can share it.
+func (l *Loopback) Authorize(ctx context.Context, cfg *oauth2.Config, resource string, prompt func(url string)) (*oauth2.Token, error) {
+	if prompt == nil {
+		prompt = func(u string) { fmt.Printf("Open this URL to authorize:\n%s\n", u) }
+	}
+	state, err := GenerateState()
+	if err != nil {
+		return nil, err
+	}
+	verifier := oauth2.GenerateVerifier()
+	prompt(AuthCodeURL(cfg, state, verifier, resource, l.redirect))
+
+	code, gotState, err := l.WaitForCode(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if gotState != state {
+		return nil, errors.New("oauth: state mismatch")
+	}
+	return Exchange(ctx, cfg, code, verifier, resource)
 }
 
 func randomState() (string, error) {
