@@ -40,13 +40,15 @@ type AuthOpen struct {
 	RedirectPrefix string `json:"redirectPrefix"`
 }
 
-// AuthDone reports the outcome of an auth.callback: connected, or an error to show. Correlated to its
-// AuthOpen by id.
+// AuthDone reports the outcome of a connect attempt: connected, or an error to show. Correlated to
+// its AuthOpen by id once a session exists; a failure during auth.begin (before an id is minted)
+// carries only the server, so the client clears that server's in-flight state either way.
 type AuthDone struct {
-	Type  string `json:"type"`
-	ID    string `json:"id"`
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	Type   string `json:"type"`
+	ID     string `json:"id,omitempty"`
+	Server string `json:"server,omitempty"`
+	OK     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
 }
 
 // AuthAccounts lists the workspace's connectable MCP accounts and whether each is already connected.
@@ -114,7 +116,9 @@ func (c *conn) auth(ctx context.Context, cmd string, data []byte) {
 			defer cancel()
 			p, err := acc.Begin(opCtx, m.Server, m.Scopes, appRedirect)
 			if err != nil {
-				c.failed(ctx, "auth.begin", err)
+				// A correlated failure (carrying the server), not a bare error event — so the client can
+				// clear that server's spinner. No session id exists yet.
+				c.send(ctx, AuthDone{Type: "auth.done", Server: m.Server, OK: false, Error: err.Error()})
 				return
 			}
 			c.send(ctx, AuthOpen{Type: "auth.open", ID: p.ID, Server: m.Server, URL: p.AuthorizeURL, RedirectPrefix: p.RedirectPrefix})
