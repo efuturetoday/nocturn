@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/app/agent"
@@ -116,6 +117,74 @@ func TestDiscover_NonDirEntries_Skipped(t *testing.T) {
 	}
 	if _, ok := set.Get("real"); !ok {
 		t.Error("expected 'real' agent")
+	}
+}
+
+// The new authority-surface fields parse: description, a wall-clock budget, and the autonomy dial.
+func TestDiscover_ParsesDescriptionBudgetAutonomy(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeAgent(t, dir, "watcher", "---\nname: watcher\ndescription: keeps an eye out\nbudget: 90s\nautonomy: guarded\n---\nWatch.\n")
+
+	var diag agentkit.Diagnostics
+	set := agent.Discover(dir, &diag)
+	a, ok := set.Get("watcher")
+	if !ok {
+		t.Fatal("watcher not discovered")
+	}
+	if a.Description != "keeps an eye out" {
+		t.Errorf("Description = %q, want %q", a.Description, "keeps an eye out")
+	}
+	if a.Budget != 90*time.Second {
+		t.Errorf("Budget = %v, want 90s", a.Budget)
+	}
+	if a.Autonomy != agent.Guarded {
+		t.Errorf("Autonomy = %q, want %q", a.Autonomy, agent.Guarded)
+	}
+}
+
+// Autonomy defaults to Strict (fail-closed) when the field is absent — never Guarded by omission.
+func TestDiscover_AutonomyDefaultsStrict(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeAgent(t, dir, "plain", "---\nname: plain\n---\nbody\n")
+
+	var diag agentkit.Diagnostics
+	set := agent.Discover(dir, &diag)
+	a, ok := set.Get("plain")
+	if !ok {
+		t.Fatal("plain not discovered")
+	}
+	if a.Autonomy != agent.Strict {
+		t.Errorf("Autonomy = %q, want %q (a missing dial must not escalate)", a.Autonomy, agent.Strict)
+	}
+}
+
+// A bad budget or an unknown autonomy is fail-closed: the agent is skipped with a diagnostic rather
+// than run with the wrong bound or a looser-than-intended autonomy.
+func TestDiscover_BadBudgetOrAutonomy_Skipped(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeAgent(t, dir, "badbudget", "---\nname: badbudget\nbudget: soon\n---\nbody\n")
+	writeAgent(t, dir, "badauto", "---\nname: badauto\nautonomy: full\n---\nbody\n")
+	writeAgent(t, dir, "good", "---\nname: good\n---\nbody\n")
+
+	var diag agentkit.Diagnostics
+	set := agent.Discover(dir, &diag)
+	if _, ok := set.Get("good"); !ok || len(set) != 1 {
+		t.Fatalf("only the good agent must load, got %v", set)
+	}
+	if _, ok := set.Get("badbudget"); ok {
+		t.Error("an unparseable budget must skip the agent (fail-closed)")
+	}
+	if _, ok := set.Get("badauto"); ok {
+		t.Error("an unknown autonomy must skip the agent (fail-closed)")
+	}
+	if diag.Len() != 2 {
+		t.Errorf("want 2 diagnostics (bad budget + bad autonomy), got %d: %v", diag.Len(), diag.All())
 	}
 }
 

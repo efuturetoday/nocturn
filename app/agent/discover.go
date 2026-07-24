@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -55,10 +56,13 @@ func Discover(dir string, diag *agentkit.Diagnostics) Set {
 
 // frontmatter is the YAML head of an agent.md; the markdown body below it is the Instructions.
 type frontmatter struct {
-	Name   string   `yaml:"name"`
-	Tools  []string `yaml:"tools"`
-	When   string   `yaml:"when"`
-	Effort string   `yaml:"effort"`
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Tools       []string `yaml:"tools"`
+	When        string   `yaml:"when"`
+	Effort      string   `yaml:"effort"`
+	Budget      string   `yaml:"budget"`
+	Autonomy    string   `yaml:"autonomy"`
 }
 
 // loadAgent parses one agent.md into an Agent, or (nil, nil) if the file is absent.
@@ -75,15 +79,44 @@ func loadAgent(path string) (*Agent, error) {
 	if err := yaml.Unmarshal(head, &fm); err != nil {
 		return nil, fmt.Errorf("agent %s: %w", path, err)
 	}
+	// A bad budget or autonomy is a hard error here so Discover skips the agent fail-closed rather
+	// than run it with the wrong bound or the wrong (looser) autonomy.
+	var budget time.Duration
+	if fm.Budget != "" {
+		budget, err = time.ParseDuration(fm.Budget)
+		if err != nil {
+			return nil, fmt.Errorf("agent %s: budget %q: %w", path, fm.Budget, err)
+		}
+	}
+	autonomy, err := parseAutonomy(fm.Autonomy)
+	if err != nil {
+		return nil, fmt.Errorf("agent %s: %w", path, err)
+	}
 	// The name is optional here: Discover resolves it (a frontmatter name overrides
 	// the folder name, else the folder name is used).
 	return &Agent{
 		Name:         fm.Name,
+		Description:  strings.TrimSpace(fm.Description),
 		Instructions: strings.TrimSpace(string(body)),
 		Tools:        fm.Tools,
 		When:         fm.When,
 		Effort:       agentkit.Effort(fm.Effort),
+		Budget:       budget,
+		Autonomy:     autonomy,
 	}, nil
+}
+
+// parseAutonomy maps the frontmatter dial to an Autonomy, defaulting empty to Strict (fail-closed).
+// An unrecognized value is an error so a typo never silently runs an agent looser than intended.
+func parseAutonomy(s string) (Autonomy, error) {
+	switch s {
+	case "", string(Strict):
+		return Strict, nil
+	case string(Guarded):
+		return Guarded, nil
+	default:
+		return "", fmt.Errorf("autonomy %q: must be %q or %q", s, Strict, Guarded)
+	}
 }
 
 // splitFrontmatter splits a "---\n<yaml>\n---\n<body>" document into its yaml head and markdown body.
