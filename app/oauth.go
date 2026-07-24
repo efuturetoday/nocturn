@@ -91,7 +91,10 @@ func authDiscover(ctx context.Context, tokens workspace.ShardTokens, srv mcp.Ser
 	}
 	secretName := mcp.SecretName(srv.Name, u.Host)
 
-	pr, err := af.ProtectedResourceMetadata(ctx, "", srv.URL)
+	// Prefer the spec-canonical trigger: an unauthenticated probe returns 401 with the
+	// resource_metadata URL; fall back to the well-known location if the server does not.
+	metadataURL, _ := af.ProbeResourceMetadata(ctx, srv.URL)
+	pr, err := af.ProtectedResourceMetadata(ctx, metadataURL, srv.URL)
 	if err != nil {
 		return fmt.Errorf("discover %q: %w", srv.Name, err)
 	}
@@ -100,7 +103,13 @@ func authDiscover(ctx context.Context, tokens workspace.ShardTokens, srv mcp.Ser
 		return fmt.Errorf("discover %q: %w", srv.Name, err)
 	}
 	if as.RegistrationEndpoint == "" {
-		return fmt.Errorf("mcp server %q: its authorization server does not offer dynamic client registration — configure a manual oauth block with a client_id instead", srv.Name)
+		// The authorization server does not do dynamic registration (GitHub is one such: it wants a
+		// pre-registered OAuth App). Print the discovered endpoints so the operator only has to
+		// register an app, get a client_id, and drop them into a manual oauth block.
+		return fmt.Errorf("mcp server %q: its authorization server (%s) does not offer dynamic client "+
+			"registration.\nRegister an OAuth app there, then set auth away and add this block to "+
+			"mcp/%s/mcp.json with your client_id:\n\n  \"oauth\": {\n    \"auth_url\": %q,\n    \"token_url\": %q,\n    \"client_id\": \"<your client id>\",\n    \"scopes\": %v\n  }\n\n(or just use a token: `nocturn secret set mcp:%s`)",
+			srv.Name, as.Issuer, srv.Name, as.AuthorizationEndpoint, as.TokenEndpoint, as.ScopesSupported, srv.Name)
 	}
 
 	// Bind the loopback BEFORE registering: the redirect URI must be the exact callback the flow uses.

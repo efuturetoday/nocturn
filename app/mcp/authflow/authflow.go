@@ -83,25 +83,72 @@ func ParseWWWAuthenticate(header string) (resourceMetadataURL string, ok bool) {
 	return "", false
 }
 
+// ProbeResourceMetadata makes an unauthenticated request to the MCP server and, on the
+// 401 the spec requires, returns the resource_metadata URL from the WWW-Authenticate
+// challenge (the canonical discovery trigger, RFC 9728 §5.1). ok is false when the
+// server does not answer 401 with a resource_metadata pointer — the caller then falls
+// back to the well-known location.
+func (c *Client) ProbeResourceMetadata(ctx context.Context, serverURL string) (metadataURL string, ok bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serverURL, nil)
+	if err != nil {
+		return "", false
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", false
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		return "", false
+	}
+	return ParseWWWAuthenticate(resp.Header.Get("WWW-Authenticate"))
+}
+
 // ProtectedResourceMetadata fetches RFC 9728 metadata. metadataURL is the URL from the
-// WWW-Authenticate header; when "", it defaults to the well-known location derived
-// from serverURL (<origin>/.well-known/oauth-protected-resource).
+// WWW-Authenticate header; when "", it tries the well-known locations derived from
+// serverURL — the path-aware form (RFC 9728 §3: the well-known segment is inserted
+// between host and path) then the origin form.
 func (c *Client) ProtectedResourceMetadata(ctx context.Context, metadataURL, serverURL string) (*ProtectedResource, error) {
-	if metadataURL == "" {
-		wk, err := wellKnown(serverURL, "oauth-protected-resource")
+	var candidates []string
+	if metadataURL != "" {
+		candidates = []string{metadataURL}
+	} else {
+		wk, err := prmWellKnownURLs(serverURL)
 		if err != nil {
 			return nil, err
 		}
-		metadataURL = wk
+		candidates = wk
 	}
-	var pr ProtectedResource
-	if err := c.getJSON(ctx, metadataURL, &pr); err != nil {
-		return nil, fmt.Errorf("protected resource metadata: %w", err)
+	var lastErr error
+	for _, u := range candidates {
+		var pr ProtectedResource
+		if err := c.getJSON(ctx, u, &pr); err != nil {
+			lastErr = err
+			continue
+		}
+		if len(pr.AuthorizationServers) == 0 {
+			lastErr = fmt.Errorf("protected resource metadata at %s: no authorization_servers", u)
+			continue
+		}
+		return &pr, nil
 	}
-	if len(pr.AuthorizationServers) == 0 {
-		return nil, fmt.Errorf("protected resource metadata: no authorization_servers")
+	return nil, fmt.Errorf("protected resource metadata: %w", lastErr)
+}
+
+// prmWellKnownURLs returns the RFC 9728 well-known candidates for a resource URL, in
+// preference order: the path-aware form, then the origin form.
+func prmWellKnownURLs(serverURL string) ([]string, error) {
+	u, err := url.Parse(serverURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("bad server URL %q", serverURL)
 	}
-	return &pr, nil
+	origin := u.Scheme + "://" + u.Host
+	var out []string
+	if path := strings.TrimSuffix(u.Path, "/"); path != "" {
+		out = append(out, origin+"/.well-known/oauth-protected-resource"+path)
+	}
+	out = append(out, origin+"/.well-known/oauth-protected-resource")
+	return out, nil
 }
 
 // AuthorizationServerMetadata fetches RFC 8414 metadata for an issuer, trying the
@@ -159,16 +206,6 @@ func decodeJSON(r io.Reader, v any) error {
 		return err
 	}
 	return json.Unmarshal(data, v)
-}
-
-// wellKnown builds <scheme>://<host>/.well-known/<name> from a URL (RFC 9728 style:
-// the metadata sits at the resource's origin).
-func wellKnown(rawURL, name string) (string, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("bad server URL %q", rawURL)
-	}
-	return u.Scheme + "://" + u.Host + "/.well-known/" + name, nil
 }
 
 // asMetadataURLs returns the RFC 8414 / OIDC well-known candidates for an issuer, in
