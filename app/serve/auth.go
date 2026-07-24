@@ -11,9 +11,9 @@ import (
 
 // This file is the app-driven half of MCP OAuth. The daemon runs the whole spec flow (discovery,
 // dynamic registration, token exchange, storage) in workspace.MCPAuth; the companion app only opens a
-// consent URL in an in-app browser and relays back the single-use, PKCE-bound authorization code. The
-// token is minted, held, and refreshed here and NEVER travels to the app, the model, or the guest —
-// the app just watches its browser navigate to appRedirect and lifts code+state from the query.
+// consent URL in the external system browser and relays back the single-use, PKCE-bound authorization
+// code. The token is minted, held, and refreshed here and NEVER travels to the app, the model, or the
+// guest — the app catches the deep-link redirect to appRedirect and lifts code+state from its query.
 
 // appRedirect is the fixed redirect the companion app registers and returns on. It is a custom-scheme
 // deep link (RFC 8252 native-app redirect): the consent page opens in the SYSTEM browser — so the
@@ -33,9 +33,9 @@ var errVaultLocked = errors.New("vault locked — unlock it on the daemon to con
 
 // ── server → client ──────────────────────────────────────────────────────────
 
-// AuthOpen hands the client a consent URL to open in an in-app browser and the redirect prefix to
-// watch for. The client lifts code+state from the intercepted navigation and returns them as
-// auth.callback with the same id.
+// AuthOpen hands the client a consent URL to open in the external browser and the redirect prefix to
+// watch for. The client lifts code+state from the deep-link redirect and returns them as auth.callback
+// with the same id.
 type AuthOpen struct {
 	Type           string `json:"type"`
 	ID             string `json:"id"`
