@@ -61,6 +61,7 @@ type Workspace struct {
 	notify        *notifier        // the seam every proactive message leaves through
 	waker         *tools.Waker     // self-continuation timers, bound to the chat manager
 	vault         *secret.Vault    // this workspace's own encrypted credential vault; nil when locked
+	accounts      *MCPAuth         // MCP OAuth session orchestration; nil when the vault is locked
 	log           *slog.Logger
 }
 
@@ -203,6 +204,12 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		vault:      vault,
 		log:        wslog,
 	}
+	// The MCP OAuth orchestrator shares the master + this workspace's shard routing, so an account a
+	// device connects over the WebSocket lands in the same folder shard the daemon reads at boot. Only
+	// when unlocked — a locked vault cannot store a token, so there is nothing to orchestrate.
+	if h.Master != nil {
+		w.accounts = NewMCPAuth(h.Master, dir, name)
+	}
 	// One static runtime per declared agent (its cage + gate + autonomy), built once — Autonomy is a
 	// declaration property, so a run's authority never depends on when it fires. The agent manager's
 	// resolver maps a run to its owner's runtime via the persisted Meta.Agent; a run whose agent was
@@ -275,6 +282,11 @@ func OpenAll(h Host, root string) (map[string]*Workspace, error) {
 
 // Name returns the workspace name.
 func (w *Workspace) Name() string { return w.name }
+
+// Accounts is the workspace's MCP OAuth orchestrator (Begin/Complete/List), or nil when the vault is
+// locked (no master passphrase — a token cannot be stored, so there is nothing to connect). The
+// daemon's WebSocket auth handler drives it for the companion app.
+func (w *Workspace) Accounts() *MCPAuth { return w.accounts }
 
 // Chats returns the workspace's chat manager.
 func (w *Workspace) Chats() *chat.Manager { return w.chats }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -218,6 +219,31 @@ func (a *MCPAuth) Complete(ctx context.Context, id, code, state string) error {
 		return fmt.Errorf("store provider record: %w", err)
 	}
 	return nil
+}
+
+// Account is a connectable MCP account: a discover-mode server and whether it currently holds a token.
+type Account struct {
+	Server    string `json:"server"`
+	Connected bool   `json:"connected"`
+}
+
+// List enumerates the workspace's discover-mode MCP servers and whether each already holds a token —
+// so a UI can show what can be connected and what already is. Sorted by name for a stable listing.
+func (a *MCPAuth) List() []Account {
+	var out []Account
+	for _, srv := range mcp.Discover(filepath.Join(a.wsDir, "mcp"), nil).All() {
+		if srv.OAuthMode() != mcp.AuthDiscover {
+			continue
+		}
+		u, err := url.Parse(srv.URL)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		_, connected := a.tokens.Get(mcp.SecretName(srv.Name, u.Host))
+		out = append(out, Account{Server: srv.Name, Connected: connected})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Server < out[j].Server })
+	return out
 }
 
 // discoverServer resolves a discover-mode server by name in this workspace's mcp/ directory. A server

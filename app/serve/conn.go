@@ -167,6 +167,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.reminder(ctx, env.Cmd, data)
 	case "agent":
 		c.agentCmd(ctx, env.Cmd, data)
+	case "auth":
+		c.auth(ctx, env.Cmd, data)
 	default:
 		c.badRequest(ctx, "unknown domain: "+env.Cmd)
 	}
