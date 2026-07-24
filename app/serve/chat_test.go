@@ -30,7 +30,7 @@ func openWorkspace(t *testing.T) *workspace.Workspace {
 	if err != nil {
 		t.Fatalf("workspace.Open: %v", err)
 	}
-	t.Cleanup(ws.Chats().CloseAll)
+	t.Cleanup(ws.Close)
 	return ws
 }
 
@@ -158,14 +158,26 @@ func TestChat_UnknownAction_Error(t *testing.T) {
 func TestChatSubmit_InvalidID_SendsBadChatID_NoSubmit(t *testing.T) {
 	c := testConn()
 	c.spaces["main"] = &workspace.Workspace{} // reached but never dereferenced: invalid id returns first
-	c.chatSubmit(context.Background(), ChatSubmit{Ws: "main", ID: "../evil", Text: "hi"})
+	c.chatSubmit(context.Background(), ChatSubmit{Ws: "main", Kind: "user", ID: "../evil", Text: "hi"})
 	recvError(t, c, "bad chat id")
 }
 
 func TestChatSubmit_UnknownWorkspace_Errors(t *testing.T) {
 	c := testConn() // empty spaces
-	c.chatSubmit(context.Background(), ChatSubmit{Ws: "ghost", ID: "abc", Text: "hi"})
+	c.chatSubmit(context.Background(), ChatSubmit{Ws: "ghost", Kind: "user", ID: "abc", Text: "hi"})
 	recvError(t, c, "unknown workspace")
+}
+
+// Kind is mandatory on every store-addressed chat command: a valid frame that omits it is rejected
+// (never silently treated as user chats), for each of the four commands.
+func TestChat_MissingKind_Rejected(t *testing.T) {
+	for _, cmd := range []string{"chat.submit", "chat.open", "chat.list", "chat.cancel", "chat.markRead"} {
+		t.Run(cmd, func(t *testing.T) {
+			c := connWith(openWorkspace(t))
+			c.chat(context.Background(), cmd, []byte(`{"cmd":"`+cmd+`","ws":"main","id":"deadbeef","text":"hi"}`))
+			recvError(t, c, "invalid kind")
+		})
+	}
 }
 
 // ── chatOpen / chatList / markRead / cancel against a real, empty workspace ───────────────────────
@@ -174,7 +186,7 @@ func TestChatSubmit_UnknownWorkspace_Errors(t *testing.T) {
 // whose in-flight fields are absent — the reopen-mid-turn state only appears for a running turn.
 func TestChatOpen_IdleSnapshot_EmptyArrays_NilInflight(t *testing.T) {
 	c := connWith(openWorkspace(t))
-	c.chatOpen(context.Background(), ChatOpen{Ws: "main", ID: "deadbeef"})
+	c.chatOpen(context.Background(), ChatOpen{Ws: "main", Kind: "user", ID: "deadbeef"})
 
 	snap, ok := recv(t, c).(ChatSnapshot)
 	if !ok {
@@ -208,13 +220,13 @@ func TestChatOpen_IdleSnapshot_EmptyArrays_NilInflight(t *testing.T) {
 
 func TestChatOpen_UnknownWorkspace_Errors(t *testing.T) {
 	c := testConn()
-	c.chatOpen(context.Background(), ChatOpen{Ws: "ghost", ID: "abc"})
+	c.chatOpen(context.Background(), ChatOpen{Ws: "ghost", Kind: "user", ID: "abc"})
 	recvError(t, c, "unknown workspace")
 }
 
 func TestChatList_EmptyWorkspace_EmptyList(t *testing.T) {
 	c := connWith(openWorkspace(t))
-	c.chatList(context.Background(), "main")
+	c.chatList(context.Background(), ChatList{Ws: "main", Kind: "user"})
 	res, ok := recv(t, c).(ChatListResult)
 	if !ok {
 		t.Fatalf("want ChatListResult")
@@ -232,14 +244,14 @@ func TestChatList_EmptyWorkspace_EmptyList(t *testing.T) {
 func TestChatMarkRead_UnknownChat_NoOp(t *testing.T) {
 	ws := openWorkspace(t)
 	c := connWith(ws)
-	c.chat(context.Background(), "chat.markRead", []byte(`{"cmd":"chat.markRead","ws":"main","id":"deadbeef"}`))
+	c.chat(context.Background(), "chat.markRead", []byte(`{"cmd":"chat.markRead","ws":"main","kind":"user","id":"deadbeef"}`))
 	assertNoMessage(t, c)
 }
 
 func TestChatCancel_UnknownChat_NoOp(t *testing.T) {
 	ws := openWorkspace(t)
 	c := connWith(ws)
-	c.chat(context.Background(), "chat.cancel", []byte(`{"cmd":"chat.cancel","ws":"main","id":"deadbeef"}`))
+	c.chat(context.Background(), "chat.cancel", []byte(`{"cmd":"chat.cancel","ws":"main","kind":"user","id":"deadbeef"}`))
 	assertNoMessage(t, c)
 }
 

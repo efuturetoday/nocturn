@@ -237,12 +237,15 @@ func (p *pushWaker) Push(ctx context.Context, intent string) error {
 // (its transcript is already persisted and reloads on resume).
 func run(ctx context.Context, ws *workspace.Workspace, stdin *bufio.Reader, model string) {
 	mgr := ws.Chats()
-	defer mgr.CloseAll() // stop the reaper + close every live session on exit
+	defer ws.Close() // stop both managers' reapers + close every live session on exit
 	turnDone := make(chan struct{}, 1)
 
 	// The Manager owns the live sessions and drains each one's events; the REPL just prints them
 	// (one chat active at a time). No local session ownership.
 	mgr.OnEvent(func(_ string, ev agentkit.Event) { renderEvent(ev, turnDone) })
+	// Agent runs stream from a separate manager; print them with a marker and never touch turnDone —
+	// a background run's TurnEnd must not release a user turn the REPL is waiting on.
+	ws.AgentChats().OnEvent(func(id string, ev agentkit.Event) { renderAgentEvent(id, ev) })
 	var activeID string
 
 	fmt.Printf("nocturn (model %q) — /chats · /open <id> · /new · /agents · /fire <name> <task> · /quit\n", model)
@@ -331,13 +334,28 @@ func fireAgent(ctx context.Context, ws *workspace.Workspace, rest string) {
 		fmt.Println("usage: /fire <name> <task>")
 		return
 	}
-	fmt.Printf("firing %s (unattended)…\n", name)
-	answer, err := ws.FireAgent(ctx, name, strings.TrimSpace(task))
+	id, err := ws.FireAgent(ctx, name, strings.TrimSpace(task))
 	if err != nil {
 		fmt.Println("agent:", err)
+		return
 	}
-	if answer != "" {
-		fmt.Println(answer)
+	fmt.Printf("fired %s → run %s (streaming below)\n", name, id)
+}
+
+// renderAgentEvent prints an agent run's streamed events with a run marker. Unlike renderEvent it
+// signals no turn-done channel: agent runs are background and must not release a user turn.
+func renderAgentEvent(id string, ev agentkit.Event) {
+	switch e := ev.(type) {
+	case agentkit.Token:
+		if e.Frame == 0 {
+			fmt.Print(e.Text)
+		}
+	case agentkit.ToolStart:
+		fmt.Printf("\n  [agent %s] → %s(%s)\n", id, e.Tool, e.Args)
+	case agentkit.TurnEnd:
+		if e.Frame == 0 {
+			fmt.Printf("\n[agent %s done]\n", id)
+		}
 	}
 }
 

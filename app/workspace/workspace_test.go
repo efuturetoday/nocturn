@@ -23,8 +23,8 @@ func (fakeLLM) Next(_ context.Context, _ []agentkit.Message, _ []agentkit.ToolSp
 	return agentkit.Step{Answer: "ok"}, nil
 }
 
-// answerLLM streams its answer as a top-level (Frame 0) token — the shape FireAgent accumulates —
-// then returns it as the final step. FireAgent builds its returned answer from tokens, not the Step.
+// answerLLM streams its answer as a top-level (Frame 0) token then returns it as the final step, so a
+// run's persisted transcript ends with that assistant message.
 type answerLLM struct{ text string }
 
 func (a answerLLM) Next(ctx context.Context, _ []agentkit.Message, _ []agentkit.ToolSpec) (agentkit.Step, error) {
@@ -34,7 +34,7 @@ func (a answerLLM) Next(ctx context.Context, _ []agentkit.Message, _ []agentkit.
 
 // toolCallerLLM issues one tool call named by the "call:<tool>" user directive, then — once it sees
 // the resulting tool message — echoes that result as the streamed answer. So the tool's outcome
-// (a denial, an "unknown tool", or a real result) surfaces in FireAgent's returned answer.
+// (a denial, an "unknown tool", or a real result) surfaces as the run's final assistant message.
 type toolCallerLLM struct{}
 
 func (toolCallerLLM) Next(ctx context.Context, conv []agentkit.Message, _ []agentkit.ToolSpec) (agentkit.Step, error) {
@@ -53,20 +53,6 @@ func (toolCallerLLM) Next(ctx context.Context, conv []agentkit.Message, _ []agen
 	return agentkit.Step{ToolCalls: []agentkit.ToolCall{{ID: "c1", Tool: tool, Args: `{"host":"example.com"}`}}}, nil
 }
 
-// blockingLLM streams one partial token, signals it did, then blocks until ctx is cancelled — so a
-// turn can be caught mid-flight to exercise FireAgent's ctx-cancel path.
-type blockingLLM struct {
-	once    sync.Once
-	emitted chan struct{}
-}
-
-func (b *blockingLLM) Next(ctx context.Context, _ []agentkit.Message, _ []agentkit.ToolSpec) (agentkit.Step, error) {
-	agentkit.Emit(ctx, agentkit.Token{Text: "partial"})
-	b.once.Do(func() { close(b.emitted) })
-	<-ctx.Done()
-	return agentkit.Step{}, ctx.Err()
-}
-
 // openWSDir opens a workspace rooted at dir with the given LLM and closes its chat manager on cleanup.
 func openWSDir(t *testing.T, llm agentkit.LLM, dir string) *workspace.Workspace {
 	t.Helper()
@@ -75,7 +61,7 @@ func openWSDir(t *testing.T, llm agentkit.LLM, dir string) *workspace.Workspace 
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(w.Chats().CloseAll)
+	t.Cleanup(w.Close)
 	return w
 }
 
@@ -159,6 +145,13 @@ func TestWorkspace_Open_UserAndAgentStoresSeparate(t *testing.T) {
 	if _, err := w.FireAgent(t.Context(), "helper", "do it"); err != nil {
 		t.Fatalf("FireAgent: %v", err)
 	}
+	// FireAgent is async: wait for the run to persist to the agent store.
+	if !eventually(func() bool {
+		runs, _ := w.AgentRuns()
+		return len(runs) == 1
+	}) {
+		t.Fatal("agent run did not persist")
+	}
 
 	users, err := w.Chats().List()
 	if err != nil {
@@ -214,7 +207,7 @@ func TestOpenAll_AlwaysIncludesMain(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		for _, w := range spaces {
-			w.Chats().CloseAll()
+			w.Close()
 		}
 	})
 	main, ok := spaces[workspace.DefaultWorkspace]
@@ -241,7 +234,7 @@ func TestOpenAll_OpensEachSubdir(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		for _, w := range spaces {
-			w.Chats().CloseAll()
+			w.Close()
 		}
 	})
 	for _, want := range []string{"work", "home", workspace.DefaultWorkspace} {
@@ -277,6 +270,12 @@ func setupMarkRead(t *testing.T) (w *workspace.Workspace, userID, agentID string
 	if _, err := w.FireAgent(t.Context(), "helper", "run"); err != nil {
 		t.Fatalf("FireAgent: %v", err)
 	}
+	if !eventually(func() bool {
+		runs, _ := w.AgentRuns()
+		return len(runs) == 1
+	}) {
+		t.Fatal("agent run did not persist")
+	}
 	runs, err := w.AgentRuns()
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("AgentRuns = %v (err %v), want 1", runs, err)
@@ -295,26 +294,25 @@ func isRead(t *testing.T, metas []chat.Meta, id string) bool {
 	return false
 }
 
-// TestWorkspace_MarkRead_BothStores_WrongOneNoOps: MarkRead advances the cursor in whichever store
-// owns the id and no-ops on the other — marking a user chat leaves the agent run untouched, and vice
-// versa.
-func TestWorkspace_MarkRead_BothStores_WrongOneNoOps(t *testing.T) {
+// TestWorkspace_MarkRead_KindSelectsStore: MarkRead advances the cursor in the kind-selected store
+// only — marking the user store leaves the agent run untouched, and vice versa.
+func TestWorkspace_MarkRead_KindSelectsStore(t *testing.T) {
 	w, userID, agentID := setupMarkRead(t)
 
-	w.MarkRead(userID)
+	w.MarkRead("user", userID)
 	users, _ := w.Chats().List()
 	runs, _ := w.AgentRuns()
 	if !isRead(t, users, userID) {
-		t.Error("MarkRead(userID) did not mark the user chat read")
+		t.Error(`MarkRead("user", userID) did not mark the user chat read`)
 	}
 	if isRead(t, runs, agentID) {
-		t.Error("MarkRead(userID) must not touch the agent run (wrong store must no-op)")
+		t.Error(`MarkRead("user", …) must not touch the agent store`)
 	}
 
-	w.MarkRead(agentID)
+	w.MarkRead("agent", agentID)
 	runs, _ = w.AgentRuns()
 	if !isRead(t, runs, agentID) {
-		t.Error("MarkRead(agentID) did not mark the agent run read")
+		t.Error(`MarkRead("agent", agentID) did not mark the agent run read`)
 	}
 }
 
@@ -332,8 +330,8 @@ func TestWorkspace_OnChatUpdate_WiresBothStores(t *testing.T) {
 	})
 
 	// MarkRead is a synchronous persist that fires the save callback; drive one on each store.
-	w.MarkRead(userID)
-	w.MarkRead(agentID)
+	w.MarkRead("user", userID)
+	w.MarkRead("agent", agentID)
 
 	mu.Lock()
 	defer mu.Unlock()

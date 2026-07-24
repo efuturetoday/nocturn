@@ -3,18 +3,50 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"strings"
-	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
 	"github.com/efuturetoday/nocturn/app/agent"
 	"github.com/efuturetoday/nocturn/app/chat"
-	"github.com/efuturetoday/nocturn/app/tools"
 )
+
+// sessionRouter resolves a chat id to the manager that owns it, so a fired wake re-opens a run in the
+// right store: an agent run (Meta.Agent set) reopens in the agent manager (its own runtime + store),
+// any other id in the user manager. It satisfies tools.Sessions (Open by id).
+type sessionRouter struct {
+	user, agent *chat.Manager
+	agentStore  *chat.Store
+}
+
+func (r sessionRouter) Open(id string) *agentkit.Session {
+	if r.agentStore.OwnerOf(id) != "" {
+		return r.agent.Open(id)
+	}
+	return r.user.Open(id)
+}
+
+// Close stops both chat managers (their reapers and every live session). Call once on shutdown.
+func (w *Workspace) Close() {
+	w.chats.CloseAll()
+	w.agentChats.CloseAll()
+}
 
 // Agents returns the workspace's declared agents, sorted by name.
 func (w *Workspace) Agents() []agent.Agent { return w.agents.All() }
+
+// AgentChats returns the manager that owns agent-run sessions (the agent-store counterpart of Chats).
+func (w *Workspace) AgentChats() *chat.Manager { return w.agentChats }
+
+// ChatManager selects a chat kind's manager: "agent" → agent runs, anything else → user chats. The
+// wire passes the kind on every store-addressed chat.* command (mandatory), so one handler set drives
+// both managers without the daemon having to derive the store.
+func (w *Workspace) ChatManager(kind string) *chat.Manager {
+	if kind == "agent" {
+		return w.agentChats
+	}
+	return w.chats
+}
 
 // StartAgents runs the cron scheduler until ctx is cancelled — call it in a goroutine.
 func (w *Workspace) StartAgents(ctx context.Context) { w.sched.Start(ctx) }
@@ -22,67 +54,49 @@ func (w *Workspace) StartAgents(ctx context.Context) { w.sched.Start(ctx) }
 // AgentRuns lists the persisted agent-run transcripts, most recent first.
 func (w *Workspace) AgentRuns() ([]chat.Meta, error) { return w.agentStore.Metas() }
 
-// FireAgent runs the named agent once, unattended, over task; it persists the transcript to the
-// agent store and returns the agent's final answer. Unattended = no approver: the agent may use
-// standing durable grants, but any fresh Ask is denied (fail-closed). Its tool cage is the workspace
-// toolset filtered to the agent's declared tools.
-func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, error) {
-	a, ok := w.agents.Get(name)
-	if !ok {
-		return "", fmt.Errorf("workspace %q: no agent %q", w.name, name)
+// agentRuntime builds the runtime one declared agent's runs spin under: its tool cage (the workspace
+// toolset filtered to the agent's declared tools), its instructions as the system prompt, its effort
+// and budget, and its autonomy resolved to an approver — Guarded hands runs the workspace's
+// out-of-band approver (an Ask reaches the human), Strict (the default) gets none, so any fresh Ask
+// is denied fail-closed. Autonomy is a declaration property, so this runtime is static per agent and
+// is built once at Open. It bakes no store: the agent manager adds the per-run store on Session.
+func (w *Workspace) agentRuntime(a agent.Agent) *runtime.Runtime {
+	var appr gate.Approver
+	if a.Autonomy == agent.Guarded {
+		appr = w.approver // itself nil when no device is wired, which collapses guarded to strict
 	}
-
-	runID := chat.NewID()
-	log := w.log.With("component", "agent", "agent", name, "run", runID)
-	log.Info("agent run started", "unattended", true)
-	start := time.Now()
-
-	rt := runtime.New(w.llm,
+	budget := turnTimeout
+	if a.Budget > 0 {
+		budget = a.Budget
+	}
+	return runtime.New(w.llm,
 		runtime.WithTools(w.tools.Select(a.Matches)),
-		runtime.WithGate(policy(), w.grants, nil),          // nil approver = unattended
-		runtime.WithGateLogger(agentkit.SlogLogger(w.log)), // trace the unattended fail-closed denials
+		runtime.WithGate(policy(), w.grants, appr),
+		runtime.WithGateLogger(agentkit.SlogLogger(w.log)),
 		runtime.WithSession(
 			agentkit.WithSystem(a.Instructions),
 			agentkit.WithEffort(a.Effort),
-			agentkit.WithTimeout(turnTimeout),
+			agentkit.WithTimeout(budget),
 			agentkit.WithLogger(agentkit.SlogLogger(w.log)),
 		),
 	)
+}
 
-	// Stamp the run id as the chat id: an agent run IS an openable transcript, so a notify or a
-	// reminder it sets carries provenance back to it exactly like one from a user chat.
-	ctx = tools.WithChatID(ctx, runID)
-
-	sess := rt.Session(ctx, agentkit.WithStore(w.agentStore, runID))
-	defer sess.Close()
-
-	var answer strings.Builder
-	done := make(chan error, 1)
-	go func() {
-		for ev := range sess.Subscribe() {
-			switch e := ev.(type) {
-			case agentkit.Token:
-				if e.Frame == 0 {
-					answer.WriteString(e.Text)
-				}
-			case agentkit.TurnEnd:
-				done <- e.Err
-				return
-			}
-		}
-		done <- nil
-	}()
-	sess.Submit(task)
-	select {
-	case err := <-done:
-		log.Info("agent run finished", "dur", time.Since(start).Round(time.Millisecond), "answer_len", answer.Len(), "err", err)
-		return answer.String(), err
-	case <-ctx.Done():
-		// Stop the stream and wait for the goroutine to stop writing answer before
-		// we read it — strings.Builder is not concurrency-safe.
-		sess.Close()
-		<-done
-		log.Warn("agent run interrupted", "dur", time.Since(start).Round(time.Millisecond), "err", ctx.Err())
-		return answer.String(), ctx.Err()
+// FireAgent starts the named agent's run over task and returns the run's id. The run is a first-class
+// chat in the agent manager: it streams live, persists its transcript to the agent store, and is
+// openable by its id — a notify or reminder it sets carries provenance back to it. It is
+// fire-and-forget (the run outlives the caller on the manager's background ctx); ctx is only used to
+// reject a call once the daemon is shutting down. The run's authority comes from its agentRuntime
+// (cage + gate + autonomy-resolved approver).
+func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, error) {
+	if _, ok := w.agents.Get(name); !ok {
+		return "", fmt.Errorf("workspace %q: no agent %q", w.name, name)
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	id := chat.NewID()
+	w.log.With("component", "agent").Info("firing agent", "agent", name, "run", id)
+	w.agentChats.Fire(id, name, task)
+	return id, nil
 }

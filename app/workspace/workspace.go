@@ -43,21 +43,25 @@ type Host struct {
 
 // Workspace is one isolated stack: its own tools, grants, persona, and chats over the Host.
 type Workspace struct {
-	name       string
-	dir        string
-	llm        agentkit.LLM
-	tools      agentkit.ToolSet
-	grants     gate.Grants
-	chats      *chat.Manager // user chats
-	userStore  *chat.Store   // the user chat store (behind chats)
-	agentStore *chat.Store   // agent run transcripts (SourceAgent)
-	agents     agent.Set
-	sched      *agent.Scheduler
-	reminders  *tools.Reminders // persistent reminder timers
-	notify     *notifier        // the seam every proactive message leaves through
-	waker      *tools.Waker     // self-continuation timers, bound to the chat manager
-	vault      *secret.Vault    // this workspace's own encrypted credential vault; nil when locked
-	log        *slog.Logger
+	name          string
+	dir           string
+	llm           agentkit.LLM
+	tools         agentkit.ToolSet
+	grants        gate.Grants
+	approver      gate.Approver // the out-of-band human; handed to a guarded agent's firing, nil-safe
+	chats         *chat.Manager // user chats
+	agentChats    *chat.Manager // agent runs (agent-store counterpart of chats)
+	userStore     *chat.Store   // the user chat store (behind chats)
+	agentStore    *chat.Store   // agent run transcripts (SourceAgent, behind agentChats)
+	agents        agent.Set
+	agentRuntimes map[string]*runtime.Runtime // one per declared agent (cage+gate+autonomy), by name
+	readOnly      *runtime.Runtime            // orphaned-run runtime: no tools, view an old transcript only
+	sched         *agent.Scheduler
+	reminders     *tools.Reminders // persistent reminder timers
+	notify        *notifier        // the seam every proactive message leaves through
+	waker         *tools.Waker     // self-continuation timers, bound to the chat manager
+	vault         *secret.Vault    // this workspace's own encrypted credential vault; nil when locked
+	log           *slog.Logger
 }
 
 // Open builds (creating its directory if needed) a workspace named name rooted at dir: it assembles
@@ -182,12 +186,14 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	}
 
 	w := &Workspace{
-		name:       name,
-		dir:        dir,
-		llm:        h.LLM,
-		tools:      toolset,
-		grants:     gs,
-		chats:      chat.NewManager(rt, userStore, wslog),
+		name:     name,
+		dir:      dir,
+		llm:      h.LLM,
+		tools:    toolset,
+		grants:   gs,
+		approver: h.Approver,
+		// User chats all spin under the one workspace root runtime — the resolver is a constant.
+		chats:      chat.NewManager(func(string) *runtime.Runtime { return rt }, userStore, wslog),
 		userStore:  userStore,
 		agentStore: agentStore,
 		agents:     agents,
@@ -197,11 +203,29 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		vault:      vault,
 		log:        wslog,
 	}
-	// Bind wake to the live chat manager now it exists: a fired wake resolves its chat by id via Open.
-	waker.Bind(w.chats)
+	// One static runtime per declared agent (its cage + gate + autonomy), built once — Autonomy is a
+	// declaration property, so a run's authority never depends on when it fires. The agent manager's
+	// resolver maps a run to its owner's runtime via the persisted Meta.Agent; a run whose agent was
+	// deleted resolves to readOnly (no tools) so its transcript still opens but it cannot act.
+	w.agentRuntimes = make(map[string]*runtime.Runtime, len(agents))
+	for _, a := range agents.All() {
+		w.agentRuntimes[a.Name] = w.agentRuntime(a)
+	}
+	w.readOnly = runtime.New(h.LLM, runtime.WithGate(policy(), gs, nil))
+	w.agentChats = chat.NewManager(func(id string) *runtime.Runtime {
+		if art, ok := w.agentRuntimes[w.agentStore.OwnerOf(id)]; ok {
+			return art
+		}
+		return w.readOnly
+	}, agentStore, wslog)
+	// Bind wake to BOTH managers: a fired wake resumes its chat by id in the store that owns it — an
+	// agent run's continuation must re-open in the agent manager (its own runtime + store), not spawn
+	// a stray user chat under the same id.
+	waker.Bind(sessionRouter{user: w.chats, agent: w.agentChats, agentStore: agentStore})
 	w.sched = agent.NewScheduler(agents, wslog, func(ctx context.Context, a agent.Agent) {
-		// A scheduled firing is unattended — nobody sees a returned error, so surface it here or it
-		// vanishes. The answer is intentionally dropped (the transcript is persisted by FireAgent).
+		// A scheduled firing is fire-and-forget; the run streams + persists like any chat. Surface only
+		// a start-time rejection (unknown agent / shutting down) — the run's own errors land in its
+		// transcript.
 		if _, err := w.FireAgent(ctx, a.Name, "Run your scheduled task now."); err != nil {
 			wslog.With("component", "scheduler").Error("scheduled agent failed", "agent", a.Name, "err", err)
 		}
@@ -279,10 +303,14 @@ func (w *Workspace) OnReminderChange(fn func()) { w.reminders.OnChange(fn) }
 // must not block. Set once, at wiring time.
 func (w *Workspace) OnNotification(fn func(tools.Notification)) { w.notify.observe(fn) }
 
-// MarkRead advances a chat's shared read cursor (user chat or agent run; the wrong store no-ops).
-func (w *Workspace) MarkRead(id string) {
+// MarkRead advances a chat's shared read cursor in the kind-selected store ("agent" → agent runs,
+// else user chats). The caller (the wire) always names the store, so this touches exactly one.
+func (w *Workspace) MarkRead(kind, id string) {
+	if kind == "agent" {
+		_ = w.agentStore.MarkRead(id)
+		return
+	}
 	_ = w.userStore.MarkRead(id)
-	_ = w.agentStore.MarkRead(id)
 }
 
 // buildTools assembles the workspace toolset: the base tools plus code_run (the root chat's cage),
@@ -376,7 +404,14 @@ func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scan
 		mtools, err := connectMCP(ctx, conn)
 		cancel()
 		if err != nil {
-			log.Warn("mcp server skipped", "server", srv.Name, "err", err)
+			var needAuth *mcp.AuthRequiredError
+			if errors.As(err, &needAuth) {
+				// The server wants OAuth and isn't authorized yet — not a failure, an action for the
+				// operator. The daemon cannot open a browser; the interactive flow is the CLI.
+				log.Info("mcp server needs authorization", "server", srv.Name, "action", "run: nocturn auth "+srv.Name)
+			} else {
+				log.Warn("mcp server skipped", "server", srv.Name, "err", err)
+			}
 			continue
 		}
 		clash := false

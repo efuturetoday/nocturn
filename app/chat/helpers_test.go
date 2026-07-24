@@ -99,7 +99,7 @@ func newManagerRT(t *testing.T, rt *runtime.Runtime) (*chat.Manager, *chat.Store
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	return chat.NewManager(rt, store, slog.New(slog.DiscardHandler)), store
+	return chat.NewManager(func(string) *runtime.Runtime { return rt }, store, slog.New(slog.DiscardHandler)), store
 }
 
 // saveCounter records the store's OnSave firings, so a test can assert a persist did (or did not)

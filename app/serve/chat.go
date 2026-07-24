@@ -14,38 +14,48 @@ import (
 // so the request is self-identifying: an unknown id starts that chat (create-on-first-submit), a
 // known one appends. No server-minted id, no chat.opened round-trip, no correlation problem. The
 // server validates the id (ValidID) before it is ever a filesystem key.
+// Kind selects which chat store a command targets: "" (or "user") the user chats, "agent" the agent
+// runs. The client sends it on every store-addressed chat.* command, so the one handler set serves
+// both managers; the client never needs to derive the store (it holds the kind statelessly, per
+// conversation). The only agent-specific wire beyond this is the roster (agent.list) and the trigger
+// (agent.fire).
 type ChatSubmit struct {
 	Cmd  string `json:"cmd"`
 	Ws   string `json:"ws"`
+	Kind string `json:"kind"`
 	Text string `json:"text"`
 	ID   string `json:"id"`
 }
 
 // ChatOpen resumes a chat in workspace Ws: the server replies with a ChatSnapshot, then streams turns.
 type ChatOpen struct {
-	Cmd string `json:"cmd"`
-	Ws  string `json:"ws"`
-	ID  string `json:"id"`
+	Cmd  string `json:"cmd"`
+	Ws   string `json:"ws"`
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
 }
 
-// ChatList requests a workspace's chat list.
+// ChatList requests a workspace's chat list; Kind selects the store ("" user | "agent" runs).
 type ChatList struct {
-	Cmd string `json:"cmd"`
-	Ws  string `json:"ws"`
+	Cmd  string `json:"cmd"`
+	Ws   string `json:"ws"`
+	Kind string `json:"kind"`
 }
 
 // ChatCancel aborts a chat's running turn (id-addressed; the chat and session stay open).
 type ChatCancel struct {
-	Cmd string `json:"cmd"`
-	Ws  string `json:"ws"`
-	ID  string `json:"id"`
+	Cmd  string `json:"cmd"`
+	Ws   string `json:"ws"`
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
 }
 
-// ChatMarkRead advances a chat's shared read cursor (clears its unread state on every device).
+// ChatMarkRead advances a chat's shared read cursor in the Kind-selected store.
 type ChatMarkRead struct {
-	Cmd string `json:"cmd"`
-	Ws  string `json:"ws"`
-	ID  string `json:"id"`
+	Cmd  string `json:"cmd"`
+	Ws   string `json:"ws"`
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
 }
 
 // ── server → client (type) ───────────────────────────────────────────────────
@@ -130,10 +140,12 @@ type ChatActivity struct {
 	Chat chat.Meta `json:"chat"`
 }
 
-// ChatListResult is a workspace's chat list, replying to chat.list.
+// ChatListResult is a workspace's chat list, replying to chat.list. Kind echoes the requested store
+// ("" user | "agent") so a client that lists both routes each result to the right view.
 type ChatListResult struct {
 	Type  string      `json:"type"`
 	Ws    string      `json:"ws"`
+	Kind  string      `json:"kind,omitempty"`
 	Chats []chat.Meta `json:"chats"`
 }
 
@@ -160,15 +172,18 @@ func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 			c.badRequest(ctx, "bad chat.list")
 			return
 		}
-		c.chatList(ctx, m.Ws)
+		c.chatList(ctx, m)
 	case "chat.cancel":
 		var m ChatCancel
 		if err := json.Unmarshal(data, &m); err != nil {
 			c.badRequest(ctx, "bad chat.cancel")
 			return
 		}
+		if !c.requireKind(ctx, m.Kind) {
+			return
+		}
 		if ws, ok := c.workspace(ctx, m.Ws); ok {
-			ws.Chats().Cancel(m.ID)
+			ws.ChatManager(m.Kind).Cancel(m.ID)
 		}
 	case "chat.markRead":
 		var m ChatMarkRead
@@ -176,8 +191,11 @@ func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 			c.badRequest(ctx, "bad chat.markRead")
 			return
 		}
+		if !c.requireKind(ctx, m.Kind) {
+			return
+		}
 		if ws, ok := c.workspace(ctx, m.Ws); ok {
-			ws.MarkRead(m.ID)
+			ws.MarkRead(m.Kind, m.ID)
 		}
 	default:
 		c.badRequest(ctx, "unknown action: "+cmd)
@@ -185,6 +203,9 @@ func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 }
 
 func (c *conn) chatSubmit(ctx context.Context, m ChatSubmit) {
+	if !c.requireKind(ctx, m.Kind) {
+		return
+	}
 	ws, ok := c.workspace(ctx, m.Ws)
 	if !ok {
 		return
@@ -198,15 +219,19 @@ func (c *conn) chatSubmit(ctx context.Context, m ChatSubmit) {
 	}
 	// Submit (not Open().Submit) so the Manager records the input as the in-flight turn's user message —
 	// a device reopening before the turn ends still sees the message and the working state.
-	ws.Chats().Submit(m.ID, m.Text)
+	ws.ChatManager(m.Kind).Submit(m.ID, m.Text)
 }
 
 func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
+	if !c.requireKind(ctx, m.Kind) {
+		return
+	}
 	ws, ok := c.workspace(ctx, m.Ws)
 	if !ok {
 		return
 	}
-	msgs, err := ws.Chats().Transcript(m.ID)
+	mgr := ws.ChatManager(m.Kind)
+	msgs, err := mgr.Transcript(m.ID)
 	if err != nil {
 		c.failed(ctx, "open", err)
 		return
@@ -214,7 +239,7 @@ func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 	if msgs == nil {
 		msgs = []agentkit.Message{} // the wire carries [] not null
 	}
-	tools, err := ws.Chats().Tools(m.ID)
+	tools, err := mgr.Tools(m.ID)
 	if err != nil {
 		c.failed(ctx, "open", err)
 		return
@@ -227,7 +252,7 @@ func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 	// the working state. Its events are rendered to the SAME wire form as the live broadcast (chatEvent),
 	// so the client folds reopen + live by one path. Live events keep streaming on top of this.
 	snap := ChatSnapshot{Type: "chat.snapshot", ID: m.ID, Messages: msgs, Tools: tools}
-	if inf := ws.Chats().Inflight(m.ID); inf.Running {
+	if inf := mgr.Inflight(m.ID); inf.Running {
 		snap.InflightRunning = true
 		snap.InflightInput = inf.Input
 		events := make([]any, 0, len(inf.Events))
@@ -241,17 +266,20 @@ func (c *conn) chatOpen(ctx context.Context, m ChatOpen) {
 	c.send(ctx, snap)
 }
 
-func (c *conn) chatList(ctx context.Context, wsName string) {
-	ws, ok := c.workspace(ctx, wsName)
+func (c *conn) chatList(ctx context.Context, m ChatList) {
+	if !c.requireKind(ctx, m.Kind) {
+		return
+	}
+	ws, ok := c.workspace(ctx, m.Ws)
 	if !ok {
 		return
 	}
-	metas, err := ws.Chats().List()
+	metas, err := ws.ChatManager(m.Kind).List()
 	if err != nil {
 		c.failed(ctx, "list", err)
 		return
 	}
-	c.send(ctx, ChatListResult{Type: "chat.list", Ws: wsName, Chats: metas})
+	c.send(ctx, ChatListResult{Type: "chat.list", Ws: m.Ws, Kind: m.Kind, Chats: metas})
 }
 
 // chatEvent renders one agentkit event as a wire chat.* message tagged with its chat id, for

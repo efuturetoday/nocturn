@@ -61,6 +61,18 @@ func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices
 	return &conn{ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, log: log, out: make(chan any, 64)}
 }
 
+// requireKind enforces that a store-addressed chat command names a valid store — "user" or "agent".
+// Kind is mandatory (never defaulted): the client holds it per conversation and sends it on every
+// chat.* command, so a missing or unknown kind is a client bug, rejected rather than silently treated
+// as user chats.
+func (c *conn) requireKind(ctx context.Context, kind string) bool {
+	if kind == "user" || kind == "agent" {
+		return true
+	}
+	c.badRequest(ctx, "missing or invalid kind (want \"user\" or \"agent\")")
+	return false
+}
+
 // workspace resolves a workspace by name, writing an error and returning false if unknown.
 func (c *conn) workspace(ctx context.Context, name string) (*workspace.Workspace, bool) {
 	w, ok := c.spaces[name]
@@ -153,6 +165,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.workspaceCmd(ctx, env.Cmd)
 	case "reminder":
 		c.reminder(ctx, env.Cmd, data)
+	case "agent":
+		c.agentCmd(ctx, env.Cmd, data)
 	default:
 		c.badRequest(ctx, "unknown domain: "+env.Cmd)
 	}

@@ -78,11 +78,17 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 		ws.OnChatUpdate(func(m chat.Meta) {
 			hub.broadcast(ChatActivity{Type: "chat.activity", Ws: name, Chat: m})
 		})
-		ws.Chats().OnEvent(func(chatID string, ev agentkit.Event) {
+		// Both managers' live events reach every device on the same wire form (chatEvent, tagged with
+		// the chat/run id) — so an agent run streams its tokens/tools exactly like a user chat, and the
+		// client renders it via the ONE reducer, distinguished only by id (agent runs list under kind
+		// "agent"). The event carries no kind: the client already knows which ids are agent runs.
+		stream := func(chatID string, ev agentkit.Event) {
 			if msg, ok := chatEvent(chatID, ev); ok {
 				hub.broadcast(msg)
 			}
-		})
+		}
+		ws.Chats().OnEvent(stream)
+		ws.AgentChats().OnEvent(stream)
 		// A reminder set, cancelled or fired changes what a device should be listing. Broadcast the
 		// bare fact and let each client re-list, so devices converge on the daemon's set.
 		ws.OnReminderChange(func() {
@@ -97,8 +103,8 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 				ChatID: n.ChatID, Title: n.Title, Message: n.Message,
 			})
 		})
-		// On daemon shutdown (Serve returns): stop each Manager's reaper and close every live session.
-		defer ws.Chats().CloseAll()
+		// On daemon shutdown (Serve returns): stop both managers' reapers and close every live session.
+		defer ws.Close()
 		// Start the cron schedulers only AFTER this workspace's subscriptions are wired: a scheduled
 		// firing saves a transcript (→ OnSave/OnEvent), so starting earlier would race the wiring.
 		go ws.StartAgents(ctx)

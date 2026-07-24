@@ -58,6 +58,7 @@ type Meta struct {
 	ID      string    `json:"id"`
 	Name    string    `json:"name"`
 	Source  Source    `json:"source"`
+	Agent   string    `json:"agent,omitempty"` // the owning agent's name (agent runs only); "" = a user chat
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
 	Read    time.Time `json:"read,omitzero"` // shared read cursor; unread when Updated is later
@@ -151,6 +152,8 @@ func (s *Store) Save(id string, msgs []agentkit.Message) error {
 	now := time.Now()
 	if rec == nil {
 		rec = &record{Meta: Meta{ID: id, Name: nameFrom(msgs), Source: s.source, Created: now}}
+	} else if rec.Meta.Name == "" {
+		rec.Meta.Name = nameFrom(msgs) // a run stamped by SetOwner before any Touch: name it now
 	}
 	rec.Messages = msgs
 	rec.Meta.Updated = now
@@ -182,6 +185,10 @@ func (s *Store) Touch(id, text string) error {
 	msgs := []agentkit.Message{{Role: agentkit.RoleUser, Content: text}} // reuse nameFrom/previewFrom
 	if rec == nil {
 		rec = &record{Meta: Meta{ID: id, Name: nameFrom(msgs), Source: s.source, Created: now}}
+	} else if rec.Meta.Name == "" {
+		// An agent run's record is created empty by SetOwner (to stamp the owner before the session
+		// opens); its name is set here on the first Touch — otherwise it would list nameless.
+		rec.Meta.Name = nameFrom(msgs)
 	}
 	rec.Meta.Updated = now
 	rec.Meta.Preview = previewFrom(msgs) // the latest message is the user's own, until the turn answers
@@ -257,6 +264,37 @@ func (s *Store) Load(id string) ([]agentkit.Message, error) {
 		return nil, err
 	}
 	return rec.Messages, nil
+}
+
+// OwnerOf returns the agent that owns the run id (Meta.Agent), or "" for a user chat or an unknown
+// id. The agent manager's runtime resolver reads it to spin a run under its declaring agent's runtime.
+func (s *Store) OwnerOf(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, err := s.read(id)
+	if err != nil || rec == nil {
+		return ""
+	}
+	return rec.Meta.Agent
+}
+
+// SetOwner stamps the owning agent's name on a run, creating the record if needed. It runs BEFORE the
+// run's session is opened, so the manager's resolver (via OwnerOf) sees the owner on the first
+// resolve; a later Touch/Save preserves it (both keep an existing record's Meta). It does not fire the
+// save callback — no list-visible change happens until the run's first Touch.
+func (s *Store) SetOwner(id, agent string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, err := s.read(id)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if rec == nil {
+		rec = &record{Meta: Meta{ID: id, Source: s.source, Created: now}}
+	}
+	rec.Meta.Agent = agent
+	return s.write(rec)
 }
 
 // List returns every stored chat id.

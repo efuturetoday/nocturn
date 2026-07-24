@@ -27,9 +27,9 @@ const idleTTL = 10 * time.Minute
 // No context.Context is stored (Go: don't put a ctx in a struct) — the session keeps its own cancel,
 // and the Manager tracks + closes; CloseAll is the single global stop.
 type Manager struct {
-	rt    *runtime.Runtime
-	store *Store
-	log   *slog.Logger
+	resolve func(id string) *runtime.Runtime // the runtime a chat id spins under (see NewManager)
+	store   *Store
+	log     *slog.Logger
 
 	mu     sync.Mutex
 	active map[string]*live // by chat id
@@ -57,10 +57,13 @@ type live struct {
 	forest *forest          // the turn's tool calls (nested) — for PERSISTING the forest group at close
 }
 
-// NewManager builds a Manager over a Runtime and a Store and starts its idle-session reaper. Call
+// NewManager builds a Manager over a per-chat runtime resolver and a Store and starts its
+// idle-session reaper. resolve reports which runtime a chat id spins under: a user manager returns a
+// constant (the workspace root runtime); an agent manager returns the owning agent's runtime (keyed
+// by the run's Meta.Agent), which is what lets one agent run per its own cage/gate/persona. Call
 // CloseAll on shutdown to stop the reaper and close every live session.
-func NewManager(rt *runtime.Runtime, store *Store, log *slog.Logger) *Manager {
-	m := &Manager{rt: rt, store: store, log: log.With("component", "chat"), active: map[string]*live{}, stop: make(chan struct{})}
+func NewManager(resolve func(id string) *runtime.Runtime, store *Store, log *slog.Logger) *Manager {
+	m := &Manager{resolve: resolve, store: store, log: log.With("component", "chat"), active: map[string]*live{}, stop: make(chan struct{})}
 	go m.reap()
 	return m
 }
@@ -90,7 +93,7 @@ func (m *Manager) openLocked(id string) *agentkit.Session {
 	// chat id is stamped on the ctx so the wake tool can resume THIS chat by id — a plain tag, no
 	// resume logic here (the manager stays wake-agnostic).
 	ctx := tools.WithChatID(context.Background(), id)
-	lv := &live{sess: m.rt.Session(ctx, agentkit.WithStore(m.store, id)), idleSince: time.Now()}
+	lv := &live{sess: m.resolve(id).Session(ctx, agentkit.WithStore(m.store, id)), idleSince: time.Now()}
 	m.active[id] = lv
 	m.wg.Add(1)
 	go m.pump(id, lv)
@@ -122,6 +125,28 @@ func (m *Manager) Submit(id, text string) {
 	m.mu.Unlock()
 	m.touch(id, text)
 	sess.Submit(text)
+}
+
+// Fire starts an agent run: it stamps the run's owner (so the runtime resolver spins it under that
+// agent's runtime), opens a fresh live session, and submits the task — after which the run behaves
+// exactly like any chat (its pump persists the transcript, builds the forest, and streams events to
+// OnEvent). It is fire-and-forget: the run outlives the caller (the session runs on the manager's own
+// background ctx), so a scheduled or manually-triggered run is unaffected by a connection closing.
+// Intended for the agent manager; agentName must be the run's owning agent.
+func (m *Manager) Fire(id, agentName, task string) {
+	if err := m.store.SetOwner(id, agentName); err != nil {
+		m.log.Error("agent run: stamping owner failed", "chat", id, "agent", agentName, "err", err)
+		return
+	}
+	m.mu.Lock()
+	sess := m.openLocked(id) // resolver now sees the owner via OwnerOf
+	if lv := m.active[id]; lv != nil {
+		lv.input = task
+	}
+	m.mu.Unlock()
+	m.log.Info("agent run fired", "chat", id, "agent", agentName)
+	m.touch(id, task)
+	sess.Submit(task)
 }
 
 // touch bumps the chat's list metadata (Updated + Preview) from the submitted text so the chat rises
