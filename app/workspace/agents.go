@@ -32,6 +32,11 @@ func (w *Workspace) Close() {
 	w.agentChats.CloseAll()
 }
 
+// maxAgentRuns caps how many past runs each agent keeps. Runs are an audit tail (see them in the app),
+// not a permanent archive: a cron agent fires forever, so without a cap the agent store grows without
+// bound (seen in the wild at thousands of runs). Applied per agent, on every fire and once at Open.
+const maxAgentRuns = 50
+
 // Agents returns the workspace's declared agents, sorted by name.
 func (w *Workspace) Agents() []agent.Agent { return w.agents.All() }
 
@@ -98,5 +103,41 @@ func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, e
 	id := chat.NewID()
 	w.log.With("component", "agent").Info("firing agent", "agent", name, "run", id)
 	w.agentChats.Fire(id, name, task)
+	// Bound this agent's run history: the fresh run (just stamped, newest) is kept; older ones past the
+	// cap are dropped. Best-effort — a prune failure must not fail the fire.
+	if n, err := w.agentStore.PruneAgent(name, maxAgentRuns); err != nil {
+		w.log.Warn("pruning agent runs failed", "agent", name, "err", err)
+	} else if n > 0 {
+		w.log.Info("pruned old agent runs", "agent", name, "deleted", n, "keep", maxAgentRuns)
+	}
 	return id, nil
+}
+
+// pruneAgentRuns caps every agent's run history to maxAgentRuns at Open — including runs whose agent
+// was since deleted (their files would otherwise linger forever). It bounds an existing backlog once,
+// then FireAgent keeps each agent bounded from there.
+func (w *Workspace) pruneAgentRuns() {
+	metas, err := w.agentStore.Metas()
+	if err != nil {
+		w.log.Warn("listing agent runs to prune failed", "err", err)
+		return
+	}
+	owners := map[string]struct{}{}
+	for _, m := range metas {
+		if m.Agent != "" {
+			owners[m.Agent] = struct{}{}
+		}
+	}
+	total := 0
+	for owner := range owners {
+		n, err := w.agentStore.PruneAgent(owner, maxAgentRuns)
+		if err != nil {
+			w.log.Warn("pruning agent runs failed", "agent", owner, "err", err)
+			continue
+		}
+		total += n
+	}
+	if total > 0 {
+		w.log.Info("pruned agent runs at startup", "deleted", total, "keepPerAgent", maxAgentRuns)
+	}
 }

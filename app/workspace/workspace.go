@@ -237,6 +237,9 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 			wslog.With("component", "scheduler").Error("scheduled agent failed", "agent", a.Name, "err", err)
 		}
 	})
+	// Bound any existing agent-run backlog (a long-running cron agent accumulates thousands otherwise);
+	// FireAgent keeps each agent capped from here.
+	w.pruneAgentRuns()
 	// Re-arm persisted reminders (overdue ones fire promptly) now the workspace is wired.
 	reminders.Restore()
 	// Every kind's discovery skips (bad agent/skill/plugin/server) drained through the one collector,

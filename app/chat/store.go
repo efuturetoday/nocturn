@@ -345,6 +345,33 @@ func (s *Store) Rename(id, name string) error {
 	return s.write(rec)
 }
 
+// PruneAgent caps how many runs one agent keeps: it deletes all but the keepN most-recently-updated
+// records owned by agent (Meta.Agent == agent), oldest first. Runs of other agents and user chats are
+// untouched. Returns the number deleted. A keepN <= 0 deletes every run of the agent. This is how an
+// unbounded firing history (a cron agent runs forever) is bounded — the runs are an audit tail, not a
+// permanent archive.
+func (s *Store) PruneAgent(agent string, keepN int) (int, error) {
+	metas, err := s.Metas() // newest-first; takes its own lock, released before the deletes below
+	if err != nil {
+		return 0, err
+	}
+	kept, deleted := 0, 0
+	for _, m := range metas {
+		if m.Agent != agent {
+			continue
+		}
+		if kept < keepN {
+			kept++
+			continue
+		}
+		if err := s.Delete(m.ID); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
 // Delete removes a chat's file. A missing chat is not an error.
 func (s *Store) Delete(id string) error {
 	if !ValidID(id) {

@@ -15,6 +15,73 @@ import (
 func userMsg(text string) agentkit.Message {
 	return agentkit.Message{Role: agentkit.RoleUser, Content: text}
 }
+
+// TestStore_PruneAgent caps one agent's runs, keeping the newest keepN and leaving other agents' runs
+// (and user chats) untouched.
+func TestStore_PruneAgent(t *testing.T) {
+	st, err := chat.NewStore(t.TempDir(), chat.WithSource(chat.SourceAgent))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	// Save is sequential, so each run's Updated (time.Now, monotonic) strictly increases — the last
+	// saved is the newest. Four for "aa", two for "bb".
+	mk := func(id, owner string) {
+		if err := st.SetOwner(id, owner); err != nil {
+			t.Fatalf("SetOwner: %v", err)
+		}
+		if err := st.Save(id, []agentkit.Message{userMsg("run " + id)}); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+	}
+	for _, id := range []string{"aa01", "aa02", "aa03", "aa04"} {
+		mk(id, "aa")
+	}
+	for _, id := range []string{"bb01", "bb02"} {
+		mk(id, "bb")
+	}
+
+	deleted, err := st.PruneAgent("aa", 2)
+	if err != nil {
+		t.Fatalf("PruneAgent: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2", deleted)
+	}
+
+	count := func(owner string) int {
+		metas, _ := st.Metas()
+		n := 0
+		for _, m := range metas {
+			if m.Agent == owner {
+				n++
+			}
+		}
+		return n
+	}
+	if got := count("aa"); got != 2 {
+		t.Errorf(`"aa" runs = %d, want 2 kept`, got)
+	}
+	if got := count("bb"); got != 2 {
+		t.Errorf(`"bb" runs = %d, want 2 (another agent must be untouched)`, got)
+	}
+	// The two newest "aa" runs survive (aa03, aa04).
+	for _, id := range []string{"aa03", "aa04"} {
+		if msgs, _ := st.Load(id); len(msgs) == 0 {
+			t.Errorf("run %q should have survived (newest kept)", id)
+		}
+	}
+
+	// keepN 0 deletes every remaining run of the agent; the other agent stays.
+	if _, err := st.PruneAgent("aa", 0); err != nil {
+		t.Fatalf("PruneAgent(0): %v", err)
+	}
+	if got := count("aa"); got != 0 {
+		t.Errorf(`"aa" runs after keep=0 = %d, want 0`, got)
+	}
+	if got := count("bb"); got != 2 {
+		t.Errorf(`"bb" runs = %d, want 2 still`, got)
+	}
+}
 func asstMsg(text string) agentkit.Message {
 	return agentkit.Message{Role: agentkit.RoleAssistant, Content: text}
 }
