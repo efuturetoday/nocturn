@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit/gate"
+	"github.com/efuturetoday/nocturn/app/mcp/authflow"
 	"github.com/efuturetoday/nocturn/app/secret"
 	"github.com/efuturetoday/nocturn/app/tools"
 )
@@ -30,6 +31,19 @@ import (
 // maxResponseBytes caps how much of an MCP response is read (both content
 // types) — the same bound as the net tool.
 const maxResponseBytes = 10 << 20 // 10 MiB
+
+// AuthRequiredError is returned when a server answers 401 — it wants OAuth (the MCP
+// authorization spec). It carries the resource-metadata URL from the WWW-Authenticate
+// challenge so a caller can point the operator at `nocturn auth <server>`. The daemon
+// treats it as "not connected yet, needs auth", not a hard failure.
+type AuthRequiredError struct {
+	Server           string
+	ResourceMetadata string
+}
+
+func (e *AuthRequiredError) Error() string {
+	return fmt.Sprintf("mcp: %s needs authorization — run: nocturn auth %s", e.Server, e.Server)
+}
 
 // credentialName is the one credential a server config can declare: the
 // server's own bearer, injected host-side as "Authorization: Bearer …".
@@ -169,7 +183,17 @@ func (c *Conn) transport(ctx context.Context, body []byte, header http.Header) (
 	}
 	// 5. A non-2xx is a server rejection (distinct from a network failure, where no response arrived).
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		wwwAuth := resp.Header.Get("WWW-Authenticate")
 		resp.Body.Close()
+		// A 401 means the server wants OAuth (the MCP authorization spec). Surface it as a typed,
+		// actionable error — parse the WWW-Authenticate challenge for the resource-metadata URL — so
+		// the daemon logs "run nocturn auth <server>" instead of an opaque rejection. The daemon can't
+		// open a browser; the interactive flow is `nocturn auth`.
+		if resp.StatusCode == http.StatusUnauthorized {
+			rm, _ := authflow.ParseWWWAuthenticate(wwwAuth)
+			c.log.Warn("mcp server needs authorization", "server", c.server.Name, "resource_metadata", rm)
+			return nil, &AuthRequiredError{Server: c.server.Name, ResourceMetadata: rm}
+		}
 		c.log.Warn("mcp server rejected", "host", c.host, "status", resp.StatusCode)
 		return nil, fmt.Errorf("mcp: %s: server rejected the request (HTTP %d)", c.server.Name, resp.StatusCode)
 	}
