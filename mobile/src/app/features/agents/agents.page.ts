@@ -1,30 +1,58 @@
 import { Component, ChangeDetectionStrategy, inject, computed } from '@angular/core';
 import { Router } from '@angular/router';
 import { DatePipe } from '@angular/common';
-import { IonContent, IonList, IonItem, IonLabel, IonIcon, IonNote } from '@ionic/angular/standalone';
+import {
+  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonIcon, IonNote, IonBadge, IonButton,
+} from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { chatbubbleOutline } from 'ionicons/icons';
-import { ChatService } from '../../core/services/chat.service';
+import { chatbubbleOutline, playOutline } from 'ionicons/icons';
+import { AgentService } from '../../core/services/agent.service';
 import { ChatListService } from '../../core/services/chat-list.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
-import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
+import type { AgentInfo, ChatMeta } from '../../core/protocol/nocturn-protocol';
 
 /**
- * Agents tab. Lists the agent runs — chats an agent owns (source === 'agent'), newest first — so
- * scheduled/background agent activity surfaces here. Tapping a run opens that chat. (Per-agent
- * grouping + live scheduler state need a server agent wire, a later slice.)
+ * Agents tab. Two sections: the ROSTER of declared agents (name, schedule, autonomy, fire button) and
+ * the RUNS they have produced (chats an agent owns, source === 'agent'). Firing is fire-and-forget —
+ * the run appears under Runs via chat.activity; tapping a run opens it (the reused ChatPage binds
+ * AgentRunService via the agents/run route, so the transcript loads and streams like any chat).
  */
 @Component({
   selector: 'app-agents',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, WorkspaceHeaderComponent, IonContent, IonList, IonItem, IonLabel, IonIcon, IonNote],
+  imports: [
+    DatePipe, WorkspaceHeaderComponent,
+    IonContent, IonList, IonListHeader, IonItem, IonLabel, IonIcon, IonNote, IonBadge, IonButton,
+  ],
   template: `
     <app-workspace-header />
 
     <ion-content class="ion-padding-vertical">
       <ion-list inset="true">
+        <ion-list-header><ion-label>Agents</ion-label></ion-list-header>
+        @for (a of agents(); track a.name) {
+          <ion-item>
+            <ion-label>
+              <h3>{{ a.name }}</h3>
+              @if (a.description) { <p>{{ a.description }}</p> }
+              <ion-note>
+                {{ a.when || 'manual' }}
+                <ion-badge [color]="a.autonomy === 'guarded' ? 'warning' : 'medium'">{{ a.autonomy }}</ion-badge>
+              </ion-note>
+            </ion-label>
+            <ion-button slot="end" fill="clear" (click)="fire(a)" [attr.aria-label]="'Run ' + a.name">
+              <ion-icon slot="icon-only" name="play-outline" />
+            </ion-button>
+          </ion-item>
+        } @empty {
+          <ion-item lines="none"><ion-label color="medium">No agents declared.</ion-label></ion-item>
+        }
+      </ion-list>
+
+      <ion-list inset="true">
+        <ion-list-header><ion-label>Runs</ion-label></ion-list-header>
         @for (r of runs(); track r.id) {
-          <ion-item button detail="true" (click)="openChat(r)">
+          <ion-item button detail="true" (click)="openRun(r)">
             <ion-icon slot="start" name="chatbubble-outline" color="medium" aria-hidden="true" />
             <ion-label>
               <h3>{{ r.name || 'Run' }}</h3>
@@ -39,21 +67,26 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
   `,
 })
 export class AgentsPage {
-  private readonly chat = inject(ChatService);
+  private readonly agentsSvc = inject(AgentService);
   private readonly chatList = inject(ChatListService);
   private readonly router = inject(Router);
 
+  protected readonly agents = this.agentsSvc.agents;
   protected readonly runs = computed(() =>
     [...this.chatList.chats()].filter((c) => c.source === 'agent').sort((a, b) => b.updated.localeCompare(a.updated)),
   );
 
   constructor() {
-    addIcons({ chatbubbleOutline });
+    addIcons({ chatbubbleOutline, playOutline });
   }
 
-  protected openChat(c: ChatMeta): void {
+  /** Trigger a run now (fire-and-forget); it surfaces under Runs when it starts. */
+  protected fire(a: AgentInfo): void {
+    this.agentsSvc.fire(a.name);
+  }
+
+  protected openRun(r: ChatMeta): void {
     (document.activeElement as HTMLElement | null)?.blur();
-    this.chat.openChat(c.id);
-    void this.router.navigate(['/agents', 'run', c.id]);
+    void this.router.navigate(['/agents', 'run', r.id]); // ChatPage opens it (kind "agent") from the route
   }
 }

@@ -3,7 +3,7 @@ import { Router } from '@angular/router';
 import { ToastController } from '@ionic/angular/standalone';
 import { ConnectionService } from './connection.service';
 import { WorkspaceService } from './workspace.service';
-import { ChatService } from './chat.service';
+import { ChatListService } from './chat-list.service';
 import type { Notification } from '../protocol/nocturn-protocol';
 
 /**
@@ -27,7 +27,7 @@ import type { Notification } from '../protocol/nocturn-protocol';
 export class NotificationService {
   private readonly conn = inject(ConnectionService);
   private readonly workspaces = inject(WorkspaceService);
-  private readonly chat = inject(ChatService);
+  private readonly chatList = inject(ChatListService);
   private readonly router = inject(Router);
   private readonly toasts = inject(ToastController);
 
@@ -46,8 +46,11 @@ export class NotificationService {
     // chat we open is resolved against the right one.
     if (ws && ws !== this.workspaces.active()) await this.workspaces.setActive(ws);
     if (!chatId) return;
-    this.chat.openChat(chatId);
-    await this.router.navigate(['/chat', chatId]);
+    // Route by the chat's kind so an agent run opens its own detail (AgentRunService) and a user chat
+    // the chat detail. Source comes from the live list (a fired run is there via chat.activity);
+    // default to a user chat if it's not listed yet. ChatPage opens it from the route.
+    const source = this.chatList.chats().find((c) => c.id === chatId)?.source;
+    await this.router.navigate(source === 'agent' ? ['/agents', 'run', chatId] : ['/chat', chatId]);
   }
 
   private async present(n: Notification): Promise<void> {

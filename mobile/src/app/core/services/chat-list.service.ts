@@ -51,13 +51,20 @@ export class ChatListService {
       if (this.conn.state() !== 'connected') return;
       const ws = this.ws.active();
       if (!ws || !this.ws.workspaces().some((w) => w.name === ws)) return;
-      this.conn.send({ cmd: 'chat.list', ws });
+      this.listFor(ws);
     });
   }
 
   listChats(): void {
     const ws = this.ws.active();
-    if (ws) this.conn.send({ cmd: 'chat.list', ws });
+    if (ws) this.listFor(ws);
+  }
+
+  /** List BOTH stores: user chats and agent runs land in one list (each view filters by source). The
+      list is otherwise kept live by the per-chat chat.activity push, which covers both stores. */
+  private listFor(ws: string): void {
+    this.conn.send({ cmd: 'chat.list', ws, kind: 'user' });
+    this.conn.send({ cmd: 'chat.list', ws, kind: 'agent' });
   }
 
   startViewing(id: string): void {
@@ -73,7 +80,12 @@ export class ChatListService {
   private reduce(e: ServerEvent): void {
     switch (e.type) {
       case 'chat.list':
-        if (e.ws === this.ws.active()) this._chats.set(e.chats);
+        // Two lists arrive (one per kind); each replaces only its own kind's chats, so the merged
+        // list holds both without one wholesale-set clobbering the other.
+        if (e.ws === this.ws.active()) {
+          const isAgent = e.kind === 'agent';
+          this._chats.update((cs) => [...cs.filter((c) => (c.source === 'agent') !== isAgent), ...e.chats]);
+        }
         break;
 
       case 'chat.activity':
@@ -88,10 +100,13 @@ export class ChatListService {
     }
   }
 
-  /** Advance a chat's shared read cursor on the daemon (clears its dot on every device). */
+  /** Advance a chat's shared read cursor on the daemon (clears its dot on every device). The store is
+      the chat's own kind, read from the metadata this list already holds — not tracked state. */
   private markRead(id: string): void {
     const ws = this.ws.active();
-    if (ws) this.conn.send({ cmd: 'chat.markRead', ws, id });
+    if (!ws) return;
+    const kind = this._chats().find((c) => c.id === id)?.source ?? 'user';
+    this.conn.send({ cmd: 'chat.markRead', ws, kind, id });
   }
 
   /** Insert or replace one chat's metadata in the list (from a chat.activity push). */

@@ -1,26 +1,43 @@
 import {
-  Component, ChangeDetectionStrategy, inject, input, effect, signal, untracked, viewChild,
+  Component, ChangeDetectionStrategy, inject, input, effect, signal, untracked, viewChild, ElementRef,
 } from '@angular/core';
 import {
-  IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonBackButton, IonButton, IonIcon,
-  IonFooter, IonTextarea, IonFab, IonFabButton,
-  type ViewWillEnter, type ViewDidEnter, type ViewDidLeave,
+  IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonBackButton, IonIcon,
+  IonFooter, IonFab, IonFabButton,
+  type ViewWillEnter, type ViewWillLeave, type ViewDidEnter, type ViewDidLeave,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { sendOutline, stopOutline, refreshOutline, chevronDownOutline } from 'ionicons/icons';
+import { chevronDownOutline } from 'ionicons/icons';
+import { ActivatedRoute } from '@angular/router';
 import { ChatService } from '../../core/services/chat.service';
+import { AgentRunService } from '../../core/services/agent-run.service';
+import { ConversationService } from '../../core/services/conversation.service';
 import { ChatListService } from '../../core/services/chat-list.service';
+import type { Source } from '../../core/protocol/nocturn-protocol';
 import { ConnectionService } from '../../core/services/connection.service';
 import { KeyboardService } from '../../core/services/keyboard.service';
 import { MessageBubbleComponent } from './components/message-bubble';
+import { ComposerComponent } from '../../shared/composer';
+import { KbFollowDirective } from '../../shared/kb-follow.directive';
 
 @Component({
   selector: 'app-chat',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  // The reused page binds to whichever conversation store its route selects (data.kind): user chats
+  // → ChatService, agent runs → AgentRunService. Provided as the ConversationService token so children
+  // (e.g. tool-frame) resolve the SAME route-correct instance without knowing the kind.
+  providers: [
+    {
+      provide: ConversationService,
+      useFactory: (route: ActivatedRoute, user: ChatService, agent: AgentRunService) =>
+        route.snapshot.data['kind'] === 'agent' ? agent : user,
+      deps: [ActivatedRoute, ChatService, AgentRunService],
+    },
+  ],
   imports: [
-    IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonBackButton, IonButton, IonIcon,
-    IonFooter, IonTextarea, IonFab, IonFabButton,
-    MessageBubbleComponent,
+    IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonBackButton, IonIcon,
+    IonFooter, IonFab, IonFabButton,
+    MessageBubbleComponent, ComposerComponent, KbFollowDirective,
   ],
   template: `
     <ion-header>
@@ -37,7 +54,7 @@ import { MessageBubbleComponent } from './components/message-bubble';
       [scrollEvents]="true"
       (ionScroll)="onScroll()"
     >
-      @for (m of chat.messages(); track $index) {
+      @for (m of convo.messages(); track $index) {
         <app-message-bubble [message]="m" />
       }
 
@@ -51,61 +68,17 @@ import { MessageBubbleComponent } from './components/message-bubble';
       </ion-fab>
     </ion-content>
 
-    <ion-footer
-      class="kb-follow"
-      [style.transform]="'translateY(-' + kb.height() + 'px)'"
-      [style.--kb-fill.px]="kb.height()"
-    >
-      <ion-toolbar class="composer">
-        <ion-textarea
-          class="composer-input"
-          fill="outline"
-          [autoGrow]="true"
-          [rows]="1"
-          placeholder="Message…"
-          [value]="draft()"
-          (ionInput)="draft.set($any($event.target).value ?? '')"
-          (keydown.enter)="$event.preventDefault(); send()"
-          [disabled]="!connection.connected()"
-        />
-        <ion-buttons slot="end">
-          @if (chat.running()) {
-            <ion-button color="danger" (click)="chat.cancel()">
-              <ion-icon slot="icon-only" name="stop-outline" />
-            </ion-button>
-          } @else {
-            <ion-button [disabled]="!draft().trim() || !connection.connected()" (click)="send()">
-              <ion-icon slot="icon-only" name="send-outline" />
-            </ion-button>
-          }
-        </ion-buttons>
-      </ion-toolbar>
+    <ion-footer #footer kbFollow>
+      <app-composer
+        [running]="convo.running()"
+        [disabled]="!connection.connected()"
+        (send)="convo.submit($event)"
+        (cancel)="convo.cancel()"
+      />
     </ion-footer>
   `,
   styles: `
     .chat-content { --padding-start: 16px; --padding-end: 16px; --padding-top: 12px; --padding-bottom: 12px; }
-    /* Footer follows the keyboard: transform is set at keyboardWillShow (start of the iOS
-       animation) and this transition matches the ~0.25s iOS curve → slides in sync, no late snap. */
-    .kb-follow { position: relative; transition: transform 0.25s ease-out; will-change: transform; }
-    /* Fill the strip below the lifted footer (behind the keyboard + its rounded top corners) with
-       the toolbar colour, so chat content doesn't leak through. Height = keyboard height. */
-    .kb-follow::after {
-      content: '';
-      position: absolute;
-      top: 100%;
-      left: 0;
-      right: 0;
-      height: var(--kb-fill, 0);
-      background: var(--ion-toolbar-background, var(--ion-background-color-step-100));
-    }
-    .composer { --padding-start: 10px; --padding-end: 6px; --padding-top: 6px; --padding-bottom: 6px; }
-    .composer-input {
-      --background: var(--ion-background-color-step-100);
-      --border-radius: 20px;
-      --padding-start: 14px;
-      --padding-end: 14px;
-      margin: 0;
-    }
     /* Jump-to-latest FAB: always mounted, shown/hidden via a class so it never mounts mid-scroll
        (which reflows and stutters the scroll). */
     .scroll-fab { transition: opacity 0.15s ease, transform 0.15s ease; }
@@ -124,25 +97,33 @@ import { MessageBubbleComponent } from './components/message-bubble';
     }
   `,
 })
-export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
+export class ChatPage implements ViewWillEnter, ViewWillLeave, ViewDidEnter, ViewDidLeave {
   /** The chat id, bound from the `:id` route param via withComponentInputBinding(). Client-minted, so
       it is set for a fresh chat too (navigated to straight from the ask box). */
   readonly id = input<string>();
+  /** The conversation kind, bound from the route's `data.kind` via withComponentInputBinding(). */
+  readonly kind = input<Source>('user');
 
-  protected readonly chat = inject(ChatService);
+  /** The route-selected active conversation (user chats or agent runs) — the page binds to this. */
+  protected readonly convo = inject(ConversationService);
+  // The user-chat service specifically, only for the fresh-chat first-message queue (a user concept;
+  // agent runs are server-created and never carry a queued first message).
+  private readonly userChat = inject(ChatService);
   private readonly chatList = inject(ChatListService);
   protected readonly connection = inject(ConnectionService);
   protected readonly kb = inject(KeyboardService);
-  protected readonly draft = signal('');
 
   private readonly content = viewChild.required<IonContent>('content');
+  private readonly contentEl = viewChild.required('content', { read: ElementRef });
+  private readonly footer = viewChild.required('footer', { read: ElementRef });
+  private lastScrollTop = 0;
   // Whether the scroll is parked at (or near) the newest message. Drives auto-scroll: we only
   // follow the stream while the user is already at the bottom. If they scrolled up to read, a live
   // update must NOT yank them down — the jump-to-latest button appears instead.
   protected readonly atBottom = signal(true);
 
   constructor() {
-    addIcons({ sendOutline, stopOutline, chevronDownOutline });
+    addIcons({ chevronDownOutline });
 
     // Open the chat when the route param resolves/changes (ws = the active workspace). Viewing
     // state (which drives read-marking) is tied to the Ionic page lifecycle below, NOT here —
@@ -156,11 +137,13 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
       // queued first message — send it (an unknown id creates the chat on the daemon). Otherwise this
       // is an existing chat: open it for its snapshot, unless it's already the active one (don't
       // re-open — openChat resets local state and would wipe the live view).
-      const first = untracked(() => this.chat.takePendingFirst());
+      // A queued first message applies only to a freshly minted USER chat (agent runs are
+      // server-created); otherwise open the conversation for its snapshot unless it is already active.
+      const first = this.kind() === 'user' ? untracked(() => this.userChat.takePendingFirst()) : null;
       if (first) {
-        this.chat.submit(first);
-      } else if (i !== untracked(() => this.chat.activeChatId())) {
-        this.chat.openChat(i);
+        this.convo.submit(first);
+      } else if (i !== untracked(() => this.convo.activeChatId())) {
+        this.convo.openChat(i);
       }
     });
 
@@ -168,7 +151,7 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
     // load and as the stream grows, like a messaging app). `atBottom` is read untracked so this
     // reacts to new messages, not to the user's own scrolling flipping the flag.
     effect(() => {
-      this.chat.messages();
+      this.convo.messages();
       if (!untracked(this.atBottom)) return;
       // Defer past this render: scrollToBottom reads scrollHeight, which is still stale if we call
       // it before the @for lays out the just-appended token — so the view lags one frame behind the
@@ -176,10 +159,9 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
       requestAnimationFrame(() => void this.content().scrollToBottom(0));
     });
 
-    // The keyboard opening lifts the footer and grows the content's bottom padding, pushing the
-    // newest message up out of view even though nothing new arrived. Re-pin to the bottom when the
-    // keyboard height changes, but only if we were already following — so opening the keyboard while
-    // scrolled up to read doesn't yank the user down.
+    // The keyboard opening lifts the footer + grows the content's bottom padding, pushing the newest
+    // message up out of view even though nothing new arrived. Re-pin to the bottom when the height
+    // changes, but only if we were already following — so opening it while scrolled up doesn't yank.
     effect(() => {
       this.kb.height();
       if (!untracked(this.atBottom)) return;
@@ -210,23 +192,32 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
     if (i) this.chatList.stopViewing(i);
   }
 
-  /** Track how close the scroll is to the bottom, so live updates only follow when already there. */
+  // Collapse the keyboard-lift the INSTANT the leave starts — the leaving OnPush view isn't
+  // change-detected during the transition, so if we navigate with the keyboard open the footer's
+  // transform + the content's bottom padding stay stale (a big blank filler that only animates away
+  // at the end). Remove the inline styles imperatively (CD-independent); the directive/binding re-apply
+  // on re-enter. This RESETS (footer back to its normal spot), it does NOT hide it — so a CANCELED
+  // swipe-back leaves a normal, visible composer.
+  ionViewWillLeave(): void {
+    const f = this.footer().nativeElement as HTMLElement;
+    f.classList.remove('kb-follow'); // make it a vanilla footer for the slide (no compositor pin)
+    f.style.removeProperty('transform');
+    f.style.removeProperty('--kb-fill');
+    (this.contentEl().nativeElement as HTMLElement).style.removeProperty('--padding-bottom');
+  }
+
+  /** Track how close the scroll is to the bottom, so live updates only follow when already there.
+   * A swipe DOWN on the messages (scrollTop drops) dismisses an open keyboard, like iOS Messages. */
   protected async onScroll(): Promise<void> {
     const el = await this.content().getScrollElement();
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    this.atBottom.set(distanceFromBottom < 80);
+    if (this.kb.open() && el.scrollTop < this.lastScrollTop - 4) this.kb.dismiss();
+    this.lastScrollTop = el.scrollTop;
+    this.atBottom.set(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
   }
 
   /** Explicit user action (jump-to-latest button): smooth-scroll down and re-arm following. */
   protected jumpToBottom(): void {
     this.atBottom.set(true);
     void this.content().scrollToBottom(300);
-  }
-
-  protected send(): void {
-    const text = this.draft().trim();
-    if (!text) return;
-    this.chat.submit(text);
-    this.draft.set('');
   }
 }

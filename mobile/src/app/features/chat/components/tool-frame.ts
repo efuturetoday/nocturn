@@ -2,7 +2,7 @@ import { Component, ChangeDetectionStrategy, input, inject, computed, signal, ef
 import { IonIcon, IonAccordion, IonAccordionGroup, IonItem } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { checkmarkCircle, alertCircle, ellipsisHorizontalCircle } from 'ionicons/icons';
-import { ChatService } from '../../../core/services/chat.service';
+import { ConversationService } from '../../../core/services/conversation.service';
 import { ApprovalService } from '../../../core/services/approval.service';
 import type { ToolView } from '../../../core/services/chat-view';
 import { highlightCode } from '../../../shared/highlight';
@@ -96,7 +96,9 @@ import { highlightCode } from '../../../shared/highlight';
 })
 export class ToolFrameComponent {
   readonly tool = input.required<ToolView>();
-  private readonly chat = inject(ChatService);
+  // The active conversation this tool belongs to — the ConversationService the enclosing ChatPage
+  // provided (user chat or agent run), so a parked-branch freeze reflects the right transcript.
+  private readonly conversation = inject(ConversationService);
   private readonly approvals = inject(ApprovalService);
 
   // Highlight only once the accordion is expanded (lazy — hljs loads on first expand).
@@ -114,7 +116,7 @@ export class ToolFrameComponent {
   // parentId chain. A parallel sibling branch, still executing, keeps ticking.
   private readonly frozen = computed(() => {
     const id = this.tool().id;
-    return id != null && this.chat.parkedToolIds().has(id);
+    return id != null && this.conversation.parkedToolIds().has(id);
   });
 
   // Ticks while the call runs so the duration counts up live; frozen once it ends (or parked).

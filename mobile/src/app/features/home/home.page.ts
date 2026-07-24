@@ -6,7 +6,6 @@ import {
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { alarmOutline } from 'ionicons/icons';
-import { ChatService } from '../../core/services/chat.service';
 import { ChatListService } from '../../core/services/chat-list.service';
 import { ReminderService } from '../../core/services/reminder.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
@@ -78,7 +77,6 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
   `,
 })
 export class HomePage {
-  protected readonly chat = inject(ChatService);
   protected readonly chatList = inject(ChatListService);
   protected readonly reminders = inject(ReminderService);
   private readonly router = inject(Router);
@@ -103,8 +101,9 @@ export class HomePage {
       .slice(0, 3);
   }
 
+  /** Open a chat or an agent run: route by kind — an agent run goes to the agents/run detail (which
+      binds AgentRunService), a user chat to the chat detail. ChatPage opens it from the route. */
   protected openChat(c: ChatMeta): void {
-    this.chat.openChat(c.id);
-    void this.router.navigate(['/chat', c.id]);
+    void this.router.navigate(c.source === 'agent' ? ['/agents', 'run', c.id] : ['/chat', c.id]);
   }
 }

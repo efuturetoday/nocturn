@@ -27,11 +27,27 @@ export interface ChatMeta {
   id: string;
   name: string;
   source: Source;
+  agent?: string; // the owning agent's name (agent runs only) — for grouping runs under a roster agent
   created: string; // RFC3339
   updated: string; // RFC3339
   read?: string; // RFC3339 shared read cursor; unread when updated > read (absent = never read)
   turns: number;
   preview?: string; // last message's first line — the list row's subtitle (à la Apple Mail)
+}
+
+/** How a declared agent's SCHEDULED firing resolves an Ask: strict denies unattended, guarded asks
+    the human out of band (the phone). */
+export type Autonomy = "strict" | "guarded";
+
+/** One declared agent (agent.list) — its identity, schedule, autonomy and tool cage. NOT a run. */
+export interface AgentInfo {
+  name: string;
+  description?: string;
+  when?: string; // cron schedule; absent/empty = manual only
+  autonomy: Autonomy;
+  tools?: string[]; // the tool cage
+  effort?: string; // reasoning effort
+  budgetMs?: number; // per-run wall-clock; 0/absent = workspace default
 }
 
 /** One model-issued tool call inside a transcript message. */
@@ -152,11 +168,20 @@ export interface ChatSnapshot {
   inflightEvents?: ServerEvent[];
 }
 
-/** A workspace's chat list, replying to chat.list. */
+/** A workspace's chat list, replying to chat.list. `kind` echoes the requested store so a client that
+    lists both routes each result to the right view. */
 export interface ChatList {
   type: "chat.list";
   ws: string;
+  kind: Source;
   chats: ChatMeta[];
+}
+
+/** A workspace's declared-agent roster, replying to agent.list. */
+export interface AgentListEvent {
+  type: "agent.list";
+  ws: string;
+  agents: AgentInfo[];
 }
 
 /** The daemon's workspaces, replying to workspace.list. */
@@ -249,6 +274,41 @@ export interface Notification {
   message: string;
 }
 
+/** One connectable MCP account (auth.accounts): a discover-mode server and whether it holds a token. */
+export interface Account {
+  server: string;
+  connected: boolean;
+}
+
+/** A workspace's connectable MCP accounts and their status (reply to auth.list). */
+export interface AuthAccounts {
+  type: "auth.accounts";
+  ws: string;
+  accounts: Account[];
+}
+
+/**
+ * A consent URL to open in an in-app browser (reply to auth.begin). Open `url`, watch the browser for
+ * a navigation whose URL starts with `redirectPrefix`, lift `code`+`state` from its query, then send
+ * them back as auth.callback with this same `id`. The token is minted in the daemon — only the
+ * single-use, PKCE-bound code ever travels back.
+ */
+export interface AuthOpen {
+  type: "auth.open";
+  id: string;
+  server: string;
+  url: string;
+  redirectPrefix: string;
+}
+
+/** The outcome of an auth.callback (correlated by `id`): connected, or an error to show. */
+export interface AuthDone {
+  type: "auth.done";
+  id: string;
+  ok: boolean;
+  error?: string;
+}
+
 /** A control error (e.g. an unknown command). */
 export interface ErrorEvent {
   type: "error";
@@ -264,6 +324,7 @@ export type ServerEvent =
   | ChatTurnEnd
   | ChatSnapshot
   | ChatList
+  | AgentListEvent
   | WorkspaceList
   | ChatActivity
   | JoinList
@@ -272,14 +333,22 @@ export type ServerEvent =
   | ReminderList
   | ReminderChanged
   | Notification
+  | AuthAccounts
+  | AuthOpen
+  | AuthDone
   | ErrorEvent;
 
 // ── client → server commands (discriminate on `cmd`) ─────────────────────────
+
+// `kind` ("user" | "agent") is MANDATORY on every store-addressed chat command: the daemon validates
+// it and routes to the right store. The client never tracks it as mutable state — it is a structural
+// constant of which conversation you are in (see the ConversationService subclasses).
 
 /** Send a message to chat `id` (client-minted). An unknown id starts that chat, a known one appends. */
 export interface ChatSubmit {
   cmd: "chat.submit";
   ws: string;
+  kind: Source;
   text: string;
   id: string;
 }
@@ -288,19 +357,22 @@ export interface ChatSubmit {
 export interface ChatOpen {
   cmd: "chat.open";
   ws: string;
+  kind: Source;
   id: string;
 }
 
-/** Request a workspace's chat list (→ ChatList). */
+/** Request a workspace's chat list (→ ChatList). `kind` selects the store: user chats or agent runs. */
 export interface ChatListCmd {
   cmd: "chat.list";
   ws: string;
+  kind: Source;
 }
 
 /** Abort a chat's running turn (id-addressed; the chat and session stay open). */
 export interface ChatCancel {
   cmd: "chat.cancel";
   ws: string;
+  kind: Source;
   id: string;
 }
 
@@ -308,7 +380,23 @@ export interface ChatCancel {
 export interface ChatMarkRead {
   cmd: "chat.markRead";
   ws: string;
+  kind: Source;
   id: string;
+}
+
+/** Request a workspace's declared-agent roster (→ AgentListEvent). */
+export interface AgentListCmd {
+  cmd: "agent.list";
+  ws: string;
+}
+
+/** Trigger an agent run now. `task` defaults to the scheduled prompt when omitted. Fire-and-forget:
+    no direct reply — the run appears via chat.activity and streams over the agent-kind chat events. */
+export interface AgentFireCmd {
+  cmd: "agent.fire";
+  ws: string;
+  name: string;
+  task?: string;
 }
 
 /** Request the daemon's workspaces (→ WorkspaceList). */
@@ -355,6 +443,30 @@ export interface PresenceSet {
   active: boolean;
 }
 
+/** Request a workspace's connectable MCP accounts and their status (→ AuthAccounts). */
+export interface AuthListCmd {
+  cmd: "auth.list";
+  ws: string;
+}
+
+/** Start connecting a discover-mode MCP account: the server by name, with optional scopes (→ AuthOpen,
+    or an error). The daemon runs discovery + dynamic registration and returns a consent URL. */
+export interface AuthBeginCmd {
+  cmd: "auth.begin";
+  ws: string;
+  server: string;
+  scopes?: string[];
+}
+
+/** Relay the intercepted authorization code back to finish the session begun by auth.begin (→ AuthDone). */
+export interface AuthCallbackCmd {
+  cmd: "auth.callback";
+  ws: string;
+  id: string;
+  code: string;
+  state: string;
+}
+
 /** The closed union of everything the client sends. */
 export type ClientCommand =
   | ChatSubmit
@@ -362,11 +474,16 @@ export type ClientCommand =
   | ChatListCmd
   | ChatCancel
   | ChatMarkRead
+  | AgentListCmd
+  | AgentFireCmd
   | WorkspaceListCmd
   | JoinListCmd
   | ApprovalResolve
   | ReminderListCmd
   | ReminderCancelCmd
+  | AuthListCmd
+  | AuthBeginCmd
+  | AuthCallbackCmd
   | PresenceSet;
 
 // ── Pairing & Auth (HTTP, NOT the WebSocket) ─────────────────────────────────

@@ -32,7 +32,9 @@ export const routes: Routes = [
   },
   // Full-screen (tab-less) chat detail — root-outlet siblings of `tabs`. The id is client-minted, so
   // a fresh chat navigates straight here (no /chat/new intermediate).
-  { path: 'chat/:id', canActivate: [connectionGuard], loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
-  { path: 'agents/run/:id', canActivate: [connectionGuard], loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
+  // `data.kind` selects which conversation store the reused ChatPage binds to (user chats vs agent
+  // runs) — the ChatPage provider reads it, so the id-addressed commands carry the right kind.
+  { path: 'chat/:id', canActivate: [connectionGuard], data: { kind: 'user' }, loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
+  { path: 'agents/run/:id', canActivate: [connectionGuard], data: { kind: 'agent' }, loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
   { path: '**', redirectTo: 'discover' },
 ];
