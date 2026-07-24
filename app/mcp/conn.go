@@ -99,7 +99,10 @@ func NewConn(srv Server, creds *secret.Injector, scanner *secret.Scanner) (*Conn
 	c := &Conn{server: srv, creds: creds, scanner: scanner, log: slog.New(slog.DiscardHandler), host: u.Host}
 	c.http = &http.Client{Timeout: 30 * time.Second, CheckRedirect: c.checkRedirect}
 	c.client = New(c.transport)
-	if (srv.OAuth != nil || srv.Auth == "token") && creds != nil {
+	// Every credential-bearing mode — a static token, a manual oauth block, or discover-mode
+	// (auth:"oauth") — binds the server's bearer host-side under its owner. Only a public server
+	// (AuthNone) has nothing to inject.
+	if srv.OAuthMode() != AuthNone && creds != nil {
 		creds.AddBinding(Owner(srv.Name), secret.Binding{
 			Secret: SecretName(srv.Name, c.host), Host: c.host,
 			Header: "Authorization", Prefix: "Bearer ",

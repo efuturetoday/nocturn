@@ -248,7 +248,15 @@ func listSecretNames(wsName string) ([]string, error) {
 	res := secret.NewStore()
 	vault.Store().CopyInto(res)
 	secret.LoadShardsInto(res, master, wsDir, wsName, discovery.ValidName, discardLog())
-	return res.Names(), nil
+	// Hide the ".provider" sidecar records — they are resolved-OAuth wiring (endpoints, client id,
+	// resource, scopes), not credentials the operator seeds or reasons about.
+	var creds []string
+	for _, n := range res.Names() {
+		if !strings.HasSuffix(n, ".provider") {
+			creds = append(creds, n)
+		}
+	}
+	return creds, nil
 }
 
 func cmdLs(args []string) int {
