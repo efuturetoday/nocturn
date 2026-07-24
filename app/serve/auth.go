@@ -15,10 +15,14 @@ import (
 // token is minted, held, and refreshed here and NEVER travels to the app, the model, or the guest —
 // the app just watches its browser navigate to appRedirect and lifts code+state from the query.
 
-// appRedirect is the fixed redirect the companion app registers and watches for. It resolves to
-// nothing real; the in-app browser is closed the instant it navigates here and the code is read off
-// the query string. Sent to the app as the RedirectPrefix so it knows which navigation to intercept.
-const appRedirect = "https://nocturn.invalid/oauth/callback"
+// appRedirect is the fixed redirect the companion app registers and returns on. It is a custom-scheme
+// deep link (RFC 8252 native-app redirect): the consent page opens in the SYSTEM browser — so the
+// user's password manager works, unlike an embedded web view — and the authorization server redirects
+// here, which the OS routes back into the app as a deep link. The app lifts code+state and relays them
+// as auth.callback. The scheme must match the app's registered URL scheme (iOS CFBundleURLTypes /
+// Android intent-filter). Security rests on PKCE: the verifier never leaves the daemon, so a
+// scheme-hijacking app that captured the code still cannot exchange it.
+const appRedirect = "nocturn://oauth/callback"
 
 // authOpTimeout bounds a single discovery-or-exchange leg so a hung authorization server can't wedge
 // the handler goroutine (the discovery HTTP client has no timeout of its own).
