@@ -1,0 +1,34 @@
+title: remind_cancel
+description: Cancel a pending reminder by id.
+
+kind:
+  name: remind
+  href: /reference/gate/remind/
+gated: false
+axis: write
+
+intro: >-
+  Drop a scheduled reminder. It is a write — it changes state — and it is still ungated, because it
+  can only remove something the assistant itself scheduled, and the worst case is a missed nudge.
+  See the [`remind` kind](/reference/gate/remind/).
+
+input:
+  - field: id
+    type: string
+    required: true
+    notes: "The reminder id, as returned by [`remind`](/reference/tools/remind/) or [`remind_list`](/reference/tools/remind_list/)."
+
+output:
+  text: "Whether that id was actually pending:"
+  code: |
+    { "id": "rem-…", "cancelled": true }
+  lang: json
+  after: "`cancelled: false` means nothing was pending under that id — an unknown id is not an error."
+
+js:
+  wrapper: null
+  call: |
+    nocturn.call("remind_cancel", { id: "rem-…" });
+
+notes: >-
+  No prelude wrapper — use the generic form.

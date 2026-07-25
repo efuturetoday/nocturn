@@ -1,0 +1,40 @@
+title: skill_read
+description: Read one of a skill's bundled files — a reference, a template, an example, or a script to run.
+
+kind: null
+gated: false
+axis: read
+
+intro: >-
+  Read a file that ships beside a skill's `SKILL.md`. A skill can bundle more than instructions:
+  reference notes it points you to, a template to fill in, a script to run with
+  [`code_run`](/reference/tools/code_run/). This is how those files are fetched. Ungated, because
+  reading pre-installed text is context, never reach — and confined to that one skill's directory at
+  the syscall level.
+
+input:
+  - field: name
+    type: string
+    required: true
+    notes: The skill the file belongs to. Unknown names are an error, not an empty result.
+  - field: path
+    type: string
+    required: true
+    notes: "Path relative to the skill's own folder, e.g. `scripts/analyze.js`."
+
+output: >-
+  The file's contents as text, capped at **256 KiB**. A path that is not a regular file is an error
+  rather than a surprise.
+
+js:
+  wrapper: |
+    const tpl = nocturn.skillFile("summarize-url", "template.md");
+  call: |
+    const tpl = nocturn.call("skill_read", { name: "summarize-url", path: "template.md" });
+
+notes: >-
+  Confinement is enforced by `os.Root` over the skill's directory, so a path can **never** escape it
+  — not via `..`, not via an absolute path, not via a symlink pointing out. That is kernel-enforced
+  (`openat2` / `RESOLVE_BENEATH`), not string arithmetic, which is what keeps this from becoming a
+  general filesystem probe. Its companion `skill_load` pulls a skill's instructions into the model's
+  context and is deliberately **not** reachable from a script: a script has no context to load into.

@@ -48,26 +48,26 @@ never holds a view across the call. Within a single host call the guest is suspe
 race-free.
 :::
 
-## The JSON envelope (for `code.run`)
+## The JSON envelope (for `code_run`)
 
-On top of the raw byte ABI, the script gate speaks JSON. When a script calls
+On top of the raw byte ABI, the script dispatcher speaks JSON. When a script calls
 `nocturn.call(tool, args)`, the request bytes are:
 
 ```json
-{ "tool": "http.read", "args": { "url": "https://example.com" } }
+{ "tool": "http_read", "args": { "url": "https://example.com" } }
 ```
 
-The host dispatcher looks `tool` up in the **same tool registry the model uses**, runs its
-`Invoke` (which is fully gated — broker + approval), and returns the tool's result string as the
-response bytes. So a script reaches an effect through the identical authorization path as the
-model; the interpreter is never rebuilt to add a capability.
+The host looks `tool` up in the **same tool set the model dispatches through** and calls it — which
+means the tool's own `gate.Check` runs, exactly as it would for the model. The result string comes
+back as the response bytes. A script therefore calls a tool through the identical path as the
+model, and the interpreter is never rebuilt to add a tool.
 
 **Errors** come back as a response prefixed with `error: `. The guest's binding turns that into
-a JavaScript exception, so a denied or failed effect raises in the script instead of crashing the
-host. Pure computation that never calls the gate performs no effect and needs no approval at all.
+a JavaScript exception, so a denied or failed call raises in the script instead of crashing the
+host. Pure computation that never calls a tool asks for nothing at all.
 
 ## What this buys
 
 The byte boundary is deliberately tiny and uniform: one import module, one `(ptr,len)` calling
-convention, one JSON envelope. Every capability is just a Go function on the host side of that
-boundary — which is exactly why each one is auditable, wrappable, and revocable in one place.
+convention, one JSON envelope. Every tool is just a Go function on the host side of that boundary —
+which is exactly why each one is auditable, wrappable and revocable in one place.

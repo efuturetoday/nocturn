@@ -1,0 +1,33 @@
+title: file_read
+description: Read a UTF-8 text file from the workspace and return its contents.
+
+kind:
+  name: file
+  href: /reference/gate/file/
+gated: false
+axis: read
+
+intro: >-
+  Read a text file from the workspace. This tool **never calls the gate** — reading inside a folder
+  the workspace owns changes nothing and reaches nothing outside it. Confinement is what protects
+  you here, not a prompt: the path is resolved against the workspace root first, and a path that
+  escapes is a hard error. See the [`file` kind](/reference/gate/file/).
+
+input:
+  - field: path
+    type: string
+    required: true
+    notes: Workspace-relative path, e.g. `notes/todo.md`.
+
+output: >-
+  The file's contents as text, capped at **1 MiB**. A larger file is truncated at that cap rather
+  than refused.
+
+js:
+  wrapper: |
+    const text = await nocturn.fs.readFile("notes/todo.md");
+  call: |
+    const text = nocturn.call("file_read", { path: "notes/todo.md" });
+
+notes: >-
+  The node-ish shim works too: `require("fs").readFileSync("notes/todo.md")` routes to the same tool.

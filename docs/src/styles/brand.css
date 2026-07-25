@@ -1,32 +1,73 @@
-/* Nocturn brand palette — dark only, matched to the mascot artwork.
-   The proper Starlight way: override the full accent + gray colour scales on
-   :root (dark). Backgrounds and borders derive from the gray scale, so tuning
-   it (purple hue, darkest = the artwork's #0f071c) recolours the whole UI and
-   lets the hero crop blend edge-to-edge into the page. */
+/* Nocturn brand palette — dark only.
+   The values are NOT invented here: they are the mobile app's Ionic tokens
+   (mobile/src/theme/variables.css) mapped onto Starlight's scales, so the docs
+   and the companion app are the same product to look at. Keep the two in sync —
+   when the app's ramp moves, move these with it.
+
+   app token                     -> Starlight
+   --ion-color-primary  #915bd7  -> --sl-color-accent
+   --ion-color-secondary #d0b4f9 -> --sl-color-accent-high
+   --ion-background-color #12101a-> --sl-color-black (page floor)
+   --ion-background-color-step-* -> the gray scale (hue 255 ramp)
+   Backgrounds and borders derive from the gray scale, so the hero artwork
+   blends edge-to-edge into the page. */
+
+@import '@fontsource-variable/space-grotesk';
 
 :root {
-	/* Accent = the headset gopher's purple (≈ hsl(266 61% 58%)). Drives links,
-	   buttons, and the active nav item. */
-	--sl-color-accent-low: hsl(265 45% 24%);
-	--sl-color-accent: hsl(266 61% 60%);
-	--sl-color-accent-high: hsl(265 85% 84%);
+	/* Accent = the app's primary purple. Drives links, buttons, active nav. */
+	--sl-color-accent-low: #3a2a52; /* darkened tertiary (#6a3fa6), aside backgrounds */
+	--sl-color-accent: #915bd7; /* --ion-color-primary */
+	--sl-color-accent-high: #d0b4f9; /* --ion-color-secondary */
 
-	/* Purple-tinted gray scale (hue 265) replacing Starlight's default blue. */
-	--sl-color-white: hsl(0 0% 100%);
-	--sl-color-gray-1: hsl(265 20% 94%);
-	--sl-color-gray-2: hsl(265 8% 77%);
-	--sl-color-gray-3: hsl(265 8% 56%);
-	--sl-color-gray-4: hsl(265 10% 37%);
-	--sl-color-gray-5: hsl(265 20% 22%);
-	--sl-color-gray-6: hsl(265 30% 15%);
-	/* Darkest = the artwork background #0f071c, so the hero image is seamless. */
-	--sl-color-black: hsl(263 60% 7%);
+	/* Gray scale = the app's hue-255 surface ramp, lightest to darkest. */
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #efedf3; /* --ion-text-color */
+	--sl-color-gray-2: #c5c3cc; /* step-800 */
+	--sl-color-gray-3: #948ea3; /* step-600 */
+	--sl-color-gray-4: #635d78; /* step-400 */
+	--sl-color-gray-5: #373244; /* step-200 */
+	--sl-color-gray-6: #211e2a; /* step-100 */
+	--sl-color-black: #12101a; /* --ion-background-color — the page floor */
+
+	/* Semantic hues for asides and badges, straight from the app's status colours. */
+	--sl-color-green: #34b273; /* --ion-color-success */
+	--sl-color-green-low: #16281f;
+	--sl-color-green-high: #8fdcb5;
+	--sl-color-orange: #ee9d2b; /* --ion-color-warning */
+	--sl-color-orange-low: #2e2113;
+	--sl-color-orange-high: #f6cd92;
+	--sl-color-red: #e45858; /* --ion-color-danger */
+	--sl-color-red-low: #2d1719;
+	--sl-color-red-high: #f1a5a5;
+	--sl-color-purple: #915bd7;
+	--sl-color-purple-low: #241b38;
+	--sl-color-purple-high: #d0b4f9;
+	--sl-color-blue: #7c9ce0;
+	--sl-color-blue-low: #191f2e;
+	--sl-color-blue-high: #b9cbf1;
 }
 
-/* Hero: a full-bleed nebula (bg.jpeg) that spans the whole viewport width and
-   fades into the page background (#0f071c) at the bottom, so there's no seam.
-   `overflow-x: clip` on the panel contains the 100vw layer without creating a
-   scroll container (keeps the sticky header working). */
+/* Display face for headings and the wordmark only — the same rule the app runs
+   (mobile/src/styles.scss): body text keeps the native system stack, so no
+   webfont sits on the reading path. */
+:root {
+	--font-display: 'Space Grotesk Variable', var(--sl-font, system-ui, sans-serif);
+}
+.site-title,
+.content-panel h1,
+.content-panel h2,
+.content-panel h3,
+.hero h1,
+.hero .tagline {
+	font-family: var(--font-display);
+	letter-spacing: -0.01em;
+}
+
+/* Hero: a full-bleed nebula (the same artwork the app's discover page uses) that
+   spans the viewport width and fades into the page floor (#12101a) at the bottom,
+   so there is no seam. `overflow-x: clip` on the panel contains the 100vw layer
+   without creating a scroll container (keeps the sticky header working). */
 .content-panel {
 	overflow-x: clip;
 }
@@ -47,12 +88,7 @@
 	   script). Shifting the position inside a `cover` image never reveals an
 	   edge, so the effect is gap-free. The gradient overlay stays put. */
 	background:
-		linear-gradient(
-			to bottom,
-			hsl(263 60% 7% / 0.3),
-			hsl(263 60% 7% / 0.72) 62%,
-			hsl(263 60% 7%) 100%
-		),
+		linear-gradient(to bottom, rgb(18 16 26 / 0.3), rgb(18 16 26 / 0.72) 62%, rgb(18 16 26) 100%),
 		url('/nebula.jpg') center calc(50% + var(--nebula-shift, 0px)) / cover no-repeat;
 }
 
@@ -61,7 +97,7 @@
    (--mascot-shift) for depth. The parallax offset is folded into the keyframes
    so the two transforms compose instead of overwriting each other. */
 .hero img {
-	filter: drop-shadow(0 12px 34px hsl(266 65% 45% / 0.5));
+	filter: drop-shadow(0 12px 34px rgb(145 91 215 / 0.5)); /* accent glow */
 	transform: translateY(var(--mascot-shift, 0px));
 	will-change: transform;
 	animation: mascot-float 6s ease-in-out infinite;
@@ -84,9 +120,11 @@
 	}
 }
 
-/* Effect-axis tags (read / write) — ONE uniform badge used in every capabilities
-   list and every tool heading, so the read/write axis always reads the same way.
-   Green = a safe read; amber = a mutating write (the thing that asks). */
+/* Read/write tags — ONE uniform badge, used in every kind's tool list and every
+   tool heading. It DESCRIBES what a tool does (observe vs change the world); it
+   does NOT state whether the tool is gated. Gating is per gate Kind and is spelled
+   out on each kind page — file_read is a read AND ungated, http_read is a read and
+   still asks. Hence neutral for read (no "safe" green) and amber for write. */
 .axis {
 	display: inline-block;
 	font-family: var(--sl-font-mono, ui-monospace, monospace);
@@ -102,12 +140,40 @@
 	white-space: nowrap;
 }
 .axis--read {
-	color: hsl(150 65% 82%);
-	background: hsl(150 55% 30% / 0.28);
-	border-color: hsl(150 55% 45% / 0.4);
+	color: var(--sl-color-gray-2);
+	background: rgb(99 93 120 / 0.28); /* gray-4 */
+	border-color: rgb(148 142 163 / 0.4); /* gray-3 */
 }
 .axis--write {
-	color: hsl(35 90% 82%);
-	background: hsl(35 80% 42% / 0.26);
-	border-color: hsl(35 85% 55% / 0.42);
+	color: #f6cd92;
+	background: rgb(238 157 43 / 0.22);
+	border-color: rgb(238 157 43 / 0.42);
+}
+
+/* Gate tags — the honest signal next to a tool: does calling it ask a human?
+   "gated" carries the kind it gates on (net / file); "ungated" is the zero-authority
+   case. Deliberately quieter than .axis--write: this is information, not a warning. */
+.gate {
+	display: inline-block;
+	font-family: var(--sl-font-mono, ui-monospace, monospace);
+	font-size: 0.66em;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	line-height: 1.5;
+	padding: 0.05em 0.5em;
+	border-radius: 0.5em;
+	vertical-align: middle;
+	border: 1px solid transparent;
+	white-space: nowrap;
+}
+.gate--gated {
+	color: var(--sl-color-accent-high);
+	background: rgb(145 91 215 / 0.22);
+	border-color: rgb(145 91 215 / 0.45);
+}
+.gate--ungated {
+	color: var(--sl-color-gray-3);
+	background: rgb(55 50 68 / 0.5); /* gray-5 */
+	border-color: rgb(99 93 120 / 0.4);
 }

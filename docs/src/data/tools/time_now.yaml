@@ -1,0 +1,31 @@
+title: time_now
+description: Return the current date and time, with timezone and offset.
+
+kind: null
+gated: false
+axis: none
+
+intro: >-
+  What time is it. Ungated and belonging to no kind: a sandboxed guest has **no wall clock of its
+  own**, and the host's time reveals nothing sensitive — yet almost every agent needs it. Zero
+  authority, so nothing to decide.
+
+input: none
+
+output:
+  text: "Everything about now in one object, so nothing has to be recomputed:"
+  code: |
+    { "unix": 1784822400, "iso": "2026-07-25T21:00:00+02:00", "utc": "2026-07-25T19:00:00Z",
+      "timezone": "CEST", "offset_seconds": 7200 }
+  lang: json
+
+js:
+  wrapper: |
+    const t = nocturn.now();
+    console.log(t.iso);
+  call: |
+    const t = JSON.parse(nocturn.call("time_now", {}));
+
+notes: >-
+  Use the `iso` field when you need to hand an absolute timestamp to
+  [`remind`](/reference/tools/remind/) — it is already RFC3339 in the host's local zone.

@@ -1,0 +1,40 @@
+title: file_write
+description: Write a UTF-8 text file to the workspace, creating parent directories.
+
+kind:
+  name: file
+  href: /reference/gate/file/
+  target: the workspace-relative path being written
+gated: true
+axis: write
+
+intro: >-
+  Write a text file. This is where the file kind actually asks: the target is the **path**, and the
+  approval offers one widening — the containing directory (`notes/todo.md` → `notes/*`). Parent
+  directories are created as needed. See the [`file` kind](/reference/gate/file/).
+
+input:
+  - field: path
+    type: string
+    required: true
+    notes: Workspace-relative path, e.g. `notes/todo.md`.
+  - field: content
+    type: string
+    required: true
+    notes: The text to write. Replaces the file if it exists.
+
+output:
+  text: "What was written, and how much:"
+  code: |
+    { "path": "notes/todo.md", "bytesWritten": 214 }
+  lang: json
+
+js:
+  wrapper: |
+    await nocturn.fs.writeFile("notes/todo.md", "buy milk\n");
+  call: |
+    nocturn.call("file_write", { path: "notes/todo.md", content: "buy milk\n" });
+
+notes: >-
+  A write replaces the file whole — there is no append tool. Read, change, write back if you need to
+  add to something.

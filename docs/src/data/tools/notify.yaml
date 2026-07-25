@@ -1,28 +1,31 @@
 title: notify
-description: Send a fire-and-forget notification to the user's device.
+description: Send a notification to the user out of band, fire and forget.
 
-capability:
-  family: notify
-  href: /reference/notify/
-axis: read
+kind:
+  name: notify
+  href: /reference/gate/notify/
+  target: the constant `user`
+gated: true
+axis: write
 
 intro: >-
-  Send a notification to your device. It does **not** ask a question or wait for a reply — for that,
-  an effect goes through an [approval](/guides/approvals/) instead. Why it runs silently and how it
-  stays safe (host-owned destination, leak-scan, rate limit) live on the
-  [`notify` capability](/reference/notify/).
+  Tell you something without waiting for you. It does **not** ask a question and does not block —
+  an action that needs your yes goes through an [approval](/guides/approvals/) instead. The tool
+  checks the [`notify` kind](/reference/gate/notify/), which the workspace root policy allows, so
+  today it runs without a prompt.
 
 input:
   - field: message
     type: string
     required: true
-    notes: The notification text.
+    notes: The notification text. Leak-scanned — a message carrying a vault secret is blocked.
   - field: title
     type: string
     required: false
     notes: Optional short title.
 
 output:
+  text: "Confirmation that the message was handed to the channel:"
   code: |
     { "sent": true }
   lang: json
@@ -30,5 +33,9 @@ output:
 js:
   wrapper: |
     nocturn.notify("Backup finished", "Nocturn");
-  gate: |
+  call: |
     nocturn.call("notify", { message: "Backup finished", title: "Nocturn" });
+
+notes: >-
+  The destination is host-owned: the model writes the words, never the recipient. That is what makes
+  a silent send defensible — the only remaining risk is the content, which the egress scan covers.

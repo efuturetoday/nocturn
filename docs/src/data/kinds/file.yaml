@@ -1,0 +1,97 @@
+title: The file kind
+description: file_write, file_remove and file_move ask; file_read, file_list, file_stat and file_search never do — all of them confined to the workspace.
+
+kind: file
+constant: tools.FileKind
+
+intro: >-
+  The workspace filesystem. This is the one place where reading and writing really do part ways:
+  the four read tools **never call the gate at all**, the three write tools check `file` with the
+  path as `Target`. Both halves share the same floor — every path is resolved against the workspace
+  root first, so confinement holds even for the ungated ones.
+
+glance:
+  target: "a **workspace-relative path** — `notes/todo.md`, `inbox/*`"
+  policy: "writes ask, remembered for the session; reads never reach the gate"
+  matcher: "`pathMatch` — `path.Match` globs, where `*` does **not** cross `/`, plus `*` for any path"
+
+tools:
+  - name: file_read
+    href: /reference/tools/file_read/
+    axis: read
+    gated: false
+    desc: read a text file
+  - name: file_list
+    href: /reference/tools/file_list/
+    axis: read
+    gated: false
+    desc: list a directory
+  - name: file_stat
+    href: /reference/tools/file_stat/
+    axis: read
+    gated: false
+    desc: stat a path
+  - name: file_search
+    href: /reference/tools/file_search/
+    axis: read
+    gated: false
+    desc: find files by glob
+  - name: file_write
+    href: /reference/tools/file_write/
+    axis: write
+    gated: true
+    desc: write a text file
+  - name: file_remove
+    href: /reference/tools/file_remove/
+    axis: write
+    gated: true
+    desc: remove a file or empty directory
+  - name: file_move
+    href: /reference/tools/file_move/
+    axis: write
+    gated: true
+    desc: move or rename a file
+
+grants:
+  intro: >-
+    A remembered file grant is a `{kind, target}` pair whose target is a path pattern. `RecallAlways`
+    grants persist to `grants.json` in the workspace; session grants live only in memory. `file_move`
+    is checked against its **destination** — moving into an allowed directory is what you approve.
+  lang: json
+  examples: |
+    { "kind": "file", "target": "notes/todo.md" }
+    { "kind": "file", "target": "notes/*" }
+    { "kind": "file", "target": "*" }
+  notes:
+    - >-
+      A path glob does **not** cross `/`, so it is depth-bounded for free: `notes/*` covers
+      `notes/todo.md` but not `notes/2026/todo.md`. `*` on its own means any path in the workspace.
+    - >-
+      The approval prompt offers one widening: the containing directory
+      (`notes/todo.md` → `notes/*`). A file at the workspace root offers none.
+    - >-
+      Grants never widen confinement. A grant of `*` still cannot reach outside the workspace — the
+      root check happens before the gate is consulted.
+
+limits:
+  - "**Read size** — one `file_read` returns at most **1 MiB**."
+  - >-
+    **Search results** — a glob sweep stops at **500** matches and says so, rather than returning an
+    unbounded list.
+
+sections:
+  - title: Confinement comes first, and it is structural
+    body: >-
+      Every path is resolved against the workspace root **before the gate is consulted**. A path that
+      would escape — via `..` or an absolute path outside the root — is a hard error, not a denied
+      call. So the gate never decides whether the assistant may leave the workspace; it cannot, by
+      construction. What the gate decides is which paths *inside* it may be changed.
+
+  - title: Why the read tools are ungated, and what that costs
+    body: >-
+      A read inside a directory the workspace owns changes nothing and reaches nothing external, so
+      asking about it would train you to click yes — the approval that matters would drown in the
+      ones that do not. The cost is real and worth naming: anything the workspace contains is
+      readable by the model without a prompt. That is why the control plane is not in reach — the
+      LLM mount is `mnt/`, while `grants.json`, `vault.enc`, `chats/` and `agents/` sit outside it,
+      as a matter of layout rather than a deny rule.

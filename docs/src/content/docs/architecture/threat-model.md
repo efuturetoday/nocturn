@@ -31,16 +31,16 @@ attacker.
 **Defense: starve it, then gate it.** Nocturn answers injection in two structural moves.
 First it removes the prize: the model never holds your secrets, so there is nothing to hand
 over — [what it does not know, it cannot leak](#nothing-to-steal). Then it gates what is
-left: every effect the model can still trigger goes through the broker, and anything
+left: every tool the model can still call goes through the gate, and anything
 irreversible or outbound waits for your out-of-band yes. The first move starves the attack;
-the second isolates the effect.
+the second isolates what it can do.
 
 | | Malicious code | Prompt injection |
 | --- | --- | --- |
 | What is hostile | the extension's code | content the model read |
 | What it abuses | your machine directly | tools you granted |
 | Its goal | run on your machine | exfiltrate through your tools |
-| Defense | the sandbox (isolate the code) | starve the secret, gate the effect |
+| Defense | the sandbox (isolate the code) | starve the secret, gate the call |
 
 ## Why the defenses cannot be merged
 
@@ -48,7 +48,7 @@ There is no single wall that stops both threats — and even injection needs mor
 move. A tempting shortcut is "just sandbox everything." It does not work:
 
 - **The sandbox alone** cannot stop injection. The injection uses the very tools the
-  sandboxed code is allowed to call. The effect is authorized; the intent is not.
+  sandboxed code is allowed to call. The call is authorized; the intent is not.
 - **Gating alone** is not enough either. If the model held your secrets, a single approved
   request could carry one out. So the secret is kept out of the model's reach in the first
   place, and gating covers what remains.
@@ -61,13 +61,16 @@ structural requirements, and both are mandatory in Nocturn.
 
 ## Zero ambient authority
 
-Underneath both defenses is one rule: nothing is granted implicitly. A sandbox starts with
-no filesystem, no network, and no input. Every ability is a window the host opens on
-purpose. There is no ambient power to escalate from.
+Underneath both defenses is one rule: nothing is granted implicitly. The guest starts with no
+filesystem, no network, and no clock. Every ability is a window the host opens on purpose, so an
+ability that was not handed over is unforgeable by absence — there is no ambient power to escalate
+from.
 
-The broker then denies by default. If no rule allows an action, it is denied, and a denial
-always beats an allow. Reach is limited to a target, effect is gated by direction, and grants
-can be revoked.
+The [gate](/reference/gate/) then decides per action, on a `{kind, target}` pair rather than on the
+sentence that led there. Worth being precise about what it is not: the workspace policy is **not**
+deny-by-default. Network and file writes ask; other kinds run. What bounds the rest is the cage —
+which tools exist for a caller at all — and the fact that the tools which do not ask cannot reach
+anything outside the workspace.
 
 ## Nothing to steal
 
@@ -93,14 +96,14 @@ request it was tricked into building cannot carry a secret past the border.
 
 ## What this buys you
 
-- A hostile extension is confined to what its cage allows, and still has to pass approval to
-  write.
-- A prompt injection that captures the model cannot act quietly, because the effect stops at
-  a gate whose yes lives on your phone.
-- A leaked or replayed approval code is useless, because it is signed, single-use, and
-  expiring.
-- A secret cannot be exfiltrated by a model that never held it, and a request that tries to
-  smuggle one out is caught at the border.
+- A hostile plugin has only the base tools its manifest named, and every call it makes is gated
+  like any other.
+- A prompt injection that captures the model cannot act quietly, because the call stops at a gate
+  whose yes lives on your phone.
+- An intercepted push approves nothing: it carries no decision and no secret, and the answer travels
+  back over an authenticated connection the attacker is not on.
+- A secret cannot be exfiltrated by a model that never held it, and a request that tries to smuggle
+  one out is blocked at the border before the host's own credential is even attached.
 
 ## Where it maps
 

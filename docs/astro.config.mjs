@@ -12,7 +12,7 @@ export default defineConfig({
 		mermaid({ autoTheme: true }),
 		starlight({
 			title: 'Nocturn',
-			description: 'A secure personal AI assistant — mandatory out-of-band approval, WASM isolation, capability broker, in a single Go binary.',
+			description: 'A secure personal AI assistant — mandatory out-of-band approval, WASM isolation, a permission gate the engine cannot see around, in a single Go binary.',
 			customCss: ['./src/styles/brand.css'],
 			// Lightweight scroll parallax for the splash hero. Drives two CSS
 			// custom properties (--nebula-shift on .hero, --mascot-shift on the
@@ -57,7 +57,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Overview', slug: 'guides/introduction' },
 						{ label: 'Install', slug: 'guides/getting-started' },
-						{ label: 'Playground', slug: 'guides/the-tui' },
+						{ label: 'The Chat', slug: 'guides/the-chat' },
 					],
 				},
 				{
@@ -73,7 +73,7 @@ export default defineConfig({
 					label: 'Automation',
 					items: [
 						{ label: 'Triggers', slug: 'guides/triggers' },
-						{ label: 'Channels', slug: 'guides/channels' },
+						{ label: 'Remote Access', slug: 'guides/remote-access' },
 					],
 				},
 				{
@@ -85,64 +85,57 @@ export default defineConfig({
 					],
 				},
 				{
-					label: 'Capabilities',
+					// The four gate Kinds that exist in the code — no more, no fewer. The kind
+					// entries stay lowercase: they are the literal Kind values, not prose.
+					label: 'The Gate',
 					items: [
-						{ label: 'Overview', slug: 'reference/capabilities' },
-						{ label: 'HTTP', link: '/reference/http/' },
-						{ label: 'DNS', link: '/reference/dns/' },
-						{ label: 'ICMP', link: '/reference/icmp/' },
-						{ label: 'Files', link: '/reference/files/' },
-						{ label: 'Notify', link: '/reference/notify/' },
-						{ label: 'Reminders', link: '/reference/reminders/' },
+						{ label: 'Cage and Gate', slug: 'reference/gate' },
+						{ label: 'net', link: '/reference/gate/net/' },
+						{ label: 'file', link: '/reference/gate/file/' },
+						{ label: 'notify', link: '/reference/gate/notify/' },
+						{ label: 'remind', link: '/reference/gate/remind/' },
 					],
 				},
 				{
 					label: 'Tools',
 					items: [
 						{
-							label: 'HTTP',
+							label: 'Network',
 							items: [
-								{ label: 'http.read', link: '/reference/tools/http-read/' },
-								{ label: 'http.write', link: '/reference/tools/http-write/' },
+								{ label: 'http_read', link: '/reference/tools/http_read/' },
+								{ label: 'http_write', link: '/reference/tools/http_write/' },
+								{ label: 'dns_resolve', link: '/reference/tools/dns_resolve/' },
+								{ label: 'ping', link: '/reference/tools/ping/' },
 							],
-						},
-						{
-							label: 'DNS',
-							items: [{ label: 'dns.resolve', link: '/reference/tools/dns-resolve/' }],
-						},
-						{
-							label: 'ICMP',
-							items: [{ label: 'ping', link: '/reference/tools/ping/' }],
 						},
 						{
 							label: 'Files',
 							items: [
-								{ label: 'file.read', link: '/reference/tools/file-read/' },
-								{ label: 'file.write', link: '/reference/tools/file-write/' },
-								{ label: 'file.list', link: '/reference/tools/file-list/' },
-								{ label: 'file.stat', link: '/reference/tools/file-stat/' },
-								{ label: 'file.search', link: '/reference/tools/file-search/' },
-								{ label: 'file.remove', link: '/reference/tools/file-remove/' },
-								{ label: 'file.move', link: '/reference/tools/file-move/' },
+								{ label: 'file_read', link: '/reference/tools/file_read/' },
+								{ label: 'file_list', link: '/reference/tools/file_list/' },
+								{ label: 'file_stat', link: '/reference/tools/file_stat/' },
+								{ label: 'file_search', link: '/reference/tools/file_search/' },
+								{ label: 'file_write', link: '/reference/tools/file_write/' },
+								{ label: 'file_remove', link: '/reference/tools/file_remove/' },
+								{ label: 'file_move', link: '/reference/tools/file_move/' },
 							],
 						},
 						{
-							label: 'Notify',
-							items: [{ label: 'notify', link: '/reference/tools/notify/' }],
-						},
-						{
-							label: 'Reminders',
+							label: 'Reaching You',
 							items: [
+								{ label: 'notify', link: '/reference/tools/notify/' },
 								{ label: 'remind', link: '/reference/tools/remind/' },
-								{ label: 'remind.list', link: '/reference/tools/remind-list/' },
-								{ label: 'remind.cancel', link: '/reference/tools/remind-cancel/' },
+								{ label: 'remind_list', link: '/reference/tools/remind_list/' },
+								{ label: 'remind_cancel', link: '/reference/tools/remind_cancel/' },
 							],
 						},
 						{
-							label: 'Other',
+							label: 'Zero Authority',
 							items: [
-								{ label: 'time.now', link: '/reference/tools/time-now/' },
+								{ label: 'time_now', link: '/reference/tools/time_now/' },
 								{ label: 'wake', link: '/reference/tools/wake/' },
+								{ label: 'code_run', link: '/reference/tools/code_run/' },
+								{ label: 'skill_read', link: '/reference/tools/skill_read/' },
 							],
 						},
 					],
@@ -150,17 +143,17 @@ export default defineConfig({
 				{
 					label: 'Sandbox',
 					items: [
-						{ label: 'WASM data format', slug: 'reference/wasm-abi' },
-						{ label: 'JavaScript runtime', slug: 'reference/javascript-runtime' },
+						{ label: 'WASM Data Format', slug: 'reference/wasm-abi' },
+						{ label: 'JavaScript Runtime', slug: 'reference/javascript-runtime' },
 					],
 				},
 				{
 					label: 'Internals',
 					items: [
 						{ label: 'Threats', slug: 'architecture/threat-model' },
+						{ label: 'The Two Halves', slug: 'architecture/agentkit' },
 						{ label: 'Design', slug: 'architecture/the-onion' },
 						{ label: 'Flow', slug: 'architecture/request-flow' },
-						// TODO: Deep dives (nested group): Sandbox, Broker, Approvals, Secrets, Plugins, Decisions
 					],
 				},
 			],

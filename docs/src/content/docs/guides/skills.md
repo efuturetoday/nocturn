@@ -1,17 +1,16 @@
 ---
 title: Skills
-description: Teach the assistant how to handle a kind of task, without giving it any new power.
+description: Bundled know-how that shapes how the assistant works — and grants it no power at all.
 ---
 
-A skill is bundled know-how. It teaches the assistant *how* to approach a certain kind of
-task: a checklist, a house style, a set of steps. A skill does not give the assistant any
-new abilities. It only shapes how the assistant uses the tools it already has, so every
-action still goes through approval.
+A skill is know-how in a folder. It teaches the assistant *how* to approach a kind of task — a
+checklist, a house style, a sequence of steps. It grants **no** new ability: a skill is text, and
+text cannot widen what the assistant may do.
 
-## Write a skill
+## Write one
 
-Each skill is a folder in your workspace with one file, `SKILL.md`. A short block at the
-top names and describes it. The rest is plain instructions.
+A skill is a folder in your workspace with a `SKILL.md`: a short frontmatter block, then the
+instructions.
 
 ```markdown
 ---
@@ -23,30 +22,33 @@ Fetch the page the user gives you. Write a summary of at most five sentences.
 Lead with the single most important point. Skip navigation and ads.
 ```
 
-That is the whole skill. Drop the folder in `skills/` and it is available.
+Drop the folder in `skills/` and it is available at the next start. As with agents and plugins, the
+folder name is the identity; a `name` in the frontmatter that disagrees is warned about. A skill
+folder without a `SKILL.md` is simply not a skill, and an unparseable one is skipped with a
+diagnostic rather than breaking the others.
 
-## Use a skill
+## How a skill gets used
 
-You turn a skill on by name from the [playground](/guides/the-tui/):
+The `description` of every skill is visible to the assistant from the start; the body is not. When a
+task matches, the assistant loads the one it needs (`skill_load`) and follows it from there. You do
+not have to name a skill for it to be used — that is the point of keeping descriptions cheap and
+bodies out of the way.
 
-```text
-/summarize-url
-/summarize-url https://example.com/article
-```
+A skill can bundle extra files beside its `SKILL.md` — reference notes, a template, an example. The
+assistant reads those with `skill_read`, and only from that skill's own folder.
 
-`/skills` lists what is available. The assistant can also pull in a skill on its own when a
-task calls for it, so you do not have to name one every time.
+Neither tool is gated, because neither carries authority: they add context, never reach. What the
+assistant does *after* reading a skill is gated exactly as before.
 
-A skill can bundle extra files next to it, like reference notes or a template. The
-assistant reads those only when the skill is active, and only from that skill's folder.
+## Why a skill grants no power
 
-## Why skills grant no power
+This is the part that makes third-party skills safe to use. A skill can say "email the summary to
+the team" — and the send still asks you, because the ask comes from the [gate](/reference/gate/),
+which never sees the skill. The worst a hostile skill can do is give bad advice. It cannot act.
 
-This is the important part. A skill is text, not a permission. It can tell the assistant to
-send an email, but the send still asks you first. Nothing in a skill can widen what the
-assistant is allowed to do. That is why you can use skills written by other people safely:
-the worst a bad skill can do is give poor advice, never take an action on its own.
+Compare that with a [plugin](/guides/writing-plugins/), which does add tools and therefore is a
+trust decision. Skills are the safe half of extending the assistant; plugins are the half worth
+reading first.
 
-Because skills live outside the agent's [workspace view](/guides/the-workspace/), the
-assistant cannot write its own skills or change them. You control them, the same way you
-control its permissions.
+Skills live in the control plane, outside `mnt/`, so the assistant can read them but cannot write or
+edit them. It cannot author its own instructions.

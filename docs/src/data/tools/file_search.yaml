@@ -1,0 +1,43 @@
+title: file_search
+description: Find files in the workspace by glob pattern, walking subdirectories.
+
+kind:
+  name: file
+  href: /reference/gate/file/
+gated: false
+axis: read
+
+intro: >-
+  Find files by name or path pattern. A pattern without `/` matches file **names** anywhere below the
+  search root (`*.md`); a pattern with a `/` matches the path relative to that root. Ungated, like
+  the other file reads — see the [`file` kind](/reference/gate/file/).
+
+input:
+  - field: pattern
+    type: string
+    required: true
+    notes: "Glob, e.g. `*.md` or `notes/*.md`."
+  - field: path
+    type: string
+    required: false
+    notes: Directory to search from. Omit for the workspace root.
+
+output:
+  text: "A JSON array of workspace-relative paths:"
+  code: |
+    ["notes/todo.md", "notes/2026/plan.md"]
+  lang: json
+  after: >-
+    A broad sweep stops at **500** matches and appends a `(truncated at 500 results)` line after the
+    JSON — so a wide glob degrades visibly instead of silently.
+
+js:
+  wrapper: |
+    const hits = await nocturn.fs.search("*.md", "notes");
+  call: |
+    const raw = nocturn.call("file_search", { pattern: "*.md", path: "notes" });
+    const hits = JSON.parse(raw.split("\n")[0]);
+
+notes: >-
+  The wrapper already splits the truncation note off before parsing; with the generic form you do it
+  yourself, as above.

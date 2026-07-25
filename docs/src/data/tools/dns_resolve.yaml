@@ -1,0 +1,42 @@
+title: dns_resolve
+description: Resolve a hostname's DNS records.
+
+kind:
+  name: net
+  href: /reference/gate/net/
+  target: the hostname being resolved
+gated: true
+axis: read
+
+intro: >-
+  Look up DNS records for a host. It sends no payload and reads nothing back into the world, and it
+  is still gated — because the *question* is the channel: resolving
+  `secret-value.attacker.example` leaks that value whether or not an answer ever comes back. It
+  shares the [`net` kind](/reference/gate/net/) with HTTP, so one host decision covers both.
+
+input:
+  - field: host
+    type: string
+    required: true
+    notes: The hostname to resolve (an IP for `PTR`).
+  - field: type
+    type: string
+    required: false
+    notes: "Record type: `A`, `AAAA`, `IP`, `MX`, `TXT`, `CNAME`, `NS`, `PTR`, `SRV`. Default `A`."
+
+output:
+  text: "A JSON object naming what was asked and what came back:"
+  code: |
+    { "host": "example.com", "type": "MX", "records": ["10 mail.example.com."] }
+  lang: json
+
+js:
+  wrapper: |
+    const mx = nocturn.resolve("example.com", "MX");
+    console.log(mx.records);
+  call: |
+    const out = JSON.parse(nocturn.call("dns_resolve", { host: "example.com", type: "MX" }));
+
+notes: >-
+  The record type is a parameter of the question, never part of the gated action — the decision is
+  about the host, so approving `example.com` does not have to be repeated per record type.

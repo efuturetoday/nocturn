@@ -3,23 +3,34 @@ import { docsLoader } from '@astrojs/starlight/loaders';
 import { docsSchema } from '@astrojs/starlight/schema';
 import { glob } from 'astro/loaders';
 
-// POC: Tier-2 data-driven tool pages (see /tools-demo/<name>/).
-// Additive collection alongside `docs` — the real Markdown tool pages under
-// src/content/docs/reference/tools/ are untouched. The schema encodes the
-// CONVENTIONS.md §6 "two-form" rule: `js.gate` is required, `js.wrapper` is
-// nullable so a wrapper-less tool must be declared consciously (null), never
-// forgotten.
+// Data-driven tool pages, rendered by src/pages/reference/tools/[...slug].astro.
+// One YAML per registered tool; the file name IS the tool name (underscored,
+// exactly as the model calls it).
+//
+// Two invariants the schema enforces, because both have drifted before:
+//   `gated` is required — a page cannot ship without saying whether calling the
+//   tool can stop for a human. It is NOT derivable from `axis` (file_read is a
+//   read and ungated; http_read is a read and still asks).
+//   `js.wrapper` is nullable, not optional — a tool without a prelude wrapper
+//   must declare null on purpose, so a forgotten wrapper is a type error.
 const tools = defineCollection({
 	loader: glob({ pattern: '**/*.yaml', base: './src/data/tools' }),
 	schema: z.object({
-		title: z.string(),
+		title: z.string(), // the registered tool name, e.g. http_read
 		description: z.string(),
-		capability: z
+		// The kind page this tool belongs to, or null for a tool that belongs to none
+		// (time_now, wake, code_run). Belonging is not the same as being gated: the
+		// file read tools belong to `file` and never call the gate — see `gated`.
+		kind: z
 			.object({
-				family: z.string(),
+				name: z.string(), // the Kind's value, e.g. "net"
 				href: z.string(),
+				target: z.string().optional(), // what Target carries when this tool checks
 			})
 			.nullable(),
+		gated: z.boolean(),
+		// Descriptive only: does the tool observe, or change something? It does not
+		// decide gating — see `gated`.
 		axis: z.enum(['read', 'write', 'none']),
 		intro: z.string(),
 		input: z
@@ -48,41 +59,43 @@ const tools = defineCollection({
 			// wrapper (idiomatic prelude form) — nullable so a wrapper-less tool
 			// is representable, but the author must set it to null on purpose.
 			wrapper: z.string().nullable(),
-			// generic gate (nocturn.call form) — REQUIRED. This is what makes the
-			// two-form rule impossible to drift: no page can ship without it.
-			gate: z.string(),
+			// generic form (nocturn.call) — REQUIRED, so no page can ship without
+			// the form that always works.
+			call: z.string(),
 		}),
 		notes: z.string().optional(),
 	}),
 });
 
-// POC: Tier-2 data-driven capability pages (see /caps-demo/<name>/).
-// Additive collection alongside `docs` and `tools` — the real Markdown
-// capability pages under src/content/docs/reference/*.md are untouched. The
-// schema encodes the CONVENTIONS.md §3 canonical section order: the fixed
-// spine (glance → tools → cage → limits → optional credentials/leakScanning)
-// plus a freeform `sections` tail for capability-specific detail (Confinement,
-// Requirements, "Why …") whose bodies are BLOCK markdown.
-const capabilities = defineCollection({
-	loader: glob({ pattern: '**/*.yaml', base: './src/data/capabilities' }),
+// Data-driven gate-kind pages, rendered by src/pages/reference/gate/[...slug].astro.
+// One YAML per gate Kind that exists in the code — today exactly four:
+// tools.NetKind, tools.FileKind, tools.NotifyKind, tools.RemindKind. There is no
+// page for a family the gate does not know: dns_resolve and ping gate on `net`,
+// so they live there rather than in invented `dns`/`icmp` kinds.
+const kinds = defineCollection({
+	loader: glob({ pattern: '**/*.yaml', base: './src/data/kinds' }),
 	schema: z.object({
 		title: z.string(),
 		description: z.string(),
-		family: z.string(),
+		kind: z.string(), // the Kind's value, e.g. "net"
+		constant: z.string(), // the Go identifier it comes from, e.g. tools.NetKind
 		intro: z.string(), // inline markdown
 		glance: z.object({
-			target: z.string(), // inline markdown
-			defaultPolicy: z.string(), // inline markdown
+			target: z.string(), // what Action.Target carries (inline markdown)
+			policy: z.string(), // what the workspace root policy rules (inline markdown)
+			matcher: z.string(), // how a grant pattern is matched (inline markdown)
 		}),
 		tools: z.array(
 			z.object({
 				name: z.string(),
 				href: z.string(),
 				axis: z.enum(['read', 'write']),
+				gated: z.boolean(),
 				desc: z.string().optional(), // inline markdown
 			})
 		),
-		cage: z.object({
+		// How a remembered grant for this kind is written and what it covers.
+		grants: z.object({
 			intro: z.string(), // block markdown prose
 			examples: z.string(), // a fenced code block body, rendered via <Code>
 			lang: z.string().default('json'),
@@ -96,7 +109,7 @@ const capabilities = defineCollection({
 				points: z.array(z.string()),
 			})
 			.optional(),
-		// Freeform capability-specific tail (Confinement / Requirements / Why …).
+		// Freeform kind-specific tail (Confinement / Requirements / Why …).
 		// `body` is BLOCK markdown (paragraphs + lists).
 		sections: z
 			.array(
@@ -112,5 +125,5 @@ const capabilities = defineCollection({
 export const collections = {
 	docs: defineCollection({ loader: docsLoader(), schema: docsSchema() }),
 	tools,
-	capabilities,
+	kinds,
 };

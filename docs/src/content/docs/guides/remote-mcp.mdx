@@ -1,28 +1,24 @@
 ---
 title: MCP servers
-description: Connect your assistant to hosted MCP servers over the internet, with the same safety as everything else.
+description: Connect to hosted MCP servers over HTTPS — one folder per server, gated on the server's host like any other network reach.
 ---
 
 import { Badge } from '@astrojs/starlight/components';
 
-MCP (Model Context Protocol) is a common way for a service to expose its tools to an AI
-assistant. Many services now offer a hosted MCP server. Nocturn can connect to one, so you
-gain its tools without writing any code.
+MCP (Model Context Protocol) is a common way for a service to expose its tools to an assistant. Many
+services now host one. Nocturn can connect, so you gain those tools without writing any code.
 
 :::danger[Remote servers only. This is deliberate.]
-Nocturn connects to remote MCP servers over HTTPS and nothing else. It does **not** run
-local (stdio) servers, it does **not** spawn processes, and it does **not** launch or manage
-a server for you. A local server would mean foreign code running on your machine, outside
-the sandbox, with your privileges. That is exactly what Nocturn refuses to do. There is no
-runtime and no execution outside the sandbox. A remote server runs on someone else's
-infrastructure, so from your side it is only an API call, and it fits the same safety model
-as everything else.
+Nocturn connects to remote MCP servers over HTTPS and nothing else. It does **not** run local
+(stdio) servers, does **not** spawn processes, and does **not** manage a server for you. A local
+server means foreign code running on your machine, outside the sandbox, with your privileges —
+exactly what this design refuses. A remote server runs on someone else's infrastructure, so from
+here it is an API call and fits the same model as everything else.
 :::
 
 ## Add a server
 
-Give each server its own folder under `mcp/` in your workspace, named after the server, with an
-`mcp.json` inside — `mcp/github/mcp.json`:
+One folder per server under `mcp/` in the workspace, each with an `mcp.json`:
 
 ```json
 {
@@ -31,71 +27,78 @@ Give each server its own folder under `mcp/` in your workspace, named after the 
 }
 ```
 
-The server's name comes from the folder (`mcp/github/` → `github`), so all you need is an
-`https` `url`. Its tools then appear to the assistant as `github_*`, alongside the built-in
-ones. To remove a server, delete its folder. (You can add a `"name"` field to override the
-folder — the same way skills, agents and plugins work — but Nocturn warns if it disagrees with
-the folder, since that is usually a mistake.) The folder also holds the server's encrypted
-credentials, so everything for one server lives in one place.
+The name comes from the folder (`mcp/github/` → `github`), so a plain `https` URL is enough. Its
+tools appear to the model as `github_*`. Delete the folder to remove the server — that also takes
+its credential shard with it.
+
+A `"name"` field may override the folder, following the same discovery rule as agents, skills and
+plugins; a name that disagrees with its folder is warned about, because that is usually a slip. The
+name must match `^[a-z0-9][a-z0-9_-]{0,31}$` — no dots, and short enough that `<server>_<tool>` fits
+in the 64 characters a tool name is allowed.
+
+Declaring a server is an authority-relevant act: it hands the model that server's tools and wires
+your token to its host. That is why `mcp/` lives in the control plane, outside `mnt/` — the model
+can neither read nor write these files. **Presence is the authorization.** There is no separate
+review step; dropping the folder in is the decision.
 
 ## Signing in
 
-How the server authenticates you:
+- **None** <Badge text="Available now" variant="success" /> — omit `auth` for a public server.
+- **Token** <Badge text="Available now" variant="success" /> — `"auth": "token"`, then seed the
+  bearer out of band:
 
-- **None** <Badge text="Available now" variant="success" /> Leave `auth` out for a public
-  server.
-- **Token** <Badge text="Available now" variant="success" /> Set `"auth": "token"` and seed a
-  personal access token: `printf %s "$TOKEN" | nocturn secret set mcp:<name>`. Kept encrypted in
-  the server's folder.
-- **OAuth, with automatic discovery and registration** <Badge text="Available now" variant="success" />
-  Set `"auth": "oauth"` — nothing else. Then run `nocturn auth <name>`: Nocturn discovers the
-  server's authorization endpoints, registers a client for you, opens the browser to sign in, and
-  stores the token. No client ID, no endpoints, no token to copy. This follows the MCP
-  authorization spec (protected-resource + authorization-server metadata, dynamic client
-  registration, PKCE, and resource-bound tokens), so it works with servers like GitHub's:
+  ```sh
+  printf %s "$TOKEN" | nocturn secret set mcp:<name>
+  ```
+
+  It lands encrypted in the server's own shard. Nothing secret ever touches `mcp.json` or the
+  environment.
+
+- **OAuth with discovery** <Badge text="Available now" variant="success" /> — `"auth": "oauth"` and
+  nothing else. `nocturn auth <name>` then discovers the server's authorization endpoints,
+  registers a client, opens the browser, and stores the token. No client id, no endpoints to copy.
+  This follows the MCP authorization spec: protected-resource metadata → authorization-server
+  metadata → dynamic client registration, PKCE, resource-bound tokens.
 
   ```json
   { "url": "https://api.githubcopilot.com/mcp/", "auth": "oauth" }
   ```
 
   ```sh
-  nocturn auth github            # discovers, registers, opens the browser
-  nocturn auth github -scope repo   # request specific scopes
+  nocturn auth github                 # discovers, registers, opens the browser
+  nocturn auth github -scope repo     # ask for specific scopes
   ```
 
-  If a server's authorization server does not support dynamic registration, configure an `oauth`
-  block with the endpoints and a `client_id` instead.
+- **OAuth, endpoints by hand** — if the server's authorization server does not do dynamic
+  registration, give an `oauth` block with `auth_url`, `token_url`, `client_id` and `scopes`
+  instead. `"auth": "oauth"` and a manual block are mutually exclusive: one credential, one source,
+  no silent tie-breaking.
 
-Either way the token stays with Nocturn. The assistant never sees it, Nocturn refreshes it, and it
-is only ever sent to the server it belongs to (bound to that server as its audience). See
-[Secrets and accounts](/guides/connecting-accounts/).
+Malformed declarations are rejected fail-closed — a non-HTTPS URL, an unknown auth mode, `token`
+alongside an OAuth block. Either way the token stays host-side, bound to that server, and the model
+never sees it.
 
-## You have to trust the server
+## How MCP calls are gated
 
-This is the important caveat. For each of its tools, the MCP server tells Nocturn whether
-that tool only reads or also changes things. Nocturn uses that to decide what to ask you
-about: a read-only tool runs quietly, a tool that changes things asks first.
+Every MCP tool call is an HTTPS POST to the server. It is gated exactly like one:
+kind `net`, target the **server's host**. So you approve `api.githubcopilot.com` once, and that
+covers the server's tools.
 
-So a server could label a changing tool as read-only, and Nocturn would run it without
-prompting you. Only connect MCP servers you trust, the same way you would only install a
-plugin you trust. The startup review is where you make that call.
+Two things follow, and the second is a real limitation worth stating plainly:
 
-What the tool can *reach* is still bounded, whatever the server claims. It can only talk to
-that one server, and results are scanned for leaks. But whether you are asked before it acts
-depends on the server telling the truth about its own tools.
+- What an MCP tool can *reach* is bounded regardless of what the server claims — it talks to its own
+  host and nowhere else, and its responses go through the ingress leak scan.
+- Nocturn does **not** distinguish a server's read-only tools from its mutating ones. The protocol
+  has a `readOnlyHint` annotation, and Nocturn parses it but does not act on it: an approval for the
+  host covers whatever the server exposes. So a server you connect can act on your behalf within
+  its own API surface without asking per tool.
 
-## The startup review
-
-The first time you connect a server, Nocturn shows you what it is and asks you to confirm. It
-remembers your answer, so an unchanged server connects quietly next time. If the declaration
-changes, it asks again and shows what changed.
-
-If you decline a server, or it is unreachable, Nocturn skips it and keeps running with
-everything else. One flaky server never blocks your assistant.
+That makes connecting an MCP server a trust decision of the same weight as installing a plugin. Both
+are structural: the reach is bounded by construction, but what happens inside the bound is the
+server's to define.
 
 ## What Nocturn refuses
 
-Nocturn declines the parts of MCP that would let a remote server drive your assistant instead
-of the other way around. It does not let a server send prompts for your model to run, and it
-does not accept server-pushed content on its own. You get the useful part, the tools, without
-handing a stranger the wheel.
+The parts of MCP that would let a remote server drive your assistant are left out: it does not
+accept server-sent prompts for your model to run, and it does not act on server-pushed content on
+its own. You get the tools without handing a stranger the wheel.

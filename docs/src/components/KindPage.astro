@@ -1,8 +1,7 @@
 ---
-// POC Tier-2 capability page renderer. Consumes one entry of the `capabilities`
-// data collection and renders the fixed CONVENTIONS.md §3 section order. Used by
-// the demo route src/pages/caps-demo/[...slug].astro — the real Markdown
-// capability pages under reference/*.md are untouched.
+// Renderer for one entry of the `kinds` data collection: a gate Kind, with the
+// tools that carry it, what a remembered grant looks like, and the limits that
+// hold regardless of any approval. Used by src/pages/reference/gate/[...slug].astro.
 import { Code } from '@astrojs/starlight/components';
 import { marked } from 'marked';
 import { slug as ghSlug } from 'github-slugger';
@@ -11,6 +10,7 @@ interface ToolRef {
 	name: string;
 	href: string;
 	axis: 'read' | 'write';
+	gated: boolean;
 	desc?: string;
 }
 
@@ -20,31 +20,29 @@ interface Section {
 }
 
 interface Props {
-	family: string;
+	kind: string;
+	constant: string;
 	intro: string;
-	glance: { target: string; defaultPolicy: string };
+	glance: { target: string; policy: string; matcher: string };
 	tools: ToolRef[];
-	cage: { intro: string; examples: string; lang?: string; notes: string[] };
+	grants: { intro: string; examples: string; lang?: string; notes: string[] };
 	limits: string[];
 	credentials?: string[];
 	leakScanning?: { intro?: string; points: string[] };
 	sections?: Section[];
 }
 
-const { family, intro, glance, tools, cage, limits, credentials, leakScanning, sections } =
+const { kind, constant, intro, glance, tools, grants, limits, credentials, leakScanning, sections } =
 	Astro.props;
 
 // Inline-Markdown for author-friendly prose fields (`code`, [text](href), **bold**).
 const md = (s: string | undefined) => (s ? (marked.parseInline(s) as string) : '');
-// Block-Markdown for freeform section bodies + cage.intro (paragraphs + lists render).
+// Block-Markdown for freeform section bodies + grants.intro (paragraphs + lists render).
 const mdBlock = (s: string | undefined) => (s ? (marked.parse(s) as string) : '');
 
-// Stable slugified ids for the freeform section headings. Use the SAME slugger
-// Starlight uses for Markdown headings (github-slugger) so anchors emitted here
-// are byte-identical to the ids the old .md pages produced — deep-links stay
-// valid. Note this keeps GitHub's behaviour of NOT collapsing the double space
-// left by a dropped em-dash (e.g. "Why it runs silently — and why that is safe"
-// → "why-it-runs-silently--and-why-that-is-safe").
+// Stable slugified ids for the freeform section headings, using the SAME slugger
+// Starlight uses for Markdown headings (github-slugger), so anchors emitted here
+// match what the Markdown pipeline would have produced.
 const slug = (s: string) => ghSlug(s);
 ---
 
@@ -54,32 +52,22 @@ const slug = (s: string) => ghSlug(s);
 <table>
 	<tbody>
 		<tr>
-			<td><strong>Family</strong></td>
-			<td><code>{family}</code></td>
+			<td><strong>Kind</strong></td>
+			<td>
+				<code>{kind}</code> — <code>{constant}</code>
+			</td>
 		</tr>
 		<tr>
 			<td><strong>Target</strong></td>
 			<td set:html={md(glance.target)} />
 		</tr>
 		<tr>
-			<td><strong>Tools</strong></td>
-			<td>
-				{
-					tools.map((t, i) => (
-						<Fragment>
-							{i > 0 && ' · '}
-							<a href={t.href}>
-								<code>{t.name}</code>
-							</a>{' '}
-							<span class={`axis axis--${t.axis}`}>{t.axis}</span>
-						</Fragment>
-					))
-				}
-			</td>
+			<td><strong>Root policy</strong></td>
+			<td set:html={md(glance.policy)} />
 		</tr>
 		<tr>
-			<td><strong>Default policy</strong></td>
-			<td set:html={md(glance.defaultPolicy)} />
+			<td><strong>Matcher</strong></td>
+			<td set:html={md(glance.matcher)} />
 		</tr>
 	</tbody>
 </table>
@@ -92,20 +80,28 @@ const slug = (s: string) => ghSlug(s);
 				<a href={t.href}>
 					<code>{t.name}</code>
 				</a>{' '}
-				<span class={`axis axis--${t.axis}`}>{t.axis}</span>
-				{t.desc && <Fragment> — <span set:html={md(t.desc)} /></Fragment>}
+				<span class={`axis axis--${t.axis}`}>{t.axis}</span>{' '}
+				<span class={`gate gate--${t.gated ? 'gated' : 'ungated'}`}>
+					{t.gated ? 'gated' : 'ungated'}
+				</span>
+				{t.desc && (
+					<Fragment>
+						{' '}
+						— <span set:html={md(t.desc)} />
+					</Fragment>
+				)}
 			</li>
 		))
 	}
 </ul>
 
-<h2 id="cage-syntax">Cage syntax</h2>
-<div set:html={mdBlock(cage.intro)} />
-<Code code={cage.examples} lang={cage.lang ?? 'json'} />
+<h2 id="grants">Grants</h2>
+<div set:html={mdBlock(grants.intro)} />
+<Code code={grants.examples} lang={grants.lang ?? 'json'} />
 {
-	cage.notes.length > 0 && (
+	grants.notes.length > 0 && (
 		<ul>
-			{cage.notes.map((n) => (
+			{grants.notes.map((n) => (
 				<li set:html={md(n)} />
 			))}
 		</ul>

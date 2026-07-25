@@ -1,0 +1,32 @@
+title: file_list
+description: List the entries of a workspace directory.
+
+kind:
+  name: file
+  href: /reference/gate/file/
+gated: false
+axis: read
+
+intro: >-
+  List what a workspace directory contains. Ungated, like the other file reads — see the
+  [`file` kind](/reference/gate/file/) for why, and for what confinement guarantees instead.
+
+input:
+  - field: path
+    type: string
+    required: false
+    notes: Workspace-relative directory. Omit or pass `""` for the workspace root.
+
+output:
+  text: "A JSON array, one object per entry:"
+  code: |
+    [ { "name": "todo.md", "isDir": false, "size": 214 },
+      { "name": "2026",    "isDir": true,  "size": 0 } ]
+  lang: json
+
+js:
+  wrapper: |
+    const entries = await nocturn.fs.list("notes");
+    for (const e of entries) console.log(e.name, e.isDir);
+  call: |
+    const entries = JSON.parse(nocturn.call("file_list", { path: "notes" }));

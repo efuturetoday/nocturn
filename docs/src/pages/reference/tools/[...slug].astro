@@ -1,8 +1,8 @@
 ---
-// Tier-2 data-driven tool pages. Each entry of the `tools` data collection is
-// rendered at /reference/tools/<name>/ inside a full Starlight page (sidebar /
-// ToC / search / theme). These slugs are byte-identical to the old Markdown
-// tool pages, so the sidebar links in astro.config.mjs keep resolving.
+// Data-driven tool pages. Each entry of the `tools` data collection renders at
+// /reference/tools/<name>/ inside a full Starlight page (sidebar / ToC / search /
+// theme). The slug is the registered tool name, underscores and all — what you
+// read in the URL is what the model calls.
 import { getCollection } from 'astro:content';
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import ToolPage from '../../../components/ToolPage.astro';
@@ -29,7 +29,8 @@ const t = entry.data;
 
 <StarlightPage frontmatter={{ title: t.title, description: t.description, prev, next }}>
 	<ToolPage
-		capability={t.capability}
+		kind={t.kind}
+		gated={t.gated}
 		axis={t.axis}
 		intro={t.intro}
 		input={t.input}

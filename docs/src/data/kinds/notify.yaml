@@ -1,0 +1,55 @@
+title: The notify kind
+description: notify — reaching you out of band, checked as its own kind so a policy can tighten it without touching the network.
+
+kind: notify
+constant: tools.NotifyKind
+
+intro: >-
+  One tool sits behind this kind: `notify`, which pushes a message to you out of band. It **does**
+  call the gate — with a constant `Target` of `user`, because there is only one destination and the
+  host owns it. The workspace root policy allows the kind, so nothing asks today. The check exists
+  so a stricter policy (an agent's, say) can start asking without any tool changing.
+
+glance:
+  target: "the constant `user` — the host owns the channel, the caller cannot aim it"
+  policy: "allowed by the workspace root policy — checked, but not asked today"
+  matcher: "`gate.ExactMatch` — there is one target and it is not a pattern"
+
+tools:
+  - name: notify
+    href: /reference/tools/notify/
+    axis: write
+    gated: true
+    desc: send a message to the user out of band
+
+grants:
+  intro: >-
+    Because the root policy rules `notify` allowed, no grant is ever recorded for it in normal use.
+    A grant becomes meaningful only under a policy that asks — and then it is the same `{kind,
+    target}` pair every kind uses, with the one constant target.
+  lang: json
+  examples: |
+    { "kind": "notify", "target": "user" }
+  notes:
+    - >-
+      There is no host, path or address to widen to. The channel is configured on the host side;
+      the model can pick the words, never the recipient.
+
+limits:
+  - >-
+    **Fire and forget** — `notify` returns `{"sent":true}` once the message is handed to the
+    channel. It is not a confirmation that you read it.
+
+leakScanning:
+  points:
+    - >-
+      The message is scanned on the way out. A notification carrying a stored vault secret is
+      blocked — the out-of-band channel is not a side door around the egress scan.
+
+sections:
+  - title: Why it runs silently — and why that is safe
+    body: >-
+      An approval prompt for "may I tell you something?" would be absurd: you are the destination.
+      The risk that remains is not the *reach* but the *content* — an injected prompt using the
+      channel to smuggle a secret to whatever address the channel points at. That is exactly what
+      the egress scan closes, and why `notify` is scanned even though it is not asked.

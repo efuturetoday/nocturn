@@ -1,0 +1,105 @@
+title: The net kind
+description: http_read, http_write, dns_resolve and ping — every tool that reaches the network, gated on the host.
+
+kind: net
+constant: tools.NetKind
+
+intro: >-
+  Everything that leaves the machine checks the **same** gate kind: `net`. Four tools sit behind it
+  — `http_read`, `http_write`, `dns_resolve` and `ping` — and the `Target` they all carry is the
+  **host**. That is the point: one allowlist of hosts spans HTTP, DNS and ICMP, so allowing
+  `api.github.com` once does not have to be re-decided per protocol.
+
+glance:
+  target: "the **host** — `api.github.com`, `example.com`, an IP for `ping`"
+  policy: "**every** net action asks, read and write alike, remembered for the session"
+  matcher: "`tools.HostMatch` — exact host, `*.domain` for a domain and its subdomains, or `*` for any"
+
+tools:
+  - name: http_read
+    href: /reference/tools/http_read/
+    axis: read
+    gated: true
+    desc: read a URL (GET/HEAD)
+  - name: http_write
+    href: /reference/tools/http_write/
+    axis: write
+    gated: true
+    desc: send data (POST/PUT/PATCH/DELETE)
+  - name: dns_resolve
+    href: /reference/tools/dns_resolve/
+    axis: read
+    gated: true
+    desc: resolve a hostname's DNS records
+  - name: ping
+    href: /reference/tools/ping/
+    axis: read
+    gated: true
+    desc: one ICMP echo to a host
+
+grants:
+  intro: >-
+    When you approve a net action you may remember it. A remembered grant is a `{kind, target}` pair;
+    `RecallAlways` grants are written to `grants.json` in the workspace, session grants live only in
+    memory and die with the process. The target is a host pattern, matched by `tools.HostMatch`.
+  lang: json
+  examples: |
+    { "kind": "net", "target": "api.github.com" }
+    { "kind": "net", "target": "*.github.com" }
+    { "kind": "net", "target": "*" }
+  notes:
+    - >-
+      `*.github.com` covers the domain **and** its subdomains (`github.com`, `api.github.com`); `*`
+      on its own means **any host** — the widest grant there is.
+    - >-
+      The approval prompt offers exactly one widening beyond the exact host: the parent domain
+      (`api.example.com` → `*.example.com`). A bare `example.com` offers none.
+    - >-
+      A grant covers the kind, not the tool. Allowing `net` for `api.github.com` lets `http_read`,
+      `http_write`, `dns_resolve` and `ping` reach that host — they share one allowlist by design.
+    - >-
+      Redirects are re-checked: each hop is a fresh `gate.Check` against the new host, so a redirect
+      cannot smuggle a request to a host you never allowed.
+
+limits:
+  - "**Response body** — capped at **64 KiB** handed back to the caller; the rest is dropped."
+  - >-
+    **Request headers** — a guest cannot set them. `Authorization`, `Cookie`, `Proxy-Authorization`
+    and friends are the host's channel; only `Content-Type` comes from the caller.
+  - "**Methods** — `http_read` accepts `GET`/`HEAD` only; a mutating method there is rejected."
+
+credentials:
+  - >-
+    Credentials are attached **host-side, at the boundary, for the matching host only**. The guest
+    never sees the token and never picks it — the destination does.
+  - >-
+    A request that carries its **own** credential is rejected: userinfo in the URL
+    (`user:pass@host`), or an `Authorization` / `Cookie` / `Proxy-Authorization` / `X-Api-Key` header.
+
+leakScanning:
+  intro: "Bidirectional — a secret can neither be smuggled out nor echoed back:"
+  points:
+    - >-
+      **Egress (the request):** URL, headers and body are scanned **before** the host stamps in its
+      own credential — a request carrying a stored vault secret is blocked.
+    - >-
+      **Ingress (the response):** body and header values are scanned and any echoed secret is
+      **redacted** before the model sees it.
+    - >-
+      **Stripped outright:** credential-bearing response headers — `Set-Cookie`, `Set-Cookie2`,
+      `Authorization`, `WWW-Authenticate`, `Proxy-Authenticate` (the guest has no cookie jar).
+
+sections:
+  - title: Why DNS and ping gate at all
+    body: >-
+      Neither sends payload anywhere, so at first glance both look free. They are gated because a
+      hostname is a channel: a lookup of `secret-value.attacker.example` exfiltrates that value in
+      the query itself, and the answer is irrelevant. Timing a `ping` sweep maps an internal network
+      just as well. Both carry the same `Target` as HTTP — the host — so one decision covers the
+      reach, whichever protocol asks for it.
+
+  - title: What ping needs from the OS
+    body: >-
+      `ping` sends one ICMP echo. On a host that does not permit unprivileged ICMP sockets the call
+      fails at the OS, not at the gate — a denial you see as an error, after the approval, not
+      instead of it.

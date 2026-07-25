@@ -1,128 +1,130 @@
-# Documentation conventions — Capabilities & Tools
+# Documentation conventions — gate kinds & tools
 
-Source of truth for how the reference docs are structured. Capability and tool pages are
-**data-driven**: you author a **YAML data entry**, and a shared Astro component renders the fixed
-layout. The structure is therefore **enforced** — a Zod schema + the renderer make it impossible to
-reorder, omit a required part, or drift. A malformed entry **fails `npx astro build`**. The
-docs-update hook (`.claude/settings.local.json`) points here.
+Source of truth for how the reference docs are structured. Kind and tool pages are **data-driven**:
+you author a **YAML data entry**, and a shared Astro component renders the fixed layout. The
+structure is therefore **enforced** — a Zod schema + the renderer make it impossible to reorder,
+omit a required part, or drift. A malformed entry **fails `npx astro build`**.
 
-> Do **not** write these pages as Markdown `.md` files anymore, and do **not** hand-write HTML
+> Do **not** write these pages as Markdown `.md` files, and do **not** hand-write HTML
 > (`<span class="axis…">`, `<code>`, `<a>`) — author Markdown *in the YAML fields*; the component
 > renders it.
 
 ---
 
-## 1. Capability vs Tool — the core distinction
+## 1. The model these pages describe
 
-- A **capability** is the authority the broker gates: in code it builds a
-  `capability.Call{Family, Target, Write}` and runs through `gateway.Do` / `Guard.Authorize`, so it
-  **can be caged**. Quick code test: `grep -rn 'capability.Call{' internal` — a package that builds
-  one *and* calls `gateway.Do` is a capability.
-- A **tool** is what the model / `nocturn.call` invokes (a `tool.Tool` in the registry). A tool
-  exercises **zero, one, or several** capabilities.
-- **Capabilities today** (by family): `http`, `dns`, `icmp` (tool `ping`), `file`, `notify`, `remind`.
-- **Ungated tools** (no capability, never gated): `code.run`, `skill.load`, `skill.read`,
-  `time.now`, `wake`.
+Two separate questions, and the docs must never blur them:
 
-## 2. Where the pages live (data-driven)
+- **Cage** — which tools a caller has at all (`agentkit.ToolSet`, a plugin's `uses`, an agent's
+  `tools`). Not a rule that is evaluated: an absent tool is absent.
+- **Gate** — what a call may do, checked per call as `gate.Check(Action{Kind, Target})`.
+
+**Kinds today** — exactly four, and no page may invent a fifth: `net` (`tools.NetKind`), `file`
+(`tools.FileKind`), `notify` (`tools.NotifyKind`), `remind` (`tools.RemindKind`).
+Verify with `grep -rn 'Kind = "' internal/tools`.
+
+**Gated is not derivable from the tool's name or its axis.** `http_read` is a read and asks;
+`file_read` is a read and never calls the gate. Every tool entry states `gated` explicitly.
+
+## 2. Where the pages live
 
 | | Data entry | Rendered by | URL |
 |---|---|---|---|
-| **Tool page** | `src/data/tools/<tool>.yaml` (dots → hyphens: `http.write` → `http-write.yaml`) | `<ToolPage>` via `src/pages/reference/tools/[...slug].astro` | `/reference/tools/<tool>/` |
-| **Capability page** | `src/data/capabilities/<family>.yaml` | `<CapabilityPage>` via `src/pages/reference/[...slug].astro` | `/reference/<family>/` |
+| **Tool page** | `src/data/tools/<tool>.yaml` — file name **is** the registered tool name, underscores and all | `<ToolPage>` via `src/pages/reference/tools/[...slug].astro` | `/reference/tools/<tool>/` |
+| **Kind page** | `src/data/kinds/<kind>.yaml` | `<KindPage>` via `src/pages/reference/gate/[...slug].astro` | `/reference/gate/<kind>/` |
 
-- **Schema** lives in `src/content.config.ts` (`tools` and `capabilities` collections). It is the
-  contract — the build fails on a missing/invalid field.
-- **Still Markdown** (`docs` collection): the overview `reference/capabilities.md`,
-  `reference/wasm-abi.md`, `reference/javascript-runtime.md`, and all `guides/*`.
-- **Sidebar** (`astro.config.mjs`): capability and tool entries use **`link: '/reference/…/'`**
-  (they are `<StarlightPage>` custom routes, not `docs`-collection slugs — `slug:` would fail the
-  build). The Overview and the Markdown pages keep `slug:`. Tools are grouped by capability; the
-  capabilities are listed by family under **Capabilities**.
+- **Schema** lives in `src/content.config.ts` (`tools` and `kinds` collections). It is the contract —
+  the build fails on a missing or invalid field.
+- **Still Markdown** (`docs` collection): `reference/gate.md`, `reference/wasm-abi.md`,
+  `reference/javascript-runtime.md`, all `guides/*` and all `architecture/*`.
+- **Sidebar** (`astro.config.mjs`): kind and tool entries use **`link: '/reference/…/'`** — they are
+  `<StarlightPage>` custom routes, not `docs` slugs, so `slug:` would fail the build. Markdown pages
+  keep `slug:`.
 
-## 3. Authoring the fields (both page types)
+## 3. Authoring the fields
 
-- **Prose = Markdown, never HTML.** Inline fields (`notes`, bullets, `desc`, `output` prose, cage
-  notes) take **inline** Markdown (`` `code` ``, `[text](href)`, `**bold**`). Block fields
-  (capability `intro`, `cage.intro`, `sections[].body`) take **block** Markdown (paragraphs, lists).
-- **Code goes in code fields**, never pasted as prose: `js.wrapper` / `js.gate`, tool `output.code`,
-  `cage.examples`. These render as real Expressive-Code blocks.
-- **Axis is a field** (`read` / `write` / `none`), not markup — the badge renders itself. Never
-  hand-write `<span class="axis…">`.
+- **Prose = Markdown, never HTML.** Inline fields (`notes`, bullets, `desc`, `output` prose, grant
+  notes) take **inline** Markdown. Block fields (`intro` on a kind, `grants.intro`, `sections[].body`)
+  take **block** Markdown.
+- **Code goes in code fields**: `js.wrapper` / `js.call`, tool `output.code`, `grants.examples`.
+- **Badges are fields**, never markup: `axis` (`read`/`write`/`none`) and `gated` (boolean) render
+  themselves.
 
 ## 4. Tool entry — `src/data/tools/<tool>.yaml`
 
-Fields: `title`, `description`, `capability` (`{family, href}` or `null` for ungated), `axis`
-(`read`/`write`/`none`), `intro` (inline md), `input` (array of `{field, type, required, notes}` or
+Fields: `title` (the registered name), `description`, `kind` (`{name, href, target?}` or `null`),
+`gated` (bool, **required**), `axis`, `intro`, `input` (array of `{field, type, required, notes}` or
 `'none'`), `output` (string **or** `{text?, code?, lang, after?}`), `js` (`{wrapper: string|null,
-gate: string}`), `notes?`.
+call: string}`), `notes?`.
 
-The component renders the fixed order and you cannot change it: **Capability line + axis badge →
-intro → `## Input` → `## Output` → `## From JavaScript` → `## Notes`**. `output` prose renders as a
-paragraph; `output.code` as a JSON box (with optional `text` before / `after` after). See §6 for
-`js`.
+Fixed render order: **gate line + axis badge → intro → `## Input` → `## Output` →
+`## From JavaScript` → `## Notes`**.
 
-## 5. Capability entry — `src/data/capabilities/<family>.yaml`
+`kind` is about **belonging**, `gated` about **behaviour**. A file read sets `kind: file` with
+`gated: false` and omits `target`; a gated tool sets `target` to whatever `Action.Target` carries
+for it.
 
-Fields: `title`, `description`, `family`, `intro` (block md), `glance` (`{target, defaultPolicy}`),
-`tools` (array of `{name, href, axis, desc?}`), `cage` (`{intro, examples, lang, notes[]}`),
-`limits[]` (min 1), `credentials?[]`, `leakScanning?` (`{intro?, points[]}`), `sections?` (array of
-`{title, body}`).
+`input` must mirror the tool's real `agentkit.WithSchema` — field names, requiredness and enums.
+Check against `internal/tools/*.go` rather than memory.
 
-Fixed, enforced order: **At a glance → Tools → Cage syntax → Limits → [Credentials] → [Leak
-scanning] → freeform `sections`**. Content rules per section:
+## 5. Kind entry — `src/data/kinds/<kind>.yaml`
 
-- **`glance`** — the At-a-glance table (Family = `family`, Target, Tools derived from `tools[]`,
-  Default policy).
-- **`cage`** — how to cage it, with a `{family, target, access}` example block. For a **host-owned**
-  capability (`notify`/`remind`) it is **family-level** (`target: "*"`), not per-target.
-- **`limits`** — the **rate limit** is enforced **per capability family, not per tool**
-  (`RateLimiter.Allow(call.Family)`); state the cap or **TBD** while unwired (today it is a primitive
-  not attached to the Guard → TBD). **Size/resource caps also go here** (http response-body cap,
-  `file` single-read cap).
-- **`credentials`** — include **only if the capability injects secrets** (`http`, MCP-over-http):
-  host-side bearer injection at the boundary; the guest never sees the token; guest-supplied
-  credentials are rejected.
-- **`leakScanning`** — include **only if it scans**: *what is scanned* and *what is stripped*
-  (`http`: egress URL+headers+body, ingress body+header values, stripped `Set-Cookie`/`Authorization`
-  …; `notify`/`remind`: the message text on egress).
-- **`sections`** — the capability-specific tail: `## Confinement` (file), `## Requirements` (icmp),
-  `## Why it is a gated capability anyway` / `## Why it runs silently …` / `## Channel` (notify).
+Fields: `title`, `description`, `kind` (the constant's value), `constant` (the Go identifier),
+`intro`, `glance` (`{target, policy, matcher}`), `tools` (array of `{name, href, axis, gated, desc?}`),
+`grants` (`{intro, examples, lang, notes[]}`), `limits[]` (min 1), `credentials?[]`, `leakScanning?`,
+`sections?`.
 
-**Anchor stability:** heading ids are generated with `github-slugger` (`#cage-syntax`, `#credentials`,
-`#leak-scanning`, `#limits`, and slugified `sections` titles like `#confinement`, `#requirements`).
-Other pages deep-link to these — keep section titles stable so cross-page anchors hold.
+Fixed order: **At a glance → Tools → Grants → Limits → [Credentials] → [Leak scanning] → freeform
+`sections`**.
+
+- **`glance.policy`** must match `internal/workspace/workspace.go:policy()` verbatim in substance.
+  `net`/`file` ask with session recall; everything else is allowed.
+- **`grants.examples`** are real `gate.Grant` JSON — `{"kind": …, "target": …}` — as written to
+  `grants.json`. Never invent a shape.
+- **`limits`** are the caps that hold regardless of any approval, with the real numbers
+  (`maxBody` = 64 KiB, `maxFileBytes` = 1 MiB, `maxSearchResults` = 500).
+- **`credentials`** only where secrets are injected (`net`).
+- **`leakScanning`** only where scanning happens (`net`, `notify`, `remind`).
+
+**Anchor stability:** ids come from `github-slugger` (`#at-a-glance`, `#tools`, `#grants`, `#limits`,
+`#credentials`, `#leak-scanning`, plus slugified `sections` titles). Other pages deep-link to these.
 
 ## 6. JavaScript completeness rule (schema-enforced)
 
-Every tool's `js` block MUST provide both forms; the schema makes it impossible to skip the gate:
+Every tool's `js` block must provide both forms:
 
-- **`js.gate`** — the generic `nocturn.call("<tool>", { … })` form — is **required**.
-- **`js.wrapper`** — the idiomatic prelude form — is **nullable**. A tool with no wrapper MUST set
-  `wrapper: null` **on purpose**, and that `null` is the signal to **add the wrapper to
-  `internal/script/prelude.js`** (the JS prelude prepended at eval time — no wasm rebuild). The
-  renderer shows both as `<Tabs>`; with `wrapper: null` it shows only the gate.
+- **`js.call`** — the generic `nocturn.call("<tool>", { … })` form — is **required**.
+- **`js.wrapper`** — the idiomatic prelude form — is **nullable**. A wrapper-less tool must set
+  `wrapper: null` on purpose, and that `null` is the signal to consider adding one to
+  `internal/script/prelude.js` (prepended at eval time — no wasm rebuild).
 
-### Wrapper coverage (keep current)
+Wrapper coverage as of today — verify with
+`grep -o 'nocturn\.call("[a-z_]*"' internal/script/prelude.js | sort -u`:
 
 | Tool(s) | Wrapper |
 |---|---|
-| `http.read` / `http.write` | `fetch(...)` |
-| `file.*` | `fs.*` / `nocturn.fs.*` |
+| `http_read` / `http_write` | `fetch(...)` |
+| `file_*` | `nocturn.fs.*` and the `require("fs")` shim |
+| `dns_resolve` | `nocturn.resolve(host, type?)` |
 | `ping` | `nocturn.ping(host)` |
-| `time.now` | `nocturn.now()` |
-| `notify` | `nocturn.notify(msg, title)` |
-| `dns.resolve` | **missing → add `nocturn.dns(host, type)`** |
-| `remind` / `remind.list` / `remind.cancel` | **missing → add `nocturn.remind*`** |
-| `wake` | **missing → add `nocturn.wake(seconds, note)`** |
+| `time_now` | `nocturn.now()` |
+| `notify` / `remind` | `nocturn.notify(...)` / `nocturn.remind(...)` |
+| `wake` | `nocturn.wake(seconds, note)` |
+| `skill_read` | `nocturn.skillFile(skill, path)` |
+| `remind_list` / `remind_cancel` / `code_run` | none — `wrapper: null` |
 
-## 7. Checklist — when adding a capability or tool
+The prelude's tool names are covered by `TestPrelude_WrappersDispatchToRegisteredNames`
+(`internal/script/script_test.go`). If you add a wrapper, add its case there — the whole point is
+that a wrapper naming a tool that does not exist fails a test instead of failing a user.
 
-- [ ] Create the YAML entry (`src/data/tools/<tool>.yaml` or `src/data/capabilities/<family>.yaml`)
-      with every required field.
-- [ ] Each tool: `js.gate` set; `js.wrapper` set **or explicitly `null`** (if `null`, add the wrapper
-      to `internal/script/prelude.js`).
-- [ ] Sidebar (`astro.config.mjs`): add a **`link:`** entry — tool grouped under its capability;
-      capability under **Capabilities**. Add the family to the overview `capabilities.md` table.
-- [ ] `npx astro build` green (the schema validates every entry); all internal links **and anchors**
-      resolve.
+## 7. Checklist — adding a tool or a kind
+
+- [ ] YAML entry created with every required field; `gated` matches whether the tool really calls
+      `gate.Check`.
+- [ ] `input` matches the tool's schema in `internal/tools/`.
+- [ ] `js.call` set; `js.wrapper` set **or explicitly `null`**.
+- [ ] The kind page's `tools[]` lists it, with the same `axis` and `gated`.
+- [ ] Sidebar (`astro.config.mjs`): a **`link:`** entry under the right group.
+- [ ] The file name equals the registered tool name — verify:
+      `for f in docs/src/data/tools/*.yaml; do grep -rq "\"$(basename $f .yaml)\"" internal agentkit || echo "$f"; done`
+- [ ] `npx astro build` green; internal links and anchors resolve.

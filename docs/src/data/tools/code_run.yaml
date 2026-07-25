@@ -1,0 +1,35 @@
+title: code_run
+description: Run JavaScript on a sandboxed QuickJS interpreter, with no authority of its own.
+
+kind: null
+gated: false
+axis: none
+
+intro: >-
+  Run a snippet of JavaScript. The tool itself is ungated because **pure computation needs zero
+  authority** — the interpreter is a WASM guest with no filesystem, no network and no clock. Any
+  call a script makes goes back out through an ordinary tool, and is gated there. So a script's
+  reach is exactly its cage, never more. Details on the
+  [JavaScript runtime](/reference/javascript-runtime/) page.
+
+input:
+  - field: source
+    type: string
+    required: true
+    notes: The JavaScript to run. Whatever it prints with `console.log` is the result.
+
+output: >-
+  Whatever the script wrote to stdout. An uncaught throw is an error carrying the guest's stderr, so
+  a failure is never silently an empty string.
+
+js:
+  wrapper: null
+  call: |
+    // A script cannot call code_run: re-entering the interpreter is refused.
+    // From a script, call the tool you actually want instead:
+    const text = nocturn.call("file_read", { path: "notes/todo.md" });
+
+notes: >-
+  `code_run` is woven per cage: the toolset a script may dispatch through is exactly the one its
+  caller has. A plugin whose `uses` lists only `http_read` gets a script that can reach only
+  `http_read` — and that call still asks, on the host, like any other.

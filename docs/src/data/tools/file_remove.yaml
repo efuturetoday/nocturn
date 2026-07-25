@@ -1,0 +1,36 @@
+title: file_remove
+description: Remove a file, or an empty directory, from the workspace.
+
+kind:
+  name: file
+  href: /reference/gate/file/
+  target: the workspace-relative path being removed
+gated: true
+axis: write
+
+intro: >-
+  Delete something. Gated on the path, like every file write — and the one where saying no matters
+  most, because there is no undo. Only empty directories are removed; a recursive wipe is not a tool.
+  See the [`file` kind](/reference/gate/file/).
+
+input:
+  - field: path
+    type: string
+    required: true
+    notes: Workspace-relative path to remove.
+
+output:
+  text: "What was removed:"
+  code: |
+    { "path": "notes/todo.md", "removed": true }
+  lang: json
+
+js:
+  wrapper: |
+    await nocturn.fs.remove("notes/todo.md");
+  call: |
+    nocturn.call("file_remove", { path: "notes/todo.md" });
+
+notes: >-
+  `require("fs").rmSync(path, { recursive: true })` deliberately throws — recursive removal is not
+  available in any form, not even through the compat shim.

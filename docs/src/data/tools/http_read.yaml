@@ -1,0 +1,45 @@
+title: http_read
+description: Read a URL over HTTP(S) with a safe method (GET/HEAD).
+
+kind:
+  name: net
+  href: /reference/gate/net/
+  target: the host of the URL, e.g. `api.github.com`
+gated: true
+axis: read
+
+intro: >-
+  Read a URL with a safe method. Every call asks — a read over the network is still a reach off the
+  machine, so `http_read` is gated exactly like `http_write`. What you approve is the **host**, and
+  the answer covers the other net tools for that host too. Reach, credentials and leak scanning all
+  live on the [`net` kind](/reference/gate/net/).
+
+input:
+  - field: url
+    type: string
+    required: true
+    notes: The URL to read.
+  - field: method
+    type: string
+    required: false
+    notes: "`GET` or `HEAD`. Default `GET`. A mutating method is rejected."
+
+output:
+  text: "A JSON envelope — the real outcome, not just the body:"
+  code: |
+    { "status": 200, "statusText": "OK", "headers": { "Content-Type": "application/json" }, "body": "…" }
+  lang: json
+  after: >-
+    The body is capped at **64 KiB**; anything beyond that is dropped rather than truncating your
+    context silently elsewhere.
+
+js:
+  wrapper: |
+    const r = await fetch("https://api.example.com/items");
+    const items = await r.json();
+  call: |
+    const res = JSON.parse(nocturn.call("http_read", { url: "https://api.example.com/items" }));
+
+notes: >-
+  Request headers other than `Content-Type` are not forwarded — the host owns the credential channel
+  and injects auth at the boundary. Each redirect hop is gated again against its new host.

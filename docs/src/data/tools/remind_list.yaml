@@ -1,0 +1,29 @@
+title: remind_list
+description: List the pending reminders, soonest first.
+
+kind:
+  name: remind
+  href: /reference/gate/remind/
+gated: false
+axis: read
+
+intro: >-
+  See what is scheduled. Takes no arguments, never calls the gate — it reads back only what the
+  assistant itself scheduled. See the [`remind` kind](/reference/gate/remind/).
+
+input: none
+
+output:
+  text: "A JSON array, soonest first:"
+  code: |
+    [ { "id": "rem-…", "fireAt": "2026-07-18T09:00:00+02:00", "message": "stretch", "title": "" } ]
+  lang: json
+
+js:
+  wrapper: null
+  call: |
+    const pending = JSON.parse(nocturn.call("remind_list", {}));
+
+notes: >-
+  There is no prelude wrapper for this one — the generic form above is the way to call it from
+  JavaScript.

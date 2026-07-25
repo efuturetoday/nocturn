@@ -1,0 +1,67 @@
+title: The remind kind
+description: remind schedules a future notification and checks its own kind; remind_list and remind_cancel never touch the gate.
+
+kind: remind
+constant: tools.RemindKind
+
+intro: >-
+  Reminders are `notify` displaced in time. `remind` schedules one and checks the `remind` kind with
+  the same constant `user` target; `remind_list` and `remind_cancel` only read and undo what is
+  already scheduled, so they never call the gate. The workspace root policy allows the kind, so
+  nothing asks today — the check is there for policies that want to.
+
+glance:
+  target: "the constant `user` — same destination as `notify`, owned by the host"
+  policy: "allowed by the workspace root policy — checked, but not asked today"
+  matcher: "`gate.ExactMatch` — one constant target, no patterns"
+
+tools:
+  - name: remind
+    href: /reference/tools/remind/
+    axis: write
+    gated: true
+    desc: schedule a notification for later
+  - name: remind_list
+    href: /reference/tools/remind_list/
+    axis: read
+    gated: false
+    desc: list the pending reminders
+  - name: remind_cancel
+    href: /reference/tools/remind_cancel/
+    axis: write
+    gated: false
+    desc: cancel a pending reminder by id
+
+grants:
+  intro: >-
+    As with `notify`, the root policy allows the kind, so no grant is recorded in normal use. Under
+    a policy that asks, it is the usual `{kind, target}` pair.
+  lang: json
+  examples: |
+    { "kind": "remind", "target": "user" }
+  notes:
+    - >-
+      One grant covers scheduling. Listing and cancelling are not gated at all, so nothing to grant
+      there.
+
+limits:
+  - >-
+    **When** — either `in <duration>` (`in 30m`, `in 2h`) or an RFC3339 timestamp. Anything else is
+    rejected as bad arguments rather than guessed at.
+  - >-
+    **Lifetime** — a pending reminder lives in the workspace and fires when its time comes, as long
+    as the process is running to fire it.
+
+leakScanning:
+  points:
+    - >-
+      The reminder text takes the same egress scan as a notification, at the moment it is delivered
+      — a scheduled message is not a way to defer a leak past the scanner.
+
+sections:
+  - title: Why cancelling is not gated
+    body: >-
+      `remind_cancel` can only remove something the assistant itself scheduled, and removing a
+      pending message reaches nothing and reveals nothing. The failure mode it enables — an injected
+      prompt quietly cancelling a reminder you wanted — is real but is a loss of a nudge, not an
+      irreversible change. Gating it would add a prompt per housekeeping call and buy little.

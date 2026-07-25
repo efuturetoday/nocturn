@@ -1,14 +1,17 @@
 title: ping
-description: Probe a host with a single ICMP echo to check reachability.
+description: Send one ICMP echo to a host and report whether it answered.
 
-capability:
-  family: icmp
-  href: /reference/icmp/
+kind:
+  name: net
+  href: /reference/gate/net/
+  target: the hostname or IP being pinged
+gated: true
 axis: read
 
 intro: >-
-  Probe a host with one ICMP echo. Runs silently under the default policy. Why it is gated and how to
-  cage it (per host / CIDR) lives on the [`icmp` capability](/reference/icmp/).
+  One ICMP echo, one answer. Gated on the [`net` kind](/reference/gate/net/) like everything else
+  that leaves the machine: a ping sweep is a perfectly good way to map a network you were never
+  meant to see, so reachability is a decision, not a freebie.
 
 input:
   - field: host
@@ -17,13 +20,19 @@ input:
     notes: The hostname or IP to ping.
 
 output:
+  text: "A JSON object — reachability and round-trip time:"
   code: |
     { "host": "example.com", "ip": "93.184.216.34", "ok": true, "rtt_ms": 12 }
   lang: json
+  after: "`ok: false` means no answer within the timeout, not that the host does not exist."
 
 js:
   wrapper: |
     const r = nocturn.ping("example.com");
-    console.log(r.ok, r.rtt_ms);
-  gate: |
-    const res = JSON.parse(nocturn.call("ping", { host: "example.com" }));
+    if (!r.ok) console.log("no answer");
+  call: |
+    const r = JSON.parse(nocturn.call("ping", { host: "example.com" }));
+
+notes: >-
+  Unprivileged ICMP is an OS permission. Where the platform refuses it the call fails after the
+  approval, as an error from the socket — not as a denial from the gate.

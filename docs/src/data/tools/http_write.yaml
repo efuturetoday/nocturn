@@ -1,0 +1,58 @@
+title: http_write
+description: Send data to a URL with a mutating method (POST/PUT/PATCH/DELETE).
+
+kind:
+  name: net
+  href: /reference/gate/net/
+  target: the host of the URL, e.g. `api.github.com`
+gated: true
+axis: write
+
+intro: >-
+  Send data somewhere. The split from `http_read` is not about the HTTP verb being trustworthy — it
+  is so the **tool the model picks already states the intent**, and so a grant for reading a host
+  never silently becomes permission to post to it. Reach, credentials and leak scanning live on the
+  [`net` kind](/reference/gate/net/).
+
+input:
+  - field: url
+    type: string
+    required: true
+    notes: The URL to send to.
+  - field: method
+    type: string
+    required: false
+    notes: "`POST`, `PUT`, `PATCH` or `DELETE`. Default `POST`."
+  - field: body
+    type: string
+    required: false
+    notes: The request body.
+  - field: content_type
+    type: string
+    required: false
+    notes: "Content-Type of the body. Default `application/json`."
+
+output:
+  text: "The same JSON envelope `http_read` returns:"
+  code: |
+    { "status": 201, "statusText": "Created", "headers": { "Location": "/items/42" }, "body": "…" }
+  lang: json
+
+js:
+  wrapper: |
+    const r = await fetch("https://api.example.com/items", {
+      method: "POST",
+      body: JSON.stringify({ title: "hello" }),
+    });
+    if (!r.ok) throw new Error("post failed: " + r.status);
+  call: |
+    const res = JSON.parse(nocturn.call("http_write", {
+      url: "https://api.example.com/items",
+      method: "POST",
+      body: JSON.stringify({ title: "hello" }),
+      content_type: "application/json",
+    }));
+
+notes: >-
+  A body carrying a stored vault secret is blocked by the egress scan **before** the host's own
+  credential is attached — the write never leaves.

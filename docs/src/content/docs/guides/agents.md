@@ -1,105 +1,105 @@
 ---
 title: Agents
-description: Define an agent, let it work in the background, and approve only the actions that matter.
+description: Define an agent, let it work in the background, and decide up front what it may do without you.
 ---
 
-An agent is a job you hand off. You describe what it should do and which tools it may use,
-then let it run, either from the chat or on its own in the background. When it hits
-something that needs your yes, it asks. The rest it just gets done.
+An agent is a job you hand off. You describe what it should do and which tools it may use, then let
+it run — from the chat, or on a schedule. What happens when it wants to do something that needs a
+human is decided in advance, by one setting, and the safe value is the one you get by forgetting to
+set it.
 
 ## Define an agent
 
-Each agent is a folder in your workspace with one file, `agent.md`. The top is a short
-settings block. Below it, in plain language, is what the agent should do.
+An agent is a folder in your workspace with one file, `agent.md`: a YAML settings block, then the
+brief in plain language.
 
 ```markdown
 ---
 name: morning-briefing
 description: Summarize my inbox and today's headlines
 tools:
-  - http.read
-  - file.write
+  - http_read
+  - file_write
 autonomy: guarded
 when: cron("0 7 * * *")
+effort: high
+budget: 5m
 ---
 
 Read my inbox in mnt/inbox.txt and the headlines from the news sites I follow.
 Write a short summary to mnt/briefing.md. Keep it under ten bullet points.
 ```
 
-The settings you will use most:
+| Field | What it does |
+|---|---|
+| `name` | Optional. The folder name is the identity; a differing `name` here warns, and the folder wins. |
+| `description` | One line, shown by `/agents` and `nocturn ls`. |
+| `tools` | The agent's **cage** — the tools it has at all. Anything not listed does not exist for it. |
+| `when` | `cron("0 7 * * *")` to run on a schedule. Leave out to run only when asked. |
+| `autonomy` | `strict` (default) or `guarded`. See below. |
+| `effort` | Reasoning effort: `low`, `medium`, `high`, `xhigh` — endpoint-dependent. |
+| `budget` | A Go duration (`5m`, `90s`) bounding the run. |
 
-- **`tools`** lists the abilities this agent may use. It cannot touch anything off the list,
-  so an agent meant for reading cannot suddenly send.
-- **`autonomy`** sets how independent it is, covered below.
-- **`when`** sets when it runs on its own. `cron("…")` schedules it. Leave it out to run the
-  agent only when you ask.
+Two failures are deliberately loud: a `budget` that does not parse and an `autonomy` that is not one
+of the two values are **hard errors**, and the agent is skipped rather than run with the wrong bound
+or a looser dial than you meant. Unknown fields are ignored — so a `model:` line does nothing today.
 
-The `name` is optional: leave it out and the agent takes its folder's name (the same rule
-skills, plugins and MCP servers follow). Set it only to override the folder — Nocturn warns
-if the two disagree, since that is usually a slip.
+## How independent it is
 
-Each agent also keeps its own permissions, separate from the chat and from other agents.
-Approving something for one agent never affects another.
+`autonomy` decides what happens when an agent, running with no human in front of it, hits an action
+the gate wants to ask about:
+
+| Setting | What happens |
+|---|---|
+| `strict` *(default, and the zero value)* | No approver is wired. The ask is **denied**, and the run says so. |
+| `guarded` | The ask is routed **out of band** — a push wakes your phone, and the run waits for your answer. |
+
+There is no third setting, and in particular there is no "just do it". The most an agent can be
+granted is the right to *ask you somewhere else*.
+
+Note what `strict` being the zero value buys: a missing dial, a typo'd file, an agent you forgot to
+configure — all of them fail toward less authority. And `guarded` with no paired device collapses
+back to `strict`, because there is nobody to ask. Setting up remote approval is what *adds*
+capability; skipping it never silently grants any.
+
+:::caution[Why there is no free-running mode]
+An agent reads untrusted content, and untrusted content tries to hijack it. That is not a
+hypothetical — it is the main threat this whole design exists for. `guarded` keeps you in the loop
+for exactly the moments that matter. See [the threat model](/architecture/threat-model/).
+:::
 
 ## Run it
 
-Two ways:
+**From the chat:**
 
-- **From the chat.** Type `/morning-briefing` to run it now, or `/morning-briefing check
-  only the inbox` to give it a one-off task. `/agents` lists everything available.
-- **On a schedule.** With a `when: cron(...)` line, the agent runs by itself in the
-  background. You do not need to be watching, but Nocturn does need to be running. There is
-  no always-on service yet, so if you close the program, scheduled agents do not fire until
-  you open it again.
+```
+/agents                                  # list them
+/fire morning-briefing check only the inbox   # run one now, with a one-off task
+```
 
-When a scheduled agent runs, it works quietly. If it needs approval for an action, that
-request comes to you, on your phone if you have set that up, and the agent waits for your
-answer without timing out.
+The run happens in the background and streams into your terminal marked with its run id, while you
+keep typing.
 
-## How independent should it be?
+**On a schedule:** with a `when: cron(...)` line the agent fires by itself. Scheduling lives in the
+process, so Nocturn has to be running — either your terminal session or
+`nocturn serve`. Nothing fires while the program is closed; a missed window is missed, not queued.
 
-The `autonomy` setting decides what happens when an agent, running on its own, wants to do
-something that would normally ask:
+## What an agent may reach
 
-| Setting | Behavior when it wants to act |
-| --- | --- |
-| `guarded` *(default)* | Reads happen quietly. Every action asks you on a second device (out of band) and waits. The safe default. |
-| `strict` | Actions are refused outright. Good for a read-only agent that should never change anything. |
-| `full` | Actions go ahead automatically, still limited to the agent's allowed tools and reach. Use only for agents you fully trust on trusted input. |
+Two independent limits, and it is worth keeping them apart:
 
-Even at `full`, the most sensitive actions still ask, and that floor cannot be turned off.
-These are the actions a plugin marks as high-stakes, such as sending money or deleting data.
-No setting lets an agent exceed the tools and reach you gave it either. Autonomy only decides
-how the asking is handled, never how far the agent can go.
+- **`tools`** is the cage — which tools exist for this agent at all. Not listed means not present,
+  which no prompt can talk its way around.
+- The **gate** still applies to every call the agent makes, exactly as it does for you. An agent
+  with `http_read` in its cage still needs the host to be approved or granted.
 
-:::caution[Why not just let it run free?]
-Because an agent reads untrusted content, and that content can try to hijack it. `guarded`
-keeps you in the loop for exactly the moments that matter, without pestering you for the
-harmless reads. That balance is the point of Nocturn.
-:::
+An agent's settings can only tighten what you already allowed; nothing in `agent.md` widens it.
 
 ## Good to know
 
-- Every scheduled run leaves its full transcript behind as a chat, so you can open it later
-  and see exactly what the agent read, did, and answered. Runs start fresh each time — an
-  agent does not carry memory from one firing to the next — and only the newest 20 runs per
-  agent are kept, so a frequent schedule never floods your chat list. Deleting an agent does
-  not take its saved runs with it: they stay readable, but a chat opened from one has no
-  tools and no permissions anymore — it can only talk.
-- Give an agent a time budget with `budget: 5m` so a runaway task stops on its own. Time
-  spent waiting for your approval does not count against it.
-- Set how hard the model thinks with `reasoning: high` (`low`, `medium`, `high`, and — where
-  your endpoint supports them — `minimal`/`xhigh`). It is this agent's default; a message can
-  override it for a single turn, and leaving it out uses the global default. An unknown value
-  is ignored rather than failing the run.
-- The `model` setting is read but not yet applied. Every agent currently uses the model you
-  configured globally. The field is there for a future per-agent override.
-- An agent's settings can tighten its permissions but never loosen them past what you have
-  allowed.
-
-## Where agents run from
-
-Today agents run while Nocturn is open, triggered manually or on a
-[schedule](/guides/triggers/). Starting them from messaging apps or over a REST API is on
-the way. See [Channels](/guides/channels/).
+- Every run leaves its transcript behind in `agent-runs/`, so you can read exactly what an agent
+  read, did and answered.
+- Runs start fresh. An agent carries no memory from one firing to the next — what it should know has
+  to be in its brief or in `mnt/`.
+- The persona in `PERSONA.md` shapes the workspace's assistant, not its agents. Each agent is
+  defined entirely by its own instructions.

@@ -1,36 +1,45 @@
 title: remind
-description: Schedule a persistent notification at a future time.
+description: Schedule a reminder that notifies the user at a future time.
 
-capability:
-  family: remind
-  href: /reference/reminders/
-axis: read
+kind:
+  name: remind
+  href: /reference/gate/remind/
+  target: the constant `user`
+gated: true
+axis: write
 
 intro: >-
-  Schedule a notification for a future time. At that time you are notified with `message` — no model
-  run, the text is fixed when you create it. Persistence and safety live on the
-  [`remind` capability](/reference/reminders/).
+  Schedule a notification for later. At that time you get `message` as written — there is no model
+  run at delivery, the text is fixed when the reminder is created. Checks the
+  [`remind` kind](/reference/gate/remind/), which the root policy allows, so it runs without a prompt.
 
 input:
   - field: when
     type: string
     required: true
-    notes: "An absolute **RFC3339** timestamp, or `\"in <duration>\"` (e.g. `\"in 2h\"`). For a wall-clock time, compute it with [`time.now`](/reference/tools/time-now/) and pass the RFC3339 result."
+    notes: "Either `\"in <duration>\"` (`\"in 30m\"`, `\"in 2h\"`) or an absolute **RFC3339** timestamp. For a wall-clock time, get the current time from [`time_now`](/reference/tools/time_now/) and pass the RFC3339 result."
   - field: message
     type: string
     required: true
-    notes: What to remind you about. Leak-scanned — a vault secret is blocked.
+    notes: What to remind you about. Leak-scanned at delivery.
   - field: title
     type: string
     required: false
     notes: Optional short title.
 
 output:
+  text: "The reminder's id and the moment it will fire:"
   code: |
     { "id": "rem-…", "fireAt": "2026-07-18T09:00:00+02:00" }
   lang: json
+  after: "Keep the `id` if you want to cancel it later with [`remind_cancel`](/reference/tools/remind_cancel/)."
 
 js:
-  wrapper: null
-  gate: |
+  wrapper: |
+    nocturn.remind("in 2h", "stretch");
+  call: |
     nocturn.call("remind", { when: "in 2h", message: "stretch" });
+
+notes: >-
+  A malformed `when` is rejected as bad arguments rather than guessed at — a reminder that fires at
+  the wrong time is worse than one that never got scheduled.

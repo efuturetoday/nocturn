@@ -1,60 +1,82 @@
 ---
 title: Request flow, end to end
-description: Follow one action from your message to the real effect and back.
+description: One action followed from your message to the tool actually running and back — including who asks, when the credential appears, and what the scanner sees.
 ---
 
-This page follows a single action all the way through Nocturn. Say you ask the assistant
-to send an email. Here is what happens between your message and the email actually going
-out.
+Say you ask the assistant to post something to an API. Here is everything between your message and
+the request actually leaving the machine.
 
 ```mermaid
 flowchart TD
-    A([You ask]) --> B[Model proposes a tool]
-    B --> C{The gateway checks it}
-    C -->|outside the limits| D([Denied, never runs])
-    C -->|a read, or already allowed| E[Runs]
-    C -->|a write| F{Asks you}
-    F -->|approve| E
-    F -->|deny or ignore| D
-    E --> G[Secret attached, for this destination only]
-    G --> H[The real effect happens]
-    H --> I[Result scanned for leaks]
-    I --> B
-    I --> K([The assistant answers you])
+    A([You type, or an agent fires]) --> B[chat.Manager starts or resumes a session]
+    B --> C[agentkit turn loop asks the model]
+    C --> D{Answer or tool call?}
+    D -->|answer| Z([Streamed back to you])
+    D -->|tool call| E[The tool runs its own gate.Check]
+    E --> F{Policy for this kind}
+    F -->|allowed| J[The call proceeds]
+    F -->|denied| X([Refused, the model is told])
+    F -->|ask| G{A matching grant?}
+    G -->|yes| J
+    G -->|no| H{An approver?}
+    H -->|none: strict| X
+    H -->|terminal| I[You answer at the prompt]
+    H -->|out of band| I2[Push wakes your phone, you answer in the app]
+    I --> J
+    I2 --> J
+    J --> K[Egress scan, then the credential is injected host-side]
+    K --> L[The tool runs for real]
+    L --> M[Ingress scan: secrets redacted, auth headers stripped]
+    M --> C
 ```
 
 ## Step by step
 
-**You ask.** You type a request, or a scheduled agent starts on its own. The model reads
-the request and decides what to do.
+**You ask.** A message in the terminal, or a cron firing. `chat.Manager` starts a new session or
+resumes the one you addressed, over a file-backed store — the transcript is a folder, not a
+database.
 
-**The model proposes a tool.** It does not act. It proposes: "send an email to this
-address". That proposal is untrusted. On its own it does nothing.
+**The loop asks the model.** `agentkit` sends the conversation to the model adapter, which streams
+back tokens, reasoning and — when the model wants to act — a native tool call. Nothing has happened
+yet: a tool call is a *proposal*, and it is untrusted, because whatever the model read to get there
+may have been hostile.
 
-**The gateway checks.** Every proposal meets the same door. The gateway checks it in
-order. First the hard limits: is this even within the agent's reach? If not, it is denied
-outright, with no prompt. Then the policy: reads run, writes ask. Then your standing
-permissions: did you already allow this? If so it goes straight through. Otherwise it asks.
+**The tool checks itself.** The proposal reaches a tool that has already been wrapped for this
+workspace. Its first act is `gate.Check` with its own kind and target — `net → api.example.com`,
+`file → notes/todo.md`. A tool that carries no authority (reading a workspace file, asking the time)
+skips this, because there is nothing to decide.
 
-**You approve.** For anything that changes the world, the assistant waits for your yes.
-The prompt shows what it wants to do in plain words, with the real target underneath so you
-cannot be misled. You can allow it once, for the session, or always. If you deny or ignore
-it, nothing happens.
+**The policy rules.** For `net` and `file` the workspace policy says *ask, and remember for the
+session*. For everything else it says *allowed*. This is a standing rule per kind, not a judgement
+about the sentence that led here.
 
-**The secret is attached.** Only after approval does Nocturn add the credential, at the
-boundary, for this destination only. The assistant never held it.
+**Grants are consulted.** If you have already allowed this kind and a target that matches — with
+the tool's own matcher, so `*.example.com` covers the subdomain and `notes/*` covers the file — it
+goes straight through, no prompt.
 
-**The effect happens.** The email is sent. This is the first moment anything real occurs.
+**Someone is asked.** Otherwise the approver is called. In the terminal that is the inline prompt.
+For an agent set to `guarded`, it is your phone: a push wakes the device, the question is delivered
+over the authenticated connection, and the run waits — up to two minutes, after which silence is a
+no. With no approver at all (`strict`), the ask is denied and the model is told so it can adapt.
 
-**The result is scanned.** What comes back is checked for leaks and cleaned before the
-model sees it, so untrusted content cannot smuggle a secret into the assistant's context.
+**The credential appears — and not before.** After the decision, at the boundary, the host stamps in
+the credential bound to that destination. The guest never held it and could not have chosen it. On
+the way out, the request is scanned: if it carries a secret the vault knows, it is blocked *before*
+the host's own credential is added.
 
-**Back to the model.** The result returns to the loop. The model may propose another tool,
-and the cycle repeats, or it writes your answer.
+**The tool runs.** This is the first moment anything real occurs.
+
+**The answer is scanned coming back.** Response bodies and headers are checked; an echoed secret is
+redacted and credential-bearing headers (`Set-Cookie`, `Authorization`, …) are stripped. Then the
+result goes back into the loop as an ordinary tool result, and the model either acts again or
+answers you.
 
 ## The one idea
 
-There is exactly one door. The model, a plugin, and an MCP server all reach it the same
-way, and all meet the same checks. There is no path around it. That is what makes
-the assistant's behavior something you can reason about: every real action passed the same
-gate, and every action that mattered passed you.
+Every path leads to the same check. The model calling a tool, a script calling `nocturn.call`, a
+plugin's `fetch`, an MCP server's POST — all of them arrive at a tool that gates itself, with the
+same kinds and the same grants. There is no second door and no bypass, because the ungated version
+of a tool is not something any of them can reach.
+
+And the decision that matters most does not live where the attack does: it lives on the device in
+your pocket.

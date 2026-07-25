@@ -1,108 +1,126 @@
 ---
-title: Adding capabilities with plugins
-description: Give your assistant new powers, like calling an API, with a small locked-down plugin.
+title: Plugins
+description: Teach the assistant a new action with a small sandboxed plugin — declared statically, caged to the base tools it names, gated like everything else.
 ---
 
-Out of the box, Nocturn can browse, work with files, and run small scripts. To connect it
-to *your* services, such as an API, a web app, or email, you add a plugin. A plugin teaches
-the assistant a new action. It runs locked in a sandbox and still has to ask before it does
-anything, which makes it safer than handing the assistant a real command-line tool.
+Out of the box the assistant can reach the network, work with workspace files and run small scripts.
+To connect it to *your* service, you add a plugin: a folder with a manifest and some JavaScript. The
+code runs in the WASM sandbox, and every call it makes leaves through a base tool that gates itself
+— so a plugin is meaningfully safer than handing the assistant a shell.
 
-This guide builds a tiny plugin so you can see the shape of one.
-
-## The idea
-
-A plugin is a folder inside your workspace:
+## The shape of one
 
 ```
-workspaces/default/plugins/my-api/
-  plugin.json   ← what it can do, and how far it may reach
+nocturn-data/workspaces/main/plugins/my-api/
+  plugin.json   ← what it offers, and which base tools it may call
   plugin.js     ← the code
 ```
 
-`plugin.json` declares the plugin. It is what Nocturn shows you when you install it, so you
-can see exactly what you are allowing. `plugin.js` is the actual code.
+Both are read at startup. A malformed plugin is **skipped with a diagnostic** rather than aborting
+anything — its tools and credentials are simply absent, which is the fail-closed direction.
 
 ## Declare it
-
-Here is a plugin that adds one action, `send`, which posts a message to an API:
 
 ```json
 {
   "name": "my-api",
-  "version": "0.1.0",
+  "version": "1",
   "tools": [
     {
       "name": "send",
       "description": "Send a message to the API",
-      "parameters": { "type": "object", "properties": { "msg": { "type": "string" } } },
-      "intent": "Send \"{msg}\" to the API"
+      "parameters": {
+        "type": "object",
+        "properties": { "msg": { "type": "string", "description": "The message" } },
+        "required": ["msg"]
+      }
     }
   ],
-  "cage": [
-    { "family": "http", "target": "api.example.com", "access": ["write"] }
-  ]
+  "uses": ["http_write"]
 }
 ```
 
-Three things to notice:
+| Field | Meaning |
+|---|---|
+| `name` | The plugin's identity. Its tools appear to the model as `my-api_send`. |
+| `version` | Required, any string. |
+| `tools` | What the model sees: name, description, and a JSON-Schema object for the parameters. |
+| `uses` | **The cage** — the base tools this plugin's code may call. `["*"]` admits all; omit it entirely for a pure-compute plugin that reaches nothing. |
+| `credentials` | Optional: credentials the host injects on its behalf (name, host, header, prefix). |
+| `oauth` | Optional: an OAuth2 provider the host runs for it. |
 
-- **`tools`** is what the assistant sees. Here it is one action, `send`, taking a `msg`.
-- **`intent`** is the friendly line you see in the approval prompt, *Send "hi" to the API*,
-  instead of a raw web address.
-- **`cage`** is the hard limit on where the plugin may reach. This one may reach only
-  `api.example.com`, and only to write. Anything else, whether another host or a read it
-  should not do, is refused outright before you are even asked. The cage sets the maximum.
-  You still approve each actual send.
+The manifest is parsed **strictly**: an unknown field is an error, not a warning. That is on purpose
+— a typo'd permission field must never be silently ignored.
+
+`uses` is the part worth dwelling on. It is not a filter applied to calls; it is the set of tools
+the plugin's guest *has*. A plugin that lists only `http_write` does not have a file tool that gets
+denied — it has no file tool. Nothing in the prompt, and nothing in the plugin's own code, can
+conjure one.
 
 ## Write it
 
-`plugin.js` exposes your actions and reaches the outside world through one helper,
-`nocturn.call`:
-
 ```js
-globalThis.plugin.tools = {
-  send(args) {
-    const res = nocturn.call('http.write', {
-      url: 'https://api.example.com/messages',
-      method: 'POST',
-      body: JSON.stringify({ text: args.msg }),
-    });
-    return res.body;
+globalThis.plugin = {
+  tools: {
+    send: async (args) => {
+      const r = await fetch("https://api.example.com/messages", {
+        method: "POST",
+        body: JSON.stringify({ text: args.msg }),
+      });
+      if (!r.ok) throw new Error("send failed: " + r.status);
+      return await r.text();
+    },
   },
 };
 ```
 
-Every request you make this way goes through the same gate as everything else. If it is
-inside the cage, Nocturn asks you to approve it. If it is outside, it is blocked and your
-code gets an error. Your plugin cannot slip past its cage.
+`fetch` is the prelude's wrapper over `http_read` / `http_write`, so this call goes through the
+ordinary gate: the host is approved by you, per request, exactly as if the model had asked for it.
+Outside the cage there is nothing to call; inside it, the gate still applies. Both walls, every
+time.
 
-## Connecting to something that needs a login
+The same prelude gives you `nocturn.fs.*`, `nocturn.ping`, `nocturn.resolve`, `nocturn.notify`,
+`nocturn.remind`, `nocturn.now` and a node-ish `require("fs")` shim — each mapping to the base tool
+of the same name, and each available only if your `uses` list includes it.
 
-Many services need an API key or a sign-in. You never put secrets in the plugin. Instead you
-declare a credential, and Nocturn holds the secret and attaches it at the last moment. Your
-code never sees it. For sign-in flows that use OAuth, the plugin can declare its provider,
-and Nocturn walks you through authorizing it once at install time. See
-[Secrets and accounts](/guides/connecting-accounts/) for the details.
+## Credentials
 
-## Install it
+Never put a secret in a plugin. Declare it instead, and the host attaches it at the boundary:
 
-Plugins are picked up when Nocturn starts. The first time, and any time a plugin changes,
-Nocturn shows you a review: what it can do, how far it can reach, and what it needs to sign
-in to. Nothing is installed until you say yes. Approve it once and it installs quietly after
-that, until it changes, when you are asked again with the differences shown.
+```json
+"credentials": [
+  { "name": "my-api", "host": "api.example.com", "header": "Authorization", "prefix": "Bearer " }
+]
+```
+
+Then store the value once:
+
+```sh
+printf %s "$TOKEN" | nocturn secret set plugin:my-api/my-api
+```
+
+Your code never sees the token — it is stamped in host-side, for that host only. For "sign in
+with…" services, declare an `oauth` provider instead and run `nocturn auth <name>` once. See
+[Secrets and accounts](/guides/connecting-accounts/).
+
+## Installing
+
+Drop the folder in `plugins/` and restart. That is the whole install — there is **no interactive
+review step today**, so the safety of installing a plugin rests on the two structural walls (its
+cage, and the gate on every call), not on a prompt you get at install time. Read the manifest before
+you drop it in; it is short by design, and it is the complete statement of what the plugin can
+reach.
 
 :::tip[A working example]
-The Nocturn repository ships a starting point under `sdk/_template/` — a manifest, the
-JavaScript entry point, and its TypeScript source.
+`sdk/_template/` in the repository is a runnable starting point: manifest, JavaScript entry point,
+and a TypeScript source if you prefer to build.
 :::
 
-## What plugins are good for
+## When to reach for one
 
-Reach for a plugin when you would otherwise wish the assistant had a CLI for some service,
-like GitHub, your calendar, or a company API. You get the same reach, but the token stays
-with Nocturn, the plugin can only touch what its cage allows, and every change asks first.
+Use a plugin when you would otherwise wish the assistant had a CLI for some service. You get the
+same reach, but the token stays with the host, the plugin can only call the base tools it named, and
+every actual call still asks you.
 
-Prefer connecting to a remote service rather than running a local tool? Nocturn can also
-talk to hosted [MCP servers](/guides/remote-mcp/), with the same safety and no code to
-write.
+Prefer not to write code? A hosted [MCP server](/guides/remote-mcp/) gives you tools with no plugin
+at all.

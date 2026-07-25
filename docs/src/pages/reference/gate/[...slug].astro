@@ -1,0 +1,43 @@
+---
+// Data-driven gate-kind pages. Each entry of the `kinds` data collection renders
+// at /reference/gate/<kind>/ inside a full Starlight page (sidebar / ToC / search
+// / theme). getStaticPaths returns only the kinds that exist in the code, so this
+// route emits exactly /reference/gate/net|file|notify|remind/.
+import { getCollection } from 'astro:content';
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import KindPage from '../../../components/KindPage.astro';
+
+export async function getStaticPaths() {
+	const entries = (await getCollection('kinds')).sort((a, b) => a.id.localeCompare(b.id));
+	return entries.map((entry, i) => ({
+		params: { slug: entry.id },
+		props: {
+			entry,
+			prev: entries[i - 1]
+				? { link: `/reference/gate/${entries[i - 1].id}/`, label: entries[i - 1].data.title }
+				: undefined,
+			next: entries[i + 1]
+				? { link: `/reference/gate/${entries[i + 1].id}/`, label: entries[i + 1].data.title }
+				: undefined,
+		},
+	}));
+}
+
+const { entry, prev, next } = Astro.props;
+const k = entry.data;
+---
+
+<StarlightPage frontmatter={{ title: k.title, description: k.description, prev, next }}>
+	<KindPage
+		kind={k.kind}
+		constant={k.constant}
+		intro={k.intro}
+		glance={k.glance}
+		tools={k.tools}
+		grants={k.grants}
+		limits={k.limits}
+		credentials={k.credentials}
+		leakScanning={k.leakScanning}
+		sections={k.sections}
+	/>
+</StarlightPage>

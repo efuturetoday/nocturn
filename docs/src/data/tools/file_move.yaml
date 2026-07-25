@@ -1,0 +1,40 @@
+title: file_move
+description: Move or rename a file within the workspace.
+
+kind:
+  name: file
+  href: /reference/gate/file/
+  target: the **destination** path
+gated: true
+axis: write
+
+intro: >-
+  Move or rename a file. Both ends stay inside the workspace. Worth knowing which end you are
+  approving: the gate checks the **destination**, because that is where the bytes end up. See the
+  [`file` kind](/reference/gate/file/).
+
+input:
+  - field: from
+    type: string
+    required: true
+    notes: Existing workspace-relative path.
+  - field: to
+    type: string
+    required: true
+    notes: Destination workspace-relative path. This is the gated target.
+
+output:
+  text: "Both ends of the move:"
+  code: |
+    { "from": "inbox/note.md", "to": "notes/note.md" }
+  lang: json
+
+js:
+  wrapper: |
+    await nocturn.fs.move("inbox/note.md", "notes/note.md");
+  call: |
+    nocturn.call("file_move", { from: "inbox/note.md", to: "notes/note.md" });
+
+notes: >-
+  `require("fs").renameSync(from, to)` routes to the same tool, with the same approval on the
+  destination.

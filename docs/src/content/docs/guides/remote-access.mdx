@@ -1,0 +1,72 @@
+---
+title: Remote access
+description: The serve daemon, the companion app, pairing a device, and how a background approval reaches your phone.
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+The terminal chat is one way in. The other is the **daemon**: one command turns a workspace into
+something your phone can talk to over your own network.
+
+```bash
+nocturn serve            # listens on :8080 by default, or $NOCTURN_ADDR
+```
+
+The daemon is not a cloud service and does not phone home. It listens on your LAN, announces itself
+over Bonjour/DNS-SD as `_nocturn._tcp` so the companion app can find it without you typing an IP,
+and speaks a small tagged-JSON protocol over one WebSocket per device.
+
+## Pairing a device <Badge text="Available now" variant="success" />
+
+Every connection is gated on a bearer token, and the daemon never stores the token itself — only its
+SHA-256 hash, compared in constant time. Getting a device its token happens in one of two ways:
+
+**The first device** redeems a bootstrap code that the daemon prints at startup (`POST /pair`). That
+is the only time a code comes from the machine itself.
+
+**Every device after that** asks an already-paired one for permission:
+
+1. the new device posts a join request (`POST /join`) and gets back a `joinId` — never a code;
+2. the request appears **live** on every connected paired device, which is the only place the code
+   is ever shown;
+3. you read the code on the trusted device and enter it on the new one (`POST /join/confirm`), which
+   redeems it for that device's own bearer.
+
+The property that buys: a device that is merely on your network cannot join. It needs a human at an
+already-trusted device to hand it a code.
+
+## What the app can do
+
+The companion app talks to the same workspace the terminal does — same conversations, same agents,
+same grants. The protocol is one tagged message per action (`chat.submit`, `chat.open`,
+`agent.fire`, `approval.resolve`, `reminder.list`, …), and everything the assistant produces streams
+back the same way (`chat.token`, `chat.thinking`, `chat.tool`, `approval.request`).
+
+Two consequences worth knowing:
+
+- **Conversations are not per device.** Start something in the terminal, pick it up on your phone.
+- **The first answer wins.** If two devices are attached and both are shown an approval, whichever
+  answers first resolves it; the other is told it was resolved.
+
+## Approvals when nobody is looking <Badge text="Available now" variant="success" />
+
+This is the reason the daemon exists. An agent running on a schedule hits something that needs your
+yes, with no terminal in front of it. If a device is paired, the ask is routed out of band: a push
+wakes your phone, you approve or deny in the app, and the agent continues or stops.
+
+The push carries **no authority**. It is a wake signal and nothing else — the decision travels back
+over the authenticated WebSocket, never in the notification. A notification that arrives twice, or
+gets replayed, cannot approve anything.
+
+With no paired device, an agent set to `guarded` behaves as `strict`: the ask is denied and the run
+reports why. Missing setup reduces authority; it never grants it. See
+[Approvals](/guides/approvals/).
+
+## Not there yet
+
+**Messaging channels** <Badge text="Planned" variant="caution" /> — starting and steering a
+workspace through WhatsApp or Telegram, with approvals in the same conversation.
+
+**A public HTTP API** <Badge text="Planned" variant="caution" /> — the WebSocket protocol is
+internal to the app today; a documented, stable surface for your own tools is not something to build
+against yet.

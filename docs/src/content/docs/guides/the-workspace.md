@@ -1,23 +1,21 @@
 ---
 title: The workspace
-description: An agent's isolated, portable world — and how several of them run side by side without ever mixing.
+description: A folder that is the whole assistant — and how several of them run side by side without ever mixing.
 ---
 
-The workspace is the most important idea in Nocturn. Understand this one and the rest
-follows.
+The workspace is the most important idea in Nocturn. Understand this one and the rest follows.
 
-Everything an agent is — the data it works with, the accounts it can use, the permissions
-you have granted, and the agents, skills, and plugins themselves — lives in a single
-folder: its **workspace**. There is no database and no hidden state. **The folder is the
-whole thing.**
+Everything the assistant is — the data it works with, the accounts it can use, the permissions you
+granted, the agents, skills and plugins themselves — lives in a single folder: its **workspace**.
+There is no database and no hidden state. **The folder is the whole thing.**
 
-And you can have more than one. A workspace for work, one for personal life, one for a
-client project — each a self-contained world that knows nothing of the others. One Nocturn
-runs them all at once, yet they never mix.
+And you can have more than one. One for work, one for personal life, one for a client — each a
+self-contained world that knows nothing of the others. One Nocturn process runs them all at once,
+yet they never mix.
 
 ```mermaid
 flowchart TD
-    N([One Nocturn instance]) --> W[work]
+    N([One Nocturn process]) --> W[main]
     N --> P[personal]
     N --> C[client-x]
     W --> Wd["🔒 own vault, agents,<br/>permissions and data"]
@@ -25,40 +23,39 @@ flowchart TD
     C --> Cd["🔒 own vault, agents,<br/>permissions and data"]
 ```
 
-That isolation is the heart of the idea, and it works on two levels: an agent is walled
-inside its workspace, and each workspace is walled off from the others. The rest of this
-page follows that one thread.
+That isolation works on two levels: the assistant is walled inside its workspace, and each workspace
+is walled off from the others.
 
 ## Inside one workspace
 
-Zoom into a single workspace and it is just a folder on disk. One directory inside it,
-`mnt/`, is the agent's entire visible world; everything alongside it is yours to manage and
-invisible to the agent.
+A workspace is a folder under `nocturn-data/workspaces/`. One directory inside it, `mnt/`, is the
+assistant's entire visible world; everything alongside it is yours.
 
 ```
-workspaces/work/
-├─ mnt/            ← the ONLY thing the agent sees, its whole world
+nocturn-data/workspaces/main/
+├─ mnt/            ← the ONLY thing the file tools can reach
 │  ├─ inbox.txt
 │  ├─ notes/
 │  └─ summary.md
 │
-│  ── everything below is yours, and invisible to the agent ──
-├─ PERSONA.md      ← the assistant's persona (its system prompt) — optional
-├─ vault.enc       ← encrypted workspace vault (workspace-level secrets; per-plugin/mcp
-│                    credentials live in each folder's own secrets.enc, not here)
-├─ grants.json     ← the standing permissions you have granted
-├─ mcp/            ← remote MCP servers you have connected (one folder per server)
-├─ agents/         ← the agents defined in this workspace
-├─ skills/         ← bundled know-how
-└─ plugins/        ← installed capabilities
+│  ── everything below is the control plane, out of the assistant's reach ──
+├─ PERSONA.md      ← the assistant's system prompt for this workspace — optional
+├─ vault.enc       ← the encrypted workspace vault
+├─ grants.json     ← the permissions you chose to remember
+├─ reminders.json  ← pending reminders
+├─ chats/          ← your conversations
+├─ agent-runs/     ← transcripts of background agent runs
+├─ agents/         ← one folder per agent, each with an agent.md
+├─ skills/         ← one folder per skill, each with a SKILL.md
+├─ plugins/        ← one folder per plugin, each with a plugin.json
+└─ mcp/            ← one folder per remote MCP server, each with an mcp.json
 ```
 
-Each plugin and MCP server keeps its own credentials in an encrypted `secrets.enc` inside
-its folder — `plugins/<name>/secrets.enc`, `mcp/<name>/secrets.enc`. That file is locked with
-a key derived from the folder's path, so it can only ever be read for the plugin or server
-that lives there: a plugin cannot reach another's credentials by claiming its name, and moving
-or renaming a folder makes its old secrets unreadable. Seed a static credential (an API key, a
-bearer token) with:
+Plugins and MCP servers keep their own credentials in an encrypted `secrets.enc` inside their own
+folder — `plugins/<name>/secrets.enc`, `mcp/<name>/secrets.enc`. Each shard is locked with a key
+derived from the folder's path, so it can only be read for the thing that lives there: a plugin
+cannot reach another's credentials by claiming its name, and moving or renaming a folder makes its
+old secrets unreadable.
 
 ```sh
 # a plugin credential (named in the plugin's manifest):
@@ -68,102 +65,71 @@ printf %s "$TOKEN" | nocturn secret set plugin:<name>/<credential>
 printf %s "$TOKEN" | nocturn secret set mcp:<name>
 ```
 
-The target is owner-namespaced — the same name you see in `nocturn secret ls` — and the value
-is read from stdin, so it never lands in your shell history or the process list. Add
-`-w <workspace>` to target a workspace other than the default. OAuth accounts are connected with
-`nocturn auth <name>` instead. `nocturn ls` shows a workspace's plugins, servers, agents, and
-skills; `nocturn secret ls` lists its credential names (never their values).
+The target is owner-namespaced — the same name `nocturn secret ls` shows — and the value is read
+from stdin, so it never lands in your shell history or in the process list. Add `-w <workspace>` for
+a workspace other than `main`. OAuth accounts are connected with `nocturn auth <name>` instead.
+`nocturn ls` shows a workspace's plugins, servers, agents and skills.
 
-A single workspace can hold several agents. They share this one folder — the same `mnt/`
-data and the same connected accounts. What each agent keeps to itself is its own
-instructions, its own list of allowed tools, and its own permissions.
+## The first wall: the file tools see only `mnt/`
 
-## The first wall: the agent lives in `mnt/`
+The file tools are rooted at `mnt/`. Not "asked to stay there" — rooted, so there is nothing to
+escape: a path that would leave it is a hard error before any permission question is even asked.
 
-The agent is handed a view of `mnt/` and nothing else. Its files, notes, and working data
-all live there, and it can read and write only inside it. It cannot see or touch anything
-outside.
+That is also what protects the workspace's own settings. `grants.json`, `vault.enc`, `agents/`,
+`PERSONA.md` and the chat transcripts sit **outside** `mnt/`, so a hijacked assistant cannot read
+its own permissions to widen them, cannot rewrite its own instructions, and cannot read back your
+conversations. Not because a rule forbids it — because those files were never in its world.
 
-This is not a rule the agent is asked to follow — it is structural. There is nothing to
-escape, because the rest of your disk was never in its world to begin with. A hostile
-instruction cannot send it wandering through your home directory.
-
-The same wall protects the workspace's own settings. Everything below `mnt/` — the vault,
-the permissions, the agent definitions — is the control plane you manage, and it sits
-outside the agent's view. So a hijacked agent cannot read its own permissions file to grant
-itself more, and cannot rewrite its own instructions, because those files are not in its
-world.
+This is why the ungated file reads are defensible: what they can reach is `mnt/`, and `mnt/` is what
+you put there.
 
 ## The assistant's persona
 
-Who the assistant *is* — its tone, its standing instructions, the way it approaches your
-work — is its **persona**: the system prompt it carries into every conversation. Drop a
-`PERSONA.md` in a workspace to set it, and this workspace's assistant follows it from then
-on. It is optional; without one, a careful built-in default is used.
+Who the assistant *is* for this workspace — tone, standing instructions, how it approaches your work
+— comes from `PERSONA.md` in the workspace root. Drop one in and it becomes the system prompt for
+every conversation in that workspace; leave it out and a careful built-in default is used.
 
-The persona resolves in layers, first match wins — so a shared house style can sit above
-per-workspace overrides:
+`PERSONA.md` is control plane. The assistant is shaped by it and cannot see or rewrite it, so an
+injected prompt cannot quietly redefine the assistant's own identity.
 
-```
-workspaces/PERSONA.md        ← a shared default for every workspace
-workspaces/work/PERSONA.md   ← this workspace's own persona (overrides the shared one)
-(no file)                    ← the built-in default
-```
-
-Like the permissions and the agent definitions, `PERSONA.md` lives in the control plane —
-outside `mnt/`. The assistant reads it but cannot see or rewrite it, so a prompt injection
-cannot quietly rewrite the assistant's own identity.
-
-Child agents are different: each carries *its own* instructions (see
-[Agents](/guides/agents/)) and does not inherit this persona — a focused worker is defined
-entirely by its own brief.
+Agents are different: each carries its own brief and does not inherit the persona — a focused worker
+is defined entirely by its own instructions. See [Agents](/guides/agents/).
 
 ## The second wall: workspaces cannot see each other
 
-Now step back out to several workspaces. The wall between them is made the same way — by
-construction, not by a policy the agents are trusted to respect.
+Each workspace has its own vault, its own grants, its own tools. The `main` assistant holds `main`'s
+accounts; there is no path from it to `personal`'s, because they are not in its hands. An injection
+in one workspace cannot reach another's secrets — there is nothing there to reach.
 
-Each workspace has its own vault, its own permissions, and its own view of the world. The
-`work` agent is handed `work`'s accounts and `work`'s tools; it has no path to `personal`'s,
-because they are simply not in its hands. A prompt injection that hijacks an agent in one
-workspace cannot reach into another's secrets — there is nothing there to reach.
-
-One convenience does span all of them: a single **master passphrase**, entered once at
-startup, unlocks every workspace's vault. Yet no two vaults share a key — each is derived
-from the master for that workspace alone. So you remember one secret, not one per
-workspace, and the walls still stand.
+One convenience spans them: a single **master passphrase**
+(`NOCTURN_MASTER_PASSPHRASE`) unlocks every workspace's vault. No two vaults share a key — each is
+derived from the master for that workspace alone. One secret to remember, walls intact.
 
 ## Working with several at once
 
-Because one Nocturn runs them all, using several is light:
-
-- Start on a particular one with `nocturn <name>` (a fresh name is created on first run).
-- Every workspace under `workspaces/` is loaded together, and each one's scheduled agents
-  run side by side, each through its own walls.
-- In the chat, `/ws` lists your workspaces and `/ws <name>` switches the one you are talking
-  to. Switching back shows that workspace's conversation where you left it — each keeps its
-  own history.
-- When a background run in another workspace needs your approval, the prompt is tagged with
-  its workspace — `[work] Send the weekly summary?` — so you always know which world is
-  asking before you say yes.
+- Every folder under `nocturn-data/workspaces/` is opened at startup, and each one's scheduled
+  agents run side by side.
+- The **terminal chat always talks to `main`.** Other workspaces still run their agents; you just do
+  not converse with them from the terminal.
+- Subcommands take `-w <name>` — `nocturn ls -w personal`, `nocturn secret ls -w client-x`.
+- The [companion app](/guides/remote-access/) can list and switch workspaces (`workspace.list`), so
+  a second device is the way to talk to more than one.
 
 ## A folder you own and move
 
 Because the folder is the entire state, a workspace behaves like any other project folder:
 
-- **Copy it** to another machine and the agent comes with it — same memory, same
-  permissions, same abilities.
-- **Version it** with git to track how it changes and roll back mistakes.
+- **Copy it** to another machine and the assistant comes with it — same data, same grants, same
+  abilities.
+- **Version it** with git to see how it changed and roll back mistakes.
 - **Back it up** by copying one directory.
 
-An agent is not tied to the machine it was born on. It is a folder you own and move around.
-
 :::note[One secret stays out of the copy]
-The vault (`secrets.vault`) is encrypted with your master passphrase. Copying the folder
-copies the locked vault, and the tokens inside cannot be read without you. See
-[Connecting accounts](/guides/connecting-accounts/).
+`vault.enc` is encrypted under your master passphrase. Copying the folder copies the locked vault;
+the credentials inside stay unreadable without you. See
+[Secrets and accounts](/guides/connecting-accounts/).
 :::
 
-The only thing that lives outside every workspace is `.env`, the small file that holds your
-model connection. It sits next to the program, not in any workspace, so remember it
-separately when you move a workspace to another machine.
+The one thing outside every workspace is `.env`, which holds your model connection. It sits next to
+the binary, not in any workspace — remember it separately when you move a workspace to another
+machine.

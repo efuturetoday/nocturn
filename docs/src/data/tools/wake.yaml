@@ -1,26 +1,28 @@
 title: wake
-description: Pause and resume yourself later — schedule the agent's own re-invocation after a delay.
+description: Pause and resume yourself later — schedule this conversation's own re-invocation after a delay.
 
-capability: null
+kind: null
+gated: false
 axis: none
 
 intro: >-
-  Schedule the running agent's **own re-invocation**: after `seconds`, this same conversation is
-  re-invoked with `note` as the prompt. Use it to wait then continue — poll something, or re-check
-  after a delay ("check the deploy again in 5 minutes"). It is the ephemeral, in-session cousin of a
-  [reminder](/reference/reminders/) (which fires a detached notification instead).
+  Schedule the running conversation's **own re-invocation**: after `seconds`, this same conversation
+  comes back with `note` as the prompt. Use it to wait and then continue — poll something, or
+  re-check after a delay. It is the in-session cousin of a [reminder](/reference/tools/remind/),
+  which fires a detached notification instead.
 
 input:
   - field: seconds
     type: number
     required: true
-    notes: Delay before resuming. **Clamped** to the allowed range (default **1 s … 1 h**).
+    notes: Delay before resuming. **Clamped** to 1 s … 1 h.
   - field: note
     type: string
     required: true
     notes: "The prompt to resume with, e.g. `\"re-check the deploy status\"`."
 
 output:
+  text: "The delay that was actually accepted, after clamping:"
   code: |
     { "wakeInSeconds": 300 }
   lang: json
@@ -28,14 +30,13 @@ output:
 js:
   wrapper: |
     nocturn.wake(300, "re-check the deploy status");
-  gate: |
+  call: |
     nocturn.call("wake", { seconds: 300, note: "re-check the deploy status" });
 
 notes: >-
   **Bounded, not gated.** `wake` reaches nothing external — it only schedules a continuation — so it
-  carries no authority and is not gated (like [`time.now`](/reference/tools/time-now/)). Any real
-  effect performed in the *resumed* turn still passes the broker + approvals normally. The one risk
-  is a runaway self-waking loop, so it is **bounded** instead: the delay is **clamped** (default 1 s
-  … 1 h), the number of **pending wakes is capped**, and pending wakes are **ephemeral** — they live
-  only as long as the process. A wake resumes the exact conversation that scheduled it, even in the
-  background; deleting that chat drops its pending wakes, so a removed conversation is never resumed.
+  carries no authority and never calls the gate. Any tool called in the *resumed* turn is gated
+  normally. The risk it does carry is a runaway self-waking loop, so it is bounded instead: the delay
+  is clamped, the number of pending wakes is capped, and pending wakes are ephemeral — they live only
+  as long as the process. A wake resumes the exact conversation that scheduled it; delete that chat
+  and its pending wakes go with it.
