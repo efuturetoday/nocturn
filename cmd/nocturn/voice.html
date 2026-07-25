@@ -1,0 +1,177 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>nocturn voice — PoC</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         background: #101014; color: #d8d8e0; margin: 0; padding: 2rem; }
+  h1 { font-size: 1rem; letter-spacing: .08em; text-transform: uppercase; color: #7a7a8c; margin: 0 0 1.5rem; }
+  #talk { width: 100%; padding: 2.5rem; font: inherit; font-size: 1.1rem; cursor: pointer;
+          background: #1c1c24; color: #d8d8e0; border: 1px solid #33333f; border-radius: 8px;
+          user-select: none; -webkit-user-select: none; touch-action: none; }
+  #talk:disabled { opacity: .4; cursor: default; }
+  #talk.live { background: #2a1d1d; border-color: #a33; }
+  #state { margin: 1rem 0; color: #7a7a8c; }
+  #state.speaking { color: #6ad; }
+  #log { margin-top: 1.5rem; border-top: 1px solid #26262f; padding-top: 1rem;
+         white-space: pre-wrap; word-break: break-word; max-height: 50vh; overflow-y: auto; }
+  .warn { color: #d97; }
+</style>
+
+<h1>nocturn voice — PoC</h1>
+<button id="talk" disabled>connecting…</button>
+<div id="state">idle</div>
+<div id="log"></div>
+
+<script type="module">
+// A real live conversation: once started, the microphone streams CONTINUOUSLY and Gemini's own
+// server-side voice activity detection decides where turns begin and end. That is what makes
+// barge-in work, and it is also mandatory — pausing the uplink means the VAD never sees the silence
+// that ends a turn, so the model waits forever instead of answering.
+//
+// The start button stands in for the wake word, which is the one piece the ESP32 does natively and
+// the browser does not. After the wake word the ESP32 streams exactly like this.
+const IN_RATE = 16000;   // Gemini Live's native input rate — also what ESP-SR produces
+const OUT_RATE = 24000;  // fixed by the API, regardless of input rate
+const JITTER = 0.06;     // seconds of slack before the first scheduled chunk
+
+const talk = document.getElementById('talk');
+const stateEl = document.getElementById('state');
+const logEl = document.getElementById('log');
+
+const log = (msg, cls = '') => {
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  logEl.append(line);
+  logEl.scrollTop = logEl.scrollHeight;
+};
+const setState = (s, speaking = false) => {
+  stateEl.textContent = s;
+  stateEl.classList.toggle('speaking', speaking);
+};
+
+// --- playback: schedule chunks back to back, or they click and drift -------------------------
+const out = new AudioContext({ sampleRate: OUT_RATE });
+let cursor = 0;
+let queued = [];
+
+function play(int16) {
+  const buf = out.createBuffer(1, int16.length, OUT_RATE);
+  const f32 = buf.getChannelData(0);
+  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 0x8000;
+  const src = out.createBufferSource();
+  src.buffer = buf;
+  src.connect(out.destination);
+  cursor = Math.max(cursor, out.currentTime + JITTER);
+  src.start(cursor);
+  cursor += buf.duration;
+  queued.push(src);
+  src.onended = () => {
+    queued = queued.filter(s => s !== src);
+    if (!queued.length && active) setState('live — just talk');
+  };
+  setState('speaking', true);
+}
+
+// Barge-in: everything scheduled but unplayed answers a question the user already abandoned.
+function flush() {
+  for (const src of queued) { try { src.stop(); } catch {} }
+  queued = [];
+  cursor = 0;
+  setState('interrupted');
+}
+
+// --- microphone ------------------------------------------------------------------------------
+// The browser's WebRTC stack gives echo cancellation, noise suppression and gain control for free.
+// On the ESP32 that same job is ESP-SR's audio front end — the hard part of the hardware build.
+const WORKLET = `
+class PCM extends AudioWorkletProcessor {
+  process(inputs) {
+    const ch = inputs[0][0];
+    if (!ch) return true;
+    const pcm = new Int16Array(ch.length);
+    for (let i = 0; i < ch.length; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    this.port.postMessage(pcm.buffer, [pcm.buffer]);
+    return true;
+  }
+}
+registerProcessor('pcm', PCM);
+`;
+
+let active = false;
+let ws;
+
+async function start() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      sampleRate: IN_RATE, channelCount: 1,
+      echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+    },
+  });
+  const ctx = new AudioContext({ sampleRate: IN_RATE });
+  const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
+  await ctx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+
+  const node = new AudioWorkletNode(ctx, 'pcm');
+  ctx.createMediaStreamSource(stream).connect(node);
+  // No gating on "am I holding a button": the uplink must not pause, or the server-side VAD never
+  // sees the end of an utterance and the model never answers.
+  node.port.onmessage = e => {
+    if (active && ws?.readyState === WebSocket.OPEN) ws.send(e.data);
+  };
+
+  ws = new WebSocket(`ws://${location.host}/voice/ws`);
+  // Binary from the start: the ESP32 will use the same framing, so base64 here would build a path
+  // that gets thrown away.
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    talk.disabled = false;
+    talk.textContent = 'start conversation';
+    setState('idle');
+    log('connected');
+  };
+  ws.onmessage = ev => {
+    if (typeof ev.data === 'string') {
+      if (JSON.parse(ev.data).type === 'interrupt') flush();
+      return;
+    }
+    play(new Int16Array(ev.data));
+  };
+  ws.onclose = () => {
+    talk.disabled = true;
+    talk.textContent = 'disconnected';
+    setState('closed');
+    log('socket closed — restart the harness and reload', 'warn');
+  };
+  ws.onerror = () => log('socket error', 'warn');
+}
+
+// A toggle, not a hold. It stands in for the wake word: everything after it is one continuous
+// conversation, and Gemini decides when you stopped talking.
+talk.addEventListener('click', () => {
+  if (talk.disabled) return;
+  active = !active;
+  talk.classList.toggle('live', active);
+  if (active) {
+    out.resume(); // an AudioContext starts suspended until a user gesture
+    talk.textContent = 'end conversation';
+    setState('live — just talk');
+    log('conversation started — speak normally, interrupt any time');
+  } else {
+    flush();
+    talk.textContent = 'start conversation';
+    setState('idle');
+  }
+});
+
+start().catch(err => {
+  log(`microphone unavailable: ${err}`, 'warn');
+  log('getUserMedia needs a secure context — reach this page on 127.0.0.1, not a LAN IP.', 'warn');
+});
+</script>

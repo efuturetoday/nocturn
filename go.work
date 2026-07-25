@@ -4,6 +4,7 @@ use (
 	.
 	./agentkit
 	./agentkit/gate
+	./agentkit/gemini
 	./agentkit/openai
 	./agentkit/tools
 	./agentkit/runtime

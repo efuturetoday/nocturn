@@ -42,6 +42,17 @@ func dispatch(args []string) int {
 			return code
 		}
 		return runApp(*addr)
+	case "voice":
+		fs := flag.NewFlagSet("voice", flag.ContinueOnError)
+		port := fs.Int("port", 8788, "loopback port for the voice PoC harness")
+		wsName := fs.String("w", workspace.DefaultWorkspace, "workspace")
+		fs.StringVar(wsName, "workspace", workspace.DefaultWorkspace, "workspace")
+		fs.Usage = usage(fs, "voice [--port 8788] [-w workspace]",
+			"Run the browser voice PoC harness (loopback only, no pairing).")
+		if code, done := parseFlags(fs, args[1:]); done {
+			return code
+		}
+		return cmdVoice(*port, *wsName)
 	case "auth":
 		return cmdAuth(args[1:])
 	case "secret":
@@ -69,6 +80,7 @@ func printUsage(w io.Writer) {
 Usage:
   nocturn                      Open the interactive terminal assistant (default workspace)
   nocturn serve [--addr :8080] Run the out-of-band WebSocket daemon
+  nocturn voice [--port 8788]  Run the browser voice PoC harness (loopback only, no pairing)
   nocturn auth <provider>      Connect an OAuth account (opens a browser)
   nocturn secret set <target>  Seed a static credential (value read from stdin)
   nocturn secret ls            List the credential names a workspace holds (never values)
