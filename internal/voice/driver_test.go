@@ -33,6 +33,7 @@ type fakeSession struct {
 	events  chan agentkit.LiveEvent
 	audio   chan []byte
 	results chan agentkit.ToolResult
+	notes   chan string
 	once    sync.Once
 }
 
@@ -41,6 +42,7 @@ func newSession() *fakeSession {
 		events:  make(chan agentkit.LiveEvent, 16),
 		audio:   make(chan []byte, 16),
 		results: make(chan agentkit.ToolResult, 16),
+		notes:   make(chan string, 16),
 	}
 }
 
@@ -49,9 +51,10 @@ func (s *fakeSession) SendResult(_ context.Context, r agentkit.ToolResult) error
 	s.results <- r
 	return nil
 }
-func (s *fakeSession) Events() <-chan agentkit.LiveEvent { return s.events }
-func (s *fakeSession) Close() error                      { s.once.Do(func() { close(s.events) }); return nil }
-func (s *fakeSession) push(ev agentkit.LiveEvent)        { s.events <- ev }
+func (s *fakeSession) SendNote(_ context.Context, text string) error { s.notes <- text; return nil }
+func (s *fakeSession) Events() <-chan agentkit.LiveEvent             { return s.events }
+func (s *fakeSession) Close() error                                  { s.once.Do(func() { close(s.events) }); return nil }
+func (s *fakeSession) push(ev agentkit.LiveEvent)                    { s.events <- ev }
 
 // fakeDevice is a satellite that never speaks unless the test tells it to.
 type fakeDevice struct {
@@ -429,6 +432,64 @@ func TestToolResult_LateWhenTheConversationMovedOn(t *testing.T) {
 
 	if got := <-sess.results; !got.Late {
 		t.Error("result not marked late although two turns completed while it ran")
+	}
+	sess.Close()
+	wait()
+}
+
+// blockingApprover stands in for a human still making up their mind: it does not answer until the
+// test says so.
+type blockingApprover struct{ release chan struct{} }
+
+func (b blockingApprover) Ask(ctx context.Context, a gate.Action, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+	select {
+	case <-b.release:
+		return true, gate.Grant{Kind: a.Kind, Target: a.Target}, gate.RecallNever, nil
+	case <-ctx.Done():
+		return false, gate.Grant{}, gate.RecallNever, ctx.Err()
+	}
+}
+
+// A pending call is opaque from the model's side — it cannot tell a slow server from a human
+// holding a phone. The note is the only way it learns which, so it must go out BEFORE the approver
+// blocks, not after.
+func TestPendingApproval_IsAnnouncedBeforeItBlocks(t *testing.T) {
+	sess, dev := newSession(), newDevice()
+	ts := toolset(t, gate.Wrap(tool("file_read", func(context.Context, string) (string, error) { return "ok", nil })))
+	ask := gate.PolicyFunc(func(gate.Action) gate.Ruling { return gate.AskWith(gate.RecallNever) })
+	appr := blockingApprover{release: make(chan struct{})}
+	d := voice.New(&fakeLive{sess: sess}, ts, ask, gate.NewMemGrants(), appr)
+	wait := run(t, d, dev, nil)
+
+	sess.push(agentkit.LiveToolCall{ID: "c1", Tool: "file_read", Args: "{}"})
+
+	// This read is the assertion: the human has not answered yet, so a note that only went out
+	// afterwards would never arrive and the test would hang here.
+	note := <-sess.notes
+	if !strings.Contains(note, "file_read") {
+		t.Errorf("note does not name what is pending: %q", note)
+	}
+	close(appr.release)
+	<-sess.results
+	sess.Close()
+	wait()
+}
+
+// Nothing is being waited for in the unattended posture, so there is nothing to announce — and a
+// note claiming otherwise would send someone to a device where no request is pending.
+func TestNoApprover_AnnouncesNothing(t *testing.T) {
+	sess, dev := newSession(), newDevice()
+	ts := toolset(t, gate.Wrap(tool("file_read", func(context.Context, string) (string, error) { return "ok", nil })))
+	ask := gate.PolicyFunc(func(gate.Action) gate.Ruling { return gate.AskWith(gate.RecallNever) })
+	d := voice.New(&fakeLive{sess: sess}, ts, ask, gate.NewMemGrants(), nil)
+	wait := run(t, d, dev, nil)
+
+	sess.push(agentkit.LiveToolCall{ID: "c1", Tool: "file_read", Args: "{}"})
+	<-sess.results
+	select {
+	case note := <-sess.notes:
+		t.Fatalf("announced a wait with no approver: %q", note)
+	default:
 	}
 	sess.Close()
 	wait()

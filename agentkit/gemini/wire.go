@@ -79,11 +79,16 @@ type blob struct {
 	Data     string `json:"data,omitempty"` // base64
 }
 
-// realtimeInput carries continuous microphone audio. Unlike clientContent it has no turn semantics:
-// the server's own voice-activity detection decides where turns begin and end, which is what makes
-// barge-in work.
+// realtimeInput carries continuous microphone audio, and text on the same footing. Unlike
+// clientContent it has no turn semantics: the server's own voice-activity detection decides where
+// turns begin and end, which is what makes barge-in work.
+//
+// It is also the ONLY way to reach the model mid-session on current live models — clientContent is
+// restricted there to seeding the initial history, and using it later closes the connection with a
+// policy violation.
 type realtimeInput struct {
-	Audio *blob `json:"audio,omitempty"`
+	Audio *blob  `json:"audio,omitempty"`
+	Text  string `json:"text,omitempty"`
 }
 
 type toolResponse struct {

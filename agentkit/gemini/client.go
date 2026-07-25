@@ -119,6 +119,10 @@ func (c *Client) Open(ctx context.Context, conv []agentkit.Message, tools []agen
 	}
 	// Seed prior conversation with TurnComplete false: it primes context without asking the model to
 	// answer, so resuming a transcript does not make the speaker start talking on its own.
+	//
+	// This is the ONLY clientContent frame the adapter ever sends. Live models restrict it to exactly
+	// this — seeding initial history — and a later one is answered with a policy violation that
+	// closes the session. Everything mid-session goes through realtimeInput instead.
 	if len(turns) > 0 {
 		if err := send(ctx, tr, clientMessage{ClientContent: &clientContent{Turns: turns}}); err != nil {
 			tr.Close()
@@ -236,6 +240,29 @@ func (s *session) SendResult(ctx context.Context, r agentkit.ToolResult) error {
 	return s.write(ctx, clientMessage{ToolResponse: &toolResponse{
 		FunctionResponses: []functionResponse{{ID: r.ID, Name: r.Tool, Response: payload}},
 	}})
+}
+
+// notePrefix marks an injected note as coming from the environment rather than from the person.
+// The Live API has no system role mid-session, so the attribution has to live in the text — without
+// it the model answers as though someone had said the words out loud.
+const notePrefix = "[system] "
+
+// SendNote injects a fact on the realtime channel, alongside the microphone.
+//
+// It deliberately does NOT use clientContent, even though a note is conceptually a turn: current
+// live models restrict that frame to seeding the initial history, and sending one mid-session closes
+// the connection with a policy violation. The realtime channel is the only way in once a session is
+// running.
+//
+// Arriving there is also better behaved. A completed clientContent turn means "answer this now" and
+// cuts the model off mid-word, which in practice made it abandon its sentence and reply to the note
+// instead. Realtime input carries no turn flag: the server's own turn-taking decides when to react,
+// exactly as it does for speech.
+func (s *session) SendNote(ctx context.Context, text string) error {
+	if text == "" {
+		return nil
+	}
+	return s.write(ctx, clientMessage{RealtimeInput: &realtimeInput{Text: notePrefix + text}})
 }
 
 func (s *session) write(ctx context.Context, msg clientMessage) error {

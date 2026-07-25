@@ -29,6 +29,18 @@ type LiveSession interface {
 	// the model can keep speaking while a tool waits on an out-of-band approval.
 	SendResult(ctx context.Context, r ToolResult) error
 
+	// SendNote injects a fact the model could not otherwise know, and asks it to react.
+	//
+	// A pending tool call is opaque from the model's side: it sees that it called something and
+	// that no result has come back, but not WHY. Waiting on a slow server and waiting on a human
+	// holding a phone are indistinguishable to it — so an assistant told to explain the wait would
+	// have to guess, and guessing "check your phone" when nothing is pending there is worse than
+	// saying nothing. The consumer knows which it is and states it here.
+	//
+	// The note is attributed to the environment, not to the user: it did not come out of anyone's
+	// mouth, and a transcript that records it as speech would be a lie about the conversation.
+	SendNote(ctx context.Context, text string) error
+
 	// Events is the session's one-way output stream, closed when the session ends. A consumer that
 	// stops draining it stalls the session — drain it in its own goroutine.
 	Events() <-chan LiveEvent

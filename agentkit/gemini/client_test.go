@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 
@@ -408,5 +409,43 @@ func TestOpen_FailsWhenSetupIsNotAcknowledged(t *testing.T) {
 	c := gemini.New(func(context.Context, string) (gemini.Transport, error) { return f, nil }, "k", "m")
 	if _, err := c.Open(t.Context(), nil, nil); err == nil {
 		t.Error("Open succeeded without setupComplete")
+	}
+}
+
+// A note must ride the realtime channel, not clientContent: live models restrict clientContent to
+// seeding the initial history and close the session with a policy violation on a later one.
+func TestSendNote_UsesTheRealtimeChannel(t *testing.T) {
+	f, sess := open(t, nil, nil)
+	f.nextSent(t) // setup
+
+	if err := sess.SendNote(t.Context(), "waiting for approval"); err != nil {
+		t.Fatalf("SendNote: %v", err)
+	}
+	frame := f.nextSent(t)
+	if _, ok := frame["clientContent"]; ok {
+		t.Fatal("note sent as clientContent; that frame is seeding-only and closes the session")
+	}
+	text, _ := frame["realtimeInput"].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "waiting for approval") {
+		t.Errorf("realtimeInput text = %q", text)
+	}
+	// Attributed to the environment: without the marker the model answers as though the person had
+	// said the words out loud.
+	if !strings.HasPrefix(text, "[system] ") {
+		t.Errorf("note not attributed to the environment: %q", text)
+	}
+}
+
+func TestSendNote_EmptyIsNotSent(t *testing.T) {
+	f, sess := open(t, nil, nil)
+	f.nextSent(t) // setup
+
+	if err := sess.SendNote(t.Context(), ""); err != nil {
+		t.Fatalf("SendNote(\"\"): %v", err)
+	}
+	select {
+	case raw := <-f.sent:
+		t.Fatalf("empty note produced a frame: %s", raw)
+	default:
 	}
 }

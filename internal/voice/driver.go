@@ -149,7 +149,8 @@ func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message) (
 
 	// The gate machinery rides on the ctx every tool Call runs under. This one install covers the
 	// whole session: each tool's own gate.Check finds it here, exactly as it does inside a turn.
-	toolCtx := gate.WithLogger(gate.With(ctx, d.policy, d.grants, d.approver), agentkit.SlogLogger(d.log))
+	// The approver is decorated so the conversation is told WHY it is about to wait.
+	toolCtx := gate.WithLogger(gate.With(ctx, d.policy, d.grants, d.announcing(sess)), agentkit.SlogLogger(d.log))
 
 	// The microphone pump is its own goroutine: it blocks on the device, and the event loop below
 	// blocks on the model. Neither may wait for the other, or the conversation deadlocks. It exits
@@ -270,6 +271,43 @@ func (d *Driver) invoke(ctx context.Context, c *conversation, call agentkit.Live
 	if err := c.sess.SendResult(ctx, res); err != nil {
 		d.log.Warn("voice tool result undeliverable", "tool", call.Tool, "err", err)
 	}
+}
+
+// announcing wraps the approver so that every ask first tells the conversation what is pending.
+// It returns nil unchanged when there is no approver — the unattended posture has nothing to
+// announce, because nobody is being waited for.
+func (d *Driver) announcing(sess agentkit.LiveSession) gate.Approver {
+	if d.approver == nil {
+		return nil
+	}
+	return &announcingApprover{inner: d.approver, sess: sess, log: d.log}
+}
+
+// announcingApprover states the reason for a wait before blocking on it.
+//
+// Only this layer knows the reason. From the model's side a pending call is opaque — it sees that
+// it called something and that nothing came back, and cannot tell a slow server from a human
+// holding a phone. Left to guess, an assistant asked to explain the wait would sometimes send
+// people to a device where nothing is pending, which is worse than silence. So the fact is stated
+// rather than inferred.
+type announcingApprover struct {
+	inner gate.Approver
+	sess  agentkit.LiveSession
+	log   *slog.Logger
+}
+
+func (a *announcingApprover) Ask(ctx context.Context, act gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+	note := "Waiting for the person to approve this on their paired device: " + act.Kind
+	if act.Target != "" {
+		note += " " + act.Target
+	}
+	note += ". Tell them, briefly, and stay with them until it comes back."
+	// A failed note must not stop the approval: the wait is the important part, the narration is
+	// not. It is logged and the ask proceeds.
+	if err := a.sess.SendNote(ctx, note); err != nil {
+		a.log.Warn("voice: could not announce a pending approval", "err", err)
+	}
+	return a.inner.Ask(ctx, act, suggest)
 }
 
 // pump forwards microphone audio upstream until the device disconnects or ctx ends.
