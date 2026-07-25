@@ -159,6 +159,80 @@ func TestRunner_Dispatch_UnknownTool_SurfacesErrorToGuest(t *testing.T) {
 	}
 }
 
+// Every convenience wrapper the prelude publishes bottoms out at a tool name the
+// host actually registers. The wrappers used to call dotted names (file.read,
+// time.now, dns.resolve) that no toolset ever had, so nocturn.fs and nocturn.now
+// failed with "unknown tool" while every test still passed — nothing exercised
+// them. Each case asserts the dispatched NAME, which is the part that rotted.
+func TestPrelude_WrappersDispatchToRegisteredNames(t *testing.T) {
+	requireInterpreter(t)
+
+	// Output each wrapper can digest: raw text where it returns the string as-is,
+	// a JSON array where it JSON.parses a list, an object everywhere else.
+	outputs := map[string]string{
+		"file_read": "contents", "file_write": "", "file_remove": "", "file_move": "",
+		"file_list": "[]", "file_search": "[]", "file_stat": `{"exists":true,"isDir":false,"size":0}`,
+		"time_now": "{}", "ping": "{}", "dns_resolve": "{}",
+		"notify": "{}", "remind": "{}", "wake": "{}", "skill_read": "# a bundled file",
+		"http_read":  `{"status":200,"statusText":"OK","headers":{},"body":"hi"}`,
+		"http_write": `{"status":201,"statusText":"Created","headers":{},"body":""}`,
+	}
+
+	var called string
+	tools := make([]agentkit.Tool, 0, len(outputs))
+	for name, out := range outputs {
+		tl, err := agentkit.NewTool(name, "desc",
+			func(_ context.Context, _ string) (string, error) {
+				called = name
+				return out, nil
+			})
+		if err != nil {
+			t.Fatalf("NewTool(%q): %v", name, err)
+		}
+		tools = append(tools, tl)
+	}
+	r := script.New(toolset(t, tools...))
+
+	// name is an identifier, not the snippet: a subtest name is escaped by the test
+	// runner, and the JS carries slashes, spaces and quotes. The snippet goes in the
+	// failure message instead, where it stays readable.
+	cases := []struct {
+		name string
+		js   string
+		want string
+	}{
+		{"fs_readFile", `nocturn.fs.readFile("a.txt")`, "file_read"},
+		{"fs_writeFile", `nocturn.fs.writeFile("a.txt", "x")`, "file_write"},
+		{"fs_list", `nocturn.fs.list("d")`, "file_list"},
+		{"fs_stat", `nocturn.fs.stat("a.txt")`, "file_stat"},
+		{"fs_remove", `nocturn.fs.remove("a.txt")`, "file_remove"},
+		{"fs_search", `nocturn.fs.search("*.md")`, "file_search"},
+		{"fs_move", `nocturn.fs.move("a.txt", "b.txt")`, "file_move"},
+		{"nodeshim_readFileSync", `require("fs").readFileSync("a.txt")`, "file_read"},
+		{"nodeshim_renameSync", `require("fs").renameSync("a.txt", "b.txt")`, "file_move"},
+		{"now", `nocturn.now()`, "time_now"},
+		{"ping", `nocturn.ping("example.com")`, "ping"},
+		{"resolve", `nocturn.resolve("example.com")`, "dns_resolve"},
+		{"notify", `nocturn.notify("hi")`, "notify"},
+		{"remind", `nocturn.remind("in 1h", "hi")`, "remind"},
+		{"wake", `nocturn.wake(1, "note")`, "wake"},
+		{"skillFile", `nocturn.skillFile("summarize-url", "template.md")`, "skill_read"},
+		{"fetch_get", `fetch("https://example.com/")`, "http_read"},
+		{"fetch_post", `fetch("https://example.com/", {method: "POST", body: "x"})`, "http_write"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			called = ""
+			if _, err := r.Run(context.Background(), c.js); err != nil {
+				t.Fatalf("Run(%q): %v", c.js, err)
+			}
+			if called != c.want {
+				t.Fatalf("%s dispatched to %q, want %q", c.js, called, c.want)
+			}
+		})
+	}
+}
+
 // Tool exposes the runner as code_run: it parses its {"source": "..."} argument,
 // runs that source, and returns the script's stdout; a missing or malformed argument
 // is rejected rather than running an empty script.

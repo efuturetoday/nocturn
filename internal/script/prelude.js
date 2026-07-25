@@ -309,19 +309,19 @@
   function toContent(data) { return data instanceof Uint8Array ? bytesToBin(data) : String(data); }
 
   var nfs = {
-    readFile: function (path) { return g.nocturn.call("file.read", { path: String(path) }); },
-    writeFile: function (path, data) { g.nocturn.call("file.write", { path: String(path), content: toContent(data) }); },
-    list: function (path) { return JSON.parse(g.nocturn.call("file.list", { path: path == null ? "" : String(path) })); },
-    stat: function (path) { return JSON.parse(g.nocturn.call("file.stat", { path: String(path) })); },
-    remove: function (path) { g.nocturn.call("file.remove", { path: String(path) }); },
-    // file.search returns a JSON array, but a truncated sweep appends a
+    readFile: function (path) { return g.nocturn.call("file_read", { path: String(path) }); },
+    writeFile: function (path, data) { g.nocturn.call("file_write", { path: String(path), content: toContent(data) }); },
+    list: function (path) { return JSON.parse(g.nocturn.call("file_list", { path: path == null ? "" : String(path) })); },
+    stat: function (path) { return JSON.parse(g.nocturn.call("file_stat", { path: String(path) })); },
+    remove: function (path) { g.nocturn.call("file_remove", { path: String(path) }); },
+    // file_search returns a JSON array, but a truncated sweep appends a
     // "(truncated ...)" note after the JSON — split it off before parsing.
     search: function (pattern, path) {
-      var raw = g.nocturn.call("file.search", { pattern: String(pattern), path: path == null ? "" : String(path) });
+      var raw = g.nocturn.call("file_search", { pattern: String(pattern), path: path == null ? "" : String(path) });
       var nl = raw.indexOf("\n");
       return JSON.parse(nl === -1 ? raw : raw.slice(0, nl));
     },
-    move: function (from, to) { g.nocturn.call("file.move", { from: String(from), to: String(to) }); },
+    move: function (from, to) { g.nocturn.call("file_move", { from: String(from), to: String(to) }); },
   };
   g.nocturn.fs = {
     readFile: promisify(nfs.readFile),
@@ -333,10 +333,11 @@
     move: promisify(nfs.move),
   };
 
-  // --- ping / clock: thin sync wrappers over the host tools (ping is gated like
-  // dns; time.now carries no authority). Both return the parsed JSON object. ---
+  // --- ping / clock: thin sync wrappers over the host tools (ping is gated on the
+  // host like dns_resolve; time_now carries no authority). Both return the parsed
+  // JSON object. ---
   g.nocturn.ping = function (host) { return JSON.parse(g.nocturn.call("ping", { host: String(host) })); };
-  g.nocturn.now = function () { return JSON.parse(g.nocturn.call("time.now", {})); };
+  g.nocturn.now = function () { return JSON.parse(g.nocturn.call("time_now", {})); };
   // notify(message[, title]) — proactively tell the user (fire-and-forget).
   g.nocturn.notify = function (message, title) {
     var args = { message: String(message) };
@@ -358,7 +359,14 @@
   g.nocturn.resolve = function (host, type) {
     var args = { host: String(host) };
     if (type != null) args.type = String(type);
-    return JSON.parse(g.nocturn.call("dns.resolve", args));
+    return JSON.parse(g.nocturn.call("dns_resolve", args));
+  };
+  // skillFile(skill, path) — read one of a skill's bundled files (a template, an example, a
+  // script) as text. Ungated and confined to that skill's own directory by os.Root on the host,
+  // so it is context, never reach. Returns the file's contents; a missing skill or an escaping
+  // path throws.
+  g.nocturn.skillFile = function (skill, path) {
+    return g.nocturn.call("skill_read", { name: String(skill), path: String(path) });
   };
 
   var fs = {
@@ -387,7 +395,7 @@
     renameSync: function (from, to) { nfs.move(from, to); },
   };
   ["mkdirSync", "copyFileSync", "appendFileSync", "createReadStream", "createWriteStream", "openSync", "watch", "watchFile"].forEach(function (m) {
-    fs[m] = function () { throw new Error("nocturn: fs." + m + " is not supported (use nocturn.fs or file.* tools)"); };
+    fs[m] = function () { throw new Error("nocturn: fs." + m + " is not supported (use nocturn.fs or the file_* tools)"); };
   });
   fs.promises = {
     readFile: promisify(fs.readFileSync), writeFile: promisify(fs.writeFileSync),
