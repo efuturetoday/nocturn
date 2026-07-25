@@ -6,7 +6,6 @@
 > - What a package does → `go doc ./internal/<pkg>` · `go doc ./agentkit[/<mod>]`
 > - Why X over Y → **`ADRS.md`** · agentkit's design → **`agentkit/DOCS.md`**
 > - What already happened → **git log**
-> - Competitive research → **`RESEARCH.md`**
 
 ---
 
