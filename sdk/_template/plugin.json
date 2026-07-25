@@ -9,11 +9,8 @@
         "type": "object",
         "properties": { "city": { "type": "string", "description": "City name, e.g. Berlin" } },
         "required": ["city"]
-      },
-      "intent": "Look up the weather for {city}"
+      }
     }
   ],
-  "cage": [
-    { "family": "http", "target": "wttr.in", "access": ["read"] }
-  ]
+  "uses": ["http_read"]
 }

@@ -3,8 +3,9 @@
 // This is the default — no bundler, no transpile. Nocturn loads this file as-is.
 //
 // A plugin defines its tools on globalThis.plugin.tools; each is `(args) => result`.
-// Every fetch/fs call routes through the gate (broker + human approval); a denied
-// effect throws. Declare the reachable hosts/paths in plugin.json (the cage).
+// Every fetch/fs call routes through the base tool it wraps, and is gated there
+// (policy + human approval); a denied effect throws. The plugin's cage is the
+// "uses" list in plugin.json — the base tools it may call at all, e.g. ["http_read"].
 
 globalThis.plugin = {
   tools: {
