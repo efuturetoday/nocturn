@@ -84,12 +84,17 @@ tools through them; a spoken session cannot, because the cage never bound them. 
 time would only interrupt every sentence — and a user interrupted every sentence learns to approve
 without reading, which is worse than not asking.
 
-Two consequences follow, and both are deliberate:
+Three consequences follow, and all of them are deliberate:
 
 - **A screenless device may never be an approver.** The approval broker takes the first answer it
   receives, so a satellite able to answer would outrace the phone it exists to defer to.
 - **Audio is not scanned.** The secret scanner works on text. A credential spoken out loud reaches
   the speech provider, and no cage prevents that.
+- **A waiting gate may not stop the conversation.** Speech providers pause the whole model while a
+  tool call is outstanding, which would turn every approval into dead air — and dead air is what
+  teaches a user to grant permanently just to make it stop. A live session therefore declares its
+  tools as non-blocking, so the assistant can keep talking, say that it is waiting, and be
+  interrupted, while a human decides somewhere else.
 
 ## Zero ambient authority
 
