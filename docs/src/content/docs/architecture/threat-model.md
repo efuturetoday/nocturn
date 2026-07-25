@@ -59,6 +59,38 @@ move. A tempting shortcut is "just sandbox everything." It does not work:
 That is why out-of-band approval and host-held secrets are not nice-to-haves. They are
 structural requirements, and both are mandatory in Nocturn.
 
+## A microphone has no authenticated input
+
+Speech adds a third shape, and it is neither of the two above. A typed message arrives over a
+paired device's authenticated connection, and someone deliberately pressed send. A room does not
+work that way: whoever is audible can speak — a guest, a delivery, a television — and none of them
+identified themselves. There is no moment of deliberate submission to point at.
+
+Approval cannot repair this. Answering "yes" by voice would be answered by the same room the
+instruction came from, which is [the in-band problem](#why-the-defenses-cannot-be-merged) again,
+one device further out.
+
+So a spoken session is bounded by its **cage** rather than by its gate. `internal/workspace`
+binds it to an allowlist of tools that only read or address the user — `file_read`, `file_list`,
+`file_search`, `file_stat`, `http_read`, `dns_resolve`, `ping`, `remind`, `remind_list`,
+`skill_read`, `time_now`, `notify`. Nothing that writes a file, sends a request with a side
+effect, or runs code is bound at all. An absent tool is not denied; it cannot be named, which is
+the stronger property.
+
+That is also why the voice policy differs from the [workspace policy](/reference/gate/): it
+**allows** the `net` and `file` kinds where a typed session asks. This reads like a loosening and
+is the opposite. The typed policy asks on those kinds because a typed session can reach writing
+tools through them; a spoken session cannot, because the cage never bound them. Asking a second
+time would only interrupt every sentence — and a user interrupted every sentence learns to approve
+without reading, which is worse than not asking.
+
+Two consequences follow, and both are deliberate:
+
+- **A screenless device may never be an approver.** The approval broker takes the first answer it
+  receives, so a satellite able to answer would outrace the phone it exists to defer to.
+- **Audio is not scanned.** The secret scanner works on text. A credential spoken out loud reaches
+  the speech provider, and no cage prevents that.
+
 ## Zero ambient authority
 
 Underneath both defenses is one rule: nothing is granted implicitly. The guest starts with no
