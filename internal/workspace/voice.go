@@ -45,30 +45,91 @@ var voiceCage = map[string]bool{
 //
 // Everything outside the read kinds still denies. A tool that somehow reached this policy without
 // being in the cage is a bug, and it fails closed rather than defaulting to allow.
-func voicePolicy() gate.Policy {
+// The kinds a caged voice session may use at all. Anything else denies.
+func voiceAllowed(kind string) bool {
+	switch kind {
+	case tools.NetKind, tools.FileKind, tools.NotifyKind, tools.RemindKind:
+		return true
+	}
+	return false
+}
+
+func voicePolicy(ask map[string]bool) gate.Policy {
 	return gate.PolicyFunc(func(a gate.Action) gate.Ruling {
-		switch a.Kind {
-		case tools.NetKind, tools.FileKind, tools.NotifyKind, tools.RemindKind:
-			return gate.Allowed()
-		default:
+		switch {
+		case !voiceAllowed(a.Kind):
 			return gate.Denied()
+		case ask[a.Kind]:
+			// RecallNever, not RecallSession: this path exists to be felt repeatedly within one
+			// conversation. A remembered yes would answer the first ask and hide every one after it,
+			// which is the opposite of what a measurement wants to observe.
+			return gate.AskWith(gate.RecallNever)
+		default:
+			return gate.Allowed()
 		}
 	})
+}
+
+// VoiceOption configures how a voice session is composed.
+type VoiceOption func(*voiceConfig)
+
+type voiceConfig struct {
+	approver gate.Approver
+	ask      map[string]bool
+	driver   []voice.Option
+}
+
+// VoiceApprover routes a voice session's asks to a human. The default is none, which is the
+// unattended posture a screenless satellite runs in: an Ask with no covering grant fails closed.
+//
+// Passing one is only meaningful together with VoiceAsk — with the shipped policy nothing in the
+// cage ever asks.
+func VoiceApprover(a gate.Approver) VoiceOption {
+	return func(c *voiceConfig) { c.approver = a }
+}
+
+// VoiceAsk switches the named gate kinds from allow to ask.
+//
+// This is a MEASUREMENT instrument, not a configuration: it exists to find out what an approval
+// actually feels like in the middle of a spoken sentence — how long the silence is, what the model
+// says while it waits, whether a user talks over it — before that shape is committed to. The
+// shipped posture asks nothing, because the cage already carries the restriction and asking every
+// sentence teaches people to approve without reading.
+//
+// Unknown kinds are accepted and simply never match; the caller is experimenting, not configuring.
+func VoiceAsk(kinds ...string) VoiceOption {
+	return func(c *voiceConfig) {
+		if c.ask == nil {
+			c.ask = make(map[string]bool, len(kinds))
+		}
+		for _, k := range kinds {
+			c.ask[k] = true
+		}
+	}
+}
+
+// VoiceDriver passes options through to the driver (budget, observer, …).
+func VoiceDriver(opts ...voice.Option) VoiceOption {
+	return func(c *voiceConfig) { c.driver = append(c.driver, opts...) }
 }
 
 // Voice builds a driver for a spoken session over live, caged by voiceCage and gated by
 // voicePolicy. It shares this workspace's durable grants and its persona, so a voice conversation
 // is the same assistant the terminal and the app talk to — reachable through a narrower door.
 //
-// The approver is deliberately absent: a satellite has no authenticated input path, so an Ask that
-// escaped the cage has no one to answer it and fails closed.
-func (w *Workspace) Voice(live agentkit.LiveLLM, opts ...voice.Option) *voice.Driver {
+// With no options it is the shipped posture: nothing asks, and there is no approver, so an Ask that
+// somehow escaped the cage has no one to answer it and fails closed.
+func (w *Workspace) Voice(live agentkit.LiveLLM, opts ...VoiceOption) *voice.Driver {
+	var cfg voiceConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
 	caged := w.tools.Select(func(name string) bool { return voiceCage[name] })
-	base := []voice.Option{
+	driver := append([]voice.Option{
 		voice.WithSystem(resolvePersona(w.dir, w.log)),
 		voice.WithLogger(w.log.With("component", "voice")),
-	}
-	return voice.New(live, caged, voicePolicy(), w.grants, nil, append(base, opts...)...)
+	}, cfg.driver...)
+	return voice.New(live, caged, voicePolicy(cfg.ask), w.grants, cfg.approver, driver...)
 }
 
 // VoiceTools reports the caged tool names, sorted, so a caller can show the user what a spoken

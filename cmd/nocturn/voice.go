@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	_ "embed"
 	"errors"
@@ -10,11 +11,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/agentkit/gemini"
 	"github.com/efuturetoday/nocturn/agentkit/openai"
 	"github.com/efuturetoday/nocturn/internal/voice"
@@ -70,7 +73,7 @@ func cmdVoice(port int, wsName string) int {
 	defer ws.Close()
 
 	live := gemini.New(dialGemini, apiKey, model, gemini.WithLogger(agentkit.SlogLogger(log)))
-	driver := ws.Voice(live)
+	driver := ws.Voice(live, approvalExperiment(log)...)
 
 	addr := fmt.Sprintf("%s:%d", loopback, port)
 	mux := http.NewServeMux()
@@ -97,6 +100,60 @@ func cmdVoice(port int, wsName string) int {
 		return 1
 	}
 	return 0
+}
+
+// approvalExperiment wires the harness's one measurement knob, off unless asked for:
+//
+//	NOCTURN_VOICE_ASK=file,net       which gate kinds ask instead of allow
+//	NOCTURN_VOICE_APPROVE=terminal   answer each ask on this terminal (default)
+//	NOCTURN_VOICE_APPROVE=8s         auto-approve after a fixed delay
+//
+// The delay variant is the more useful instrument of the two: it reproduces a human's latency on a
+// second device without needing you to type while you are mid-sentence, and it repeats exactly, so
+// two runs are comparable. The terminal variant is the honest one — you find out whether you can
+// actually answer a prompt while a speaker is waiting on you.
+func approvalExperiment(log *slog.Logger) []workspace.VoiceOption {
+	raw := os.Getenv("NOCTURN_VOICE_ASK")
+	if raw == "" {
+		return nil
+	}
+	kinds := strings.Split(raw, ",")
+	for i := range kinds {
+		kinds[i] = strings.TrimSpace(kinds[i])
+	}
+
+	var approver gate.Approver = &terminalApprover{in: bufio.NewReader(os.Stdin)}
+	mode := os.Getenv("NOCTURN_VOICE_APPROVE")
+	if d, err := time.ParseDuration(mode); err == nil && d >= 0 {
+		approver = delayedApprover{after: d, log: log}
+	} else if mode != "" && mode != "terminal" {
+		log.Warn("unknown NOCTURN_VOICE_APPROVE, using the terminal", "value", mode)
+	}
+	log.Warn("approval experiment armed — voice sessions will ask", "kinds", kinds, "approve", mode)
+	return []workspace.VoiceOption{workspace.VoiceAsk(kinds...), workspace.VoiceApprover(approver)}
+}
+
+// delayedApprover stands in for a human on a second device: it waits, then says yes.
+//
+// It approves unconditionally, which is why it may only ever exist behind the harness's experiment
+// flag. What it measures is the WAIT — the silence in the conversation, what the model does with
+// it, whether the user talks over it — not the decision.
+type delayedApprover struct {
+	after time.Duration
+	log   *slog.Logger
+}
+
+func (d delayedApprover) Ask(ctx context.Context, a gate.Action, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+	d.log.Info("simulated approval pending", "kind", a.Kind, "target", a.Target, "after", d.after)
+	select {
+	case <-time.After(d.after):
+		d.log.Info("simulated approval granted", "kind", a.Kind, "target", a.Target)
+		// RecallNever: the next identical call must ask again, or the experiment measures one wait
+		// and then silently stops measuring.
+		return true, gate.Grant{Kind: a.Kind, Target: a.Target}, gate.RecallNever, nil
+	case <-ctx.Done():
+		return false, gate.Grant{}, gate.RecallNever, ctx.Err()
+	}
 }
 
 // openWorkspace assembles the named workspace for the harness. The LLM endpoint is optional here:

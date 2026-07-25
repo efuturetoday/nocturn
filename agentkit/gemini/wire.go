@@ -52,6 +52,9 @@ type functionDecl struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	Parameters  map[string]any `json:"parameters,omitempty"`
+	// Behavior "NON_BLOCKING" lets the conversation continue while the call runs. The default is
+	// blocking: the API pauses ALL model interaction until the response arrives.
+	Behavior string `json:"behavior,omitempty"`
 }
 
 // clientContent seeds prior conversation. Sent with TurnComplete false it primes context WITHOUT

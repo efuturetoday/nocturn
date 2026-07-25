@@ -3,6 +3,8 @@ package workspace_test
 import (
 	"slices"
 	"testing"
+
+	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
 // The cage is the security boundary for a spoken session, so it is pinned by name rather than left
@@ -42,5 +44,18 @@ func TestVoice_BuildsADriver(t *testing.T) {
 	w := openWS(t, fakeLLM{})
 	if w.Voice(nil) == nil {
 		t.Fatal("Voice returned nil")
+	}
+}
+
+// The experiment knob may only ever narrow. A kind the cage never allowed must stay denied even
+// when the caller names it, or a measurement flag would become a way to widen authority.
+func TestVoiceAsk_CannotWidenBeyondTheCage(t *testing.T) {
+	w := openWS(t, fakeLLM{})
+	if w.Voice(nil, workspace.VoiceAsk("exec", "file")) == nil {
+		t.Fatal("Voice returned nil")
+	}
+	// The cage is unchanged by the knob: it selects tools, the policy only rules on kinds.
+	if got := w.VoiceTools(); slices.Contains(got, "code_run") {
+		t.Errorf("VoiceAsk changed the cage: %v", got)
 	}
 }

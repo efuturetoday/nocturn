@@ -149,6 +149,11 @@ func TestOpen_SendsSetupWithModelToolsAndTranscription(t *testing.T) {
 	if props["type"] != "STRING" {
 		t.Errorf("property type = %v, want STRING", props["type"])
 	}
+	// Without NON_BLOCKING the API pauses ALL model interaction until the result arrives, so a call
+	// waiting on a human's approval would freeze the conversation for as long as the human takes.
+	if fn["behavior"] != "NON_BLOCKING" {
+		t.Errorf("behavior = %v, want NON_BLOCKING", fn["behavior"])
+	}
 }
 
 func TestOpen_SystemGoesToInstructionHistoryToTurns(t *testing.T) {
@@ -259,8 +264,14 @@ func TestSendResult_ShapesFunctionResponse(t *testing.T) {
 	if fr["id"] != "c1" || fr["name"] != "time_now" {
 		t.Errorf("functionResponse = %v", fr)
 	}
-	if got := fr["response"].(map[string]any)["result"]; got != "12:00" {
+	resp := fr["response"].(map[string]any)
+	if got := resp["result"]; got != "12:00" {
 		t.Errorf("result = %v", got)
+	}
+	// A non-blocking declaration requires the response to say when to surface it; INTERRUPT reports
+	// the outcome the human is waiting to hear instead of filing it away.
+	if got := resp["scheduling"]; got != "INTERRUPT" {
+		t.Errorf("scheduling = %v, want INTERRUPT", got)
 	}
 }
 
@@ -278,6 +289,10 @@ func TestSendResult_ErrorReachesTheModel(t *testing.T) {
 	// hangs on a call that is never answered.
 	if resp["error"] != "gate: denied" {
 		t.Errorf("response = %v, want the error surfaced", resp)
+	}
+	// A denial is exactly the outcome the human waited for — it must interrupt, not idle.
+	if got := resp["scheduling"]; got != "INTERRUPT" {
+		t.Errorf("scheduling = %v, want INTERRUPT", got)
 	}
 }
 

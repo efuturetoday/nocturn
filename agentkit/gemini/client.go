@@ -203,13 +203,23 @@ func (s *session) SendAudio(ctx context.Context, pcm []byte) error {
 	}})
 }
 
+// interrupt is the scheduling every result carries: report it as soon as it lands, cutting into
+// whatever the model is saying.
+//
+// A non-blocking declaration requires the response to say WHEN the model should surface it. The
+// alternatives do not fit a gated tool: WHEN_IDLE holds the answer until the model runs out of
+// things to say, and SILENT files it away without telling anyone. Both are wrong when a human just
+// spent ten seconds approving something — the outcome, allowed or denied, is the thing they are
+// waiting to hear.
+const interrupt = "INTERRUPT"
+
 // SendResult answers one tool call. A failed tool reports its error as the result payload: the
 // model is meant to react to it (apologize, try another route), so swallowing it would leave the
 // conversation hanging on a call that never gets answered.
 func (s *session) SendResult(ctx context.Context, r agentkit.ToolResult) error {
-	payload := map[string]any{"result": r.Result}
+	payload := map[string]any{"result": r.Result, "scheduling": interrupt}
 	if r.Err != nil {
-		payload = map[string]any{"error": r.Err.Error()}
+		payload = map[string]any{"error": r.Err.Error(), "scheduling": interrupt}
 	}
 	return s.write(ctx, clientMessage{ToolResponse: &toolResponse{
 		FunctionResponses: []functionResponse{{ID: r.ID, Name: r.Tool, Response: payload}},

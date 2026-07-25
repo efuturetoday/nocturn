@@ -43,6 +43,20 @@ func renderSchema(s *agentkit.Schema) map[string]any {
 	return m
 }
 
+// nonBlocking is declared on every tool, and that is a deliberate blanket choice.
+//
+// Gemini's default is blocking: the API pauses ALL model interaction until a functionResponse
+// arrives. For a gated deployment that is unusable — a call waiting on a human's approval on
+// another device would freeze the conversation for as long as the human takes, with no way for the
+// model to even say so. Running the call in its own goroutine does not help: it keeps the audio
+// transport moving, but the model on the far side is still stopped.
+//
+// The blanket applies because the consumer cannot know in advance which call will block. Whether a
+// tool asks is decided at call time by the policy and the remembered grants, not by the tool's
+// identity — so any tool may turn out to be the slow one, and declaring only the "slow" ones
+// non-blocking would be guessing.
+const nonBlocking = "NON_BLOCKING"
+
 // declare renders the tool specs into the single Tools entry Gemini expects.
 func declare(tools []agentkit.ToolSpec) []toolDecl {
 	if len(tools) == 0 {
@@ -54,6 +68,7 @@ func declare(tools []agentkit.ToolSpec) []toolDecl {
 			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  renderSchema(t.Parameters),
+			Behavior:    nonBlocking,
 		})
 	}
 	return []toolDecl{{FunctionDeclarations: decls}}
