@@ -83,6 +83,17 @@ func (d *fakeDevice) Recv(ctx context.Context) ([]byte, error) {
 func (d *fakeDevice) Play(pcm []byte) error { d.played <- pcm; return nil }
 func (d *fakeDevice) Interrupt() error      { d.interrupts <- struct{}{}; return nil }
 
+// fakeObserver reports what the session committed, which is also how a test observes that the
+// event loop has processed a turn — no sleeps.
+type fakeObserver struct{ said chan agentkit.Message }
+
+func newObserver() *fakeObserver { return &fakeObserver{said: make(chan agentkit.Message, 16)} }
+
+func (o *fakeObserver) Said(role agentkit.Role, text string) {
+	o.said <- agentkit.Message{Role: role, Content: text}
+}
+func (o *fakeObserver) ToolRan(string, string, string, error) {}
+
 // tool builds a named tool whose Call runs fn.
 func tool(name string, fn func(ctx context.Context, args string) (string, error)) agentkit.Tool {
 	t, err := agentkit.NewTool(name, "test tool", fn)
@@ -367,4 +378,58 @@ func TestBudget_EndsTheSessionWithoutAnError(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Errorf("Run = %v, want nil on budget expiry", err)
 	}
+}
+
+// An answer that arrives while the person is still waiting should cut in — it is what they asked
+// for.
+func TestToolResult_NotLateWhileTheCallerStillWaits(t *testing.T) {
+	sess, dev := newSession(), newDevice()
+	ts := toolset(t, tool("time_now", func(context.Context, string) (string, error) { return "12:00", nil }))
+	d := voice.New(&fakeLive{sess: sess}, ts, allow(), gate.NewMemGrants(), nil)
+	wait := run(t, d, dev, nil)
+
+	sess.push(agentkit.LiveToolCall{ID: "c1", Tool: "time_now", Args: "{}"})
+	if got := <-sess.results; got.Late {
+		t.Error("result marked late although no turn completed")
+	}
+	sess.Close()
+	wait()
+}
+
+// Once the conversation has moved on, the answer must wait for a gap: the person asked about a
+// file, then talked about something else, and the file contents cutting into that is worse than a
+// short wait.
+func TestToolResult_LateWhenTheConversationMovedOn(t *testing.T) {
+	sess, dev := newSession(), newDevice()
+	release := make(chan struct{})
+	ts := toolset(t, tool("slow", func(ctx context.Context, _ string) (string, error) {
+		select {
+		case <-release:
+			return "done", nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}))
+	obs := newObserver()
+	d := voice.New(&fakeLive{sess: sess}, ts, allow(), gate.NewMemGrants(), nil, voice.WithObserver(obs))
+	wait := run(t, d, dev, nil)
+
+	sess.push(agentkit.LiveToolCall{ID: "c1", Tool: "slow", Args: "{}"})
+	// Two whole turns pass while the approval is outstanding.
+	sess.push(agentkit.LiveModelText{Text: "one moment"})
+	sess.push(agentkit.LiveTurnDone{})
+	sess.push(agentkit.LiveUserText{Text: "anyway, the weather"})
+	sess.push(agentkit.LiveTurnDone{})
+
+	// Wait for both turns to be committed, so the counter has certainly advanced before release.
+	for range 2 {
+		<-obs.said
+	}
+	close(release)
+
+	if got := <-sess.results; !got.Late {
+		t.Error("result not marked late although two turns completed while it ran")
+	}
+	sess.Close()
+	wait()
 }

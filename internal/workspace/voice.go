@@ -113,6 +113,26 @@ func VoiceDriver(opts ...voice.Option) VoiceOption {
 	return func(c *voiceConfig) { c.driver = append(c.driver, opts...) }
 }
 
+// voiceRider is appended to the workspace persona for spoken sessions. A persona written for a
+// screen does not survive contact with a speaker: there is no formatting, no scrollback, and no
+// visible spinner telling the user that something is happening.
+//
+// The waiting instruction is the load-bearing one. Declaring tools non-blocking lets the model keep
+// talking while a call is outstanding — but it only MAY, it does not have to, and with nothing else
+// pending it simply goes quiet. Silence during an approval is the failure mode that teaches people
+// to grant permanently just to make it stop, so the model is told to fill it and to name what it is
+// waiting on.
+const voiceRider = `
+You are speaking out loud, not writing. Keep replies short and plain — no lists, no markdown, no
+formatting of any kind. Say numbers, dates and units the way a person would say them.
+
+When a tool call does not come back immediately, SAY SO right away and stay with the person:
+tell them what you are waiting for, and that they may have to approve it on their phone. Never
+wait in silence — they cannot see that anything is happening. Keep answering them while you
+wait, and report the outcome as soon as it arrives.
+
+If something is refused, say so plainly and offer what you can still do.`
+
 // Voice builds a driver for a spoken session over live, caged by voiceCage and gated by
 // voicePolicy. It shares this workspace's durable grants and its persona, so a voice conversation
 // is the same assistant the terminal and the app talk to — reachable through a narrower door.
@@ -126,7 +146,7 @@ func (w *Workspace) Voice(live agentkit.LiveLLM, opts ...VoiceOption) *voice.Dri
 	}
 	caged := w.tools.Select(func(name string) bool { return voiceCage[name] })
 	driver := append([]voice.Option{
-		voice.WithSystem(resolvePersona(w.dir, w.log)),
+		voice.WithSystem(resolvePersona(w.dir, w.log) + "\n" + voiceRider),
 		voice.WithLogger(w.log.With("component", "voice")),
 	}, cfg.driver...)
 	return voice.New(live, caged, voicePolicy(cfg.ask), w.grants, cfg.approver, driver...)

@@ -296,6 +296,22 @@ func TestSendResult_ErrorReachesTheModel(t *testing.T) {
 	}
 }
 
+// Lateness, not outcome, picks the scheduling: an answer the conversation has moved past waits for
+// a gap instead of cutting into whatever is being said now.
+func TestSendResult_LateResultWaitsForAGap(t *testing.T) {
+	f, sess := open(t, nil, nil)
+	f.nextSent(t) // setup
+
+	err := sess.SendResult(t.Context(), agentkit.ToolResult{ID: "c1", Tool: "file_read", Result: "…", Late: true})
+	if err != nil {
+		t.Fatalf("SendResult: %v", err)
+	}
+	fr := f.nextSent(t)["toolResponse"].(map[string]any)["functionResponses"].([]any)[0].(map[string]any)
+	if got := fr["response"].(map[string]any)["scheduling"]; got != "WHEN_IDLE" {
+		t.Errorf("scheduling = %v, want WHEN_IDLE", got)
+	}
+}
+
 func TestServerContent_TranscriptsAudioAndTurnEnd(t *testing.T) {
 	f, sess := open(t, nil, nil)
 	f.server(t, map[string]any{"serverContent": map[string]any{

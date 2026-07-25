@@ -44,6 +44,16 @@ type ToolResult struct {
 	Tool   string
 	Result string
 	Err    error
+
+	// Late reports that the conversation moved on while this call was outstanding — the speakers
+	// completed at least one turn between the call and this answer.
+	//
+	// It exists because correlation is not the same as timing. A provider matches the answer to its
+	// call by ID however long it takes, but an answer that arrives two subjects later should not cut
+	// into whatever is being said now: the person asked about a file, then moved to the weather, and
+	// having the file contents interrupt the weather is worse than a short wait. An adapter maps
+	// this onto whatever delivery its provider offers; one with no such control ignores it.
+	Late bool
 }
 
 // LiveEvent is one item on a LiveSession's output stream. Like Event, the set is sealed (unexported

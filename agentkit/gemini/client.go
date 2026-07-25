@@ -203,23 +203,35 @@ func (s *session) SendAudio(ctx context.Context, pcm []byte) error {
 	}})
 }
 
-// interrupt is the scheduling every result carries: report it as soon as it lands, cutting into
-// whatever the model is saying.
+// A non-blocking declaration requires each response to say WHEN the model should surface it.
 //
-// A non-blocking declaration requires the response to say WHEN the model should surface it. The
-// alternatives do not fit a gated tool: WHEN_IDLE holds the answer until the model runs out of
-// things to say, and SILENT files it away without telling anyone. Both are wrong when a human just
-// spent ten seconds approving something — the outcome, allowed or denied, is the thing they are
-// waiting to hear.
-const interrupt = "INTERRUPT"
+//   - interrupt — report it now, cutting into whatever is being said. Right while the person is
+//     still waiting: the outcome, allowed or denied, is the thing they asked for.
+//   - whenIdle — hold it until the model finishes what it is doing. Right once the conversation has
+//     moved on, so an answer from two subjects ago does not cut into the current one.
+//
+// SILENT, the third option, is never used here: it files the result away without telling anyone,
+// which would leave a person who approved something on their phone with no confirmation that it
+// happened.
+const (
+	interrupt = "INTERRUPT"
+	whenIdle  = "WHEN_IDLE"
+)
 
 // SendResult answers one tool call. A failed tool reports its error as the result payload: the
 // model is meant to react to it (apologize, try another route), so swallowing it would leave the
 // conversation hanging on a call that never gets answered.
+//
+// Lateness, not outcome, picks the scheduling: a denial the person is waiting on should interrupt,
+// and a success they have long moved past should not.
 func (s *session) SendResult(ctx context.Context, r agentkit.ToolResult) error {
-	payload := map[string]any{"result": r.Result, "scheduling": interrupt}
+	scheduling := interrupt
+	if r.Late {
+		scheduling = whenIdle
+	}
+	payload := map[string]any{"result": r.Result, "scheduling": scheduling}
 	if r.Err != nil {
-		payload = map[string]any{"error": r.Err.Error(), "scheduling": interrupt}
+		payload = map[string]any{"error": r.Err.Error(), "scheduling": scheduling}
 	}
 	return s.write(ctx, clientMessage{ToolResponse: &toolResponse{
 		FunctionResponses: []functionResponse{{ID: r.ID, Name: r.Tool, Response: payload}},

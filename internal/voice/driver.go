@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
@@ -157,8 +158,7 @@ func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message) (
 	uplink := make(chan error, 1)
 	go func() { uplink <- d.pump(ctx, dev, sess) }()
 
-	var pending sync.WaitGroup
-	transcript := newTranscript(conv)
+	c := &conversation{dev: dev, sess: sess, tr: newTranscript(conv)}
 
 	// Teardown order is load-bearing, so it is spelled out rather than left to defer stacking:
 	// cancel FIRST, so a tool still blocked on a human approval is released immediately — waiting
@@ -166,7 +166,7 @@ func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message) (
 	// budget, long after the caller hung up.
 	defer func() {
 		cancel()
-		pending.Wait()
+		c.pending.Wait()
 		sess.Close()
 	}()
 
@@ -178,40 +178,54 @@ func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message) (
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				d.log.Info("voice session ended on its budget", "budget", d.budget)
 			}
-			return transcript.messages(), nil
+			return c.tr.messages(), nil
 		case err := <-uplink:
-			return transcript.messages(), err
+			return c.tr.messages(), err
 		case ev, ok := <-sess.Events():
 			if !ok {
-				return transcript.messages(), nil
+				return c.tr.messages(), nil
 			}
-			if err := d.handle(toolCtx, dev, sess, transcript, &pending, ev); err != nil {
-				return transcript.messages(), err
+			if err := d.handle(toolCtx, c, ev); err != nil {
+				return c.tr.messages(), err
 			}
 		}
 	}
 }
 
+// conversation is one session's mutable state, bound together so the event loop and the tool
+// goroutines share it by reference rather than by an ever-growing parameter list.
+type conversation struct {
+	dev  Device
+	sess agentkit.LiveSession
+	tr   *transcript
+
+	pending sync.WaitGroup
+	// turns completed so far: written by the event loop, read by each tool goroutine when it
+	// answers. It is how a call learns the conversation moved on without it.
+	turns atomic.Uint64
+}
+
 // handle applies one live event. It returns an error only for conditions that end the session.
-func (d *Driver) handle(ctx context.Context, dev Device, sess agentkit.LiveSession, tr *transcript, pending *sync.WaitGroup, ev agentkit.LiveEvent) error {
+func (d *Driver) handle(ctx context.Context, c *conversation, ev agentkit.LiveEvent) error {
 	switch e := ev.(type) {
 	case agentkit.LiveAudio:
-		if err := dev.Play(e.PCM); err != nil {
+		if err := c.dev.Play(e.PCM); err != nil {
 			return fmt.Errorf("voice: play: %w", err)
 		}
 	case agentkit.LiveInterrupted:
 		// Drop the device's buffer first, then the half-spoken sentence: the user has moved on, and
 		// keeping either would have the speaker answer a question that no longer stands.
-		if err := dev.Interrupt(); err != nil {
+		if err := c.dev.Interrupt(); err != nil {
 			return fmt.Errorf("voice: interrupt: %w", err)
 		}
-		tr.discardPartial()
+		c.tr.discardPartial()
 	case agentkit.LiveUserText:
-		tr.append(agentkit.RoleUser, e.Text)
+		c.tr.append(agentkit.RoleUser, e.Text)
 	case agentkit.LiveModelText:
-		tr.append(agentkit.RoleAssistant, e.Text)
+		c.tr.append(agentkit.RoleAssistant, e.Text)
 	case agentkit.LiveTurnDone:
-		for _, m := range tr.commit() {
+		c.turns.Add(1)
+		for _, m := range c.tr.commit() {
 			if d.observer != nil {
 				d.observer.Said(m.Role, m.Content)
 			}
@@ -220,7 +234,8 @@ func (d *Driver) handle(ctx context.Context, dev Device, sess agentkit.LiveSessi
 		// Concurrent on purpose: a gated call can block for as long as a human takes to answer on
 		// another device. Running it inline would stall the audio path — including the model's own
 		// "hold on, I need permission for that".
-		pending.Go(func() { d.invoke(ctx, sess, e) })
+		issued := c.turns.Load()
+		c.pending.Go(func() { d.invoke(ctx, c, e, issued) })
 	case agentkit.LiveError:
 		return fmt.Errorf("voice: session: %w", e.Err)
 	}
@@ -230,7 +245,7 @@ func (d *Driver) handle(ctx context.Context, dev Device, sess agentkit.LiveSessi
 // invoke runs one tool call and answers it. Every outcome — unknown tool, gate denial, tool failure
 // — is reported back to the model as a result, because a call left unanswered hangs the
 // conversation, and a denial is something the model should say out loud rather than stall on.
-func (d *Driver) invoke(ctx context.Context, sess agentkit.LiveSession, call agentkit.LiveToolCall) {
+func (d *Driver) invoke(ctx context.Context, c *conversation, call agentkit.LiveToolCall, issued uint64) {
 	res := agentkit.ToolResult{ID: call.ID, Tool: call.Tool}
 	tool, ok := d.tools[call.Tool]
 	if !ok {
@@ -249,7 +264,10 @@ func (d *Driver) invoke(ctx context.Context, sess agentkit.LiveSession, call age
 	case res.Err != nil:
 		d.log.Warn("voice tool failed", "tool", call.Tool, "err", res.Err)
 	}
-	if err := sess.SendResult(ctx, res); err != nil {
+	// A turn completed while this call was outstanding, so the person has moved on and the answer
+	// must wait for a gap rather than cut into whatever they are talking about now.
+	res.Late = c.turns.Load() > issued
+	if err := c.sess.SendResult(ctx, res); err != nil {
 		d.log.Warn("voice tool result undeliverable", "tool", call.Tool, "err", err)
 	}
 }
