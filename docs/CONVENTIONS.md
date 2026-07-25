@@ -100,7 +100,7 @@ Every tool's `js` block MUST provide both forms; the schema makes it impossible 
 - **`js.gate`** — the generic `nocturn.call("<tool>", { … })` form — is **required**.
 - **`js.wrapper`** — the idiomatic prelude form — is **nullable**. A tool with no wrapper MUST set
   `wrapper: null` **on purpose**, and that `null` is the signal to **add the wrapper to
-  `internal/script/runtime.js`** (the JS prelude prepended at eval time — no wasm rebuild). The
+  `internal/script/prelude.js`** (the JS prelude prepended at eval time — no wasm rebuild). The
   renderer shows both as `<Tabs>`; with `wrapper: null` it shows only the gate.
 
 ### Wrapper coverage (keep current)
@@ -121,7 +121,7 @@ Every tool's `js` block MUST provide both forms; the schema makes it impossible 
 - [ ] Create the YAML entry (`src/data/tools/<tool>.yaml` or `src/data/capabilities/<family>.yaml`)
       with every required field.
 - [ ] Each tool: `js.gate` set; `js.wrapper` set **or explicitly `null`** (if `null`, add the wrapper
-      to `internal/script/runtime.js`).
+      to `internal/script/prelude.js`).
 - [ ] Sidebar (`astro.config.mjs`): add a **`link:`** entry — tool grouped under its capability;
       capability under **Capabilities**. Add the family to the overview `capabilities.md` table.
 - [ ] `npx astro build` green (the schema validates every entry); all internal links **and anchors**

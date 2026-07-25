@@ -93,9 +93,8 @@ in to. Nothing is installed until you say yes. Approve it once and it installs q
 that, until it changes, when you are asked again with the differences shown.
 
 :::tip[A working example]
-The Nocturn repository ships a complete minimal plugin under
-`internal/plugin/testdata/example/`, including a deliberately out-of-bounds action that
-shows the cage blocking it.
+The Nocturn repository ships a starting point under `sdk/_template/` — a manifest, the
+JavaScript entry point, and its TypeScript source.
 :::
 
 ## What plugins are good for

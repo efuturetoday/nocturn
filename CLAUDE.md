@@ -1,542 +1,518 @@
-# Nocturn — Projektwissen (CLAUDE.md)
+# Nocturn — Project Knowledge (CLAUDE.md)
 
-> Destilliertes, **nicht-ableitbares** Wissen: Vision, Threat-Model, Muster, Pitfalls.
-> Lies das zuerst, bevor du weiterbaust.
+> Distilled, **non-derivable** knowledge: vision, threat model, patterns, pitfalls.
+> Read this before building further.
 >
-> **Single sources of truth — hier NICHT duplizieren:**
-> - Was ein Paket tut → **`go doc ./internal/<pkg>`** (die Paket-Doc-Kommentare sind die
->   destillierte Per-Paket-Wahrheit; §4 ist nur ein Index, keine Nach-Transkription).
-> - Warum wir X statt Y gewählt haben → **`ADRS.md`** (die Entscheidungs-Records).
-> - Was schon passiert ist → **git log** (keine „Erledigt"-Historie hier).
+> **Single sources of truth — do NOT duplicate here:**
+> - What a package does → **`go doc ./internal/<pkg>`** and **`go doc ./agentkit`** (the package
+>   doc comments are the distilled per-package truth; §4 is an index, not a transcription).
+> - Why we chose X over Y → **`ADRS.md`** (the decision records).
+> - What already happened → **git log** (no "done" history here).
 >
-> Vollständiger Ur-Plan: `~/.claude/plans/ich-m-chte-eine-openclaw-foamy-tulip.md`.
-> Offene Fragen/Entscheidungen: **`FRAGEN.md`** (pflegen, wenn was aufkommt).
+> agentkit's own design: **`agentkit/DOCS.md`**.
 
 ---
 
-## 1. Was Nocturn ist
+## 1. What Nocturn is
 
-Ein **sicherer persönlicher AI-Assistent** in **Go** — Gegenentwurf zu OpenClaw
-(„sloppified AI crap": unsicher, komplex, schwere UI). Ein einzelnes Binary,
-kein Fremd-Runtime, das ein LLM mit **capability-gebrokerten, human-in-the-loop-
-gegateten** Werkzeugen orchestriert.
+A **secure personal AI assistant** in **Go** — the counter-design to OpenClaw ("sloppified AI
+crap": insecure, complex, heavy UI). A single binary, no foreign runtime, orchestrating an LLM
+through **permission-gated, human-in-the-loop** tools.
 
-### Vision — 4 Säulen (Nordstern)
-1. **Simplicity / easy deployment, ohne Runtime** — eine Go-Binary, kein
-   Node/Postgres/Docker/CGo/Fremd-Runtime.
-2. **Nachhaltiges Ökosystem, DevEx super, polyglot** (JS/TS/Rust/Go).
-3. **Kleine begleitende App** (später Tauri).
-4. **Klein, fokussiert, sicher, überschaubar** — minimale TCB, nicht alles voll
-   ausgebaut, aber beherrschbar.
+### Vision — 4 pillars (north star)
+1. **Simplicity / easy deployment, no runtime** — one Go binary, no Node/Postgres/Docker/CGo.
+2. **Sustainable ecosystem, great DevEx, polyglot** (JS/TS/Rust/Go).
+3. **A small companion app** — shipped: the mobile app is where approvals happen.
+4. **Small, focused, secure, comprehensible** — minimal TCB, not everything built out, but
+   controllable.
 
 ---
 
-## 2. Abgrenzung — was wir anders machen
+## 2. Positioning — what we do differently
 
 | | OpenClaw | IronClaw (nearai, Rust) | **Nocturn** |
 |---|---|---|---|
-| Stack | TS/Node | Rust + wasmtime + **Postgres** + Node-WebUI | **Go, single binary, wazero** |
-| Isolation | keine (exec/bash) | WASM-Component + Vault + TEE | WASM (wazero) Zero-Authority |
-| Effekt-Gatung | schwache Allowlists | statische Per-Tool-Allowlist | **dynamisches Ziel-Gating + HITL** |
-| Human-in-the-Loop | iOS/Watch, **exec-only, abschaltbar**, in-band | in-band `ask`, **Auto-Approve default AN** | **verpflichtend, out-of-band, nicht abschaltbar** |
-| Polyglot-Skills | Markdown (kein Code) | **Rust-only, kein PDK** | polyglot geplant (Skill-Schicht offen) |
-| TCB | groß | 54 Crates | **minimal** (wazero + go-openai(0 transitiv) + godotenv) |
+| Stack | TS/Node | Rust + wasmtime + **Postgres** + Node web UI | **Go, single binary, wazero** |
+| Isolation | none (exec/bash) | WASM component + vault + TEE | WASM (wazero) zero authority |
+| Effect gating | weak allowlists | static per-tool allowlist | **dynamic target gating + HITL** |
+| Human-in-the-loop | iOS/Watch, **exec-only, disableable**, in-band | in-band `ask`, **auto-approve on by default** | **mandatory, out-of-band, not disableable** |
+| Polyglot skills | Markdown (no code) | **Rust-only, no PDK** | JS plugins today, polyglot planned |
+| TCB | large | 54 crates | **minimal** (agentkit core has *zero* deps) |
 
-**Der verteidigbare Winkel:** *verpflichtende, nicht abschaltbare Out-of-band-
-Freigabe auf einem zweiten Gerät, an JEDER Trust-Boundary, WASM-isoliert, als
-einzelne Go-Binary ohne DB/Cloud.* Weder OpenClaw noch IronClaw haben das
-(beide: „Mensch raus / optional / in-band"). **Live gegen ntfy.sh + echtes iPhone
-verifiziert.**
+**The defensible angle:** *mandatory, non-disableable out-of-band approval on a second device, at
+EVERY trust boundary, WASM-isolated, as a single Go binary without DB or cloud.* Neither OpenClaw
+nor IronClaw has that (both: "human out / optional / in-band").
 
-**Zwei Bedrohungsklassen → zwei Verteidigungen (Kern-Erkenntnis):**
-- Bösartiger Skill-*Code* / Supply-Chain → **WASM-Sandbox** (isoliert den Code).
-- Prompt-Injection missbraucht *legitime* Tools → **Broker + Out-of-band-HITL**
-  (isoliert die *Wirkung*). In-band-Freigabe liegt im selben Trust-Domain wie die
-  Injection → deshalb **separates Gerät**.
+**Two threat classes → two defenses (the core insight):**
+- Malicious skill/plugin *code* / supply chain → **WASM sandbox** (isolates the code).
+- Prompt injection abusing *legitimate* tools → **gate + out-of-band HITL** (isolates the *effect*).
+  In-band approval sits in the same trust domain as the injection → hence a **separate device**.
 
 ---
 
-## 3. Architektur — die Zwiebel (Schicht für Schicht gebaut)
+## 3. Architecture — the two halves
 
-Von innen (0) nach außen — jede Schale ruht auf der darunter, jede war stabil +
-getestet, bevor die nächste kam:
+Since the greenfield rebuild there are two clearly separated halves:
 
-**Die Schalen — von innen (0) nach außen (7), jede ruht auf der darunter:**
+**`agentkit/` — the reusable engine (its own module, zero dependencies).**
+An LLM-agnostic turn loop, immutable tool and skill sets, sub-agents (a sub-agent is just a
+tool), a one-way event stream, per-turn and per-tree guards (steps, wall clock, tokens, spawn
+depth/population). Everything external is a port: `LLM`, `Tool`, `Logger`, `Store`. The core is
+**policy-blind** — it knows nothing about permissions. Adapters live in sibling modules
+(`gate`, `runtime`, `openai`, `tools`). Destined for its own repository.
 
-```
-7  cmd/nocturn      TUI (parameterlos) = das ganze Interface; app.go = Prozess-Spine,
-                    stack.go = ein isolierter Stack pro Workspace
-   workspace        Composition-Aggregat: OWNS guard/tools/skills/agents/grants pro ws;
-                    mintet die Charters (RootCharter/AgentCharter)
-   chat · agent     Chat = DIE Konversations-Einheit (Charter-konstruiert, ein Turn-Loop,
-                    Once/Store/Manager); agent = nur Deklaration + Cron-Scheduler
-   plugin · mcp     sandboxed Plugins · remote-MCP-Client — beide über die geteilte Registry
-6  llm              go-openai-Adapter, native tool_calls, SSE  (erfüllt brain.Model)
-5  brain            agentischer Loop, Model-Port; Tokens/Tools/Reasoning → internal/activity
-4  gateway          Guard.Authorize = die eine Pipeline (Cage ∩ Grants ∩ Policy → HITL)
-                    Effekt-Adapter LEBEN AUSSERHALB: netcap/filecap/notifycap/… (je *Guard)
-3  hitl             Out-of-band-Freigabe, HMAC-Single-Use-Token; ntfy-Transport
-2  secret           Store (nur Präsenz) + Vault (verschlüsselt) + Injector + Leak-Scanner
-1  capability       Broker deny>ask>allow (fail-closed) + Epoch/Rate/Window/Cage/Grants
-0  sandbox          Zero Authority + WASI + Standard-ABI + Härtung (wazero)
-```
-
-### Request-Fluss
+**`internal/` — nocturn: the product built on it.**
+The security boundary (sandbox, secrets, gated tools), the things agentkit deliberately leaves
+to the consumer (transcript persistence, skill sources, discovery), and composition per
+workspace.
 
 ```
-   User "hol mir X"  (TUI, parameterlos)
+cmd/nocturn      the binary: loads .env, builds the process spine (master key, LLM client),
+                 opens workspaces, runs a line-based terminal chat + `serve` for the app
+
+internal/workspace   composition root PER workspace: owns tools (the cage), the gate
+                     (policy + durable grants + approver), persona, chat store and manager
+internal/chat        transcript persistence + multiplexing over agentkit.Store
+internal/serve       one backend, many fronts: workspace chats over WebSocket (daemon-as-truth)
+internal/auth        device registry: every WebSocket connection gated on a paired bearer
+internal/hitl        routes a gate approval to a human out of band (attached app, or push wake)
+internal/push        APNs adapter — a push is only a WAKE, never the decision itself
+internal/tools       the thin gated tools (net/file/notify/remind/time/wake)
+internal/plugin      installed sandboxed plugins (plugin.js/.wasm + plugin.json manifest)
+internal/mcp         remote-MCP client (protocol) + its gated connection layer
+internal/script      untrusted JS on the sandbox; ONE host import: nocturn.call
+internal/sandbox     wazero guest under zero authority + WASI + hardening
+internal/secret      store (presence only) + encrypted vault + injector + leak scanner
+internal/skill       agentskills.io skills from disk → agentkit.SkillSet (context, never authority)
+internal/agent       declaration + cron schedule only; execution lives in workspace/chat
+
+agentkit             the loop, ports, sets, guards, events        (0 deps)
+agentkit/gate        policy → allow/ask/deny, grants, approver     (the permission layer)
+agentkit/runtime     wires LLM + tools + skills + gate into ready-to-run sessions
+agentkit/openai      OpenAI-compatible adapter (the sole go-openai dependency in the tree)
+agentkit/tools       ready-made tools that gate their own target (HTTPGet, host matching)
+```
+
+### Request flow
+
+```
+   User "fetch me X"        (terminal REPL, or the mobile app over WebSocket)
         │
         ▼
-   cmd/nocturn ── lädt .env; baut den Prozess-Spine (master key, HITL-Engine, LLM-Client);
-        │          workspace.Open setzt PRO Workspace den isolierten Stack zusammen
+   cmd/nocturn ── loads .env; builds the process spine; workspace.Open assembles
+        │          the per-workspace stack (tools, gate, persona, chat store)
         ▼
-   chat.Chat ── serialisierter Turn-Loop (Submit rein / Subscribe raus);
-        │        turn = Scope.Bind(ganze Authority) + Skills + Budget — DIE eine Zeremonie
+   internal/chat ── Manager starts or resumes an agentkit Session over the file-backed Store
         │
         ▼
-   brain  ── agentischer Loop: Model fragen → Tool-Call | Antwort → Tool → zurück
-        │        Model = Port; Tokens/Tool-Events/Reasoning streamen via internal/activity (ctx-Sink)
-        ├──▶ llm  ── Adapter über go-openai, NATIVE tool_calls, SSE. Naht: brain.Model ⟵ llm.Client
+   agentkit.Session ── the turn loop: ask model → tool call | answer → tool → back
+        │              LLM is a port; answer/reasoning tokens stream on the ctx event sink
+        ├──▶ agentkit/openai ── streaming SSE, native tool_calls, reasoning deltas
         ▼
-   tool.Registry ── ein Effekt-Tool (netcap/filecap/…) baut capability.Call{Family, Write, Target}
-        │
+   agentkit/gate.Check ── the one decision point, per ACTION (not per tool):
+        │   Policy.Evaluate → allow · deny · ask
+        │   "ask" first consults remembered Grants (session or always), else prompts
+        ├──▶ internal/hitl ── first-committed-wins across attached app connections,
+        │                     or internal/push wakes a paired device (APNs)
         ▼
-   gateway.Guard.Authorize ── DIE eine Pipeline (reiner Komponierer, kein per-session-State):
-        │   Cage-Kette ∩ stehende capability.Grants ∩ Policy.Evaluate(call, Env{Now,Epochs,Rate})
-        │      → Allow: weiter · Deny: ErrDenied · Ask: HITL
-        ├──▶ hitl.Engine ──[attended Stream ODER ntfy → 📱]──▶ (Approve/Deny, signiertes Token)
+   internal/secret.Injector ── bearer injected host-side at the boundary (the guest never sees it)
         ▼
-   secret.Injector ── Bearer host-seitig an der Grenze injiziert (Gast sieht ihn nie)
-        ▼
-   echter Effekt (HTTP/DNS/File/…) → Egress/Ingress-Leak-Scan → Ergebnis zurück ins Brain
+   the real effect (HTTP/DNS/file/…) → egress/ingress leak scan → result back into the loop
 ```
 
-> Detail pro Schale: `go doc ./internal/<sandbox|capability|secret|hitl|gateway|brain|llm>`.
+> Detail per package: `go doc ./internal/<pkg>` · `go doc ./agentkit/<mod>`.
 
 ---
 
-## 4. Paket-Index (`internal/`)
+## 4. Package index
 
-> **Nur ein Index — was ein Paket wirklich TUT steht im Paket-Doc-Kommentar: `go doc
-> ./internal/<pkg>`.** Hier nichts duplizieren (sonst driftet es). Ein Einzeiler pro Paket,
-> nach Rolle gruppiert.
+> **Index only — what a package really DOES lives in its doc comment.** One line each, grouped
+> by role. Nothing duplicated here (it would drift).
 
-**Sicherheitskern (reine Entscheidung + Grenze):**
-- `capability` — der Broker: `Call{Family,Write,Target}` gegen `Policy` → allow/ask/deny; `Cage`, `Grants`, `EpochRegistry`, `RateLimiter`, `Window`. Kein I/O.
-- `gateway` — `Guard.Authorize` = die eine Pipeline (Broker + HITL + Grants); `Do` = authorize-then-execute; `Scope` = widerrufbare Epoche. Effekt-Adapter leben außerhalb.
-- `secret` — Store (nur Präsenz) + verschlüsselter `Vault` + `Injector` (host-owned Cred-Injektion) + `Scanner` (bidirektionaler Leak-Scan).
-- `hitl` — Out-of-band-Freigabe-Engine, HMAC-Single-Use-Token; Sub-Paket `hitl/ntfy`.
-- `sandbox` — wazero-Gast unter Zero Authority + WASI + Standard-ABI + Härtung (Memory-Cap, Wall-Clock-Deadline); gated selbst nichts.
-- `deadline` — pausierbares Execution-Budget im ctx (HITL-Wait zehrt nicht das Timeout).
+**agentkit (separate module, own repo eventually):**
+- `agentkit` — the loop, `Session`/`Once`, ports (`LLM`, `Tool`, `Logger`, `Store`), immutable
+  `ToolSet`/`SkillSet`, sub-agents, events, guards, pausable budget. Zero deps.
+- `agentkit/gate` — human-approved, remembered permission: `Policy` → `Ruling`
+  (allow/ask/deny), `Grants` (recall: never/session/always), `Approver`, `Check`/`Wrap`.
+- `agentkit/runtime` — the wiring: one `Runtime`, many sessions sharing tools/policy/grants.
+- `agentkit/openai` — OpenAI-compatible adapter → `agentkit.LLM`.
+- `agentkit/tools` — generic gated tools (`HTTPGet`, `HostMatch`, host grant suggestions).
 
-**Tool-Bus + Loop:**
-- `tool` — der neutrale Tool-Bus (`Tool`/`Spec`/`Registry`), stdlib-only Leaf; trennt Effekt-Provider von Consumern (kein Import-Zyklus).
-- `brain` — der agentische Loop; `Model`-Port, `Conversation`, parallele Tool-Calls.
-- `llm` — OpenAI-kompatibler Adapter (go-openai, native tool_calls, SSE) → erfüllt `brain.Model`.
-- `activity` — ein ctx-getragener Sink für Live-Aktivität (Antwort-Tokens, Reasoning, Tool-Events); one-way Observability, keine Domänendaten.
+**Security boundary (nocturn):**
+- `sandbox` — wazero guest at zero authority + WASI + brokered host imports + hardening
+  (memory cap, wall-clock deadline). Performs no action itself.
+- `secret` — kind-agnostic store (a guest learns a secret *exists*, never its value) +
+  encrypted `Vault` + `Injector` (host-owned credential injection) + bidirectional leak `Scanner`.
+- `secret/oauth` — host-managed OAuth2 (loopback PKCE + refresh); tokens are just secrets.
+- `auth` — device registry; bearers stored only as hashes, first device paired via one-time code.
+- `hitl` — out-of-band approval broker implementing `gate.Approver`.
+- `push` — APNs adapter; carries no approval authority (wake only).
 
-**Effekt-Capabilities (jede = kleiner Typ mit `*Guard`):**
-- `netcap` — `http.read`/`http.write`, `dns.resolve`, `ping` (icmp).
-- `filecap` — `file.read/list/stat/search` + `file.write/remove/move`, confined auf einen Workspace-Root (Target = Pfad).
-- `notifycap` — `notify` (proaktiv den User erreichen; still, host-owned Kanal, Leak-Scan + Rate).
-- `remindcap` — `remind`/`remind.list`/`remind.cancel` (persistent, feuert ein `notify`).
-- `wakecap` — `wake` (Agent plant seine eigene Wieder-Aufwachung; ungegated, geboundet).
-- `timecap` — `time.now` (ungegated, Null-Autorität; der Gast hat keine Wall-Clock).
+**Tools · interpreters · extensions:**
+- `tools` — the thin gated tools sharing one gate model: `http_read`/`http_write`/`dns_resolve`/
+  `ping`, `file.*` (workspace-confined), `notify`, `remind*`, `time_now`, `wake`. `Base` builds
+  the set every chat and agent draws from.
+- `script` — untrusted JS on QuickJS/wasm; exactly ONE host import (`nocturn.call`) dispatching
+  onto the SAME gated toolset the model uses.
+- `plugin` — installed sandboxed plugins; the manifest declares tools, cage (`uses`) and
+  credentials, and is reviewed WITHOUT running the artifact.
+- `mcp` (+ `mcp/authflow`) — remote-HTTP MCP: stdlib-only protocol client over an injected
+  transport, plus the gated connection layer (every JSON-RPC POST is a gated network action).
 
-**Interpreter · Plugins · MCP:**
-- `script` — echter JS-Interpreter (QuickJS→wasm) auf der Sandbox; Tool `code.run`; ein Host-Gate `nocturn.call` auf die geteilte Registry.
-- `plugin` — installierte, sandboxed Plugins (`plugin.js`/`.wasm` + `plugin.json`-Manifest mit Cage); Ersatz für lokale MCP-Server.
-- `mcp` — protokoll-reiner Client für remote-MCP (JSON-RPC/HTTP, stdlib-only, injizierter Transport).
-- `mcpcap` — die gegatete Verbindungsschicht darunter (jeder JSON-RPC-POST = ein `http.write` durch den Guard).
+**Context · composition · lifecycle:**
+- `skill` — agentskills.io skills from disk → `agentkit.SkillSet` + `skill_read` (tier 3).
+- `discovery` — the shared vocabulary of everything discoverable (agents, skills, plugins, MCP):
+  how a skipped item is recorded, how a name is resolved. One rule, four kinds.
+- `chat` — file-backed transcript store with chat metadata + `Manager` (start/resume sessions).
+- `agent` — declaration only: `Agent`, discovery of `agent.md` into an immutable `Set`, cron
+  `Scheduler`. Execution is injected by the workspace.
+- `workspace` — the composition root per workspace: tools + gate + persona + chat store/manager
+  over a shared `Host`; also OAuth/MCP account plumbing.
+- `serve` — the WebSocket surface: tagged JSON, one file per domain (chat, approval, agent, …).
 
-**Kontext · Identität · Credentials:**
-- `skill` — die Skills-Schicht (agentskills.io): Kontext, KEINE Tools, null Autorität; progressive disclosure via `skill.load`.
-- `oauth` — host-managed OAuth2 (Loopback-PKCE + Refresh); Token nur host-seitig als Bearer injiziert.
-- `approval` — durabler „schon reviewed"-Record für Plugins/MCP (kein Re-Prompt bei unverändert); KEINE Autorität.
-- `grantstore` — file-backed `capability.GrantStore` (`<ws>/grants.json`, 0600) — die stehenden Rechte.
+**`cmd/nocturn`** — the binary: process spine, workspace open, a line-based terminal chat with
+slash commands (`/chats`, `/new`, `/open`, `/agents`, `/fire`, `/quit`), and the `serve` mode the
+mobile app talks to.
 
-**Composition + Lifecycle:**
-- `workspace` — das Composition-Aggregat: OWNS pro Workspace guard/tools/skills/agents/grants; `Open` baut den Stack; die EINZIGE Charter-Fabrik (`RootCharter`, `AgentCharter(name, autonomy)`). Persona via `PERSONA.md` (layered).
-- `chat` — DIE Konversations-Einheit: `Chat` (unter einem `Charter` konstruiert; serialisierter Turn-Loop, Submit/Subscribe — der headless-Kern, den TUI/REST/Mobile gleich treiben; `turn` = die eine Zeremonie), `Once` (Wegwerf-Chat = ein Agent-Run), `Store` (+`Meta.Agent`, `Prune`) + `Manager` (N live Chats, `FireAgent` für Cron-Firings mit persistiertem Transcript).
-- `agent` — nur noch DEKLARATION + Zeitplan: `Agent` (`<ws>/agents/<name>/agent.md`, `Matches`, `Discover`) und der Cron-`Scheduler`; Ausführung lebt in `chat` (Once/FireAgent), die Übersetzung in Autorität im `workspace` (AgentCharter).
+**`mobile/`** — the companion app (Angular + Capacitor, iOS): pairing, chats, and the approval
+UI. This is the second device that makes out-of-band HITL real.
 
-`cmd/nocturn` — **die TUI ist das ganze Interface** (parameterlos, `go run ./cmd/nocturn [ws]`):
-`app.go` (Prozess-Spine + bubbletea-Programm), `stack.go` (`shared`/`bound`, ein isolierter Stack
-pro Workspace), `tui.go` (View, event-getrieben über den offenen `chat.Chat`), `plugins.go`/`mcp.go`/
-`auth.go` (interaktives Wiring: Plugins, remote-MCP, Plugin-OAuth), `vault.go` (Unlock), `agents.go`/
-`skills.go` (Startup-Reports), `theme.go` (Styles). Detail: `go doc`. `spike/extism`, `spike/javy` =
-Wegwerf-Spikes (eigene go.mod).
-
-**Dependencies (bewusst minimal):** Kern (`internal/`): `wazero` (pure Go, kein
-CGo), `go-openai` (**0 transitive Deps**), `golang.org/x/sys`, `golang.org/x/net`
-(nur `icmp` für `ping` in `netcap`), `golang.org/x/oauth2` (nur im `oauth`-Paket),
-`github.com/petar-dambovaliev/aho-corasick` (nur im `secret`-Leak-Scanner),
-`gopkg.in/yaml.v3` (nur im `skill`-Paket, SKILL.md-Frontmatter;
-in Go kein RCE-Deserialisierungs-Risiko, Input size-capped + typed decode; `check.v1`
-= test-only). `cmd/`: `godotenv`, **charm** (bubbletea/lipgloss/bubbles) — nur
-Präsentation, berührt die **Trusted-TCB nicht**. **Verworfen:** langchaingo (290 Deps,
-bringt eigenen Agent-Loop der unsere Sicherheit umgeht).
-**Dev-Tools:** `wat2wasm` (brew wabt) für den WAT-Gast; **`wasi-sdk` + quickjs-ng-Checkout** zum Neubauen des Interpreter-`.wasm` (`internal/script/qjs/build.sh`, nur bei Shim-Änderung — das gebaute `.wasm` ist committet); `javy` (Spike). Kein Runtime-Dep: das Binary bleibt pure Go/wazero, kein CGo.
-
----
-
-## 5. Zentrale Design-Entscheidungen (ADRs)
-
-**Ausgelagert → `ADRS.md`.** Dort liegen die Entscheidungs-*Records* (das *Warum*: X
-statt Y) — ADR-1…10 plus LLM-Provider, Trust-Grenze (Variante A), wazero-vs-Wasmtime
-und PORTICO. Ergänze einen ADR dort, wenn du eine tragende Entscheidung triffst oder
-umkehrst. Kurzform des resultierenden Sicherheitsmodells: siehe §8.
+**Dependencies (deliberately minimal):** agentkit core: **none**. nocturn: `wazero` (pure Go, no
+CGo), `coder/websocket`, `libp2p/zeroconf` (mDNS), `golang.org/x/crypto` (scrypt),
+`golang.org/x/net` (icmp for `ping`), `golang.org/x/oauth2`,
+`petar-dambovaliev/aho-corasick` (leak scanner only), `gopkg.in/yaml.v3` (skill frontmatter
+only — no RCE deserialization risk in Go, input size-capped, typed decode), `lmittmann/tint`
+(log formatting), `godotenv`. `go-openai` is indirect — only `agentkit/openai` speaks to it.
+**Rejected:** langchaingo (290 deps, brings its own agent loop that bypasses our security).
+**Dev tools:** `wat2wasm` (brew wabt) for the WAT test guests; **`wasi-sdk` + a quickjs-ng
+checkout** to rebuild the interpreter `.wasm` (`internal/script/qjs/build.sh`, only when the shim
+changes — the built `.wasm` is committed). No runtime dependency: the binary stays pure Go/wazero.
 
 ---
 
-## 6. Muster & Code-Style (durchgängig eingehalten)
+## 5. Key design decisions (ADRs)
 
-- **Explizite Konstanten statt überladener Nullwerte, fail-closed.** Vergessenes
-  Feld darf nie still „alles erlauben / permanent / wildcard" heißen.
-  - `capability.Wildcard` (`"*"`) — leer matcht *nichts*; leeres `HostGlob` matcht
-    keinen Host-tragenden Call → man kann `net.fetch` nicht aus Versehen für alle
-    Hosts freigeben.
-  - `capability.Permanent` — `Epoch:0` = unset = fail-closed; Permanenz explizit.
-  - `hitl` Outcome-Nullwert = `Denied`.
-- **Kein Backward-Compat-Cruft in Greenfield.** Alte API ersetzen + alle (eigenen)
-  Call-Sites migrieren; keine redundanten Wrapper stehen lassen (das ist Tech-Debt).
-  Bsp: `Evaluate`/`EvaluateInEpoch`/`EvaluateWith` → *eine* `Evaluate(call, Env)`.
-- **Ports & Adapters.** `brain.Model` = Port; `llm.Client` = Adapter über go-openai
-  → Brain provider-agnostisch + mock-testbar. `hitl.Notifier` = Port; `ntfy` = Adapter.
-- **Kein God-Object.** `Guard` = geteilte Autorisierungs-Pipeline; **Capability-Gruppen**
-  (`Net`) sind kleine Typen mit `*Guard` + eigenen Deps. Neue Capability = kleine
-  Methode / kleiner Typ, **kein** wachsendes Feld-Monster.
-- **Rollen-Namen für Felder** (`Secrets`, `Approvals`, `Policy`, `Rate`) statt
-  generisch/typ-benannt (`Vault`, `Engine`). Paketnamen unzweideutig (`llm`, nicht `model`).
-- **Funktionale Options** für Konfiguration (`ntfy.WithAuth`, `RateLimiter.WithLimit`).
-- **Zwiebel-/Mauer-Bau:** einen Aspekt klären → in Code gießen → als stabil beweisen
-  → erst dann die nächste Schicht. „Untere Schale nicht anfassen" = *stabil halten*,
-  nicht *toten Code behalten*. Kein quer-schneidender Wildwuchs.
+**Moved out → `ADRS.md`.** That file holds the decision *records* (the *why*: X over Y) — ADR-1…10
+plus LLM provider, trust boundary (variant A), wazero-vs-Wasmtime and PORTICO. Add an ADR there
+when you make or reverse a load-bearing decision. Short form of the resulting security model: §8.
 
 ---
 
-## 7. Pitfalls & Tweaks (real getroffen)
+## 6. Patterns & code style (held throughout)
 
-- **wazero `Memory.Read` gibt einen View zurück, keine Kopie.** Bytes **sofort
-  rauskopieren** (`string(buf)`) bevor die Host-Function zurückkehrt; nie über den
-  Aufruf hinaus behalten (`memory.grow` realloziert). Innerhalb eines Host-Aufrufs
-  ist der Gast suspendiert → race-frei. Eine Instanz = eine Goroutine (Instanzen
-  sind nicht nebenläufig-sicher).
-- **`go mod tidy` entfernt Deps, die (noch) niemand importiert.** godotenv wurde
-  geprunt bis `main.go` es nutzte → dann `go get` + `tidy`.
-- **`.env` ist gitignored** (Key nie im Code); `godotenv.Load()` lädt aus CWD, echte
-  Env-Vars gewinnen. `.env.example` committen.
-- **ntfy-Kanal-Auth ist schwach** (Topic-Name ist öffentlich) → Sicherheit kommt aus
-  dem **HMAC-signierten, single-use, expiry-gebundenen Token** (Outcome *im* signierten
-  Payload → Deny kann nicht zu Approve gefälscht werden). Response geht an ein
-  *anderes* Topic (Daemon hört nur ab, kein eingehender Port).
-- **LLMs sind nie 100% feuerfest.** Robustheit = strukturierte `tool_calls` (kein
-  Text-Raten) + Schema als Leitplanke + **eigene Arg-Validierung + Retry** (Fehler
-  wird ans Modell zurückgespeist).
-- **freellm-Endpoint:** OpenAI-kompatibel, Model `auto` (umgeht Cooldowns einzelner
-  Modelle); `FREELLM_BASE_URL`/`_API_KEY`/`_MODEL` in `.env`. War hinter Authelia
-  (303→SSO), jetzt offen.
-- **Tool-Call-History nativ (`tool_call_id`-Plumbing):** ein Assistant-Turn trägt seine
-  `tool_calls` (mit id) nativ, ein Ergebnis ist eine `role=tool`-Message mit `tool_call_id` —
-  Ergebnisse sind ihren Calls **per id** zugeordnet, nicht positionell/textuell. `brain.ToolCall.ID`
-  + `brain.Message.ToolCalls`/`.ToolCallID`; der llm-Adapter fängt die id (Fallback `call_<idx>`,
-  falls der Endpoint keine liefert) und baut natives `tool_calls`/`role=tool` in `buildMessages`.
-  (Früher: `[tool result] …`-Text; abgelöst.) Voraussetzung für parallele Tool-Ausführung.
-- **`.gitignore`-Regeln an den Root ankern** (`/plugins/`, `/workspaces/`), sonst matcht
-  `plugins/` **jedes** gleichnamige Verzeichnis in jeder Tiefe — `internal/workspace/` war so
-  aus Versehen ge-ignored und **nie committet** (HEAD baute aus frischem Clone nicht).
-- **gopls-Diagnostics können stale sein — der Compiler ist die Wahrheit.** „undefined: X" bei
-  grünem `go build ./...` = stale Index (`go clean -cache` hilft beim nächsten Reload). Nie
-  auf Verdacht Code umbauen; erst `go build`.
+- **Explicit constants over overloaded zero values, fail closed.** A forgotten field must never
+  silently mean "allow everything / permanent / wildcard". `gate.Recall`'s zero value is
+  `RecallNever`; a `Ruling`'s zero value is not "allow".
+- **No backward-compat cruft in greenfield.** Replace the old API and migrate every (own) call
+  site; leave no redundant wrappers standing (that is tech debt).
+- **Ports & adapters.** `agentkit.LLM` is a port, `agentkit/openai` the adapter → the loop is
+  provider-agnostic and mock-testable. `gate.Approver` is a port; the terminal and `hitl` are
+  two adapters that the runtime cannot tell apart.
+- **Policy-blind core.** agentkit knows nothing about permissions; gating is a wrapper on top.
+  That separation is what lets agentkit leave for its own repo.
+- **Two separate questions, deliberately.** WHICH tools an agent has at all = agentkit's
+  `ToolSet` (bound once, statically). WHAT a tool may DO = `gate` (checked per action, asked when
+  risky, remembered).
+- **Immutable sets.** `ToolSet`/`SkillSet`/`agent.Set` are built once and never mutated —
+  no registry that anything can inject into at runtime.
+- **No god object.** Each gated tool is a small thing owning its own kind constant and target
+  matcher; they share the gate model, not a growing struct.
+- **Role names for fields** (`Secrets`, `Grants`, `Policy`) over generic/type names.
+  Unambiguous package names.
+- **Functional options** for configuration (`openai.WithEffort`, `runtime.WithGate`).
+- **Onion/wall building:** clarify one aspect → cast it in code → prove it stable → only then the
+  next layer. "Don't touch the lower shell" means *keep it stable*, not *keep dead code*.
 
 ---
 
-## 8. Sicherheitsmodell (Kurzform)
+## 7. Pitfalls & tweaks (actually hit)
 
-- **Zero Ambient Authority:** wazero-Gast bekommt nichts; jede Fähigkeit ist ein
-  explizit gereichtes Host-Fenster → „unforgeable by absence".
-- **Broker `deny > ask > allow`, deny-by-default, deny-wins.** Match-Bedingungen:
-  Capability, Host(-Glob), lebende Epoche, Zeitfenster; danach Rate-Post-Check.
-- **HITL:** `Ask` → out-of-band-Freigabe (Terminal *oder* Handy); Timeout/Deny =
-  fail-closed. Verpflichtend, nicht abschaltbar für irreversible/externe Aktionen.
-- **Vault:** Secrets host-seitig; Gast sieht nur Präsenz; Bearer an der Grenze injiziert.
-- **Epoch:** Grants an Task gebunden, `reg.Close()` widerruft alles auf einen Schlag;
-  Stale-Replay wird vor dem Effekt abgewiesen.
+- **wazero's `Memory.Read` returns a view, not a copy.** Copy the bytes out immediately
+  (`string(buf)`) before the host function returns; never hold them past the call
+  (`memory.grow` reallocates). Within one host call the guest is suspended → race-free. One
+  instance = one goroutine (instances are not concurrency-safe).
+- **`go mod tidy` removes deps nobody imports (yet).** godotenv got pruned until `main.go` used
+  it → then `go get` + `tidy`.
+- **`.env` is gitignored** (key never in code); `godotenv.Load()` reads from CWD, real env vars
+  win. Commit `.env.example`.
+- **A push is a wake, never a decision.** APNs carries no authority; the approve/deny happens
+  in-app over the authenticated WebSocket, so the signed decision never leaves the daemon.
+- **Bearers are stored as hashes only.** A leaked `devices.json` cannot be replayed.
+- **LLMs are never 100% fireproof.** Robustness = structured `tool_calls` (no text guessing) +
+  schema as a guardrail + **our own argument validation + retry** (the error is fed back to the
+  model).
+- **freellm endpoint:** OpenAI-compatible, model `auto` (dodges individual model cooldowns);
+  `FREELLM_BASE_URL`/`_API_KEY`/`_MODEL` in `.env`.
+- **Anchor `.gitignore` rules at the root** (`/plugins/`, `/workspaces/`), otherwise `plugins/`
+  matches **every** directory of that name at any depth — `internal/workspace/` was accidentally
+  ignored once and **never committed** (HEAD did not build from a fresh clone).
+- **`git mv a/x b/x` nests when `b/x` already exists** (a leftover directory, e.g. holding only a
+  `.DS_Store`, is enough) — you get `b/x/x`. Check for leftovers before a bulk move.
+- **gopls diagnostics can be stale — the compiler is the truth.** "undefined: X" with a green
+  `go build ./...` = stale index (`go clean -cache` helps on the next reload). Never restructure
+  code on suspicion; build first.
 
 ---
 
-## 9. Testing-Konventionen
+## 8. Security model (short form)
 
-- **Externes Test-Paket** (`_test`) für die öffentliche API; **internes** (gleicher
-  Paketname) nur für Unexportiertes.
-- **Table-driven** wo viele Fälle (`TestPolicy_Evaluate`).
-- **Fakes über Interfaces**: `Notifier`/`Model` mocken; ntfy/HTTP via `httptest`.
-- **Blockierende Funktionen** (HITL, Streaming) mit Goroutine + Kanälen koordinieren
-  (kein `sleep`); `-race` läuft grün.
-- **Zeit-abhängige Tests via `testing/synctest`** (Go 1.25+, `synctest.Test` + echtes
-  `time`, Fake-Clock im Bubble) — **keine** Clock-Injektion (`go.dev/blog/testing-time`);
-  so testen `wakecap` + `capability` (RateLimiter). Produktions-Uhr-Injektion (`timecap.Clock`,
-  `agent.Scheduler`) ist davon getrennt und legitim.
-- Compile-Zeit-Asserts: `var _ brain.Model = (*llm.Client)(nil)`.
+- **Zero ambient authority:** the wazero guest gets nothing; every capability is an explicitly
+  handed host window → "unforgeable by absence".
+- **Gate per ACTION, not per tool:** policy → allow/ask/deny; "ask" consults remembered grants
+  first (session or always), then a human. Deny wins, unknown = deny.
+- **HITL:** out-of-band on a second device (the app), or the terminal when attended.
+  Timeout/deny = fail closed. Mandatory, not disableable for irreversible or external actions.
+- **Vault:** secrets host-side; the guest sees only presence; bearer injected at the boundary.
+- **Leak scan:** bidirectional — egress blocked when a secret would leave, ingress redacted.
 
 ---
 
-## 10. Dev-Workflow
+## 9. Testing conventions
 
-> **Go-Skills nutzen, wann immer möglich.** Bei Go-Arbeit die installierten
-> `cc-skills-golang`-Skills einsetzen — allen voran **`go-review`** vor jedem Commit von
-> nicht-trivialem Go (prüft gegen Effective Go + Google Style Guide, zitiert die Regel),
-> plus die themenspezifischen (`golang-concurrency`, `golang-error-handling`,
-> `golang-testing`, `golang-naming`, …), wenn der Task sie berührt. `golang-how-to` ist der
-> Orchestrator, der die passenden lädt. Nicht aus dem Gedächtnis stylen, wenn eine Skill die
-> Regel kennt.
+- **External test package** (`_test`) for the public API; **internal** (same package name) only
+  for unexported things.
+- **Table-driven** where there are many cases.
+- **Fakes over interfaces**: mock `LLM`/`Approver`/`Sender`; HTTP via `httptest`.
+- **Blocking functions** (approval, streaming) coordinated with goroutines + channels
+  (no `sleep`); `-race` runs green.
+- **Time-dependent tests via `testing/synctest`** (Go 1.25+, `synctest.Test` + real `time`, fake
+  clock inside the bubble) — **no** clock injection (go.dev/blog/testing-time). Production clock
+  injection (`agent.Scheduler`) is separate and legitimate.
+- Compile-time asserts: `var _ agentkit.LLM = (*openai.Client)(nil)`.
+
+---
+
+## 10. Dev workflow
+
+> **Use the Go skills whenever possible.** For Go work, use the installed `cc-skills-golang`
+> skills — above all **`go-review`** before committing non-trivial Go (checks against Effective Go
+> + the Google Style Guide, cites the rule), plus the topical ones (`golang-concurrency`,
+> `golang-error-handling`, `golang-testing`, `golang-naming`, …) when the task touches them.
+> `golang-how-to` is the orchestrator that loads the right ones. Don't style from memory when a
+> skill knows the rule.
 
 ```bash
-go build ./...            # alles bauen
-go test ./internal/...    # alle Tests (race-clean)
-go test -race ./internal/...
-golangci-lint run         # (geplant)
+go build ./...            # build everything (go.work spans nocturn + agentkit modules)
+go test ./...             # all tests (race-clean)
+go test -race ./...
 
-# Sandbox-WAT-Test-Gäste neu bauen (nach Änderung):
+# rebuild the sandbox WAT test guests (after a change):
 wat2wasm internal/sandbox/testdata/echo.wat -o internal/sandbox/testdata/echo.wasm
-wat2wasm internal/plugin/testdata/wasmprobe/plugin.wat -o internal/plugin/testdata/wasmprobe/plugin.wasm
 
-# QuickJS-Interpreter-wasm neu bauen (nur bei Shim-Änderung; braucht wasi-sdk):
+# rebuild the QuickJS interpreter wasm (only when the shim changes; needs wasi-sdk):
 internal/script/qjs/build.sh
 
-# Der Assistent (die TUI ist das ganze Interface, parameterlos):
-cp .env.example .env   # FREELLM_API_KEY eintragen
-go run ./cmd/nocturn
-#   multi-turn Chat, Streaming, Markdown, Tool-Indicator; http.write = Ask → inline y/n;
-#   Enter senden · Ctrl+J neue Zeile · Ctrl+N neue Session · ctrl+c quit
+# the assistant:
+cp .env.example .env   # fill in FREELLM_API_KEY
+go run ./cmd/nocturn            # interactive terminal chat (default workspace)
+go run ./cmd/nocturn serve      # the out-of-band WebSocket daemon the mobile app talks to
+#   in-chat slash commands: /chats /new /open <id> /agents /fire <name> /quit
+#   other subcommands: auth <provider> · secret set|ls · ls · version · help (most take -w)
+
+# the docs site (Astro/Starlight):
+cd docs && npx astro build      # the schema validates every tool/capability entry
 ```
 
 ---
 
-## 11. Status & nächste Schritte
+## 11. Status & next steps
 
-> Was schon passiert ist steht in **git log** — hier nur der grobe Ist-Stand + was offen ist.
+> What already happened is in **git log** — here only the rough current state and what is open.
 
-**Steht (race-clean getestet, live gg. iPhone verifiziert):** der ganze Sicherheitskern
-(Schalen 0–5) · Effekt-Capabilities `netcap`/`filecap`/`notifycap`/`remindcap`/`wakecap`/
-`timecap` · `code.run` (QuickJS auf der Sandbox) · `plugin`-System (JS/WASM, Cage-begrenzt) ·
-remote-**MCP** (`mcp`/`mcpcap`, ADR-9) · **Skills**-Schicht · **OAuth** (nur aus Plugins) ·
-**Workspace**-Aggregat (N isolierte Stacks/Prozess, `PERSONA.md` layered, mintet Charters) ·
-**ein** `chat.Chat` als alleinige Konversations-Einheit (eine Turn-Zeremonie; Agent-Runs =
-`chat.Once`/`FireAgent` mit persistiertem Transcript) · **TUI** (parameterlos, event-getrieben,
-Streaming/Reasoning/Tool-Forest/`/ws`) · **Out-of-band-HITL** (attended Stream **oder** ntfy → Handy).
+**Standing (race-clean, tested):** `agentkit` as a zero-dependency engine (loop, ports, immutable
+sets, sub-agents, events, guards) with `gate`/`runtime`/`openai`/`tools` modules · nocturn rebuilt
+on it: sandbox, secrets + vault + leak scan, gated tools, `code_run` (QuickJS on the sandbox),
+plugins, remote MCP, skills, OAuth, per-workspace composition, chat persistence + multiplexing ·
+`serve` (daemon-as-truth over WebSocket) with device pairing, and the **mobile app** as the
+out-of-band approval surface with APNs wake.
 
-**Offen / als Nächstes:**
-1. **Weitere Capabilities** (Mail, Kalender) — Muster: kleiner Typ + `*Guard`, kommt Modell/
-   Skript/Plugin gleichzeitig zugute. (`exec` = **bewusst nie**, ADR-7 Bucket C bleibt leer.)
-2. **Verteilung** (IronHub-Stil + Code-Signing) + **Skill/Plugin-Signing/Attenuation**
-   (Ed25519) — der M2-Rest.
-3. **Keychain-Backend** für `secret` (statt Prozess-Speicher).
-4. **Härtung**: SECURITY.md, append-only Audit-Sink, Metriken; Task- statt Session-Epoche
-   (PORTICO-Feinung).
+**Open / next:**
+1. **More tools** (mail, calendar) — the pattern is a small gated tool in `internal/tools`, which
+   serves model, script and plugin at once. (`exec` = **deliberately never**, ADR-7 bucket C
+   stays empty.)
+2. **agentkit extraction** into its own repository (it is already its own module with zero deps).
+3. **Distribution** (IronHub-style + code signing) + **skill/plugin signing and attenuation**
+   (Ed25519) — the M2 remainder.
+4. **Keychain backend** for `secret` (instead of process memory).
+5. **Hardening**: SECURITY.md, append-only audit sink, metrics.
 
-**Arbeitsweise:** Zwiebelschalig — einen Aspekt klären → bauen → als stabil beweisen. Explizit
-statt implizit. Kein Wildwuchs, kein Cruft, kein Backward-Compat-Ballast in Greenfield.
+**Way of working:** onion-shell — clarify one aspect → build → prove it stable. Explicit over
+implicit. No sprawl, no cruft, no backward-compat ballast in greenfield.
 
 ---
 
-# Anhang — Recherche & Roadmap (dauerhaftes Wissen)
+# Appendix — Research & roadmap (durable knowledge)
 
-> Aus dem Ur-Plan hierher konsolidiert. Referenz, nicht täglich gebraucht —
-> aber zu wertvoll, um in einer Plan-Datei zu verrotten. `★`-Zahlen/Timestamps
-> sind grobe Richtwerte (Fetch-Summarizer konfabuliert Zahlen — vor externer
-> Nutzung via GitHub-API prüfen). Alles Übrige ist repo-/primärquellen-verifiziert.
+> Consolidated here from the original plan. Reference material, not needed daily — but too
+> valuable to rot in a plan file. `★` counts and timestamps are rough (fetch summarizers
+> confabulate numbers — verify via the GitHub API before using them externally). Everything else
+> is repo- or primary-source-verified.
 >
-> **Hinweis:** Die **Wettbewerbs-Recherche (A/B/C, Positionierung)** ist der bleibende Teil.
-> Die **Roadmap/Milestones (E) und die Beweis-Checkliste (F)** sind ein historischer
-> Schnappschuss — für den echten Ist-Stand siehe **§11 + git log**, nicht die Häkchen hier.
+> **Note:** the **competitive research (A/B/C, positioning)** is the lasting part. The
+> **roadmap/milestones (E) and the proof checklist (F)** are a historical snapshot — for the real
+> current state see **§11 + git log**, not the checkmarks here.
 
-## A — Wettbewerb (Deep-Dive)
+## A — Competition (deep dive)
 
-### IronClaw (`nearai/ironclaw`) — der direkte Rivale, Benchmark
-Rust-Reimplementierung von OpenClaw, 54-Crate-Workspace, Apache-2.0/MIT, ~12,5k★,
-v0.29.1 (Juni 2026, **pre-1.0**). Illia Polosukhin (NEAR) assoziiert. Hosted = NEAR
-AI Cloud (TEE).
-- **Isolation:** Wasmtime 46, Component-Model + WASI Preview 2. WASM-Tools sehen nur
-  **4 Host-Funktionen** (`log`, `now_unix_secs`, `workspace_read/write`); Netz über
-  host-seitigen HTTP-Proxy. Per-Tool `capabilities.json`. Memory-Limit via
-  `ResourceLimiter`, **CPU via Fuel** (100 M Instr.). Pipeline:
-  `WASM→Allowlist→Leak-Scan→Credential→Execute→Leak-Scan→WASM`.
-- **Stärken (nicht frontal angreifen):** (a) **Credential-Vault** `ironclaw_secrets`:
-  AES-256-GCM, per-Secret HKDF-SHA256, domain-separated AAD, Low-Entropy-Guard, Secret
-  nie im WASM-Memory — **Table-Stakes-Vorbild für uns**. (b) **Bidirektionales
-  Leak-Scanning** (15+ Patterns, ein-/ausgehend). (c) Rust-Memory-Safety + reife
-  Component-Isolation + Fuel. (d) Feature-Breite (MCP-Client, viele Provider/Channels,
-  NL→WASM-Tool-Autogen, Hybrid-Vektorsuche).
-- **Schwächen (verifiziert, schlagbar):** (a) **Kein Out-of-band/Phone-HITL**
-  (`phone|twilio|push|sms` = 0 Treffer). „Approval" = persistenter Grant-Store
-  `ironclaw_approvals` (Allow/Ask/Deny), **prompted den User nicht**, **Auto-Approve
-  default AN**, „Ask" ist *in-band* (angreifbar). Background-Trigger → kein Mensch,
-  System *denied* nur High-Severity. (b) `PolicyAction::Review` = **Stub**. (c)
-  **Skill-Attenuation nicht geportet** (#5581), Capability-Katalog leakt (#5712),
-  **kein Code-Signing**. (d) **Kein SECURITY.md**, private Vuln-Reporting aus (#6000).
-  (e) Multi-Tenant-Leck (#5460), Audit-Sink-Lücken (#5640/#5428). (f)
-  **Schwergewichtig:** Postgres 15 + pgvector + 54 Crates + Node/pnpm-WebUI; „einfach" =
-  NEAR-Cloud/TEE-Lock-in. „reborn"-Rewrite läuft → Design ungesetzt.
+### IronClaw (`nearai/ironclaw`) — the direct rival, the benchmark
+Rust reimplementation of OpenClaw, 54-crate workspace, Apache-2.0/MIT, ~12.5k★, v0.29.1
+(June 2026, **pre-1.0**). Illia Polosukhin (NEAR) associated. Hosted = NEAR AI Cloud (TEE).
+- **Isolation:** Wasmtime 46, component model + WASI Preview 2. WASM tools see only **4 host
+  functions** (`log`, `now_unix_secs`, `workspace_read/write`); network via a host-side HTTP proxy.
+  Per-tool `capabilities.json`. Memory limit via `ResourceLimiter`, **CPU via fuel** (100M instr).
+  Pipeline: `WASM→allowlist→leak scan→credential→execute→leak scan→WASM`.
+- **Strengths (do not attack head-on):** (a) **credential vault** `ironclaw_secrets`: AES-256-GCM,
+  per-secret HKDF-SHA256, domain-separated AAD, low-entropy guard, secret never in WASM memory —
+  **the table-stakes model for us**. (b) **Bidirectional leak scanning** (15+ patterns, in and
+  out). (c) Rust memory safety + mature component isolation + fuel. (d) Feature breadth (MCP
+  client, many providers/channels, NL→WASM tool autogen, hybrid vector search).
+- **Weaknesses (verified, beatable):** (a) **No out-of-band/phone HITL** (`phone|twilio|push|sms`
+  = 0 hits). "Approval" = a persistent grant store `ironclaw_approvals` (allow/ask/deny) that
+  **does not prompt the user**, **auto-approve on by default**, and "ask" is *in-band*
+  (attackable). Background triggers → no human, the system only *denies* high severity.
+  (b) `PolicyAction::Review` = **stub**. (c) **Skill attenuation not ported** (#5581), capability
+  catalog leaks (#5712), **no code signing**. (d) **No SECURITY.md**, private vuln reporting off
+  (#6000). (e) Multi-tenant leak (#5460), audit sink gaps (#5640/#5428). (f) **Heavyweight:**
+  Postgres 15 + pgvector + 54 crates + Node/pnpm web UI; "simple" = NEAR cloud/TEE lock-in. A
+  "reborn" rewrite is underway → the design is unsettled.
 
-### OpenClaw selbst — der HITL-Incumbent (überraschend)
-- iOS-App + **Apple-Watch** reviewen/genehmigen pending **`exec`-Requests** vom Handy
-  (`operator.approvals`, „first committed answer wins"). Echte Out-of-band-Freigabe —
-  **bereits ausgeliefert**.
-- **Schwächen (unser Konter):** nur `tools.exec` (nicht alle Boundaries) · **abschaltbar**
-  („never stop on exec approvals") · TS-Monolith, **kein WASM-Sandbox**. → Wir:
-  *verpflichtend, nicht abschaltbar, an ALLEN Boundaries, WASM-isoliert*.
+### OpenClaw itself — the HITL incumbent (surprisingly)
+- iOS app + **Apple Watch** review and approve pending **`exec` requests** from the phone
+  (`operator.approvals`, "first committed answer wins"). Real out-of-band approval —
+  **already shipped**.
+- **Weaknesses (our counter):** only `tools.exec` (not all boundaries) · **disableable**
+  ("never stop on exec approvals") · TS monolith, **no WASM sandbox**. → We: *mandatory, not
+  disableable, at ALL boundaries, WASM-isolated*.
 
-### WASM-Sandbox-Tech (Isolations-Konkurrenz)
-- **MS Wassette** — MCP-Server, läuft WASI-Components als Tools (Wasmtime). WIT→JSON-
-  Schema-Automapping, OCI-Distribution **signiert (Notation/Cosign)**, deny-by-default,
-  YAML-Policy. Sauberste standardkonforme Capability-Injektion, aber **„not production
-  ready"**, Rust+Wasmtime+CGo, **kein HITL**.
-- **wasmCloud/Cosmonic** — Capability-Injektion als typisierte WIT-Contracts (Link-Zeit,
-  kein Ambient-Effekt). Schwergewichtig (Lattice), aber Linking-Modell = Blaupause.
-- **Extism** — Plugin-Framework, **Go-SDK nutzt wazero (CGo-frei)** — direkter
-  Präzedenzfall. Capability = Manifest. **Footgun:** `allowed_hosts: null` = ALLE Hosts;
-  kein Signing/Registry.
+### WASM sandbox tech (isolation competition)
+- **MS Wassette** — an MCP server running WASI components as tools (Wasmtime). WIT→JSON schema
+  automapping, OCI distribution **signed (Notation/Cosign)**, deny-by-default, YAML policy. The
+  cleanest standards-conformant capability injection, but **"not production ready"**,
+  Rust+Wasmtime+CGo, **no HITL**.
+- **wasmCloud/Cosmonic** — capability injection as typed WIT contracts (link time, no ambient
+  effect). Heavyweight (lattice), but the linking model is a blueprint.
+- **Extism** — plugin framework, **its Go SDK uses wazero (CGo-free)** — a direct precedent.
+  Capability = manifest. **Footgun:** `allowed_hosts: null` = ALL hosts; no signing/registry.
 
-### OpenClaw-Forks (Isolation, aber kein Out-of-band-HITL)
-| Fork | Stack | Isolation | Schwäche |
+### OpenClaw forks (isolation, but no out-of-band HITL)
+| Fork | Stack | Isolation | Weakness |
 |---|---|---|---|
-| **NanoClaw** (`nanocoai/nanoclaw`) | TS, Docker | Container-pro-Chat-Gruppe, Vault | „Tamper-evident Log" nur Blog-Claim; Name mehrdeutig |
-| **NemoClaw** (`NVIDIA/NemoClaw`) | TS-CLI + Python | **Real:** OpenShell (Landlock+seccomp+netns) + YAML-Policy | Sandbox ≠ VM; Approval lokal/policy |
-| **ZeroClaw** (`elev8tion/zeroclaw`) | Rust | Gateway-Pairing (OTP+Bearer), deny-by-default Channel-Allowlist | „<5 MB" = 1 macOS-Run, keine Methodik; fragmentiert |
-| **PicoClaw** (`sipeed/picoclaw`) | **Go**, Single-Binary, MCP | Multi-Arch | **Kein** Capability-/Security-Modell; ~95% agent-generiert |
-| **nanobot** (`HKUDS/nanobot`) | Python + MCP | „safer workspace access" | **Kein** Sandbox/Gate/Approval; Name kollidiert |
+| **NanoClaw** (`nanocoai/nanoclaw`) | TS, Docker | container per chat group, vault | "tamper-evident log" is a blog claim only; ambiguous name |
+| **NemoClaw** (`NVIDIA/NemoClaw`) | TS CLI + Python | **real:** OpenShell (Landlock+seccomp+netns) + YAML policy | sandbox ≠ VM; approval local/policy |
+| **ZeroClaw** (`elev8tion/zeroclaw`) | Rust | gateway pairing (OTP+bearer), deny-by-default channel allowlist | "<5 MB" = one macOS run, no methodology; fragmented |
+| **PicoClaw** (`sipeed/picoclaw`) | **Go**, single binary, MCP | multi-arch | **no** capability/security model; ~95% agent-generated |
+| **nanobot** (`HKUDS/nanobot`) | Python + MCP | "safer workspace access" | **no** sandbox/gate/approval; name collides |
 
-### HITL-Player (in-app/desktop, nicht out-of-band)
-- **Cline** (~58k★) — per-Tool-Approval, Auto-Approve-Toggles, `requires_approval`,
-  Shadow-Git-Checkpoints. VS-Code-in-Editor, kein Sandbox/Out-of-band.
-- **QwenPaw** (AgentScope) — „Tool Guard" YAML + `ShellEvasionGuardian`, Level
-  STRICT/SMART/AUTO/OFF, Kernel-Sandbox, Skill-Scanner. Lokal, **kein** Push.
-- **Goose** (Block, Rust) — Modi Autonomous/Manual/Smart/Chat-Only, per-Tool
-  Always/Ask/Never. In-app.
-- **OpenHands** (Python) — Confirmation-Mode (`WAITING_FOR_CONFIRMATION`), sauber
-  getrennt `SecurityAnalyzer` (LLM taggt Risk) vs. `ConfirmationPolicy`. Coding, in-app.
-- **MS Agent Framework** — per-Function `approval_mode`; Run gibt `user_input_requests`
-  zurück, **App liefert den Kanal** — exakt der Hook für eine Phone-Schicht. Kein Transport.
-- **Shannot** (`corv89/shannot`) — HITL via Syscall-Interception + virtuelles FS, Review
-  in **TUI**. Lokal, nicht mobil.
+### HITL players (in-app/desktop, not out-of-band)
+- **Cline** (~58k★) — per-tool approval, auto-approve toggles, `requires_approval`, shadow-git
+  checkpoints. VS Code in-editor, no sandbox, not out-of-band.
+- **QwenPaw** (AgentScope) — "tool guard" YAML + `ShellEvasionGuardian`, levels
+  STRICT/SMART/AUTO/OFF, kernel sandbox, skill scanner. Local, **no** push.
+- **Goose** (Block, Rust) — modes autonomous/manual/smart/chat-only, per-tool always/ask/never.
+  In-app.
+- **OpenHands** (Python) — confirmation mode (`WAITING_FOR_CONFIRMATION`), cleanly separated
+  `SecurityAnalyzer` (LLM tags risk) vs `ConfirmationPolicy`. Coding, in-app.
+- **MS Agent Framework** — per-function `approval_mode`; a run returns `user_input_requests` and
+  **the app supplies the channel** — exactly the hook a phone layer would need. No transport.
+- **Shannot** (`corv89/shannot`) — HITL via syscall interception + a virtual FS, review in a
+  **TUI**. Local, not mobile.
 
-### Out-of-band-/Phone-Approval — die Nische ist in 3 Fragmente zersplittert
-- **Bolt-on-MCP** (`telegram-assistant-mcp`) — winzig/generisch, kein Sandbox.
-- **Claude-Code-Hooks** (`claude-push`, `claude-ntfy-hook`) — `PermissionRequest`-Hook +
-  ntfy-SSE mit Allow/Deny. Beweisen die Nachfrage, aber Coding-scoped, **Topic-Name =
-  einzige Auth (schwach)**, un-sandboxed.
-- **Enterprise-OAuth CIBA** (Auth0/Okta) — rigoroseste Out-of-band-Freigabe,
-  standardisiert, aber **transaktions-scoped**, kein genereller Trust-Boundary. *Option:*
-  CIBA als Transport für Standards-Glaubwürdigkeit.
-- **MCP Elicitation** — das *richtige* Primitive (Tool pausieren bis User-Input), aber
-  transport-agnostisch → jemand muss es ans Handy verdrahten.
+### Out-of-band / phone approval — the niche is split into 3 fragments
+- **Bolt-on MCP** (`telegram-assistant-mcp`) — tiny/generic, no sandbox.
+- **Claude Code hooks** (`claude-push`, `claude-ntfy-hook`) — `PermissionRequest` hook + ntfy SSE
+  with allow/deny. They prove the demand, but are coding-scoped, **the topic name is the only
+  auth (weak)**, un-sandboxed.
+- **Enterprise OAuth CIBA** (Auth0/Okta) — the most rigorous out-of-band approval, standardized,
+  but **transaction-scoped**, not a general trust boundary. *Option:* CIBA as a transport for
+  standards credibility.
+- **MCP elicitation** — the *right* primitive (pause a tool until user input), but
+  transport-agnostic → somebody has to wire it to the phone.
 
-### Positionierungs-Matrix
-| Projekt | Stack | Isolation | HITL | Out-of-band | Verbindlich | Ops | Reife |
+### Positioning matrix
+| Project | Stack | Isolation | HITL | Out-of-band | Mandatory | Ops | Maturity |
 |---|---|---|---|---|---|---|---|
-| **Nocturn** | Go+wazero | Capability, Zero Ambient | Broker-Gate | **Ja, erzwungen** | **Ja, nicht abschaltbar** | Single-Binary | Neu |
-| IronClaw | Rust | WASM-Component+Vault+Fuel | Grant-Store | Nein | Auto-Approve AN | Postgres+54 Crates/TEE | Reif (pre-1.0) |
-| OpenClaw | TS | keiner | iOS/Watch (exec-only) | Ja, optional | **Abschaltbar** | Node-Gateway | Sehr reif |
-| Wassette | Wasmtime-Comp. | Zero-Authority | — | Nein | — | MCP-Server | Früh |
-| NemoClaw | TS+Rust | Landlock+seccomp+netns | Policy | Nein | Policy | Kernel-Sandbox | Neu |
-| Cline | TS/VS-Code | keiner | Per-Action | Nein | Optional | Extension | ~58k★ |
-| OpenHands | Python | Docker | Confirmation | Nein | Optional | Docker | Hoch |
+| **Nocturn** | Go+wazero | capability, zero ambient | gate | **yes, enforced** | **yes, not disableable** | single binary | new |
+| IronClaw | Rust | WASM component+vault+fuel | grant store | no | auto-approve on | Postgres+54 crates/TEE | mature (pre-1.0) |
+| OpenClaw | TS | none | iOS/Watch (exec-only) | yes, optional | **disableable** | Node gateway | very mature |
+| Wassette | Wasmtime comp. | zero authority | — | no | — | MCP server | early |
+| NemoClaw | TS+Rust | Landlock+seccomp+netns | policy | no | policy | kernel sandbox | new |
+| Cline | TS/VS Code | none | per-action | no | optional | extension | ~58k★ |
+| OpenHands | Python | Docker | confirmation | no | optional | Docker | high |
 
-### Wo Nocturn gewinnt (und wo nicht)
-1. **Nicht neu:** WASM-Sandbox (IronClaw/Wassette) **und** Phone-Approval (OpenClaw)
-   existieren einzeln — nicht als Neuheit verkaufen.
-2. **Verteidigbar = Kombination + Verbindlichkeit:** *verpflichtende, nicht abschaltbare
-   Out-of-band-Freigabe auf separatem Gerät, an JEDER Trust-Boundary, WASM-isoliert,
-   Single-Binary ohne DB/Cloud*. Andere: *sandboxen-und-automatisieren* (IronClaw) **oder**
-   *fragen-nur-in-app* (Cline/OpenHands) **oder** *out-of-band-aber-optional-exec-only*
-   (OpenClaw). Niemand macht Out-of-band zum **erzwungenen Default**.
-3. **Table-Stakes zum Mitziehen:** Credential-Vault + **bidirektionales Leak-Scanning**
-   (sonst wirkt IronClaw stärker).
-4. **Glaubwürdigkeits-Siege gg. IronClaws Lücken:** erzwungene Attenuation (#5581),
-   Code-Signing, SECURITY.md + getesteter Audit-Sink (#6000/#5640), starke Krypto am
-   Approval-Kanal (ntfy-Bolt-ons haben nur ratbaren Topic).
-5. **Framing:** *„IronClaw-Grade Tool-Isolation, aber mit erzwungener menschlicher
-   Zustimmung an Trust-Boundaries — auf einem zweiten Gerät, nicht abschaltbar, in einer
-   einzigen Go-Binary ohne Cloud."*
+### Where Nocturn wins (and where it doesn't)
+1. **Not new:** the WASM sandbox (IronClaw/Wassette) **and** phone approval (OpenClaw) exist
+   separately — don't sell either as a novelty.
+2. **Defensible = the combination plus the mandate:** *mandatory, non-disableable out-of-band
+   approval on a separate device, at EVERY trust boundary, WASM-isolated, single binary without
+   DB or cloud.* Others: *sandbox-and-automate* (IronClaw) **or** *ask-but-only-in-app*
+   (Cline/OpenHands) **or** *out-of-band-but-optional-and-exec-only* (OpenClaw). Nobody makes
+   out-of-band the **enforced default**.
+3. **Table stakes to match:** credential vault + **bidirectional leak scanning** (otherwise
+   IronClaw looks stronger).
+4. **Credibility wins against IronClaw's gaps:** enforced attenuation (#5581), code signing,
+   SECURITY.md + a tested audit sink (#6000/#5640), strong crypto on the approval channel.
+5. **Framing:** *"IronClaw-grade tool isolation, but with enforced human consent at trust
+   boundaries — on a second device, not disableable, in a single Go binary without cloud."*
 
-## B — OpenClaw Gap-Analyse (Bedrohung → unsere Antwort)
+## B — OpenClaw gap analysis (threat → our answer)
 
-OpenClaw-Arch: **channel** (Messaging-Adapter) → **brain** (Loop, Memory) → **body**
-(Tools: Browser/Shell/Cron). Skills = Plain Files via „ClawHub", model-agnostisch.
+OpenClaw's architecture: **channel** (messaging adapters) → **brain** (loop, memory) → **body**
+(tools: browser/shell/cron). Skills = plain files via "ClawHub", model-agnostic.
 
-| # | Schwäche (dokumentiert) | Ursache | Nocturns Antwort |
+| # | Documented weakness | Root cause | Nocturn's answer |
 |---|---|---|---|
-| 1 | Prompt-Injection (~57% Robustheit); Web-/Nachrichten-Inhalt kapert Agent | LLM-Output steuert privilegierte Tools direkt | Broker + **HITL für irreversibel/extern**; LLM-Output = *untrusted* |
-| 2 | **Exfil über Link-Previews** (PromptArmor): Agent baut Angreifer-URL, Preview holt sie | Ungebremster Egress | Kein Ambient-Netz; Egress gebrokert + **Leak-Scanning** + HITL für neue Ziele |
-| 3 | Bösartige Skills / ClawHub-Supply-Chain (Cisco) | Skills ungesandboxt mit Host-Rechten | **WASM Zero-Authority**; Skills signiert + **Attenuation erzwungen** |
-| 4 | Schwache Default-Configs (CNCERT) → Takeover | Ambient-Rechte, Opt-out | **Deny-by-default**: keine Capability ohne expliziten epoch-Grant |
-| 5 | Exponierte Control-UI/Dashboards | Netz-erreichbare Web-UI | **Lokal-only**, Unix-Socket, keine Netz-Bindung; Keychain |
-| 6 | Irreversible Fehlaktionen (MoltMatch) | Kein Freigabe-Gate für destruktive Ops | HITL zwingend für send/delete/pay/commit; Zeitfenster + Rate |
-| 7 | Governance/„vibe slop" | Usability über Security | Kleiner auditierter Kern; append-only Audit; SECURITY.md |
+| 1 | Prompt injection (~57% robustness); web/message content hijacks the agent | LLM output drives privileged tools directly | gate + **HITL for irreversible/external**; LLM output is *untrusted* |
+| 2 | **Exfil via link previews** (PromptArmor): the agent builds an attacker URL, the preview fetches it | unthrottled egress | no ambient network; egress gated + **leak scanning** + HITL for new targets |
+| 3 | Malicious skills / ClawHub supply chain (Cisco) | skills unsandboxed with host rights | **WASM zero authority**; skills signed + **attenuation enforced** |
+| 4 | Weak default configs (CNCERT) → takeover | ambient rights, opt-out | **deny by default**: no capability without an explicit grant |
+| 5 | Exposed control UI/dashboards | network-reachable web UI | **local-only**, paired devices, no open listener |
+| 6 | Irreversible mistakes (MoltMatch) | no approval gate for destructive ops | HITL mandatory for send/delete/pay/commit |
+| 7 | Governance / "vibe slop" | usability over security | small audited core; append-only audit; SECURITY.md |
 
-**Kern:** Zwei unabhängige Bedrohungsklassen → zwei Verteidigungen. Bösartiger
-*Code* (#3,#4) → **WASM-Sandbox**. Injection missbraucht *legitime* Tools (#1,#2,#6)
-→ **Broker + Out-of-band-HITL** (Sandbox allein stoppt Injection nicht; in-band-
-Freigabe liegt im selben Trust-Domain → **separates Gerät**).
+**Core:** two independent threat classes → two defenses. Malicious *code* (#3,#4) → **WASM
+sandbox**. Injection abusing *legitimate* tools (#1,#2,#6) → **gate + out-of-band HITL** (the
+sandbox alone does not stop injection; in-band approval sits in the same trust domain → hence a
+**separate device**).
 
-## C · D — Runtime-Einordnung & Trust-Grenze → `ADRS.md`
+## C · D — Runtime evaluation & trust boundary → `ADRS.md`
 
-Ausgelagert zu den Entscheidungs-Records: **wazero vs. Wasmtime** (WASIp1-only, kein
-Component-Model/Fuel — warum trotzdem richtig), **PORTICO** (epoch-gebundene Capabilities,
-Revoke = Epoche invalidieren — erster Schritt: `capability.EpochRegistry` + `gateway.Scope`),
-und **Trust-Grenze Variante A** (Brain im Host, Skills/Tools im WASM). Siehe `ADRS.md`.
+Moved to the decision records: **wazero vs Wasmtime** (WASIp1-only, no component model or fuel —
+why it is still right), **PORTICO** (capability revocation), and **trust boundary variant A**
+(the loop in the host, skills/tools in WASM). See `ADRS.md`.
 
-## E — Roadmap M0–M7 + Ziel-Layout
+## E — Roadmap M0–M7
 
-**Status:** M0–M5 stehen (Kern 0–5, Gateway, Brain, LLM, Binary, TUI, Out-of-band-HITL
-live gg. iPhone verifiziert). M4-Rest (Leak-Scan) ist die **aktive** Aufgabe.
+**Status:** M0–M5 stand; the greenfield rebuild on agentkit replaced the hand-rolled loop and
+broker with the engine + gate split.
 
-- **M0 Scaffold** ✅ — wazero führt Zero-Authority-Guest.
-- **M1 Broker + erste Host-Fn** ✅ — deny>ask>allow, epoch-check. (`http_get` → real:
-  `net.fetch`/`dns.resolve`.)
-- **M2 Signierte + attenuierte Skills** ⬜ — Ed25519, erzwungene Attenuation, Beispiel-
-  Skill (TinyGo→wasm). *Skill-Schicht geparkt (Extism vs. eigener Host+Javy).*
-- **M3 Out-of-band-HITL** ✅ — Queue, signiertes Single-Use-Token, ntfy, nicht abschaltbar.
-- **M4 Vault + Leak-Scan** ✅ — Credential-Injektion **host-owned + capability/host-scoped**
-  (`secret.Injector`, Manual-Cred-Reject); **Leak-Scan** `secret.Scanner` (Tier1 exakt +
-  Tier2 gitleaks/Aho-Corasick/Entropy, Egress-Block + Ingress-Redact). Offen: Keychain ⬜,
-  Single-Use/Zeroize ⬜ (Go-Sprachgrenze, best-effort später), Leak-Scan-Verifikation bewusst ⛔.
-- **M5 Brain** ✅ — Loop (Variante A), LLM-Adapter, Tool-Calls durch Broker.
-- **M6 Tauri-Shell** ⬜ — Desktop-UI über Unix-Socket, Approval-Liste, kein Netz-Listener.
-- **M7 Policy + Härtung** 🔷 — Zeitfenster/Rate ✅ (Primitive), Metriken/SECURITY.md/Audit-
-  Sink ⬜, Security-Pass.
+- **M0 scaffold** ✅ — wazero runs a zero-authority guest.
+- **M1 broker + first host fn** ✅ — now `agentkit/gate`: allow/ask/deny with remembered grants.
+- **M2 signed + attenuated skills** ⬜ — Ed25519, enforced attenuation, example skill.
+- **M3 out-of-band HITL** ✅ — approval broker + paired mobile app + APNs wake, not disableable.
+- **M4 vault + leak scan** ✅ — host-owned credential injection, bidirectional leak scan.
+  Open: keychain ⬜, single-use/zeroize ⬜ (Go language limit, best-effort later).
+- **M5 the loop** ✅ — now agentkit (zero-dep, policy-blind), gated by agentkit/gate.
+- **M6 companion app** ✅ — shipped as the mobile app (Angular + Capacitor, iOS).
+- **M7 policy + hardening** 🔷 — metrics/SECURITY.md/audit sink ⬜, security pass.
 
-**Ziel-Repo-Layout (noch nicht erreichte Teile):** `cmd/nocturnd` (Daemon), `internal/
-skill/` (loader + Ed25519 + Attenuation, registry), `internal/audit/log.go` (append-only,
-getestet), `api/socket.go` (Unix-Socket-IPC), `skills/example-http/`, `desktop/` (Tauri),
-`internal/secret/keychain.go`, `SECURITY.md`.
+## F — Security proof checklist (what we must always be able to demonstrate)
 
-## F — Sicherheits-Beweis-Checkliste (was wir stets beweisen können müssen)
+- **Zero authority:** a guest without a grant can open no connection and no FS (link/trap error). ✅
+- **Gate precedence:** deny beats a narrower allow; unknown action → deny; a grant covers only
+  its own target. ✅
+- **Attenuation (M2):** an installed skill demonstrably cannot write/HTTP/shell (the counter to
+  IronClaw #5581). ⬜
+- **Out-of-band HITL E2E:** approve ⇒ action + audit; deny/timeout ⇒ trapped; the boundary policy
+  is not disableable (negative test). ✅
+- **Vault/leak scan (M4):** a secret is never in guest memory; egress carrying a secret → blocked;
+  ingress secret → flagged/redacted. ✅
+- **Exfil regression (OpenClaw #2):** egress to a non-granted target → blocked; new domain → "ask"
+  instead of silent execution. ✅
+- **Hardening (M7):** OOM/deadline guests trapped cleanly; the daemon exposes only the paired
+  WebSocket. 🔷
 
-- **Zero-Authority:** Guest ohne `net`/`fs`-Grant kann keine Verbindung/kein FS öffnen
-  (Link-/Trap-Fehler). ✅
-- **Broker-Präzedenz + Epoch:** deny schlägt engere allow; first-match; unbekannte
-  Capability → deny; abgelaufene Epoche → Stale-Replay abgewiesen. ✅
-- **Attenuation (M2):** installierter Skill kann nachweislich nicht schreiben/HTTP/Shell
-  (Konter zu IronClaw #5581). ⬜
-- **Out-of-band-HITL-E2E:** Approve ⇒ Aktion+Audit; Deny/Timeout ⇒ getrappt;
-  abgelaufenes/wiederverwendetes Token abgewiesen; Boundary-Policy nicht abschaltbar
-  (Negativtest). ✅ (live gg. iPhone)
-- **Vault/Leak-Scan (M4):** Secret nie im Guest-Memory; Egress mit Secret → geblockt;
-  Ingress-Secret → geflaggt/redigiert. 🔷 (aktiv)
-- **Exfil-Regression (OpenClaw #2):** Egress auf Nicht-Allowlist → geblockt; neue Domain →
-  „ask" statt stiller Ausführung. ✅ (Gating) / 🔷 (Secret-in-URL: mit Leak-Scan)
-- **Härtung (M7):** OOM-/Deadline-Guest sauber getrappt; Daemon bindet nur Unix-Socket,
-  kein TCP (`lsof`). ⬜
+## G — Open points
 
-## G — Referenzen & offene Punkte
-
-**Referenzen auf der Platte:** `scrippy/internal/engine/extism/` (WASM-Host-Muster,
-wazero), `my-tauri-app` / `f7svelte` (Tauri-Shells), `neura/aep-export-saas/.claude/
-skills/golang-*` (Go-Style/Testing/Security).
-
-**Offen:** Skill-Sprache Guests (TinyGo vs. Rust) · ntfy self-hosted vs. .sh + CIBA-
-Adoption · Escape-Hatch wasmtime-go/Component-Backend · Task- vs. Session-Epoche
-(PORTICO-Feinung, aktuell 1 Epoche/Session) · Keychain-Backend · Skill-PDK-Weiche
-(Extism 34-Modul-TCB vs. eigener Host+Javy — Säule-2 DevEx vs. Säule-4 kleine TCB).
+**Open:** skill guest language (TinyGo vs Rust) · CIBA adoption · escape hatch to a
+wasmtime-go/component backend · keychain backend · the skill PDK fork (Extism's 34-module TCB vs
+our own host + Javy — pillar 2 DevEx vs pillar 4 small TCB) · when agentkit moves to its own repo.
