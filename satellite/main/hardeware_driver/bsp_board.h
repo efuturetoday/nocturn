@@ -186,6 +186,13 @@ esp_err_t esp_sdcard_deinit(char *mount_point);
 
 esp_err_t esp_audio_play(const int16_t* data, int length, uint32_t ticks_to_wait);
 
+/**
+ * @brief Play mono 16-bit PCM, expanded to the 32-bit stereo frames the I2S bus actually carries.
+ *        @p samples is a COUNT, not a byte length. See the definition for why the conversion is
+ *        mandatory regardless of what esp_board_init was passed.
+ */
+esp_err_t esp_audio_mono16(const int16_t *data, int samples, uint32_t ticks_to_wait);
+
 esp_err_t esp_get_feed_data(bool is_get_raw_channel, int16_t *buffer, int buffer_len);
 int esp_get_feed_channel(void);
 char* esp_get_input_format(void);

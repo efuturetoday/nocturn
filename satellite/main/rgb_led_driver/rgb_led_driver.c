@@ -82,6 +82,23 @@ void _set_single_led_color(RGB_example_color_t color ,uint32_t led_index)
     ESP_ERROR_CHECK(led_strip_refresh(led_strip));
 }
 
+// rgb_set_solid lights the whole ring in one colour, immediately.
+//
+// set_rgb_color cannot do this: it only records the colour, and the strip is written by the demo's
+// mode handlers — of which the default, RGB_MODE_IDLE, writes nothing at all. A satellite shows
+// state, not an animation, so it writes the pixels itself.
+void rgb_set_solid(RGB_example_color_t color)
+{
+    if (!led_strip) {
+        return;
+    }
+    rgb_color_t c = color_rgb_map[color];
+    for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
+        led_strip_set_pixel(led_strip, i, c.r, c.g, c.b);
+    }
+    led_strip_refresh(led_strip);
+}
+
 //100ms scan
 void _example_playing(bool *reset)
 {

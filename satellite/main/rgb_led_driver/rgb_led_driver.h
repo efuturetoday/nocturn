@@ -30,6 +30,9 @@ void RGB_Example(void);
 void set_rgb_mode(RGB_example_mode_t mode);
 void set_rgb_color(RGB_example_color_t color);
 
+// Light the whole ring in one colour, right now. See the note on the definition.
+void rgb_set_solid(RGB_example_color_t color);
+
 #ifdef __cplusplus
 }
 #endif

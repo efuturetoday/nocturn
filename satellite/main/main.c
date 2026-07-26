@@ -1,221 +1,169 @@
+// Step two of bringing the satellite up: prove the acoustics before any networking exists.
+//
+// After the wake word, the cleaned microphone audio goes straight back out of the speaker. That
+// makes the one question this hardware has to answer audible: with the board playing and listening
+// at the same time, does the echo canceller hold, or does it hear itself and run away? Every later
+// stage — WebSocket, daemon, live model — assumes it holds, and finding that out here costs an
+// afternoon instead of a fortnight.
+//
+// The loopback is also the seam. Replacing this one sink with "send upstream" is what turns this
+// into a real satellite; nothing else about the audio path changes.
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
 #include "esp_log.h"
-#include "esp_err.h"
-#include "esp_timer.h"
+#include "esp_system.h"
+#include "esp_heap_caps.h"
+#include <string.h>
 
+#include "audio_out.h"
 #include "bsp_board.h"
-#include "tca9555_driver.h"
 #include "mic_speech.h"
-#include "audio_driver.h"
 #include "rgb_led_driver.h"
-#include "button_driver.h"
+#include "tca9555_driver.h"
 
-static char *TAG = "app main";
+static const char *TAG = "sat";
 
-#define MAX_MP3_FILE    50
-static char SD_Name[MAX_MP3_FILE][100]; 
-static uint16_t Search_mp3_file_count = 0;
-static char music_buf[120] = {0};
-static int16_t now_play_id = 0;
+// Loud enough to be audible across a room, quiet enough not to invite howling while the canceller
+// is the thing under test.
+#define TEST_VOLUME 85
 
-// 按键回调函数
-static void on_key_event(key_id_t id, key_event_t event, void *user_data) 
+static uint32_t dropped;
+
+// Record first, play afterwards — never both at once.
+//
+// A live loopback cannot answer whether the microphone works, because the echo canceller exists
+// precisely to remove the speaker from the microphone: feeding the speaker with what the microphone
+// just heard gives the canceller its own output to subtract, and the better it works the quieter the
+// test gets. Separating the two in time takes it out of the picture entirely — nothing is playing
+// while we capture, and nothing is captured while we play.
+#define CAPTURE_SECONDS 5
+#define CAPTURE_SAMPLES (16000 * CAPTURE_SECONDS)
+
+static int16_t *capture;
+static size_t captured;
+static volatile bool playing_back;
+
+// Peak amplitude of what the front end handed us since the last report. Silence has to be measured
+// at the source: everything downstream can be provably working and still play nothing if the
+// samples arriving here are zeros.
+static volatile int32_t peak;
+
+// on_pcm runs on the fetch loop, so it only queues. Drops are counted rather than logged: printing
+// from here would be the very stall the queue exists to prevent.
+static void on_pcm(const int16_t *pcm, size_t samples, void *user)
 {
-    int vol;
-    switch (id) 
-    {
-        case KEY_ID_9:
-            if (event == KEY_EVENT_SHORT_PRESS) 
-            {
-                vol = get_audio_volume();
-                vol+=10;
-                if(vol>Volume_MAX)
-                    vol = Volume_MAX;
-                Volume_Adjustment(vol);
-                ESP_LOGI(TAG, "vol=%d",vol);
-            } 
-            else 
-            {
-                Audio_Stop_Play();
-                if(Search_mp3_file_count==0)
-                    return;
-                now_play_id--;
-                if(now_play_id<0)
-                {
-                    now_play_id = Search_mp3_file_count-1;
-                }
-                memset(music_buf,0,sizeof(music_buf));
-                sprintf(music_buf,"file://sdcard/%s",SD_Name[now_play_id]);
-                Audio_Play_Music(music_buf);
-                ESP_LOGI(TAG, "上一首");
-            }
-            break;
-        case KEY_ID_10:
-            if (event == KEY_EVENT_SHORT_PRESS) 
-            {
-                esp_asp_state_t state =  Audio_Get_Current_State();
-                switch (state)
-                {
-                    case ESP_ASP_STATE_NONE:
-                        if(Search_mp3_file_count==0)
-                            return;
-                        memset(music_buf,0,sizeof(music_buf));
-                        sprintf(music_buf,"file://sdcard/%s",SD_Name[now_play_id]);
-                        Audio_Play_Music(music_buf);
-                        set_rgb_mode(RGB_MODE_PLAYING);
-                        ESP_LOGI(TAG, "播放:%s",music_buf);
-                        break;
-                    case ESP_ASP_STATE_RUNNING:
-                        ESP_LOGI(TAG, "暂停播放");
-                        Audio_Pause_Play();
-                        set_rgb_mode(RGB_MODE_IDLE);
-                        break;
-                    case ESP_ASP_STATE_PAUSED:
-                        ESP_LOGI(TAG, "恢复播放");
-                        Audio_Resume_Play();
-                        set_rgb_mode(RGB_MODE_PLAYING);
-                        break;
-                    case ESP_ASP_STATE_STOPPED:
-                        memset(music_buf,0,sizeof(music_buf));
-                        sprintf(music_buf,"file://sdcard/%s",SD_Name[now_play_id]);
-                        Audio_Play_Music(music_buf);
-                        ESP_LOGI(TAG, "播放:%s",music_buf);
-                        set_rgb_mode(RGB_MODE_PLAYING);
-                        break;
-                    case ESP_ASP_STATE_FINISHED:
-                        ESP_LOGI(TAG, "播放完毕");
-                        set_rgb_mode(RGB_MODE_IDLE);
-                        break;
-                    default:
-                        break;
-                }
-                
-            } 
-            else 
-            {
-                Audio_Stop_Play();
-                ESP_LOGI(TAG, "停止播放");
-            }
-            break;
-        case KEY_ID_11:
-            if (event == KEY_EVENT_SHORT_PRESS) 
-            {
-                vol = get_audio_volume();
-                vol-=10;
-                if(vol<0)
-                    vol = 0;
-                Volume_Adjustment(vol);
-                ESP_LOGI(TAG, "vol=%d",vol);
-            } 
-            else 
-            {
-                Audio_Stop_Play();
-                if(Search_mp3_file_count==0)
-                    return;
-                now_play_id++;
-                if(now_play_id==Search_mp3_file_count)
-                {
-                    now_play_id = 0;
-                }
-                memset(music_buf,0,sizeof(music_buf));
-                sprintf(music_buf,"file://sdcard/%s",SD_Name[now_play_id]);
-                Audio_Play_Music(music_buf);
-                ESP_LOGI(TAG, "上一首");
-            }
-            break;
+    int32_t p = peak;
+    for (size_t i = 0; i < samples; i++) {
+        int32_t v = pcm[i] < 0 ? -pcm[i] : pcm[i];
+        if (v > p) {
+            p = v;
+        }
+    }
+    peak = p;
+
+    if (playing_back || captured >= CAPTURE_SAMPLES) {
+        return;
+    }
+    size_t room = CAPTURE_SAMPLES - captured;
+    size_t take = samples < room ? samples : room;
+    memcpy(&capture[captured], pcm, take * sizeof(int16_t));
+    captured += take;
+}
+
+static void on_event(mic_speech_event_t event, void *user)
+{
+    if (event == MIC_EVT_AWAKE) {
+        captured = 0;
+        rgb_set_solid(RGB_COLOR_RED);
+    } else {
+        rgb_set_solid(RGB_COLOR_GREEN); // playing back what was just heard
+        playing_back = true;
     }
 }
 
-//语音唤醒和命令词回调函数
-static void Speech_event_callback(esp_sr_rec_event_t event,esp_sr_evt_data_t evt_data, void *user_data)
+// playback_task waits for a finished recording and plays it. It runs off the audio path so the
+// front end keeps feeding while the speaker works.
+static void playback_task(void *arg)
 {
-    static bool play_flag = 0;
-    switch (event)
-    {
-        case ESP_SR_EVT_AWAKEN:
-            ESP_LOGI(TAG, "ESP_SR_EVT_AWAKEN = %d",evt_data.awaken_channel);
-            esp_asp_state_t state =  Audio_Get_Current_State();
-            if(state==ESP_ASP_STATE_RUNNING)
-            {
-                ESP_LOGI(TAG, "暂停播放");
-                Audio_Pause_Play();
-                play_flag = 1;
-            }
-            set_rgb_mode(RGB_MODE_REC_COMMAND);
-            break;
-        case ESP_SR_EVT_CMD:
-            //ESP_LOGI(TAG, "ESP_SR_EVT_CMD = %d",evt_data.sr_cmd);
-            switch (evt_data.sr_cmd)
-            {
-                case 0:
-                    ESP_LOGI(TAG, "灯光变成红色");
-                    set_rgb_color(RGB_COLOR_RED);
-                    break;
-                case 1:
-                    ESP_LOGI(TAG, "灯光变成蓝色");
-                    set_rgb_color(RGB_COLOR_BLUE);
-                    break;
-                case 2:
-                    ESP_LOGI(TAG, "灯光变成绿色");
-                    set_rgb_color(RGB_COLOR_GREEN);
-                    break;
-                case 3:
-                    ESP_LOGI(TAG, "灯光变成白色");
-                    set_rgb_color(RGB_COLOR_WHITE);
-                    break;
-                default:
-                    break;
-            }
-            break;
-        case ESP_SR_EVT_CMD_TIMEOUT:
-            ESP_LOGI(TAG, "ESP_SR_EVT_CMD_TIMEOUT");
+    for (;;) {
+        if (!playing_back) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        size_t n = captured;
+        ESP_LOGI(TAG, "replaying %u samples (%u ms)", (unsigned)n, (unsigned)(n * 1000 / 16000));
+        audio_out_amp(true);
 
-            if(play_flag == 1)
-            {
-                play_flag = 0;
-                ESP_LOGI(TAG, "恢复播放");
-                Audio_Resume_Play();
-                set_rgb_mode(RGB_MODE_PLAYING);
+        // In chunks, so the queue is never asked for more than it holds.
+        const size_t step = 1024;
+        for (size_t off = 0; off < n; off += step) {
+            size_t take = (n - off) < step ? (n - off) : step;
+            while (audio_out_write(&capture[off], take) != ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(10)); // queue full: wait rather than drop, this is a test
             }
-            else
-            {
-                set_rgb_mode(RGB_MODE_IDLE);
-            }
-            break;
-        default:
-            break;
+        }
+        // Trailing silence, then let it all drain. Without the zeros the codec sits on its last
+        // buffer and holds the final sample as a tone until something else is written.
+        audio_out_silence(120);
+        vTaskDelay(pdMS_TO_TICKS(n * 1000 / 16000 + 600));
+        audio_out_amp(false);
+        captured = 0;
+        playing_back = false;
+        rgb_set_solid(RGB_COLOR_BLUE);
+        ESP_LOGI(TAG, "replay done");
     }
 }
 
-//扫描TF卡MP3文件
-static void Search_mp3_Music(void)     
-{        
-    Search_mp3_file_count = Folder_retrieval("/sdcard",".mp3",SD_Name,MAX_MP3_FILE);
-    printf("file_count=%d\r\n",Search_mp3_file_count);
-    if(Search_mp3_file_count) 
-    {  
-        for (int i = 0; i < Search_mp3_file_count; i++) 
-        {
-            ESP_LOGI("SAFASF","%s",SD_Name[i]);
-        }                
-        
-    }                                                             
+// report is the loopback's instrumentation, and it prints unconditionally on purpose.
+//
+// The console is the chip's native USB, so every reset re-enumerates the device and kills whatever
+// had the port open. Attaching afterwards means the boot banner is long gone, and firmware that only
+// speaks when something is wrong is indistinguishable from firmware that is dead. A heartbeat makes
+// the state readable at any moment, without having to catch a reset.
+static void report(void *arg)
+{
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        uint32_t chunks = 0, samples = 0;
+        int werr = 0;
+        audio_out_stats(&chunks, &samples, &werr);
+        ESP_LOGI(TAG, "alive — session=%d peak=%ld queued_drop=%lu played=%lu chunks/%lu samples werr=%d",
+                 mic_speech_session_open(), (long)peak, dropped, chunks, samples, werr);
+        peak = 0;
+        dropped = 0;
+    }
 }
 
-void app_main()
+void app_main(void)
 {
-    ESP_ERROR_CHECK(esp_board_init(16000, 2, 16));
+    // 16 kHz throughout: the capture path, the front end and the playback reference share the codec
+    // clock, so the board has exactly one rate. Audio arriving at another rate is resampled
+    // upstream, never here.
+    ESP_LOGI(TAG, "step: board");
+    ESP_ERROR_CHECK(esp_board_init(16000, 2, 32)); // match the bus: 32-bit stereo slots
+    ESP_LOGI(TAG, "step: tca");
     tca9555_driver_init();
-    esp_sdcard_init("/sdcard", 10);
-    Speech_Init();
-    Speech_register_callback(Speech_event_callback);
-    Audio_Play_Init();
+    ESP_LOGI(TAG, "step: rgb");
+    // RGB_Example, not configure_led: the latter returns a handle and assigns it to a LOCAL, so the
+    // static one set_rgb_color posts against stays null — along with the queue it posts to. Calling
+    // it directly and then setting a colour dereferences both.
     RGB_Example();
+    rgb_set_solid(RGB_COLOR_BLUE);
+    ESP_LOGI(TAG, "step: volume");
+    esp_audio_set_play_vol(TEST_VOLUME);
+    ESP_LOGI(TAG, "step: audio_out");
+    capture = heap_caps_malloc(CAPTURE_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    ESP_ERROR_CHECK(capture ? ESP_OK : ESP_ERR_NO_MEM);
 
-    key_module_init(NULL);
-    key_register_callback(on_key_event);
-    
-    Search_mp3_Music();
+    ESP_ERROR_CHECK(audio_out_init());
+    ESP_LOGI(TAG, "step: mic");
+    ESP_ERROR_CHECK(mic_speech_start(on_pcm, on_event, NULL));
+    ESP_LOGI(TAG, "step: done");
+
+    xTaskCreate(report, "report", 3 * 1024, NULL, 2, NULL);
+    xTaskCreate(playback_task, "replay", 4 * 1024, NULL, 4, NULL);
+
+    ESP_LOGI(TAG, "ready — wake word, talk for up to %d s, then it replays", CAPTURE_SECONDS);
 }
-

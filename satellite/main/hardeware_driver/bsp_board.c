@@ -367,6 +367,37 @@ static esp_err_t bsp_codec_deinit()
     return ret_val;
 }
 
+// esp_audio_mono16 plays mono 16-bit PCM, converting it to what the I2S bus actually carries.
+//
+// That conversion is not optional, and the reason is in I2S_CONFIG_DEFAULT: the macro ignores its
+// own sample_rate, channel_fmt and bits_per_chan arguments and hard-codes 16 kHz, 32-bit slots,
+// stereo. So the bus consumes 8 bytes per frame at 16 kHz — 128 kB/s — no matter what
+// esp_board_init was asked for. Handing it 16-bit mono supplies a quarter of that and plays back at
+// four times the speed; 16-bit stereo supplies half, and plays at double. Both were heard before
+// this was traced.
+//
+// Each sample therefore becomes two 32-bit words, left and right. The record side declares the same
+// shape (channel = 2, bits_per_sample = 32) — the hardware's format, not a requested one.
+esp_err_t esp_audio_mono16(const int16_t *data, int samples, uint32_t ticks_to_wait)
+{
+    (void)ticks_to_wait;
+    if (!play_dev) {
+        return ESP_FAIL;
+    }
+    int32_t *frames = malloc(samples * 2 * sizeof(int32_t));
+    if (!frames) {
+        return ESP_ERR_NO_MEM;
+    }
+    for (int i = 0; i < samples; i++) {
+        int32_t v = (int32_t)data[i] << 16; // 16-bit sample in the top half of a 32-bit slot
+        frames[2 * i] = v;
+        frames[2 * i + 1] = v;
+    }
+    esp_err_t ret = esp_codec_dev_write(play_dev, frames, samples * 2 * (int)sizeof(int32_t));
+    free(frames);
+    return ret;
+}
+
 esp_err_t esp_audio_play(const int16_t* data, int length, uint32_t ticks_to_wait)
 {
     size_t bytes_write = 0;

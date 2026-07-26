@@ -1,161 +1,165 @@
 #include "mic_speech.h"
 
-#include "esp_wn_iface.h"
-#include "esp_wn_models.h"
+#include "esp_afe_config.h"
 #include "esp_afe_sr_iface.h"
 #include "esp_afe_sr_models.h"
-#include "esp_mn_iface.h"
-#include "esp_mn_models.h"
 #include "model_path.h"
-#include "esp_process_sdkconfig.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "bsp_board.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 
-static const char *TAG = "App/Speech";
+static const char *TAG = "sat/mic";
 
+// How long silence must hold before an utterance counts as finished. Short enough that the person
+// is not left waiting after they stop, long enough to survive the pause in the middle of a
+// sentence. The front end's own VAD supplies the per-frame decision; this only debounces it.
+#define SILENCE_TO_END_MS 900
 
-int wakeup_flag = 0;
-static esp_afe_sr_iface_t *afe_handle = NULL;
-static volatile int task_flag = 0;
-srmodel_list_t *models = NULL;
-static esp_sr_event_callback_t spench_callback =  NULL;
+static esp_afe_sr_iface_t *afe_handle;
+static esp_afe_sr_data_t *afe_data;
+static volatile bool running;
+static volatile bool session;
 
-void feed_Task(void *arg)
+static mic_pcm_sink_t pcm_sink;
+static mic_speech_event_cb_t event_cb;
+static void *cb_user;
+
+static void emit(mic_speech_event_t ev)
 {
-    esp_afe_sr_data_t *afe_data = arg;
-    int audio_chunksize = afe_handle->get_feed_chunksize(afe_data);
-    int nch = afe_handle->get_feed_channel_num(afe_data);
-    int feed_channel = esp_get_feed_channel();
-    assert(nch == feed_channel);
-    int16_t *i2s_buff = heap_caps_malloc(audio_chunksize * sizeof(int16_t) * feed_channel,MALLOC_CAP_SPIRAM);
+    if (event_cb) {
+        event_cb(ev, cb_user);
+    }
+}
 
-    assert(i2s_buff);
+static void feed_task(void *arg)
+{
+    int chunk = afe_handle->get_feed_chunksize(afe_data);
+    int channels = esp_get_feed_channel();
+    assert(afe_handle->get_feed_channel_num(afe_data) == channels);
 
-    esp_task_wdt_add(NULL);      // 先订阅当前任务
-    while (task_flag) {
-        esp_get_feed_data(true, i2s_buff, audio_chunksize * sizeof(int16_t) * feed_channel);
-        afe_handle->feed(afe_data, i2s_buff);
+    int16_t *buf = heap_caps_malloc(chunk * sizeof(int16_t) * channels, MALLOC_CAP_SPIRAM);
+    assert(buf);
+
+    esp_task_wdt_add(NULL);
+    while (running) {
+        // Raw channels: the codec presents them in the layout esp_get_input_format() declares
+        // ("RMNM" — a playback reference alongside the microphones), and the front end unpacks it
+        // itself. That reference is what makes echo cancellation possible without any clock work of
+        // ours, so it must reach the front end untouched.
+        esp_get_feed_data(true, buf, chunk * sizeof(int16_t) * channels);
+        afe_handle->feed(afe_data, buf);
         esp_task_wdt_reset();
     }
-    if (i2s_buff) {
-        free(i2s_buff);
-        i2s_buff = NULL;
-    }
+    free(buf);
     vTaskDelete(NULL);
 }
 
-void detect_Task(void *arg)
+static void detect_task(void *arg)
 {
-    esp_afe_sr_data_t *afe_data = arg;
-    int afe_chunksize = afe_handle->get_fetch_chunksize(afe_data);
-    char *mn_name = esp_srmodel_filter(models, ESP_MN_PREFIX, ESP_MN_CHINESE);
-    printf("multinet:%s\n", mn_name);
-    esp_mn_iface_t *multinet = esp_mn_handle_from_name(mn_name);
-    model_iface_data_t *model_data = multinet->create(mn_name, 6000);
-    esp_mn_commands_update_from_sdkconfig(multinet, model_data); // Add speech commands from sdkconfig
-    int mu_chunksize = multinet->get_samp_chunksize(model_data);
-    assert(mu_chunksize == afe_chunksize);
-    multinet->print_active_speech_commands(model_data);
+    int silence_ms = 0;
+    int frame_ms = 0;
 
-    esp_task_wdt_add(NULL);      // 先订阅当前任务
-
-    while (task_flag) {
-        afe_fetch_result_t* res = afe_handle->fetch(afe_data); 
+    esp_task_wdt_add(NULL);
+    while (running) {
+        afe_fetch_result_t *res = afe_handle->fetch(afe_data);
         if (!res || res->ret_value == ESP_FAIL) {
-            printf("fetch error!\n");
+            ESP_LOGE(TAG, "fetch failed");
             break;
         }
-
-        if (res->wakeup_state == WAKENET_DETECTED) {
-            //printf("WAKEWORD DETECTED\n");
-	        multinet->clean(model_data);
+        if (!frame_ms) {
+            // Derived rather than assumed: the chunk size is the front end's to choose.
+            frame_ms = (res->data_size / (int)sizeof(int16_t)) * 1000 / 16000;
+            ESP_LOGI(TAG, "listening — %d ms frames", frame_ms);
         }
 
-        if (res->raw_data_channels == 1 && res->wakeup_state == WAKENET_DETECTED) {
-            wakeup_flag = 1;
-        } else if (res->raw_data_channels > 1 && res->wakeup_state == WAKENET_CHANNEL_VERIFIED) {
-            // For a multi-channel AFE, it is necessary to wait for the channel to be verified.
-            //printf("AFE_FETCH_CHANNEL_VERIFIED, channel index: %d\n", res->trigger_channel_id);
-            esp_sr_evt_data_t evtdata;
-            evtdata.awaken_channel = res->trigger_channel_id;
-            if(spench_callback!=NULL)
-            {
-                spench_callback(ESP_SR_EVT_AWAKEN,evtdata,NULL);
+        // A multi-channel front end reports the wake word twice: once on detection, then again once
+        // it has decided which microphone heard it. Waiting for the verified one avoids opening a
+        // session on the array's guess.
+        bool woke = res->raw_data_channels == 1 ? res->wakeup_state == WAKENET_DETECTED
+                                                : res->wakeup_state == WAKENET_CHANNEL_VERIFIED;
+        if (woke && !session) {
+            session = true;
+            silence_ms = 0;
+            emit(MIC_EVT_AWAKE);
+            // The front end holds back the audio from just before the trigger. Without it the
+            // first word of the request is missing — the person says "nocturn, what time is it"
+            // and the far side receives "at time is it".
+            if (res->vad_cache_size > 0 && pcm_sink) {
+                pcm_sink(res->vad_cache, res->vad_cache_size / sizeof(int16_t), cb_user);
             }
-            wakeup_flag = 1;
         }
 
-        esp_task_wdt_reset();
-        if (wakeup_flag == 1) {
-            
-            esp_mn_state_t mn_state = multinet->detect(model_data, res->data);
-
-            if (mn_state == ESP_MN_STATE_DETECTING) {
-                continue;
+        if (session) {
+            if (pcm_sink) {
+                pcm_sink(res->data, res->data_size / sizeof(int16_t), cb_user);
             }
-
-            if (mn_state == ESP_MN_STATE_DETECTED) {
-                esp_mn_results_t *mn_result = multinet->get_results(model_data);
-
-                //ESP_LOGI(TAG, "TOP %d, command_id: %d, phrase_id: %d, string:%s prob: %f\n", 
-                //1, mn_result->command_id[0], mn_result->phrase_id[0], mn_result->string, mn_result->prob[0]);
-
-                esp_sr_evt_data_t evtdata;
-                evtdata.sr_cmd = mn_result->command_id[0];
-                if(spench_callback!=NULL)
-                {
-                    spench_callback(ESP_SR_EVT_CMD,evtdata,NULL);
-                }
-            }
-
-            if (mn_state == ESP_MN_STATE_TIMEOUT) {
-                esp_mn_results_t *mn_result = multinet->get_results(model_data);
-                //printf("timeout, string:%s\n", mn_result->string);
+            silence_ms = res->vad_state == VAD_SPEECH ? 0 : silence_ms + frame_ms;
+            if (silence_ms >= SILENCE_TO_END_MS) {
+                session = false;
+                emit(MIC_EVT_SPEECH_END);
+                // Wakenet is suppressed while a session runs, so the wake word inside a sentence
+                // does not restart it. Re-arm now that the session is over.
                 afe_handle->enable_wakenet(afe_data);
-                wakeup_flag = 0;
-
-                esp_sr_evt_data_t evtdata;
-                if(spench_callback!=NULL)
-                {
-                    spench_callback(ESP_SR_EVT_CMD_TIMEOUT,evtdata,NULL);
-                }
-
-                continue;
             }
-
         }
         esp_task_wdt_reset();
-        
     }
-    if (model_data) {
-        multinet->destroy(model_data);
-        model_data = NULL;
-    }
-    printf("detect exit\n");
+    ESP_LOGW(TAG, "detect loop exited");
     vTaskDelete(NULL);
 }
 
-void Speech_Init(void)
+esp_err_t mic_speech_start(mic_pcm_sink_t sink, mic_speech_event_cb_t on_event, void *user)
 {
-    models = esp_srmodel_init("model"); // partition label defined in partitions.csv
-    afe_config_t *afe_config = afe_config_init(esp_get_input_format(), models, AFE_TYPE_SR, AFE_MODE_LOW_COST);
-    afe_config->ns_init = false;
-    afe_config->vad_init = false;
-    afe_handle = esp_afe_handle_from_config(afe_config);
-    esp_afe_sr_data_t *afe_data = afe_handle->create_from_config(afe_config);
-    afe_config_free(afe_config);
+    pcm_sink = sink;
+    event_cb = on_event;
+    cb_user = user;
 
-    task_flag = 1;
-    xTaskCreatePinnedToCore(&detect_Task, "detect", 8 * 1024, (void*)afe_data, 5, NULL, 1);
-    xTaskCreatePinnedToCore(&feed_Task, "feed", 8 * 1024, (void*)afe_data, 5, NULL, 0);
-}
+    srmodel_list_t *models = esp_srmodel_init("model"); // partition label from partitions.csv
+    afe_config_t *cfg = afe_config_init(esp_get_input_format(), models, AFE_TYPE_SR, AFE_MODE_LOW_COST);
+    if (!cfg) {
+        return ESP_ERR_NO_MEM;
+    }
 
-// 注册回调
-esp_err_t Speech_register_callback(esp_sr_event_callback_t callback) 
-{
-    if (!callback) return ESP_ERR_INVALID_ARG;
-    spench_callback = callback;
+    // Stated rather than inherited. The vendor demo left noise suppression and voice activity off
+    // because a command model does not need either; a satellite needs both — the far side hears
+    // whatever we send, and something has to decide when a sentence ended.
+    cfg->aec_init = true;
+    cfg->ns_init = true;
+    cfg->vad_init = true;
+    cfg->vad_mode = VAD_MODE_1;
+    cfg->vad_min_speech_ms = 128;
+    cfg->vad_min_noise_ms = 500;
+
+    // Automatic gain, which the vendor never switched on because a command model does not need it.
+    // A satellite does: the person is across the room, not holding the board, and whatever leaves
+    // here is what the far side has to understand. Without this the output is technically correct
+    // and practically inaudible.
+    cfg->agc_init = true;
+    cfg->agc_mode = AFE_AGC_MODE_WEBRTC;
+
+    // A fixed multiplier on top, because AGC only tracks — it does not raise a quiet room to a
+    // usable level on its own. Conservative: this scales the amplitude directly, so too much
+    // clips before it gets louder.
+    cfg->afe_linear_gain = 3.0f;
+
+    afe_handle = esp_afe_handle_from_config(cfg);
+    afe_data = afe_handle->create_from_config(cfg);
+    afe_config_free(cfg);
+    if (!afe_data) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    running = true;
+    // Opposite cores: feeding is I2S-bound and fetching is compute-bound, and letting them share a
+    // core reintroduces exactly the stall the queueing elsewhere exists to avoid.
+    xTaskCreatePinnedToCore(detect_task, "mic_detect", 8 * 1024, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(feed_task, "mic_feed", 8 * 1024, NULL, 5, NULL, 0);
     return ESP_OK;
 }
+
+bool mic_speech_session_open(void) { return session; }
