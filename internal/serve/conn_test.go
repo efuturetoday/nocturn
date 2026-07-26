@@ -14,10 +14,10 @@ import (
 // spaces) are set by the test itself.
 func testConn() *conn {
 	return &conn{
-		spaces: map[string]*workspace.Workspace{},
-		hub:    newHub(),
-		log:    slog.New(slog.DiscardHandler),
-		out:    make(chan any, 64),
+		spaces:  map[string]*workspace.Workspace{},
+		hub:     newHub(),
+		log:     slog.New(slog.DiscardHandler),
+		control: make(chan any, 64),
 	}
 }
 
@@ -26,7 +26,7 @@ func testConn() *conn {
 func recv(t *testing.T, c *conn) any {
 	t.Helper()
 	select {
-	case msg := <-c.out:
+	case msg := <-c.control:
 		return msg
 	case <-time.After(time.Second):
 		t.Fatal("expected a message on out, got none")
@@ -90,7 +90,7 @@ func TestConn_Send_EnqueuesOnBufferedChannel(t *testing.T) {
 // send must never block forever: when the writer can't take the message and ctx is already done, it
 // returns instead of parking the producer.
 func TestConn_Send_RespectsCtxCancel(t *testing.T) {
-	c := &conn{log: slog.New(slog.DiscardHandler), out: make(chan any)} // unbuffered: send would block
+	c := &conn{log: slog.New(slog.DiscardHandler), control: make(chan any)} // unbuffered: send would block
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -105,7 +105,7 @@ func TestConn_Send_RespectsCtxCancel(t *testing.T) {
 		t.Fatal("send did not return on a cancelled ctx — it blocked")
 	}
 	select {
-	case msg := <-c.out:
+	case msg := <-c.control:
 		t.Fatalf("nothing should have been enqueued on a cancelled ctx, got %v", msg)
 	default:
 	}
@@ -113,14 +113,14 @@ func TestConn_Send_RespectsCtxCancel(t *testing.T) {
 
 // trySend drops silently when the buffer is full rather than blocking the broadcaster.
 func TestConn_TrySend_DropsWhenFull(t *testing.T) {
-	c := &conn{out: make(chan any, 1)}
+	c := &conn{control: make(chan any, 1)}
 	c.trySend("first")  // fills the buffer
 	c.trySend("second") // dropped, must not block
-	if got := <-c.out; got != "first" {
+	if got := <-c.control; got != "first" {
 		t.Errorf("kept %v, want first (second must be dropped)", got)
 	}
 	select {
-	case msg := <-c.out:
+	case msg := <-c.control:
 		t.Fatalf("buffer should be empty after the one kept message, got %v", msg)
 	default:
 	}

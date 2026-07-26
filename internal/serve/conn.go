@@ -56,12 +56,25 @@ type conn struct {
 	// tool missing rather than refused.
 	broker *hitl.Broker
 	hub    *hub
+	device string // which device this connection is, for addressed delivery. Identity, not session state.
 	log    *slog.Logger
-	out    chan any
+
+	// Two queues, one writer, control first. Audio is a steady twenty-five to fifty frames a second
+	// where JSON is small and bursty, and the drop-when-full policy that suits the second ruins the
+	// first: a chat event would be lost because audio filled the buffer. Separating them keeps the
+	// loss where it is harmless — a dropped audio frame is a click, a dropped event is missing state.
+	control chan any
+	audio   chan []byte
 }
 
-func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, log *slog.Logger) *conn {
-	return &conn{ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, log: log, out: make(chan any, 64)}
+func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, device string, log *slog.Logger) *conn {
+	return &conn{
+		ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, device: device, log: log,
+		control: make(chan any, 64),
+		// Roughly a second at the rates a satellite sends. Deeper only delays the moment a congested
+		// link is noticed, and stale audio has no value.
+		audio: make(chan []byte, 48),
+	}
 }
 
 // requireKind enforces that a store-addressed chat command names a valid store — "user" or "agent".
@@ -113,18 +126,56 @@ func (c *conn) serve(ctx context.Context) {
 	}
 }
 
-// writer serializes every outbound message onto the socket.
+// writer serializes every outbound message onto the socket. coder/websocket forbids concurrent
+// writes, so this is the only goroutine that touches the write side.
+//
+// Control is drained before audio, always: an approval or a chat event waiting behind a second of
+// buffered speech would arrive too late to matter, while audio delayed by a JSON frame is
+// imperceptible.
 func (c *conn) writer(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg := <-c.out:
-			if err := wsjson.Write(ctx, c.ws, msg); err != nil {
-				c.log.Debug("ws write ended", "err", err)
+		case msg := <-c.control:
+			if !c.writeJSON(ctx, msg) {
 				return
 			}
+		default:
+			select {
+			case <-ctx.Done():
+				return
+			case msg := <-c.control:
+				if !c.writeJSON(ctx, msg) {
+					return
+				}
+			case pcm := <-c.audio:
+				if err := c.ws.Write(ctx, websocket.MessageBinary, pcm); err != nil {
+					c.log.Debug("ws audio write ended", "err", err)
+					return
+				}
+			}
 		}
+	}
+}
+
+// writeJSON reports whether the writer should keep going.
+func (c *conn) writeJSON(ctx context.Context, msg any) bool {
+	if err := wsjson.Write(ctx, c.ws, msg); err != nil {
+		c.log.Debug("ws write ended", "err", err)
+		return false
+	}
+	return true
+}
+
+// sendAudio queues one chunk of speech, dropping it when the queue is full rather than waiting.
+// Blocking here would stall whatever produced the audio, and a late frame is worth less than a
+// missing one: the listener hears a click either way, but a stalled producer stops the conversation.
+func (c *conn) sendAudio(pcm []byte) {
+	select {
+	case c.audio <- pcm:
+	default:
+		c.log.Debug("audio frame dropped, link congested")
 	}
 }
 
@@ -132,7 +183,7 @@ func (c *conn) writer(ctx context.Context) {
 // hints (chat activity) a congested client can miss and recover from on its next resync.
 func (c *conn) trySend(msg any) {
 	select {
-	case c.out <- msg:
+	case c.control <- msg:
 	default:
 	}
 }
@@ -144,7 +195,7 @@ func (c *conn) trySend(msg any) {
 // goroutine.
 func (c *conn) send(ctx context.Context, msg any) {
 	select {
-	case c.out <- msg:
+	case c.control <- msg:
 	case <-ctx.Done():
 	}
 }

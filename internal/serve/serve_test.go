@@ -13,11 +13,11 @@ import (
 func TestHub_Broadcast_NonBlocking_DropsFullBuffer(t *testing.T) {
 	h := newHub()
 
-	full := &conn{out: make(chan any, 64)}
+	full := &conn{control: make(chan any, 64)}
 	for range 64 { // saturate the buffer (newConn's cap)
-		full.out <- "filler"
+		full.control <- "filler"
 	}
-	open := &conn{out: make(chan any, 64)}
+	open := &conn{control: make(chan any, 64)}
 
 	h.add(full)
 	h.add(open)
@@ -33,11 +33,11 @@ func TestHub_Broadcast_NonBlocking_DropsFullBuffer(t *testing.T) {
 		t.Fatal("broadcast blocked on a full connection")
 	}
 
-	if len(full.out) != 64 {
-		t.Errorf("full conn buffer = %d, want 64 (message dropped, not enqueued)", len(full.out))
+	if len(full.control) != 64 {
+		t.Errorf("full conn buffer = %d, want 64 (message dropped, not enqueued)", len(full.control))
 	}
 	select {
-	case got := <-open.out:
+	case got := <-open.control:
 		if got != "live" {
 			t.Errorf("open conn received %v, want live", got)
 		}
@@ -49,7 +49,7 @@ func TestHub_Broadcast_NonBlocking_DropsFullBuffer(t *testing.T) {
 // Concurrent broadcasts with a live reader must be race-clean (run with -race).
 func TestHub_Broadcast_Concurrent(t *testing.T) {
 	h := newHub()
-	c := &conn{out: make(chan any, 64)}
+	c := &conn{control: make(chan any, 64)}
 	h.add(c)
 
 	// Drain continuously so the buffer never wedges.
@@ -59,7 +59,7 @@ func TestHub_Broadcast_Concurrent(t *testing.T) {
 			select {
 			case <-stop:
 				return
-			case <-c.out:
+			case <-c.control:
 			}
 		}
 	}()
@@ -78,7 +78,7 @@ func TestHub_Broadcast_Concurrent(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		other := &conn{out: make(chan any, 64)}
+		other := &conn{control: make(chan any, 64)}
 		for range 100 {
 			h.add(other)
 			h.remove(other)

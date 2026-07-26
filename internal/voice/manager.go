@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 
@@ -34,10 +35,55 @@ type Manager struct {
 	closed bool
 }
 
-// session is one running conversation and the handle that stops it.
+// Sink is the writing half of a device: where a session's speech and its one control signal go.
+//
+// A caller supplies only this, never a whole Device, because only the writing half is something it
+// owns. The reading half belongs to the session — a standing connection outlives many conversations,
+// so "the next chunk of microphone audio" means nothing without knowing which conversation is
+// asking. The Manager therefore holds the microphone side itself and hands the driver a Device that
+// joins the two.
+type Sink interface {
+	// Play queues one chunk of speech for the device.
+	Play(pcm []byte) error
+	// Interrupt tells the device to drop whatever it has buffered but not yet played.
+	Interrupt() error
+}
+
+// errSessionOver ends a session's Recv without implying the device went away. The driver treats a
+// Recv error as the end of the conversation, which is exactly right here — and the connection
+// underneath is untouched, ready for the next wake word.
+var errSessionOver = errors.New("voice: session ended")
+
+// session is one running conversation: the handle that stops it, and the microphone queue the
+// connection feeds.
 type session struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	mic    chan []byte
+}
+
+// deviceView is the Device the driver sees: a caller's Sink for writing, this session's queue for
+// reading. It exists for exactly one conversation, while the connection behind the Sink stands for
+// as long as the device is switched on.
+type deviceView struct {
+	Sink
+	mic  chan []byte
+	done chan struct{}
+}
+
+// Recv returns the next microphone chunk, or ends the session.
+//
+// A closed session reports errSessionOver rather than blocking: the driver's pump would otherwise
+// sit on a queue nobody fills, and Run would only unwind when its budget expired.
+func (d *deviceView) Recv(ctx context.Context) ([]byte, error) {
+	select {
+	case pcm := <-d.mic:
+		return pcm, nil
+	case <-d.done:
+		return nil, errSessionOver
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Ended is called when a session finishes, with whatever was said. The Manager does not persist the
@@ -55,7 +101,7 @@ func NewManager(d *Driver, log *slog.Logger) *Manager {
 // conversation means the person is addressing the assistant again, not that they want two.
 //
 // ended is called from the session's own goroutine when it finishes, however it finishes.
-func (m *Manager) Start(deviceID string, dev Device, conv []agentkit.Message, ended Ended) {
+func (m *Manager) Start(deviceID string, out Sink, conv []agentkit.Message, ended Ended) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -76,7 +122,14 @@ func (m *Manager) Start(deviceID string, dev Device, conv []agentkit.Message, en
 	// tying it to whichever request happened to start it would make an unrelated cancellation look
 	// like the person hanging up.
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &session{cancel: cancel, done: make(chan struct{})}
+	s := &session{
+		cancel: cancel,
+		done:   make(chan struct{}),
+		// A second or so of speech. Deeper only hides a link that cannot keep up, and stale
+		// microphone audio is worth less than knowing the link is congested.
+		mic: make(chan []byte, 48),
+	}
+	dev := &deviceView{Sink: out, mic: s.mic, done: s.done}
 	m.active[deviceID] = s
 	m.wg.Add(1)
 	m.mu.Unlock()
@@ -120,6 +173,26 @@ func (m *Manager) stop(deviceID string) {
 	}
 	s.cancel()
 	<-s.done
+}
+
+// Feed hands one chunk of microphone audio to the device's running conversation, dropping it if
+// there is none or the queue is full.
+//
+// Dropping rather than blocking is the same reasoning as everywhere else on this path: the caller is
+// a connection's read loop, and a read loop that waits stops serving everything else the device
+// sends. A dropped frame costs a click; a stalled read loop costs the connection.
+func (m *Manager) Feed(deviceID string, pcm []byte) {
+	m.mu.Lock()
+	s := m.active[deviceID]
+	m.mu.Unlock()
+	if s == nil {
+		return // no conversation is listening; the device is streaming into nothing
+	}
+	select {
+	case s.mic <- pcm:
+	default:
+		m.log.Debug("microphone frame dropped", "device", deviceID)
+	}
 }
 
 // Active reports whether the device has a conversation running.

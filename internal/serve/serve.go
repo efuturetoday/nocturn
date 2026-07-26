@@ -29,6 +29,26 @@ func newHub() *hub { return &hub{conns: map[*conn]struct{}{}} }
 func (h *hub) add(c *conn)    { h.mu.Lock(); h.conns[c] = struct{}{}; h.mu.Unlock() }
 func (h *hub) remove(c *conn) { h.mu.Lock(); delete(h.conns, c); h.mu.Unlock() }
 
+// send delivers msg to the connections of one device, without blocking.
+//
+// Broadcast is right for chat — every device shows the same conversation — and wrong for audio: a
+// phone should not play what the speaker in the hallway is hearing. A device may hold more than one
+// connection while an old one is still timing out, so this addresses all of them rather than
+// assuming a single winner.
+func (h *hub) send(device string, pcm []byte) {
+	h.mu.Lock()
+	conns := make([]*conn, 0, 2)
+	for c := range h.conns {
+		if c.device == device {
+			conns = append(conns, c)
+		}
+	}
+	h.mu.Unlock()
+	for _, c := range conns {
+		c.sendAudio(pcm)
+	}
+}
+
 // broadcast sends msg to every connection without blocking (a slow one drops it and resyncs).
 func (h *hub) broadcast(msg any) {
 	h.mu.Lock()
@@ -143,7 +163,8 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 		if !capabilitiesOf(dev.Class).approve {
 			approver = nil
 		}
-		newConn(ws, spaces, devices, approver, hub, log.With("remote", r.RemoteAddr, "class", dev.Class)).serve(r.Context())
+		newConn(ws, spaces, devices, approver, hub, dev.ID,
+			log.With("remote", r.RemoteAddr, "device", dev.ID, "class", dev.Class)).serve(r.Context())
 	})
 
 	srv := &http.Server{Addr: addr, Handler: cors(mux)}

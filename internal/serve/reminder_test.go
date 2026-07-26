@@ -63,8 +63,8 @@ func TestReminderCancel_UnknownID_SilentNoOp(t *testing.T) {
 
 	// The handler pushes synchronously to the buffered out channel, so anything it meant to send is
 	// already there — no wait needed to prove it sent nothing.
-	if n := len(c.out); n != 0 {
-		t.Fatalf("expected no reply, got %d message(s): %#v", n, <-c.out)
+	if n := len(c.control); n != 0 {
+		t.Fatalf("expected no reply, got %d message(s): %#v", n, <-c.control)
 	}
 }
 

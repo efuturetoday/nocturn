@@ -258,7 +258,7 @@ func TestChatCancel_UnknownChat_NoOp(t *testing.T) {
 func assertNoMessage(t *testing.T, c *conn) {
 	t.Helper()
 	select {
-	case msg := <-c.out:
+	case msg := <-c.control:
 		t.Fatalf("expected no message, got %v", msg)
 	case <-time.After(50 * time.Millisecond):
 	}

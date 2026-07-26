@@ -18,6 +18,20 @@ func managed(t *testing.T, sess *fakeSession) *voice.Manager {
 	return m
 }
 
+// sink is the writing half a caller supplies: what a connection would do with speech and the one
+// control signal. The Manager owns the reading half, so a test feeds the microphone through Feed.
+type sink struct {
+	played     chan []byte
+	interrupts chan struct{}
+}
+
+func newSink() *sink {
+	return &sink{played: make(chan []byte, 16), interrupts: make(chan struct{}, 4)}
+}
+
+func (s *sink) Play(pcm []byte) error { s.played <- pcm; return nil }
+func (s *sink) Interrupt() error      { s.interrupts <- struct{}{}; return nil }
+
 // ending returns a callback plus the channel it reports through.
 func ending() (voice.Ended, chan []agentkit.Message) {
 	done := make(chan []agentkit.Message, 4)
@@ -25,7 +39,7 @@ func ending() (voice.Ended, chan []agentkit.Message) {
 }
 
 func TestManager_RunsUntilStopped(t *testing.T) {
-	sess, dev := newSession(), newDevice()
+	sess, dev := newSession(), newSink()
 	m := managed(t, sess)
 	ended, done := ending()
 
@@ -49,7 +63,7 @@ func TestManager_RunsUntilStopped(t *testing.T) {
 // tears down, and returning early would leave an approval on somebody's phone able to answer a call
 // that no longer exists.
 func TestManager_StopWaitsForTheSessionToUnwind(t *testing.T) {
-	sess, dev := newSession(), newDevice()
+	sess, dev := newSession(), newSink()
 	m := managed(t, sess)
 	ended, done := ending()
 
@@ -69,7 +83,7 @@ func TestManager_StopWaitsForTheSessionToUnwind(t *testing.T) {
 // they want two conversations at once.
 func TestManager_StartReplacesARunningSession(t *testing.T) {
 	first := newSession()
-	dev := newDevice()
+	dev := newSink()
 	d := voice.New(&fakeLive{sess: first}, toolset(t), allow(), gate.NewMemGrants(), nil)
 	m := voice.NewManager(d, slog.New(slog.DiscardHandler))
 	t.Cleanup(m.CloseAll)
@@ -95,22 +109,22 @@ func TestManager_StartReplacesARunningSession(t *testing.T) {
 // a session, or one person's question is answered into the other's room.
 func TestManager_DevicesAreIndependent(t *testing.T) {
 	hall, kitchen := newSession(), newSession()
-	hallDev, kitchenDev := newDevice(), newDevice()
+	hallSink, kitchenSink := newSink(), newSink()
 
 	// One driver per session here, because the fake hands out a fixed session.
 	mHall := managed(t, hall)
 	mKitchen := managed(t, kitchen)
 	ended, _ := ending()
 
-	mHall.Start("hallway", hallDev, nil, ended)
-	mKitchen.Start("kitchen", kitchenDev, nil, ended)
+	mHall.Start("hallway", hallSink, nil, ended)
+	mKitchen.Start("kitchen", kitchenSink, nil, ended)
 
 	hall.push(agentkit.LiveAudio{PCM: []byte{0xAA}})
-	if got := <-hallDev.played; got[0] != 0xAA {
+	if got := <-hallSink.played; got[0] != 0xAA {
 		t.Errorf("hallway played %v", got)
 	}
 	select {
-	case pcm := <-kitchenDev.played:
+	case pcm := <-kitchenSink.played:
 		t.Fatalf("kitchen played the hallway's audio: %v", pcm)
 	default:
 	}
@@ -128,7 +142,7 @@ func TestManager_StopUnknownDeviceIsHarmless(t *testing.T) {
 
 // After shutdown a new session would hold the daemon open on a conversation nobody can hear.
 func TestManager_ClosedManagerStartsNothing(t *testing.T) {
-	sess, dev := newSession(), newDevice()
+	sess, dev := newSession(), newSink()
 	m := managed(t, sess)
 	m.CloseAll()
 
@@ -139,7 +153,7 @@ func TestManager_ClosedManagerStartsNothing(t *testing.T) {
 }
 
 func TestManager_CloseAllEndsEverything(t *testing.T) {
-	sess, dev := newSession(), newDevice()
+	sess, dev := newSession(), newSink()
 	m := managed(t, sess)
 	ended, done := ending()
 
@@ -161,7 +175,7 @@ func TestManager_CloseAllEndsEverything(t *testing.T) {
 // The transcript is handed back rather than persisted here: where a spoken conversation belongs is
 // the consumer's decision.
 func TestManager_ReportsTheTranscript(t *testing.T) {
-	sess, dev := newSession(), newDevice()
+	sess, dev := newSession(), newSink()
 	m := managed(t, sess)
 	ended, done := ending()
 
@@ -176,5 +190,53 @@ func TestManager_ReportsTheTranscript(t *testing.T) {
 	transcript := <-done
 	if len(transcript) != 1 || transcript[0].Content != "what time is it" {
 		t.Errorf("transcript = %+v", transcript)
+	}
+}
+
+// The session owns the microphone, not the caller: a standing connection outlives many
+// conversations, so "the next chunk" means nothing without knowing which one is asking.
+func TestManager_FeedReachesTheRunningSession(t *testing.T) {
+	sess, out := newSession(), newSink()
+	m := managed(t, sess)
+	m.Start("hallway", out, nil, nil)
+
+	m.Feed("hallway", []byte{0x11, 0x22})
+	if got := <-sess.audio; got[0] != 0x11 || got[1] != 0x22 {
+		t.Errorf("uplink = %v", got)
+	}
+	m.Stop("hallway")
+}
+
+// Audio arriving with no conversation open is streamed into nothing — not an error, and not
+// something that may block the connection's read loop.
+func TestManager_FeedWithoutASessionIsDropped(t *testing.T) {
+	m := managed(t, newSession())
+	m.Feed("hallway", []byte{0x11}) // must not panic or block
+	if m.Active("hallway") {
+		t.Error("feeding started a session")
+	}
+}
+
+// Ending a session must not look like the device disappearing: the connection underneath stands, and
+// the next wake word has to work.
+func TestManager_StoppingLeavesTheSinkUsable(t *testing.T) {
+	first, out := newSession(), newSink()
+	m := managed(t, first)
+
+	m.Start("hallway", out, nil, nil)
+	first.push(agentkit.LiveAudio{PCM: []byte{0x01}})
+	<-out.played
+	m.Stop("hallway")
+
+	// Same sink, second conversation.
+	second := newSession()
+	d := voice.New(&fakeLive{sess: second}, toolset(t), allow(), gate.NewMemGrants(), nil)
+	m2 := voice.NewManager(d, slog.New(slog.DiscardHandler))
+	t.Cleanup(m2.CloseAll)
+
+	m2.Start("hallway", out, nil, nil)
+	second.push(agentkit.LiveAudio{PCM: []byte{0x02}})
+	if got := <-out.played; got[0] != 0x02 {
+		t.Errorf("second session played %v", got)
 	}
 }
