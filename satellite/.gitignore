@@ -1,0 +1,15 @@
+# ESP-IDF build output and resolved dependencies. Anchored at this directory so the rules cannot
+# match a same-named folder deeper in the tree.
+/build/
+/managed_components/
+/dependencies.lock
+
+# Generated from sdkconfig.defaults on the first build. Checking it in would freeze a machine's
+# local answers into the repo; sdkconfig.defaults is the source of truth.
+/sdkconfig
+/sdkconfig.old
+
+# Fetched on demand by flash.sh: Espressif's standalone esptool, and the images staged out of the
+# build volume for it.
+/.tools/
+/.flash/
