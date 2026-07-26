@@ -204,11 +204,62 @@ type conversation struct {
 	// turns completed so far: written by the event loop, read by each tool goroutine when it
 	// answers. It is how a call learns the conversation moved on without it.
 	turns atomic.Uint64
+
+	// inflight holds one cancel per running call, so the provider withdrawing a call can stop the
+	// work it started. Written by the event loop and by each tool goroutine as it finishes.
+	mu       sync.Mutex
+	inflight map[string]context.CancelFunc
+}
+
+// start registers a call and returns the ctx its work runs under.
+func (c *conversation) start(ctx context.Context, id string) context.Context {
+	ctx, cancel := context.WithCancel(ctx)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.inflight == nil {
+		c.inflight = map[string]context.CancelFunc{}
+	}
+	c.inflight[id] = cancel
+	return ctx
+}
+
+// finish releases a call's registration, cancelling it so the context is never leaked.
+func (c *conversation) finish(id string) {
+	c.mu.Lock()
+	cancel := c.inflight[id]
+	delete(c.inflight, id)
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// cancel stops the named calls and reports which were actually running.
+func (c *conversation) cancel(ids []string) []string {
+	c.mu.Lock()
+	var hit []string
+	for _, id := range ids {
+		if cancel, ok := c.inflight[id]; ok {
+			delete(c.inflight, id)
+			hit = append(hit, id)
+			defer cancel()
+		}
+	}
+	c.mu.Unlock()
+	return hit
 }
 
 // handle applies one live event. It returns an error only for conditions that end the session.
 func (d *Driver) handle(ctx context.Context, c *conversation, ev agentkit.LiveEvent) error {
+	d.trace(ev)
 	switch e := ev.(type) {
+	case agentkit.LiveCallsCancelled:
+		// The provider has withdrawn these calls, so their work is now unwanted — including any
+		// approval still sitting on somebody's phone, which must not grant authority for a call that
+		// no longer exists. Cancelling the ctx unwinds the tool and the gate check together.
+		if hit := c.cancel(e.IDs); len(hit) > 0 {
+			d.log.Info("voice calls cancelled by the provider", "ids", hit)
+		}
 	case agentkit.LiveAudio:
 		if err := c.dev.Play(e.PCM); err != nil {
 			return fmt.Errorf("voice: play: %w", err)
@@ -247,7 +298,8 @@ func (d *Driver) handle(ctx context.Context, c *conversation, ev agentkit.LiveEv
 // — is reported back to the model as a result, because a call left unanswered hangs the
 // conversation, and a denial is something the model should say out loud rather than stall on.
 func (d *Driver) invoke(ctx context.Context, c *conversation, call agentkit.LiveToolCall, issued uint64) {
-	ctx = withCall(ctx, call)
+	ctx = c.start(withCall(ctx, call), call.ID)
+	defer c.finish(call.ID)
 	res := agentkit.ToolResult{ID: call.ID, Tool: call.Tool}
 	tool, ok := d.tools[call.Tool]
 	if !ok {
@@ -265,6 +317,12 @@ func (d *Driver) invoke(ctx context.Context, c *conversation, call agentkit.Live
 		d.log.Info("voice tool denied", "tool", call.Tool, "err", res.Err)
 	case res.Err != nil:
 		d.log.Warn("voice tool failed", "tool", call.Tool, "err", res.Err)
+	}
+	// A withdrawn call wants no answer, and a session that is shutting down cannot deliver one.
+	// Reporting either way would address an id the provider has already forgotten.
+	if ctx.Err() != nil {
+		d.log.Debug("voice tool result dropped", "tool", call.Tool, "id", call.ID, "err", ctx.Err())
+		return
 	}
 	// A turn completed while this call was outstanding, so the person has moved on and the answer
 	// must wait for a gap rather than cut into whatever they are talking about now.
@@ -331,6 +389,34 @@ func (a *announcingApprover) Ask(ctx context.Context, act gate.Action, suggest [
 		a.log.Warn("voice: could not announce a pending approval", "err", err)
 	}
 	return a.inner.Ask(ctx, act, suggest)
+}
+
+// trace logs one live event at debug level. A duplex session is otherwise opaque from the outside:
+// whether the provider ever sent an interruption, how a turn was punctuated, and whether calls get
+// withdrawn are all questions that can only be answered by watching the stream, and guessing at them
+// costs more than the log line does.
+func (d *Driver) trace(ev agentkit.LiveEvent) {
+	if !d.log.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	switch e := ev.(type) {
+	case agentkit.LiveAudio:
+		d.log.Debug("live audio", "bytes", len(e.PCM))
+	case agentkit.LiveUserText:
+		d.log.Debug("live user text", "text", e.Text)
+	case agentkit.LiveModelText:
+		d.log.Debug("live model text", "text", e.Text)
+	case agentkit.LiveToolCall:
+		d.log.Debug("live tool call", "id", e.ID, "tool", e.Tool, "args", e.Args)
+	case agentkit.LiveCallsCancelled:
+		d.log.Debug("live calls cancelled", "ids", e.IDs)
+	case agentkit.LiveInterrupted:
+		d.log.Debug("live interrupted")
+	case agentkit.LiveTurnDone:
+		d.log.Debug("live turn done")
+	case agentkit.LiveError:
+		d.log.Debug("live error", "err", e.Err)
+	}
 }
 
 // pump forwards microphone audio upstream until the device disconnects or ctx ends.

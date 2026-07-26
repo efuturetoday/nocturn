@@ -117,10 +117,18 @@ type functionResponse struct {
 // serverMessage is the server-to-client envelope. Like the client side, exactly one field is
 // meaningful per frame.
 type serverMessage struct {
-	SetupComplete *struct{}       `json:"setupComplete,omitempty"`
-	ServerContent *serverContent  `json:"serverContent,omitempty"`
-	ToolCall      *serverToolCall `json:"toolCall,omitempty"`
-	GoAway        *goAway         `json:"goAway,omitempty"`
+	SetupComplete        *struct{}             `json:"setupComplete,omitempty"`
+	ServerContent        *serverContent        `json:"serverContent,omitempty"`
+	ToolCall             *serverToolCall       `json:"toolCall,omitempty"`
+	ToolCallCancellation *toolCallCancellation `json:"toolCallCancellation,omitempty"`
+	GoAway               *goAway               `json:"goAway,omitempty"`
+}
+
+// toolCallCancellation withdraws calls the server has discarded. "This message occurs only in cases
+// where the clients interrupt server turns." Whether asynchronous (NON_BLOCKING) calls are included
+// is not documented — handling it is defensive either way: if it never arrives, this is inert.
+type toolCallCancellation struct {
+	IDs []string `json:"ids,omitempty"`
 }
 
 type serverContent struct {

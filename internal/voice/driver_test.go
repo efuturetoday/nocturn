@@ -500,3 +500,49 @@ func TestNoApprover_AnnouncesNothing(t *testing.T) {
 	sess.Close()
 	wait()
 }
+
+// A withdrawn call must stop what it started. The blocking case is the one that matters: an
+// approval nobody is waiting for any more should not still be sitting on somebody's phone, and it
+// must never grant authority for a call that no longer exists.
+func TestCallsCancelled_UnwindsAPendingApproval(t *testing.T) {
+	sess, dev := newSession(), newDevice()
+	ts := toolset(t, gate.Wrap(tool("file_read", func(context.Context, string) (string, error) { return "secret", nil })))
+	ask := gate.PolicyFunc(func(gate.Action) gate.Ruling { return gate.AskWith(gate.RecallNever) })
+	appr := blockingApprover{release: make(chan struct{})} // never released: only the cancel frees it
+	d := voice.New(&fakeLive{sess: sess}, ts, ask, gate.NewMemGrants(), appr)
+	wait := run(t, d, dev, nil)
+
+	sess.push(agentkit.LiveToolCall{ID: "c1", Tool: "file_read", Args: "{}"})
+	<-sess.notes // the approval is pending
+
+	sess.push(agentkit.LiveCallsCancelled{IDs: []string{"c1"}})
+
+	// The session must still be usable, which also proves the approval unwound rather than wedged.
+	sess.push(agentkit.LiveAudio{PCM: []byte{0x01}})
+	<-dev.played
+
+	// And no answer may go out for a call the provider has already forgotten.
+	select {
+	case r := <-sess.results:
+		t.Fatalf("answered a withdrawn call: %+v", r)
+	default:
+	}
+	sess.Close()
+	wait()
+}
+
+func TestCallsCancelled_UnknownIDsAreHarmless(t *testing.T) {
+	sess, dev := newSession(), newDevice()
+	ts := toolset(t, tool("time_now", func(context.Context, string) (string, error) { return "12:00", nil }))
+	d := voice.New(&fakeLive{sess: sess}, ts, allow(), gate.NewMemGrants(), nil)
+	wait := run(t, d, dev, nil)
+
+	sess.push(agentkit.LiveCallsCancelled{IDs: []string{"never-existed"}})
+	// A call issued afterwards is unaffected.
+	sess.push(agentkit.LiveToolCall{ID: "c1", Tool: "time_now", Args: "{}"})
+	if got := <-sess.results; got.Result != "12:00" {
+		t.Errorf("result = %+v", got)
+	}
+	sess.Close()
+	wait()
+}

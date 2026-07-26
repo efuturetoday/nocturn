@@ -95,6 +95,14 @@ type LiveToolCall struct {
 	Args string
 }
 
+// LiveCallsCancelled reports that the given tool calls will never be answered — the provider has
+// discarded them and a result for those IDs is no longer wanted.
+//
+// A consumer must stop whatever those calls are doing, which is more than tidiness when one is
+// blocked on a human: an approval nobody is waiting for any more should not still be sitting on
+// somebody's phone, and it must never grant authority for a call that no longer exists.
+type LiveCallsCancelled struct{ IDs []string }
+
 // LiveInterrupted reports that the user talked over the model and generation was cut. Any audio the
 // consumer has buffered but not yet played is now stale and must be dropped — otherwise the speaker
 // keeps answering a question the user already abandoned.
@@ -109,10 +117,11 @@ type LiveTurnDone struct{}
 // after it.
 type LiveError struct{ Err error }
 
-func (LiveAudio) isLiveEvent()       {}
-func (LiveUserText) isLiveEvent()    {}
-func (LiveModelText) isLiveEvent()   {}
-func (LiveToolCall) isLiveEvent()    {}
-func (LiveInterrupted) isLiveEvent() {}
-func (LiveTurnDone) isLiveEvent()    {}
-func (LiveError) isLiveEvent()       {}
+func (LiveAudio) isLiveEvent()          {}
+func (LiveUserText) isLiveEvent()       {}
+func (LiveModelText) isLiveEvent()      {}
+func (LiveToolCall) isLiveEvent()       {}
+func (LiveCallsCancelled) isLiveEvent() {}
+func (LiveInterrupted) isLiveEvent()    {}
+func (LiveTurnDone) isLiveEvent()       {}
+func (LiveError) isLiveEvent()          {}

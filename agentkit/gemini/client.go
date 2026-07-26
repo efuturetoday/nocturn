@@ -305,6 +305,9 @@ func (s *session) dispatch(ctx context.Context, msg serverMessage) bool {
 		s.emit(ctx, agentkit.LiveError{Err: fmt.Errorf("gemini: server closing (time left %s)", g.TimeLeft)})
 		return false
 	}
+	if c := msg.ToolCallCancellation; c != nil && len(c.IDs) > 0 {
+		s.emit(ctx, agentkit.LiveCallsCancelled{IDs: c.IDs})
+	}
 	if tc := msg.ToolCall; tc != nil {
 		for _, fc := range tc.FunctionCalls {
 			args := string(fc.Args)

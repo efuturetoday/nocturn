@@ -464,3 +464,15 @@ func TestOpen_FailsWhenSetupIsNotAcknowledged(t *testing.T) {
 
 // scheduling and willContinue are SIBLINGS of response, not keys inside it. Nested, the server
 // silently falls back to its WHEN_IDLE default and the model reads the key as ordinary data.
+
+// The server withdraws calls it has discarded; whether asynchronous calls are included is not
+// documented, so this stays defensive — if the frame never arrives, nothing downstream fires.
+func TestToolCallCancellation_SurfacesTheIDs(t *testing.T) {
+	f, sess := open(t, nil, nil)
+	f.server(t, map[string]any{"toolCallCancellation": map[string]any{"ids": []any{"c1", "c2"}}})
+
+	got := expect[agentkit.LiveCallsCancelled](t, sess)
+	if len(got.IDs) != 2 || got.IDs[0] != "c1" || got.IDs[1] != "c2" {
+		t.Errorf("ids = %v, want [c1 c2]", got.IDs)
+	}
+}
