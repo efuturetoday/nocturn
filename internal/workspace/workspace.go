@@ -19,10 +19,12 @@ import (
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/mcp"
+	"github.com/efuturetoday/nocturn/internal/memory"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/tools"
+	"github.com/efuturetoday/nocturn/internal/voice"
 )
 
 const turnTimeout = 2 * time.Minute
@@ -34,6 +36,7 @@ const DefaultWorkspace = "main"
 // approver (one device). It grows as more shared services arrive (notify, log, master key).
 type Host struct {
 	LLM      agentkit.LLM
+	Live     agentkit.LiveLLM // duplex speech; nil = no spoken sessions in this process
 	Approver gate.Approver
 	Master   *secret.Master // root of the per-workspace vault keys (one passphrase); nil = vaults locked
 	Notifier tools.Notifier // out-of-band user notification for the notify tool; nil = no notify
@@ -60,6 +63,8 @@ type Workspace struct {
 	reminders     *tools.Reminders // persistent reminder timers
 	notify        *notifier        // the seam every proactive message leaves through
 	waker         *tools.Waker     // self-continuation timers, bound to the chat manager
+	mem           *memory.Store    // the assistant's durable notes; its index is folded into every prompt
+	voice         *voice.Manager   // live spoken sessions, one per device; nil when Host.Live is unset
 	vault         *secret.Vault    // this workspace's own encrypted credential vault; nil when locked
 	accounts      *MCPAuth         // MCP OAuth session orchestration; nil when the vault is locked
 	log           *slog.Logger
@@ -139,6 +144,23 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		}
 		baseTools = append(baseTools, readTool)
 	}
+	// Memory: the assistant's own durable notes. Its folder is a SIBLING of mnt, so the file tools
+	// cannot reach it — memory_write is the only writer and it asks the human. The tools join the base
+	// set, so they flow into the agent cages exactly like skill_read; the index is folded into the
+	// system prompt below.
+	memDir := filepath.Join(dir, "memory")
+	// Created eagerly: os.OpenRoot needs the directory to exist, so the FIRST memory_write would
+	// otherwise fail on a fresh workspace. It also gives the human an obvious place to look.
+	if err := os.MkdirAll(memDir, 0o700); err != nil {
+		return nil, fmt.Errorf("workspace %q: memory dir: %w", name, err)
+	}
+	mem := memory.New(memDir, scanner)
+	mem.SetLogger(wslog.With("component", "memory"))
+	memTools, err := mem.Tools()
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: memory: %w", name, err)
+	}
+	baseTools = append(baseTools, memTools...)
 	base, err := agentkit.NewToolSet(baseTools...)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
@@ -149,7 +171,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: grants: %w", name, err)
 	}
 
-	toolset, err := buildTools(base, h.LLM, agents)
+	toolset, err := buildTools(base, h.LLM, agents, mem)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
 	}
@@ -165,13 +187,16 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// (as <server>_<tool>), each gated on the net host-allowlist like http_read/http_write (ADR-9).
 	nMCP := installMCP(dir, toolset, injector, scanner, &diag, wslog.With("component", "mcp"))
 
+	// The persona is resolved ONCE: the assistant's identity must not shift mid-run. Only the facts
+	// around it are live, which is why the prompt goes in as a function rather than a string.
+	persona := resolvePersona(dir, h.Log)
 	rt := runtime.New(h.LLM,
 		runtime.WithTools(toolset),
 		runtime.WithSkills(skills),
 		runtime.WithGate(policy(), gs, h.Approver),
 		runtime.WithGateLogger(agentkit.SlogLogger(wslog)), // trace gate allow/deny/ask with ws+chat
 		runtime.WithSession(
-			agentkit.WithSystem(resolvePersona(dir, h.Log)),
+			agentkit.WithSystemFunc(func() string { return composePrompt(persona, mem, hasTool(toolset)) }),
 			agentkit.WithTimeout(turnTimeout),
 			agentkit.WithLogger(agentkit.SlogLogger(wslog)),
 		),
@@ -201,6 +226,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		reminders:  reminders,
 		notify:     notify,
 		waker:      waker,
+		mem:        mem,
 		vault:      vault,
 		log:        wslog,
 	}
@@ -229,6 +255,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// agent run's continuation must re-open in the agent manager (its own runtime + store), not spawn
 	// a stray user chat under the same id.
 	waker.Bind(sessionRouter{user: w.chats, agent: w.agentChats, agentStore: agentStore})
+	w.startVoice(h.Live)
 	w.sched = agent.NewScheduler(agents, wslog, func(ctx context.Context, a agent.Agent) {
 		// A scheduled firing is fire-and-forget; the run streams + persists like any chat. Surface only
 		// a start-time rejection (unknown agent / shutting down) — the run's own errors land in its
@@ -332,7 +359,7 @@ func (w *Workspace) MarkRead(kind, id string) {
 // and each declared agent exposed as a sub-agent tool scoped to its OWN cage — its filtered subset of
 // the base tools, plus code_run only if the agent declares it, dispatching over that same subset.
 // code_run is woven per cage (tools.Compose), so a script never reaches past the cage it runs in.
-func buildTools(base agentkit.ToolSet, llm agentkit.LLM, agents agent.Set) (agentkit.ToolSet, error) {
+func buildTools(base agentkit.ToolSet, llm agentkit.LLM, agents agent.Set, mem *memory.Store) (agentkit.ToolSet, error) {
 	// Root chat cage: every base tool + code_run dispatching over them.
 	rootSet, err := tools.Compose(base, true)
 	if err != nil {
@@ -350,9 +377,13 @@ func buildTools(base agentkit.ToolSet, llm agentkit.LLM, agents agent.Set) (agen
 		if err != nil {
 			return agentkit.ToolSet{}, err
 		}
+		// The sub-agent's prompt carries the memory index too, but only the part of it its own cage
+		// can maintain — AgentTool applies caller options after its own, so this wins over the
+		// WithSystem(a.Instructions) it sets internally.
 		sub := agentkit.AgentTool(
 			agentkit.Agent{Name: a.Name, Instructions: a.Instructions, Effort: a.Effort},
 			llm, cage,
+			agentkit.WithSystemFunc(func() string { return composePrompt(a.Instructions, mem, a.Matches) }),
 		)
 		all = append(all, sub)
 	}
@@ -457,8 +488,14 @@ func connectMCP(ctx context.Context, conn *mcp.Conn) ([]agentkit.Tool, error) {
 	return conn.Tools(ctx)
 }
 
-// policy is the workspace-root policy: the net kind asks the human (remembered for the session);
-// every other Kind runs free. Per-agent policies (stricter) come with the agent slice.
+// policy is the workspace-root policy — the one a chat the human is watching runs under: the net and
+// file kinds ask (remembered for the session); every other Kind runs free.
+//
+// memory is deliberately NOT asked here. A memory write is not an effect in the world; its risk is
+// that untrusted text becomes durable context nobody looks at again. In an interactive chat the
+// human already sees the call in the transcript as it happens, so an approval prompt buys "before"
+// instead of "after" and nothing else. Where nobody is watching it buys the whole thing — see
+// agentPolicy.
 func policy() gate.Policy {
 	return gate.PolicyFunc(func(a gate.Action) gate.Ruling {
 		switch a.Kind {
@@ -468,6 +505,49 @@ func policy() gate.Policy {
 			return gate.Allowed()
 		}
 	})
+}
+
+// agentPolicy is the workspace policy plus the one kind an unattended run must not exercise
+// silently: memory. A cron agent firing at 6am writes into the store that is folded into EVERY
+// future prompt, in every chat, with no human reading its transcript — so it asks out of band, and
+// with no device wired the missing approver denies it fail-closed.
+func agentPolicy() gate.Policy {
+	base := policy()
+	return gate.PolicyFunc(func(a gate.Action) gate.Ruling {
+		if a.Kind == memory.Kind {
+			return gate.AskWith(gate.RecallSession)
+		}
+		return base.Decide(a)
+	})
+}
+
+// composePrompt builds a session's system prompt: the base identity (the workspace persona, or an
+// agent's instructions) plus the live memory index. has reports whether a name is in the runner's
+// cage, so the block is omitted for a runner that cannot touch memory at all — showing an agent
+// facts it has no tool to maintain would burn tokens and leak the user's notes into a cage that was
+// deliberately narrowed.
+//
+// An empty memory yields the base prompt unchanged: a fresh workspace pays nothing, and the model
+// still learns the capability exists from memory_write's description.
+func composePrompt(base string, mem *memory.Store, has func(name string) bool) string {
+	canUseMemory := has("memory_read") || has("memory_write")
+	if mem == nil || !canUseMemory {
+		return base
+	}
+	index := mem.Index()
+	if index == "" {
+		return base
+	}
+	return base + "\n\n<memory note=\"what you have chosen to remember about this user; the links are files you can memory_read\">\n" +
+		index + "\n</memory>"
+}
+
+// hasTool adapts a ToolSet to composePrompt's membership test.
+func hasTool(ts agentkit.ToolSet) func(string) bool {
+	return func(name string) bool {
+		_, ok := ts[name]
+		return ok
+	}
 }
 
 // defaultPersona is the built-in system prompt used when a workspace has no PERSONA.md.

@@ -30,6 +30,9 @@ func (r sessionRouter) Open(id string) *agentkit.Session {
 func (w *Workspace) Close() {
 	w.chats.CloseAll()
 	w.agentChats.CloseAll()
+	if w.voice != nil {
+		w.voice.CloseAll()
+	}
 }
 
 // maxAgentRuns caps how many past runs each agent keeps. Runs are an audit tail (see them in the app),
@@ -76,10 +79,12 @@ func (w *Workspace) agentRuntime(a agent.Agent) *runtime.Runtime {
 	}
 	return runtime.New(w.llm,
 		runtime.WithTools(w.tools.Select(a.Matches)),
-		runtime.WithGate(policy(), w.grants, appr),
+		runtime.WithGate(agentPolicy(), w.grants, appr),
 		runtime.WithGateLogger(agentkit.SlogLogger(w.log)),
 		runtime.WithSession(
-			agentkit.WithSystem(a.Instructions),
+			// The agent's own instructions plus the live memory index, scoped to its cage — so a cron
+			// agent firing at 6am has the same picture of the user as the evening chat.
+			agentkit.WithSystemFunc(func() string { return composePrompt(a.Instructions, w.mem, a.Matches) }),
 			agentkit.WithEffort(a.Effort),
 			agentkit.WithTimeout(budget),
 			agentkit.WithLogger(agentkit.SlogLogger(w.log)),

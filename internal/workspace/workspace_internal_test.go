@@ -12,6 +12,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/internal/agent"
+	"github.com/efuturetoday/nocturn/internal/memory"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/tools"
@@ -72,7 +73,7 @@ func TestBuildTools_IncludesAgentToolPerDeclaredAgent(t *testing.T) {
 		"planner": {Name: "planner"}, // pure reasoner
 	}
 
-	set, err := buildTools(base, llmStub{}, agents)
+	set, err := buildTools(base, llmStub{}, agents, nil)
 	if err != nil {
 		t.Fatalf("buildTools: %v", err)
 	}
@@ -167,6 +168,9 @@ func TestPolicy_NetAndFileAsk_ElseAllowed(t *testing.T) {
 		{"time allowed", "time_now", allow},
 		{"notify allowed", tools.NotifyKind, allow},
 		{"unknown allowed", "whatever", allow},
+		// A watched chat writes memory without a prompt: the call is already visible in the transcript
+		// as it happens, so asking would buy "before" instead of "after" and nothing else.
+		{"memory allowed in a watched chat", memory.Kind, allow},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -174,6 +178,22 @@ func TestPolicy_NetAndFileAsk_ElseAllowed(t *testing.T) {
 				t.Errorf("Decide(%q) ruling mismatch", tt.kind)
 			}
 		})
+	}
+}
+
+// TestAgentPolicy_AsksOnMemory: an unattended run writes into the store folded into EVERY future
+// prompt with nobody reading its transcript, so memory — and only memory — is tightened for agents.
+// Everything else must stay exactly as the root policy rules it, or the two would drift.
+func TestAgentPolicy_AsksOnMemory(t *testing.T) {
+	agentP, rootP := agentPolicy(), policy()
+
+	if got, want := agentP.Decide(gate.Action{Kind: memory.Kind}), gate.AskWith(gate.RecallSession); got != want {
+		t.Errorf("agent policy on memory = %+v, want ask", got)
+	}
+	for _, kind := range []string{tools.NetKind, tools.FileKind, tools.NotifyKind, tools.RemindKind, "time_now", "whatever"} {
+		if got, want := agentP.Decide(gate.Action{Kind: kind}), rootP.Decide(gate.Action{Kind: kind}); got != want {
+			t.Errorf("agent policy diverges from the root policy on %q", kind)
+		}
 	}
 }
 
@@ -269,5 +289,71 @@ func TestInstallPlugins_BindsCredentialsUnderOwner(t *testing.T) {
 	}
 	if _, ok := bare.Headers["Authorization"]; ok {
 		t.Error("plugin credential leaked onto an unowned call — it must stay owner-scoped")
+	}
+}
+
+// memoryWith lays one note into a fresh memory folder and returns a Store over it. summary empty
+// means an empty memory.
+func memoryWith(t *testing.T, note, summary string) *memory.Store {
+	t.Helper()
+	dir := t.TempDir()
+	if summary != "" {
+		if err := os.WriteFile(filepath.Join(dir, note), []byte("---\ndescription: "+summary+"\n---\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return memory.New(dir, nil)
+}
+
+func hasAll(names ...string) func(string) bool {
+	set := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		set[n] = struct{}{}
+	}
+	return func(n string) bool { _, ok := set[n]; return ok }
+}
+
+// TestComposePrompt_FoldsMemoryIntoTheBase: the live index rides along with the persona, so the
+// model knows its user without spending a tool call.
+func TestComposePrompt_FoldsMemoryIntoTheBase(t *testing.T) {
+	mem := memoryWith(t, "lina.md", "daughter, 7 years old")
+
+	got := composePrompt("PERSONA", mem, hasAll("memory_read", "memory_write"))
+	if !strings.HasPrefix(got, "PERSONA") {
+		t.Fatalf("prompt does not start with the base identity: %q", got)
+	}
+	if !strings.Contains(got, "<memory") || !strings.Contains(got, "lina.md — daughter, 7 years old") {
+		t.Fatalf("prompt is missing the memory block: %q", got)
+	}
+}
+
+// TestComposePrompt_OmittedWhenNothingToSay: a fresh workspace must cost zero prompt tokens, and a
+// runner whose cage has no memory tool must not be handed the user's notes.
+func TestComposePrompt_OmittedWhenNothingToSay(t *testing.T) {
+	filled := memoryWith(t, "lina.md", "daughter, 7 years old")
+
+	for _, tc := range []struct {
+		name string
+		mem  *memory.Store
+		has  func(string) bool
+	}{
+		{"empty memory", memoryWith(t, "lina.md", ""), hasAll("memory_read", "memory_write")},
+		{"no memory tool in the cage", filled, hasAll("file_read")},
+		{"no store at all", nil, hasAll("memory_read")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := composePrompt("PERSONA", tc.mem, tc.has); got != "PERSONA" {
+				t.Fatalf("prompt = %q, want the bare base", got)
+			}
+		})
+	}
+}
+
+// TestComposePrompt_ReadOnlyCageStillSeesTheIndex: memory_read alone is enough to be shown the
+// notes — an agent that may consult but not amend them is a legitimate configuration.
+func TestComposePrompt_ReadOnlyCageStillSeesTheIndex(t *testing.T) {
+	mem := memoryWith(t, "coding.md", "Go, no comments")
+	if got := composePrompt("A", mem, hasAll("memory_read")); !strings.Contains(got, "coding.md — Go, no comments") {
+		t.Fatalf("read-only cage got no memory block: %q", got)
 	}
 }

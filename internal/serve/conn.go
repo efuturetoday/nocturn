@@ -113,14 +113,23 @@ func (c *conn) serve(ctx context.Context) {
 		if c.broker != nil {
 			c.broker.Detach(c)
 		}
-		// No session cleanup: sessions are server-owned and keep running past this connection.
+		// Chat sessions are server-owned and keep running past this connection — their answer is
+		// still worth having when the client returns. A spoken one is not: audio has nobody to play
+		// to and a live model bills for every second, so it ends with the device.
+		c.endVoice()
 		c.log.Info("ws connection closed")
 	}()
 	for {
-		_, data, err := c.ws.Read(ctx)
+		typ, data, err := c.ws.Read(ctx)
 		if err != nil {
 			c.log.Debug("ws read ended", "err", err) // normal on client close
 			return
+		}
+		// Binary frames are the only ones that are not commands: they are microphone audio, and they
+		// carry no envelope because a device has one conversation at a time.
+		if typ == websocket.MessageBinary {
+			c.audioIn(data)
+			continue
 		}
 		c.dispatch(ctx, data)
 	}
@@ -227,6 +236,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.agentCmd(ctx, env.Cmd, data)
 	case "auth":
 		c.auth(ctx, env.Cmd, data)
+	case "voice":
+		c.voice(ctx, env.Cmd, data)
 	default:
 		c.badRequest(ctx, "unknown domain: "+env.Cmd)
 	}

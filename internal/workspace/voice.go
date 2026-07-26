@@ -155,6 +155,20 @@ func (w *Workspace) Voice(live agentkit.LiveLLM, opts ...VoiceOption) *voice.Dri
 	return voice.New(live, caged, voicePolicy(cfg.ask), w.grants, cfg.approver, driver...)
 }
 
+// startVoice builds this workspace's voice session manager. Nil host LLM means the process was not
+// configured for speech, and then there is nothing to manage — a satellite connecting to it gets
+// told so rather than opening a session that cannot talk.
+func (w *Workspace) startVoice(live agentkit.LiveLLM) {
+	if live == nil {
+		return
+	}
+	w.voice = voice.NewManager(w.Voice(live), w.log)
+}
+
+// VoiceSessions returns the manager for spoken sessions, or nil when this process has no live model
+// configured. Callers check for nil rather than being handed a manager that cannot start anything.
+func (w *Workspace) VoiceSessions() *voice.Manager { return w.voice }
+
 // VoiceTools reports the caged tool names, sorted, so a caller can show the user what a spoken
 // session is actually able to do. An always-on microphone should not have to be taken on trust.
 func (w *Workspace) VoiceTools() []string {

@@ -36,17 +36,32 @@ func (h *hub) remove(c *conn) { h.mu.Lock(); delete(h.conns, c); h.mu.Unlock() }
 // connection while an old one is still timing out, so this addresses all of them rather than
 // assuming a single winner.
 func (h *hub) send(device string, pcm []byte) {
+	for _, c := range h.of(device) {
+		c.sendAudio(pcm)
+	}
+}
+
+// control delivers a JSON message to one device's connections. Unlike send it goes on the control
+// queue, so it overtakes whatever speech is already buffered — which matters for the one message
+// that tells a device to throw that speech away.
+func (h *hub) control(device string, msg any) {
+	for _, c := range h.of(device) {
+		c.trySend(msg)
+	}
+}
+
+// of returns the connections belonging to one device. There may be more than one while an old
+// connection is still timing out, so this never assumes a single winner.
+func (h *hub) of(device string) []*conn {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	conns := make([]*conn, 0, 2)
 	for c := range h.conns {
 		if c.device == device {
 			conns = append(conns, c)
 		}
 	}
-	h.mu.Unlock()
-	for _, c := range conns {
-		c.sendAudio(pcm)
-	}
+	return conns
 }
 
 // broadcast sends msg to every connection without blocking (a slow one drops it and resyncs).
