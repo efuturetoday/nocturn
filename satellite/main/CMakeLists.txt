@@ -3,6 +3,10 @@
 # front of the codec. The button driver went with the demo's media controls.
 set(SOURCES
     "./main.c"
+    "./net/provision.c"
+    "./net/wifi.c"
+    "./net/discover.c"
+    "./net/link.c"
     "./audio_out/audio_out.c"
     "./hardeware_driver/bsp_board.c"
     "./speech_det_driver/mic_speech.c"
@@ -12,6 +16,7 @@ set(SOURCES
 
 set(INCLUDE_DIRS
     "."
+    "./net"
     "./audio_out"
     "./hardeware_driver"
     "./speech_det_driver"

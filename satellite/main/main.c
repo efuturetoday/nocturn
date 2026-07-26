@@ -14,14 +14,19 @@
 
 #include "esp_log.h"
 #include "esp_system.h"
+#include <string.h>
 #include "esp_heap_caps.h"
 #include <string.h>
 
 #include "audio_out.h"
 #include "bsp_board.h"
+#include "discover.h"
+#include "link.h"
 #include "mic_speech.h"
+#include "provision.h"
 #include "rgb_led_driver.h"
 #include "tca9555_driver.h"
+#include "wifi.h"
 
 static const char *TAG = "sat";
 
@@ -129,11 +134,65 @@ static void report(void *arg)
         uint32_t chunks = 0, samples = 0;
         int werr = 0;
         audio_out_stats(&chunks, &samples, &werr);
-        ESP_LOGI(TAG, "alive — session=%d peak=%ld queued_drop=%lu played=%lu chunks/%lu samples werr=%d",
-                 mic_speech_session_open(), (long)peak, dropped, chunks, samples, werr);
+        ESP_LOGI(TAG, "alive — link=%d session=%d peak=%ld queued_drop=%lu played=%lu chunks/%lu samples werr=%d",
+                 link_connected(), mic_speech_session_open(), (long)peak, dropped, chunks, samples, werr);
         peak = 0;
         dropped = 0;
     }
+}
+
+// on_control is what the daemon says. Nothing acts on it yet: this build exists to prove the
+// connection, and interpreting messages before the transport is trusted only makes a failure harder
+// to place.
+static void on_control(const char *json, void *user)
+{
+    ESP_LOGI(TAG, "daemon: %s", json);
+}
+
+// on_audio would go to the speaker. It counts instead, for the same reason.
+static void on_audio(const uint8_t *pcm, size_t bytes, void *user)
+{
+    ESP_LOGI(TAG, "daemon sent %u bytes of speech", (unsigned)bytes);
+}
+
+// network brings up the link and leaves it up.
+//
+// It runs as its own task rather than inline in app_main: discovery waits on the network, and a
+// board that shows no LED and answers no wake word for several seconds looks broken. The audio path
+// starts first and works without a daemon; the link joins it when it can.
+static void network(void *arg)
+{
+    provision_t prov;
+    if (provision_load(&prov) != ESP_OK) {
+        ESP_LOGE(TAG, "not provisioned — flash an NVS image with ssid, pass and bearer");
+        rgb_set_solid(RGB_COLOR_RED);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_ERROR_CHECK(wifi_start(prov.ssid, prov.pass));
+    if (!wifi_wait(30000)) {
+        // Not fatal: wifi keeps retrying on its own, and discovery below will simply fail until it
+        // succeeds. Saying so is worth more than giving up.
+        ESP_LOGW(TAG, "no network yet, still trying");
+    }
+
+    daemon_addr_t daemon = {0};
+    if (prov.host[0]) {
+        strlcpy(daemon.host, prov.host, sizeof(daemon.host));
+        daemon.port = prov.port;
+        strlcpy(daemon.path, "/ws", sizeof(daemon.path));
+    } else {
+        discover_init();
+        while (!discover_find(&daemon, 3000)) {
+            ESP_LOGW(TAG, "nocturn not found, retrying");
+            vTaskDelay(pdMS_TO_TICKS(5000));
+        }
+    }
+
+    ESP_ERROR_CHECK(link_start(daemon.host, daemon.port, daemon.path, prov.bearer,
+                               on_control, on_audio, NULL));
+    vTaskDelete(NULL);
 }
 
 void app_main(void)
@@ -163,6 +222,7 @@ void app_main(void)
     ESP_LOGI(TAG, "step: done");
 
     xTaskCreate(report, "report", 3 * 1024, NULL, 2, NULL);
+    xTaskCreate(network, "network", 5 * 1024, NULL, 3, NULL);
     xTaskCreate(playback_task, "replay", 4 * 1024, NULL, 4, NULL);
 
     ESP_LOGI(TAG, "ready — wake word, talk for up to %d s, then it replays", CAPTURE_SECONDS);
