@@ -3,6 +3,7 @@ package serve
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -100,6 +101,12 @@ func cors(h http.Handler) http.Handler {
 // bootstrap code logged at startup, further devices via POST /join + /join/confirm. One backend,
 // many fronts — the backend is the truth.
 func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger) error {
+	return serveOn(ctx, addr, spaces, devices, broker, log, nil)
+}
+
+// serveOn is Serve with a hook for the address it actually bound. It exists so a test can ask for
+// port 0 and still find the daemon; production always passes nil.
+func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger, ready func(string)) error {
 	log = log.With("component", "serve")
 	if code := devices.Bootstrap(bootstrapTTL); code != "" {
 		log.Info("no devices paired — pair one with POST /pair", "code", code, "validFor", bootstrapTTL)
@@ -182,7 +189,18 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 			log.With("remote", r.RemoteAddr, "device", dev.ID, "class", dev.Class)).serve(r.Context())
 	})
 
-	srv := &http.Server{Addr: addr, Handler: cors(mux)}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	// The bound address, not the requested one: with port 0 they differ, which is what lets a test
+	// take a free port and still know where to connect.
+	addr = ln.Addr().String()
+	if ready != nil {
+		ready(addr)
+	}
+
+	srv := &http.Server{Handler: cors(mux)}
 	// Graceful shutdown on cancel; stop() cancels the hook if ListenAndServe returns first, so the
 	// watcher never leaks.
 	stop := context.AfterFunc(ctx, func() {
@@ -204,5 +222,5 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 	}
 
 	log.Info("ws daemon listening", "addr", addr)
-	return srv.ListenAndServe()
+	return srv.Serve(ln)
 }

@@ -22,6 +22,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
+	"github.com/efuturetoday/nocturn/agentkit/gemini"
 	"github.com/efuturetoday/nocturn/agentkit/openai"
 	"github.com/efuturetoday/nocturn/internal/auth"
 	"github.com/efuturetoday/nocturn/internal/chat"
@@ -100,7 +101,12 @@ func runApp(serveAddr string) int {
 	if broker != nil {
 		active = broker.AnyActive
 	}
-	host := workspace.Host{LLM: llm, Approver: approver, Master: master, Notifier: notifier, Active: active, Log: logger}
+	// Speech is opt-in per process: without a live model configured, a device asking for a spoken
+	// session is told so rather than left waiting for audio that cannot come. See liveModel.
+	host := workspace.Host{
+		LLM: llm, Live: liveModel(logger), Approver: approver, Master: master,
+		Notifier: notifier, Active: active, Log: logger,
+	}
 
 	spaces, err := workspace.OpenAll(host, wsRoot)
 	if err != nil {
@@ -124,6 +130,21 @@ func runApp(serveAddr string) int {
 	}
 	run(ctx, spaces[workspace.DefaultWorkspace], stdin, model)
 	return 0
+}
+
+// liveModel builds the duplex speech model from GEMINI_*, or nil when it is not configured.
+//
+// The model id is required rather than defaulted because live-capable ids churn and, more
+// importantly, differ in what they support: one without asynchronous function calling stops the
+// whole conversation on every tool call, which is unusable once approvals are involved. A stale
+// built-in default would fail at connect time, or worse, connect and behave subtly wrong.
+func liveModel(log *slog.Logger) agentkit.LiveLLM {
+	key, model := os.Getenv("GEMINI_API_KEY"), os.Getenv("GEMINI_LIVE_MODEL")
+	if key == "" || model == "" {
+		return nil
+	}
+	log.Info("voice enabled", "model", model)
+	return gemini.New(dialGemini, key, model, gemini.WithLogger(agentkit.SlogLogger(log)))
 }
 
 // apnsSender builds the APNs sender from NOCTURN_APNS_*; nil when unconfigured or on error, so both
