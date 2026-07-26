@@ -49,6 +49,28 @@ FREELLM_MODEL=your-model
 Real environment variables win over the `.env` file, so you can override one without editing
 anything. The `FREELLM_` prefix is just the name Nocturn reads — any compatible provider works.
 
+### Speaking to it (optional)
+
+Spoken conversations need a second, different model: one that takes and returns a continuous audio
+stream rather than answering a turn at a time. Leave these unset and everything else works as
+described; a device asking for a spoken session is simply told the daemon has none.
+
+```ini
+GEMINI_API_KEY=your-key-here
+GEMINI_LIVE_MODEL=the-live-model-id
+```
+
+| Variable | Meaning |
+|---|---|
+| `GEMINI_API_KEY` | the key for the live API |
+| `GEMINI_LIVE_MODEL` | which live model — **required**, there is no default |
+
+The model id has no default on purpose. Live-capable ids change often, and they differ in what they
+support: one **without asynchronous function calling** stops the whole conversation whenever the
+assistant uses a tool, which is unusable as soon as anything needs your approval. A built-in default
+would either fail at connect time or, worse, connect and behave subtly wrong. Check what your account
+actually offers rather than copying an id from documentation — the two lists are not the same.
+
 ## 3. First run
 
 ```bash
