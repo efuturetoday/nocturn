@@ -76,7 +76,7 @@ func TestConfirmJoin_RightCodeMintsBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfirmJoin: %v", err)
 	}
-	if !s.Verify(bearer) {
+	if !verified(s, bearer) {
 		t.Error("minted bearer is not accepted by Verify")
 	}
 	// Single-use: the same joinId+code cannot be redeemed twice.

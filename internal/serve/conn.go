@@ -51,10 +51,13 @@ type conn struct {
 	ws      *websocket.Conn
 	spaces  map[string]*workspace.Workspace // the daemon's workspaces, by name
 	devices *auth.Store
-	broker  *hitl.Broker
-	hub     *hub
-	log     *slog.Logger
-	out     chan any
+	// broker is nil when this device may not answer approvals. Absence rather than a check: the
+	// connection then has nothing to approve WITH, the same way a plugin outside its cage finds the
+	// tool missing rather than refused.
+	broker *hitl.Broker
+	hub    *hub
+	log    *slog.Logger
+	out    chan any
 }
 
 func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, log *slog.Logger) *conn {
@@ -88,11 +91,15 @@ func (c *conn) workspace(ctx context.Context, name string) (*workspace.Workspace
 func (c *conn) serve(ctx context.Context) {
 	c.log.Info("ws connection opened")
 	go c.writer(ctx)
-	c.broker.Attach(ctx, c)
+	if c.broker != nil {
+		c.broker.Attach(ctx, c)
+	}
 	c.hub.add(c)
 	defer func() {
 		c.hub.remove(c)
-		c.broker.Detach(c)
+		if c.broker != nil {
+			c.broker.Detach(c)
+		}
 		// No session cleanup: sessions are server-owned and keep running past this connection.
 		c.log.Info("ws connection closed")
 	}()

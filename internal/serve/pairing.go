@@ -65,11 +65,57 @@ func handleJoinConfirm(w http.ResponseWriter, r *http.Request, devices *auth.Sto
 	writeJSON(w, map[string]string{"bearer": bearer})
 }
 
+// handleEnrol brings a new device into the household, on behalf of the device that asks.
+//
+// Some devices cannot pair themselves. An appliance has no display for a code and no keyboard for
+// one, so the join flow — where a device asks and an already-paired device confirms — has nothing to
+// work with. Letting it enrol itself is not the alternative: anything that can enrol itself is not
+// being authorised by anyone. So an already-paired device asks on its behalf, the human authorises
+// where authorising is possible, and the new device only receives what it is handed.
+//
+// The rule is a subset test, not a list of special cases: a device may only enrol a class whose
+// capabilities its own class already covers. An appliance can enrol nothing, so a stolen appliance
+// bearer cannot multiply into a household of equally trusted microphones; and no device can hand out
+// more authority than it holds.
+func handleEnrol(w http.ResponseWriter, r *http.Request, devices *auth.Store, log *slog.Logger) {
+	caller, ok := devices.Lookup(bearerOf(r))
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Name  string     `json:"name"`
+		Class auth.Class `json:"class"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+
+	mine := capabilitiesOf(caller.Class)
+	if !mine.enrol || !mine.covers(capabilitiesOf(req.Class)) {
+		log.Warn("enrolment refused", "remote", r.RemoteAddr,
+			"caller", caller.Class, "requested", req.Class)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	bearer, err := devices.Mint(req.Name, req.Class)
+	if err != nil {
+		log.Error("enrolment failed", "name", req.Name, "err", err)
+		http.Error(w, "could not enrol", http.StatusInternalServerError)
+		return
+	}
+	log.Info("device enrolled", "name", req.Name, "class", req.Class, "by", caller.Name)
+	// Shown once. From here only the hash exists, so a lost bearer means enrolling again rather than
+	// recovering it.
+	writeJSON(w, map[string]string{"bearer": bearer})
+}
+
 // handleRegister records the calling device's push token (bearer-gated), so it can be woken out of
 // band for a background approval. An empty token clears it.
 func handleRegister(w http.ResponseWriter, r *http.Request, devices *auth.Store, log *slog.Logger) {
 	bearer := bearerOf(r)
-	if !devices.Verify(bearer) {
+	if _, ok := devices.Lookup(bearer); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}

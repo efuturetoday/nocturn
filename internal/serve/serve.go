@@ -115,6 +115,7 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) { handleJoin(w, r, devices, hub, log) })
 	mux.HandleFunc("/join/confirm", func(w http.ResponseWriter, r *http.Request) { handleJoinConfirm(w, r, devices, log) })
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) { handleRegister(w, r, devices, log) })
+	mux.HandleFunc("POST /devices", func(w http.ResponseWriter, r *http.Request) { handleEnrol(w, r, devices, log) })
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			OriginPatterns: []string{"*"}, // dev: the companion app's origin is not fixed
@@ -129,13 +130,20 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 		// HTTP 401 is invisible to the browser WebSocket API, so the client couldn't tell auth
 		// failure from a network drop and would reconnect-loop instead of re-pairing.
 		bearer := bearerOf(r)
-		if !devices.Verify(bearer) {
+		dev, ok := devices.Lookup(bearer)
+		if !ok {
 			log.Warn("ws unauthorized", "remote", r.RemoteAddr)
 			_ = ws.Close(4401, "unauthorized")
 			return
 		}
 		devices.UpdateLastUsed(bearer)
-		newConn(ws, spaces, devices, broker, hub, log.With("remote", r.RemoteAddr)).serve(r.Context())
+		// The one place a class becomes authority for a connection: a device that may not approve is
+		// handed no broker at all, so there is nothing for it to answer with.
+		approver := broker
+		if !capabilitiesOf(dev.Class).approve {
+			approver = nil
+		}
+		newConn(ws, spaces, devices, approver, hub, log.With("remote", r.RemoteAddr, "class", dev.Class)).serve(r.Context())
 	})
 
 	srv := &http.Server{Addr: addr, Handler: cors(mux)}

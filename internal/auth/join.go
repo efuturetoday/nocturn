@@ -77,5 +77,6 @@ func (s *Store) ConfirmJoin(joinID, code string) (string, error) {
 		return "", ErrPairing
 	}
 	delete(s.joins, joinID) // single-use
-	return s.addDevice(j.name, j.platform)
+	// The join flow requires a screen to relay the code, so whatever completes it is an app.
+	return s.addDevice(j.name, j.platform, ClassApp)
 }

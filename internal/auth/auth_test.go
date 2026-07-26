@@ -18,6 +18,13 @@ import (
 const bootstrapTTL = 5 * time.Minute
 
 // newStore opens a fresh Store backed by a devices.json in a per-test tempdir.
+// verified keeps the tests reading as a yes/no question where that is all they ask. Lookup replaced
+// Verify because callers now need the device's class, not merely whether it exists.
+func verified(s *auth.Store, bearer string) bool {
+	_, ok := s.Lookup(bearer)
+	return ok
+}
+
 func newStore(t *testing.T) (*auth.Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "devices.json")
@@ -100,16 +107,16 @@ func TestVerify_UnknownBearerRejected(t *testing.T) {
 	t.Parallel()
 	s, _ := newStore(t)
 
-	if s.Verify("") {
+	if verified(s, "") {
 		t.Error("empty bearer accepted; would let an unauthenticated /ws connect")
 	}
-	if s.Verify("this-token-was-never-issued") {
+	if verified(s, "this-token-was-never-issued") {
 		t.Error("random bearer accepted on empty store")
 	}
 
 	// A paired device must not make an unrelated bearer suddenly valid.
 	pairFirst(t, s)
-	if s.Verify("still-not-a-real-bearer") {
+	if verified(s, "still-not-a-real-bearer") {
 		t.Error("random bearer accepted after a device was paired")
 	}
 }
@@ -119,10 +126,10 @@ func TestVerify_PairedBearerAccepted(t *testing.T) {
 	s, _ := newStore(t)
 	bearer := pairFirst(t, s)
 
-	if !s.Verify(bearer) {
+	if !verified(s, bearer) {
 		t.Fatal("the exact issued bearer was rejected")
 	}
-	if mutated := mutateOne(bearer); s.Verify(mutated) {
+	if mutated := mutateOne(bearer); verified(s, mutated) {
 		t.Errorf("a one-character mutation of the bearer was accepted (%q); compare must be exact", mutated)
 	}
 }
@@ -280,7 +287,7 @@ func TestPersistence_HashesOnlyNeverBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if !reloaded.Verify(bearer) {
+	if !verified(reloaded, bearer) {
 		t.Error("reloaded store rejected the original bearer")
 	}
 }
@@ -311,7 +318,7 @@ func TestNew_MissingFileIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New on missing file: %v", err)
 	}
-	if s.Verify("anything") {
+	if verified(s, "anything") {
 		t.Error("empty store accepted a bearer")
 	}
 	if got := s.PushTargets(); len(got) != 0 {
@@ -329,4 +336,65 @@ func TestNew_CorruptJSON(t *testing.T) {
 	if _, err := auth.New(path); err == nil {
 		t.Error("New on corrupt JSON returned nil error; must fail loudly, not silently empty")
 	}
+}
+
+// The pairing flows both require a screen — one to read a bootstrap code, one to relay a join code —
+// so whatever completes them is an app, and must come back able to approve.
+func TestPairAndJoin_ProduceApps(t *testing.T) {
+	s, _ := newStore(t)
+	bearer := pairFirst(t, s)
+	if dev, _ := s.Lookup(bearer); dev.Class != auth.ClassApp {
+		t.Errorf("paired device class = %q, want app", dev.Class)
+	}
+	joined := joinDevice(t, s, "phone2", "ios")
+	if dev, _ := s.Lookup(joined); dev.Class != auth.ClassApp {
+		t.Errorf("joined device class = %q, want app", dev.Class)
+	}
+}
+
+// Mint is the enrolment path for a device that cannot take part in a code exchange.
+func TestMint_EnrolsWithoutACode(t *testing.T) {
+	s, _ := newStore(t)
+	bearer, err := s.Mint("hallway", auth.ClassAppliance)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	dev, ok := s.Lookup(bearer)
+	if !ok {
+		t.Fatal("minted bearer does not verify")
+	}
+	if dev.Class != auth.ClassAppliance || dev.Name != "hallway" {
+		t.Errorf("device = %+v, want a satellite named hallway", dev)
+	}
+}
+
+// A record written before Class existed must not read back as ClassUnknown: it would silently lose
+// the right to answer an approval, and the phone would simply never ring again.
+func TestLoad_StampsPreClassRecordsAsApps(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "devices.json")
+	legacy := `[{"id":"a1","name":"iphone","bearerHash":"` + sha256Hex("secret") + `","added":"2025-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := auth.New(path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	dev, ok := s.Lookup("secret")
+	if !ok {
+		t.Fatal("legacy device does not verify")
+	}
+	if dev.Class != auth.ClassApp {
+		t.Errorf("legacy class = %q, want app", dev.Class)
+	}
+	// And the stamp is persisted, so the migration happens once rather than on every start.
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), `"class": "app"`) {
+		t.Error("stamp was not written back to disk")
+	}
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
