@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"strings"
 	"sync"
 	"testing"
 
@@ -265,13 +264,12 @@ func TestSendResult_ShapesFunctionResponse(t *testing.T) {
 	if fr["id"] != "c1" || fr["name"] != "time_now" {
 		t.Errorf("functionResponse = %v", fr)
 	}
-	resp := fr["response"].(map[string]any)
-	if got := resp["result"]; got != "12:00" {
+	if got := fr["response"].(map[string]any)["result"]; got != "12:00" {
 		t.Errorf("result = %v", got)
 	}
 	// A non-blocking declaration requires the response to say when to surface it; INTERRUPT reports
 	// the outcome the human is waiting to hear instead of filing it away.
-	if got := resp["scheduling"]; got != "INTERRUPT" {
+	if got := fr["scheduling"]; got != "INTERRUPT" {
 		t.Errorf("scheduling = %v, want INTERRUPT", got)
 	}
 }
@@ -292,7 +290,7 @@ func TestSendResult_ErrorReachesTheModel(t *testing.T) {
 		t.Errorf("response = %v, want the error surfaced", resp)
 	}
 	// A denial is exactly the outcome the human waited for — it must interrupt, not idle.
-	if got := resp["scheduling"]; got != "INTERRUPT" {
+	if got := fr["scheduling"]; got != "INTERRUPT" {
 		t.Errorf("scheduling = %v, want INTERRUPT", got)
 	}
 }
@@ -308,8 +306,60 @@ func TestSendResult_LateResultWaitsForAGap(t *testing.T) {
 		t.Fatalf("SendResult: %v", err)
 	}
 	fr := f.nextSent(t)["toolResponse"].(map[string]any)["functionResponses"].([]any)[0].(map[string]any)
-	if got := fr["response"].(map[string]any)["scheduling"]; got != "WHEN_IDLE" {
+	if got := fr["scheduling"]; got != "WHEN_IDLE" {
 		t.Errorf("scheduling = %v, want WHEN_IDLE", got)
+	}
+}
+
+func TestSendResult_SchedulingIsASiblingOfResponse(t *testing.T) {
+	f, sess := open(t, nil, nil)
+	f.nextSent(t) // setup
+
+	if err := sess.SendResult(t.Context(), agentkit.ToolResult{ID: "c1", Tool: "time_now", Result: "12:00"}); err != nil {
+		t.Fatalf("SendResult: %v", err)
+	}
+	fr := f.nextSent(t)["toolResponse"].(map[string]any)["functionResponses"].([]any)[0].(map[string]any)
+	if got := fr["scheduling"]; got != "INTERRUPT" {
+		t.Errorf("top-level scheduling = %v, want INTERRUPT", got)
+	}
+	if _, nested := fr["response"].(map[string]any)["scheduling"]; nested {
+		t.Error("scheduling nested inside response; the server ignores it there")
+	}
+}
+
+// An interim result turns the call into a generator: the model learns why it is waiting and a final
+// result for the same id still follows.
+func TestSendResult_PendingSetsWillContinueAndDoesNotInterrupt(t *testing.T) {
+	f, sess := open(t, nil, nil)
+	f.nextSent(t) // setup
+
+	err := sess.SendResult(t.Context(), agentkit.ToolResult{
+		ID: "c1", Tool: "http_read", Result: "waiting for approval", Pending: true,
+	})
+	if err != nil {
+		t.Fatalf("SendResult: %v", err)
+	}
+	fr := f.nextSent(t)["toolResponse"].(map[string]any)["functionResponses"].([]any)[0].(map[string]any)
+	if fr["willContinue"] != true {
+		t.Errorf("willContinue = %v, want true", fr["willContinue"])
+	}
+	// An aside must never cut the model off — that is the rudeness it exists to avoid.
+	if got := fr["scheduling"]; got != "WHEN_IDLE" {
+		t.Errorf("scheduling = %v, want WHEN_IDLE for an interim result", got)
+	}
+}
+
+// A final result ends the call; leaving willContinue unset says so without sending a redundant false.
+func TestSendResult_FinalLeavesWillContinueUnset(t *testing.T) {
+	f, sess := open(t, nil, nil)
+	f.nextSent(t) // setup
+
+	if err := sess.SendResult(t.Context(), agentkit.ToolResult{ID: "c1", Tool: "http_read", Result: "200"}); err != nil {
+		t.Fatalf("SendResult: %v", err)
+	}
+	fr := f.nextSent(t)["toolResponse"].(map[string]any)["functionResponses"].([]any)[0].(map[string]any)
+	if _, ok := fr["willContinue"]; ok {
+		t.Errorf("willContinue present on a final result: %v", fr["willContinue"])
 	}
 }
 
@@ -412,40 +462,5 @@ func TestOpen_FailsWhenSetupIsNotAcknowledged(t *testing.T) {
 	}
 }
 
-// A note must ride the realtime channel, not clientContent: live models restrict clientContent to
-// seeding the initial history and close the session with a policy violation on a later one.
-func TestSendNote_UsesTheRealtimeChannel(t *testing.T) {
-	f, sess := open(t, nil, nil)
-	f.nextSent(t) // setup
-
-	if err := sess.SendNote(t.Context(), "waiting for approval"); err != nil {
-		t.Fatalf("SendNote: %v", err)
-	}
-	frame := f.nextSent(t)
-	if _, ok := frame["clientContent"]; ok {
-		t.Fatal("note sent as clientContent; that frame is seeding-only and closes the session")
-	}
-	text, _ := frame["realtimeInput"].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "waiting for approval") {
-		t.Errorf("realtimeInput text = %q", text)
-	}
-	// Attributed to the environment: without the marker the model answers as though the person had
-	// said the words out loud.
-	if !strings.HasPrefix(text, "[system] ") {
-		t.Errorf("note not attributed to the environment: %q", text)
-	}
-}
-
-func TestSendNote_EmptyIsNotSent(t *testing.T) {
-	f, sess := open(t, nil, nil)
-	f.nextSent(t) // setup
-
-	if err := sess.SendNote(t.Context(), ""); err != nil {
-		t.Fatalf("SendNote(\"\"): %v", err)
-	}
-	select {
-	case raw := <-f.sent:
-		t.Fatalf("empty note produced a frame: %s", raw)
-	default:
-	}
-}
+// scheduling and willContinue are SIBLINGS of response, not keys inside it. Nested, the server
+// silently falls back to its WHEN_IDLE default and the model reads the key as ordinary data.

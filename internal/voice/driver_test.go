@@ -47,14 +47,20 @@ func newSession() *fakeSession {
 }
 
 func (s *fakeSession) SendAudio(_ context.Context, pcm []byte) error { s.audio <- pcm; return nil }
+
+// An interim result is an announcement, not the answer: it goes to notes so a test can assert on
+// each independently.
 func (s *fakeSession) SendResult(_ context.Context, r agentkit.ToolResult) error {
+	if r.Pending {
+		s.notes <- r.Result
+		return nil
+	}
 	s.results <- r
 	return nil
 }
-func (s *fakeSession) SendNote(_ context.Context, text string) error { s.notes <- text; return nil }
-func (s *fakeSession) Events() <-chan agentkit.LiveEvent             { return s.events }
-func (s *fakeSession) Close() error                                  { s.once.Do(func() { close(s.events) }); return nil }
-func (s *fakeSession) push(ev agentkit.LiveEvent)                    { s.events <- ev }
+func (s *fakeSession) Events() <-chan agentkit.LiveEvent { return s.events }
+func (s *fakeSession) Close() error                      { s.once.Do(func() { close(s.events) }); return nil }
+func (s *fakeSession) push(ev agentkit.LiveEvent)        { s.events <- ev }
 
 // fakeDevice is a satellite that never speaks unless the test tells it to.
 type fakeDevice struct {

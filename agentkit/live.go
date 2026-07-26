@@ -26,20 +26,9 @@ type LiveSession interface {
 	SendAudio(ctx context.Context, pcm []byte) error
 
 	// SendResult answers one ToolCall. Results may arrive in any order and long after the call, so
-	// the model can keep speaking while a tool waits on an out-of-band approval.
+	// the model can keep speaking while a tool waits on an out-of-band approval. A result marked
+	// Pending may be followed by further results for the same ID.
 	SendResult(ctx context.Context, r ToolResult) error
-
-	// SendNote injects a fact the model could not otherwise know, and asks it to react.
-	//
-	// A pending tool call is opaque from the model's side: it sees that it called something and
-	// that no result has come back, but not WHY. Waiting on a slow server and waiting on a human
-	// holding a phone are indistinguishable to it — so an assistant told to explain the wait would
-	// have to guess, and guessing "check your phone" when nothing is pending there is worse than
-	// saying nothing. The consumer knows which it is and states it here.
-	//
-	// The note is attributed to the environment, not to the user: it did not come out of anyone's
-	// mouth, and a transcript that records it as speech would be a lie about the conversation.
-	SendNote(ctx context.Context, text string) error
 
 	// Events is the session's one-way output stream, closed when the session ends. A consumer that
 	// stops draining it stalls the session — drain it in its own goroutine.
@@ -66,6 +55,21 @@ type ToolResult struct {
 	// having the file contents interrupt the weather is worse than a short wait. An adapter maps
 	// this onto whatever delivery its provider offers; one with no such control ignores it.
 	Late bool
+
+	// Pending marks this as an INTERIM answer: the call is still running and a final result for the
+	// same ID will follow.
+	//
+	// It exists because a pending call is otherwise opaque from the model's side. It sees that it
+	// called something and that nothing came back, but not why — waiting on a slow server and
+	// waiting on a human holding a phone are indistinguishable. An assistant told to explain the
+	// wait would have to guess, and guessing "check your phone" when nothing is pending there is
+	// worse than saying nothing.
+	//
+	// Answering the call itself is what makes this safe to say. The alternative — injecting the
+	// reason as conversational input — counts as somebody speaking, which interrupts the model
+	// mid-sentence and makes it abandon what it was saying. An interim result is data about a call
+	// the model already made, so it arrives without anyone appearing to talk.
+	Pending bool
 }
 
 // LiveEvent is one item on a LiveSession's output stream. Like Event, the set is sealed (unexported

@@ -247,6 +247,7 @@ func (d *Driver) handle(ctx context.Context, c *conversation, ev agentkit.LiveEv
 // — is reported back to the model as a result, because a call left unanswered hangs the
 // conversation, and a denial is something the model should say out loud rather than stall on.
 func (d *Driver) invoke(ctx context.Context, c *conversation, call agentkit.LiveToolCall, issued uint64) {
+	ctx = withCall(ctx, call)
 	res := agentkit.ToolResult{ID: call.ID, Tool: call.Tool}
 	tool, ok := d.tools[call.Tool]
 	if !ok {
@@ -273,7 +274,16 @@ func (d *Driver) invoke(ctx context.Context, c *conversation, call agentkit.Live
 	}
 }
 
-// announcing wraps the approver so that every ask first tells the conversation what is pending.
+// callKey carries the id of the tool call a gate check belongs to. The gate hands an approver only
+// the Action — a kind and a target — but answering the model requires the call's id, and the only
+// layer that knows both is the one that dispatched the call.
+type callKey struct{}
+
+func withCall(ctx context.Context, call agentkit.LiveToolCall) context.Context {
+	return context.WithValue(ctx, callKey{}, call)
+}
+
+// announcing wraps the approver so that every ask first tells the model what is pending.
 // It returns nil unchanged when there is no approver — the unattended posture has nothing to
 // announce, because nobody is being waited for.
 func (d *Driver) announcing(sess agentkit.LiveSession) gate.Approver {
@@ -288,8 +298,12 @@ func (d *Driver) announcing(sess agentkit.LiveSession) gate.Approver {
 // Only this layer knows the reason. From the model's side a pending call is opaque — it sees that
 // it called something and that nothing came back, and cannot tell a slow server from a human
 // holding a phone. Left to guess, an assistant asked to explain the wait would sometimes send
-// people to a device where nothing is pending, which is worse than silence. So the fact is stated
-// rather than inferred.
+// people to a device where nothing is pending, which is worse than silence.
+//
+// It answers the CALL rather than speaking into the conversation. Injected text counts as somebody
+// talking, so it interrupts the model mid-sentence and makes it abandon what it was saying — the
+// exact rudeness the announcement exists to prevent. An interim result is data about a call the
+// model already made, and arrives without anyone appearing to speak.
 type announcingApprover struct {
 	inner gate.Approver
 	sess  agentkit.LiveSession
@@ -297,14 +311,23 @@ type announcingApprover struct {
 }
 
 func (a *announcingApprover) Ask(ctx context.Context, act gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
-	note := "Waiting for the person to approve this on their paired device: " + act.Kind
-	if act.Target != "" {
-		note += " " + act.Target
+	call, ok := ctx.Value(callKey{}).(agentkit.LiveToolCall)
+	if !ok {
+		// A gate check outside a live tool call — nothing to answer, so nothing to announce.
+		return a.inner.Ask(ctx, act, suggest)
 	}
-	note += ". Tell them, briefly, and stay with them until it comes back."
-	// A failed note must not stop the approval: the wait is the important part, the narration is
-	// not. It is logged and the ask proceeds.
-	if err := a.sess.SendNote(ctx, note); err != nil {
+	target := act.Kind
+	if act.Target != "" {
+		target += " " + act.Target
+	}
+	interim := agentkit.ToolResult{
+		ID: call.ID, Tool: call.Tool, Pending: true,
+		Result: "Waiting for the person to approve this on their paired device: " + target +
+			". Tell them once, briefly, then carry on.",
+	}
+	// A failed announcement must not stop the approval: the wait is the important part, the
+	// narration is not. It is logged and the ask proceeds.
+	if err := a.sess.SendResult(ctx, interim); err != nil {
 		a.log.Warn("voice: could not announce a pending approval", "err", err)
 	}
 	return a.inner.Ask(ctx, act, suggest)

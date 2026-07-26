@@ -226,44 +226,31 @@ const (
 // model is meant to react to it (apologize, try another route), so swallowing it would leave the
 // conversation hanging on a call that never gets answered.
 //
-// Lateness, not outcome, picks the scheduling: a denial the person is waiting on should interrupt,
-// and a success they have long moved past should not.
+// An interim result sets willContinue, which turns the call into a generator: the model learns why
+// it is waiting, and a final result for the same id follows. Interim results are always WHEN_IDLE —
+// they are an aside, and cutting the model off to deliver one is the very rudeness they exist to
+// avoid. For the final result lateness picks the scheduling instead of the outcome: a denial the
+// person is still waiting on should interrupt, a success they have long moved past should not.
 func (s *session) SendResult(ctx context.Context, r agentkit.ToolResult) error {
 	scheduling := interrupt
-	if r.Late {
+	switch {
+	case r.Pending, r.Late:
 		scheduling = whenIdle
 	}
-	payload := map[string]any{"result": r.Result, "scheduling": scheduling}
+	payload := map[string]any{"result": r.Result}
 	if r.Err != nil {
-		payload = map[string]any{"error": r.Err.Error(), "scheduling": scheduling}
+		payload = map[string]any{"error": r.Err.Error()}
 	}
-	return s.write(ctx, clientMessage{ToolResponse: &toolResponse{
-		FunctionResponses: []functionResponse{{ID: r.ID, Name: r.Tool, Response: payload}},
-	}})
+	fr := functionResponse{ID: r.ID, Name: r.Tool, Response: payload, Scheduling: scheduling}
+	if r.Pending {
+		fr.WillContinue = &yes
+	}
+	return s.write(ctx, clientMessage{ToolResponse: &toolResponse{FunctionResponses: []functionResponse{fr}}})
 }
 
-// notePrefix marks an injected note as coming from the environment rather than from the person.
-// The Live API has no system role mid-session, so the attribution has to live in the text — without
-// it the model answers as though someone had said the words out loud.
-const notePrefix = "[system] "
-
-// SendNote injects a fact on the realtime channel, alongside the microphone.
-//
-// It deliberately does NOT use clientContent, even though a note is conceptually a turn: current
-// live models restrict that frame to seeding the initial history, and sending one mid-session closes
-// the connection with a policy violation. The realtime channel is the only way in once a session is
-// running.
-//
-// Arriving there is also better behaved. A completed clientContent turn means "answer this now" and
-// cuts the model off mid-word, which in practice made it abandon its sentence and reply to the note
-// instead. Realtime input carries no turn flag: the server's own turn-taking decides when to react,
-// exactly as it does for speech.
-func (s *session) SendNote(ctx context.Context, text string) error {
-	if text == "" {
-		return nil
-	}
-	return s.write(ctx, clientMessage{RealtimeInput: &realtimeInput{Text: notePrefix + text}})
-}
+// yes is the addressable true willContinue points at. A final result leaves the field unset rather
+// than sending false: both end the call, and omitting it keeps the frame to what it means.
+var yes = true
 
 func (s *session) write(ctx context.Context, msg clientMessage) error {
 	select {

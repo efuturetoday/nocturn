@@ -95,10 +95,23 @@ type toolResponse struct {
 	FunctionResponses []functionResponse `json:"functionResponses,omitempty"`
 }
 
+// functionResponse answers one call.
+//
+// Scheduling and WillContinue are SIBLINGS of Response, not keys inside it. The prose docs show a
+// Python sample that nests scheduling in the response dict; the proto-generated types are the wire
+// contract and put it here. Nested, it is silently ignored — the server falls back to its WHEN_IDLE
+// default and the model reads the key as ordinary data.
 type functionResponse struct {
 	ID       string         `json:"id,omitempty"`
 	Name     string         `json:"name"`
 	Response map[string]any `json:"response"`
+	// "Specifies how the response should be scheduled in the conversation. Only applicable to
+	// NON_BLOCKING function calls, is ignored otherwise. Defaults to WHEN_IDLE."
+	Scheduling string `json:"scheduling,omitempty"`
+	// "Signals that function call continues, and more responses will be returned, turning the
+	// function call into a generator. Is only applicable to NON_BLOCKING function calls […] If set
+	// to false, future responses will not be considered." Not supported on Vertex AI.
+	WillContinue *bool `json:"willContinue,omitempty"`
 }
 
 // serverMessage is the server-to-client envelope. Like the client side, exactly one field is
