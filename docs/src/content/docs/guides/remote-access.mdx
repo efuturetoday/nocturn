@@ -19,7 +19,7 @@ and speaks a small tagged-JSON protocol over one WebSocket per device.
 ## Pairing a device <Badge text="Available now" variant="success" />
 
 Every connection is gated on a bearer token, and the daemon never stores the token itself — only its
-SHA-256 hash, compared in constant time. Getting a device its token happens in one of two ways:
+SHA-256 hash, compared in constant time. Getting a device its token happens in one of three ways.
 
 **The first device** redeems a bootstrap code that the daemon prints at startup (`POST /pair`). That
 is the only time a code comes from the machine itself.
@@ -35,6 +35,32 @@ is the only time a code comes from the machine itself.
 The property that buys: a device that is merely on your network cannot join. It needs a human at an
 already-trusted device to hand it a code.
 
+**A device that cannot read a code** is enrolled *for* — a speaker in a hallway has no display to
+show one and no keyboard to enter one, so the exchange above has nothing to work with. An
+already-paired device asks the daemon to mint a bearer on its behalf (`POST /devices`) and hands it
+over. Letting such a device enrol itself is not the alternative: anything that can enrol itself is
+not being authorised by anyone.
+
+## What a device is, and what that lets it do
+
+Every device carries a **class**, which is a fact about the device rather than a list of permissions.
+What a class may do is decided in one place, so the rules can change without rewriting what is
+already stored.
+
+| Class | May answer approvals | May enrol devices |
+|---|---|---|
+| `app` | yes | yes |
+| `appliance` | no | no |
+
+An **appliance** is anything with no authenticated input path — a voice satellite, a doorbell, a car.
+Whoever is present can operate it and none of them identified themselves, so nothing it reports is
+anybody's consent. It is not shown approvals at all: a connection that may not answer one is never
+attached to the approval broker, so there is nothing for it to answer *with*.
+
+Enrolment follows one rule rather than a list of exceptions: **a device may only enrol a class whose
+abilities its own class already covers.** An appliance therefore enrols nothing, so a stolen
+appliance token cannot multiply into a household of equally trusted microphones.
+
 ## What the app can do
 
 The companion app talks to the same workspace the terminal does — same conversations, same agents,
@@ -45,8 +71,9 @@ back the same way (`chat.token`, `chat.thinking`, `chat.tool`, `approval.request
 Two consequences worth knowing:
 
 - **Conversations are not per device.** Start something in the terminal, pick it up on your phone.
-- **The first answer wins.** If two devices are attached and both are shown an approval, whichever
-  answers first resolves it; the other is told it was resolved.
+- **The first answer wins.** If two devices are shown an approval, whichever answers first resolves
+  it; the other is told it was resolved. This is also why an appliance is never shown one — it would
+  outrace the phone it exists to defer to.
 
 ## Approvals when nobody is looking <Badge text="Available now" variant="success" />
 
