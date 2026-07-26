@@ -75,6 +75,31 @@ Two consequences worth knowing:
   it; the other is told it was resolved. This is also why an appliance is never shown one — it would
   outrace the phone it exists to defer to.
 
+## Speaking, on the same connection
+
+Voice is a domain on the protocol above, not a separate channel: `voice.wake` opens a spoken session
+and `voice.end` closes it, and the audio itself is binary frames — the only frames on the socket that
+are not commands. The daemon answers with `voice.state` on each transition and `voice.interrupt` when
+you talk over it, which tells the device to drop whatever it has buffered but not yet played.
+
+One connection carries all of it because a second one would need a second copy of everything that
+already hangs off a device's connection — pairing, the approval routing, presence. It also means a
+device that can already talk to the daemon can already speak, without another endpoint or another
+token.
+
+Three ways this differs from chat, all deliberate:
+
+- **A device has one conversation at a time**, which is why an audio frame carries no addressing of
+  its own. The wake word already said which one.
+- **Audio is addressed, not broadcast.** A conversation is shown on every device; speech is played on
+  exactly one, or your phone would play what the speaker in the hallway is hearing.
+- **A spoken session ends when the device goes away.** A chat turn deliberately survives that,
+  because its answer is still worth reading when you come back. Audio has nobody to play to, and a
+  live model bills for every second of it.
+
+A daemon with no live model configured refuses `voice.wake` and says so, rather than opening a
+session that can never answer.
+
 ## Approvals when nobody is looking <Badge text="Available now" variant="success" />
 
 This is the reason the daemon exists. An agent running on a schedule hits something that needs your
