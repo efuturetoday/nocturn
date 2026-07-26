@@ -152,6 +152,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Threats', slug: 'architecture/threat-model' },
 						{ label: 'The Two Halves', slug: 'architecture/agentkit' },
+						{ label: 'Speaking to It', slug: 'architecture/live-voice' },
 						{ label: 'Design', slug: 'architecture/the-onion' },
 						{ label: 'Flow', slug: 'architecture/request-flow' },
 					],
