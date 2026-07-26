@@ -74,52 +74,43 @@ so if AGC alone is enough, the multiplier is a liability rather than a help. Set
 
 ---
 
-## 4. Before a satellite is on the network
+## 4. Getting a satellite onto the network
 
-The harness is loopback-only and unauthenticated, which is safe for exactly that reason. A satellite
-is on the LAN, so it needs a bearer — and a device class that cannot answer approvals.
+The daemon side is **done** (`f43235d`): devices carry a class, `capabilitiesOf` in `internal/serve`
+is the one place a class becomes authority, a connection that may not approve is handed no broker at
+all, and `POST /devices` enrols under a single rule — a device may only enrol a class whose abilities
+its own already covers. An appliance therefore enrols nothing and answers nothing.
+
+What remains is getting a bearer onto the board.
 
 ### The principle
 
-**A satellite must not be able to enrol itself.** It has no screen, no keyboard and nothing to
-prove: it cannot display a pairing code or be handed one, so the existing `/join` flow — where a
-device asks and an already-paired device confirms with a code — does not apply. A device that can
-enrol itself is the hole, not the feature.
+**A satellite must not enrol itself.** It has no screen and no keyboard: it cannot display a pairing
+code or be handed one, so the `/join` flow has nothing to work with. And a device that can enrol
+itself is not being authorised by anyone — that is the hole, not the feature.
 
 So the phone does it. It is already paired and already authenticated, so it asks the daemon for a
-bearer and hands it over. The human authorises on a device that *can* authorise; the satellite never
-proves anything, it only receives.
+bearer and passes it on. The human authorises on a device that *can* authorise; the satellite only
+receives.
 
 ```
-phone  ──▶ daemon:  mint a bearer, class = satellite
+phone  ──▶ daemon:  POST /devices {name, class: "appliance"}
 daemon ──▶ phone:   the bearer, once — afterwards only its hash exists
 phone  ──▶ board:   wifi credentials + bearer          (BLE or SoftAP)
 board:              into NVS
 board  ──▶ mDNS:    find the daemon                    (the address is not provisioned)
 ```
 
-### Daemon side
+### Now: write NVS at flash time
 
-Independent of how the bearer later reaches the board, so it is not built twice.
+The board is being flashed anyway; `nvs_partition_gen` builds the image and the firmware reads
+credentials and bearer from it. No provisioning code, no app flow, no BLE security design — and it
+unblocks wifi and the WebSocket immediately. For one device in a flat this is proportionate; how it
+scales is a question the second device asks.
 
-| Where | Change |
-|---|---|
-| `internal/auth` | `Class` on `Device` — `Kind` and `Role` are both taken (gate action kind, chat store kind, notification kind; `agentkit.Role` is a message author). Zero value `ClassUnknown`, least authority. |
-| `internal/auth` | `Mint(name string, class Class) (bearer string, err error)` — enrol without the code exchange, for a caller that is already trusted. |
-| `internal/auth` | Replace `Verify` with `Lookup(bearer) (Device, bool)`. A caller that needs the class needs the device; leaving both would be the redundant wrapper. |
-| `internal/auth` | Migrate on load: records written before `Class` existed can only have come from the app flow, so stamp them `ClassApp` once. Without this every paired phone silently loses the ability to approve. |
-| `internal/serve` | `POST /satellite`, authenticated with an existing app bearer, mints and returns one. |
-| `internal/serve` | `conn` attaches to the approval broker **only** for `ClassApp`. The broker takes the first answer, so a device with a microphone and no authenticated input would outrace the phone it exists to defer to. |
+### Later: BLE provisioning from the app
 
-### Getting it onto the board
-
-**Now: write NVS at flash time.** The board is being flashed anyway; `nvs_partition_gen` builds the
-image and the firmware reads credentials and bearer from it. No provisioning code, no app flow, no
-BLE security design — and it unblocks wifi and the WebSocket immediately. For one device in a flat
-this is proportionate; the question of how it scales arrives with the second device.
-
-**Later: BLE provisioning from the app.** ESP-IDF ships `wifi_provisioning` (already in the
-component list) over BLE or SoftAP, with Espressif's own apps to test against before ours can do it.
-It must run in security mode 2 (SRP) with a proof of possession supplied out of band — printed on
-the device or shipped with it. Without that the bearer crosses an open access point in the clear,
-which would undo the whole point of minting it carefully.
+ESP-IDF ships `wifi_provisioning` (already in the component list) over BLE or SoftAP, with
+Espressif's own apps to test against before ours can. It must run in security mode 2 (SRP) with a
+proof of possession supplied out of band — printed on the device or shipped with it. Without that the
+bearer crosses an open access point in the clear, which would undo the care taken minting it.
