@@ -11,12 +11,38 @@
 
 static const char *TAG = "sat/out";
 
-// Roughly a second of mono 16 kHz PCM16. Deep enough to ride out a codec hiccup, shallow enough
-// that a barge-in flush does not leave a noticeable tail.
-#define RING_BYTES (32 * 1024)
+// Two seconds of mono 16 kHz PCM16, and this number IS the credit window.
+//
+// It is sized against the credit loop's round trip, not against jitter, and the ratio is the whole
+// point. An earlier attempt used 256 ms against a measured 208 ms round trip — the window and the
+// delay in reopening it were the same number, so the queue was empty every time credit came back and
+// no amount of tuning either number helped. Two seconds against the same 200 ms is ten to one, and a
+// loop with that much slack cannot oscillate.
+//
+// Depth costs nothing here. Capacity is not latency — what delays the first word is the fill level
+// at which playback starts, below — and it costs no barge-in reach either, because a barge-in is
+// decided on this board and audio_out_flush empties this ring locally and instantly, however full it
+// is.
+#define RING_BYTES 64000
+
+// How much has to pile up before playback starts: 200 ms.
+//
+// This, and only this, is what the listener pays for buffering. Audio arrives from the network in
+// bursts and leaves at the codec's steady rate; starting on the first chunk guarantees running dry
+// between bursts, which is heard as a stutter rather than a pause. 40 ms was tried and sat below one
+// WiFi round trip, so the queue was empty at every refill and two thirds of what the speaker emitted
+// was silence the board invented.
+#define PREBUFFER_BYTES 6400
+
+// How long the wait for that cushion may last before playing whatever is there anyway.
+//
+// The cushion is a target, not a condition: a reply's last fragment is whatever is left over, often
+// less than the cushion, and waiting for one that will never arrive leaves it in the queue until the
+// next reply pushes it out. Measured at 134 ms sitting there for as long as the board stayed up.
+#define PREBUFFER_WAIT_TICKS 15
 
 // One fetch chunk is well under this; the drain task reads whatever has accumulated.
-#define DRAIN_BYTES 2048
+#define DRAIN_BYTES 640
 
 static RingbufHandle_t ring;
 
@@ -27,6 +53,15 @@ static volatile uint32_t played_chunks;
 static volatile uint32_t played_samples;
 static volatile int last_write_err;
 
+// Bytes that have left the queue and not yet been credited back to the sender. This is the entire
+// flow control: the sender may have RING_BYTES outstanding, and every byte played here earns it one
+// more. Overflow is structurally impossible rather than merely unlikely.
+static volatile size_t freed;
+
+// Set by a flush. After a barge-in the queue is empty by definition, so playback waits for a cushion
+// again rather than starting on the first chunk of whatever comes next.
+static volatile bool refill;
+
 // drain_task moves queued samples into the codec. It is the only caller of esp_audio_play, which
 // is what keeps that call off the fetch loop.
 static void drain_task(void *arg)
@@ -34,10 +69,41 @@ static void drain_task(void *arg)
     // Mono all the way through. The board carries an ES8311, which has a single DAC channel, so a
     // duplicated stereo stream is twice the material for the same amount of time — it plays at
     // double speed with every sample heard twice. The codec is opened as one channel to match.
+    // Once playback starts this loop never stops writing until the reply is over, and the write is
+    // what paces it: esp_codec_dev_write blocks until the DMA accepts, so this loop is clocked by the
+    // crystal. Stop writing and it stops being clocked — it would spin and burn the core the network
+    // is on. Silence is not filler, it is what keeps the loop a clock while nothing is queued.
+    static const int16_t quiet[DRAIN_BYTES / sizeof(int16_t)] = {0};
+    bool playing = false;
+    int held = 0;
+
     for (;;) {
+        size_t waiting = RING_BYTES - xRingbufferGetCurFreeSize(ring);
+        if (refill) {
+            refill = false;
+            playing = false;
+        }
+        if (!playing) {
+            if (waiting < PREBUFFER_BYTES && held < PREBUFFER_WAIT_TICKS) {
+                held++;
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
+            if (waiting == 0) {
+                held = 0;
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
+            held = 0;
+            playing = true;
+        }
+
         size_t got = 0;
-        int16_t *mono = xRingbufferReceiveUpTo(ring, &got, portMAX_DELAY, DRAIN_BYTES);
+        int16_t *mono = xRingbufferReceiveUpTo(ring, &got, 0, DRAIN_BYTES);
         if (!mono) {
+            // Nothing queued. Keep the codec fed, which is what keeps this loop clocked.
+            esp_audio_mono16(quiet, sizeof(quiet) / sizeof(quiet[0]), portMAX_DELAY);
+            playing = false;
             continue;
         }
         esp_err_t err = esp_audio_mono16(mono, got / sizeof(int16_t), portMAX_DELAY);
@@ -47,13 +113,19 @@ static void drain_task(void *arg)
         played_chunks++;
         played_samples += got / sizeof(int16_t);
         vRingbufferReturnItem(ring, mono);
+        // Earned only once the samples have actually gone. Crediting on receipt would hand the
+        // sender room the queue does not have yet.
+        freed += got;
     }
 }
 
 esp_err_t audio_out_init(void)
 {
     // A byte-buffer ring, so a writer's chunk size and the drain size need not agree.
-    ring = xRingbufferCreate(RING_BYTES, RINGBUF_TYPE_BYTEBUF);
+    // PSRAM: two seconds does not belong in the internal heap, which the WiFi stack and the audio
+    // front end already compete for. Nothing reads it by DMA — the drain task copies each block into
+    // an internal scratch on its way to the codec — so the usual PSRAM-and-DMA trap does not apply.
+    ring = xRingbufferCreateWithCaps(RING_BYTES, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM);
     if (!ring) {
         return ESP_ERR_NO_MEM;
     }
@@ -132,11 +204,30 @@ void audio_out_flush(void)
         size_t got = 0;
         void *item = xRingbufferReceiveUpTo(ring, &got, 0, DRAIN_BYTES);
         if (!item) {
-            return;
+            break; // break, not return — what follows is the point of calling this
         }
         vRingbufferReturnItem(ring, item);
+        // Discarded is just as FREE as played, and the sender has to be told so.
+        //
+        // Crediting only what reached the speaker means every flush permanently shrinks the window:
+        // the sender goes on believing this queue holds bytes that were thrown away, and after a
+        // couple of barge-ins it has no room left to send into and the conversation goes quiet.
+        // Measured — the second turn got no answer at all.
+        freed += got;
     }
+    refill = true;
 }
+
+size_t audio_out_capacity(void) { return RING_BYTES; }
+
+size_t audio_out_take_freed(void)
+{
+    size_t n = freed;
+    freed -= n;
+    return n;
+}
+
+size_t audio_out_depth(void) { return ring ? RING_BYTES - xRingbufferGetCurFreeSize(ring) : 0; }
 
 void audio_out_stats(uint32_t *chunks, uint32_t *samples, int *err)
 {

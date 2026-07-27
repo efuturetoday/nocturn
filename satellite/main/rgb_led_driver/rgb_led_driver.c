@@ -36,6 +36,10 @@ static const char *TAG = "sat/rgb";
 // How long rgb_flash holds. Long enough to be seen, short enough not to read as a state.
 #define FLASH_TICKS 3
 
+// How long a gauge holds: a second. Long enough to look at after the hand has moved, short enough
+// that the ring goes back to saying what the device is doing.
+#define GAUGE_TICKS 20
+
 const rgb_color_t RGB_OFF = {0, 0, 0};
 const rgb_color_t RGB_WHITE = {255, 255, 255};
 const rgb_color_t RGB_RED = {255, 0, 0};
@@ -55,8 +59,10 @@ static led_strip_handle_t strip;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static rgb_pattern_t want_pattern = RGB_SOLID;
 static rgb_color_t want_color;
-static rgb_color_t flash_color;
-static int flash_left;
+static rgb_color_t overlay_color;
+static int overlay_left;
+// -1 means a plain flash; 0..100 means draw that much of the ring.
+static int overlay_gauge;
 
 // scale dims a colour to `level` out of 255.
 static rgb_color_t scale(rgb_color_t c, int level)
@@ -160,16 +166,37 @@ static void render_task(void *arg)
         rgb_pattern_t pattern;
         rgb_color_t color;
 
+        int gauge = -1;
         portENTER_CRITICAL(&lock);
-        if (flash_left > 0) {
-            flash_left--;
+        if (overlay_left > 0) {
+            overlay_left--;
             pattern = RGB_SOLID;
-            color = flash_color;
+            color = overlay_color;
+            gauge = overlay_gauge;
         } else {
             pattern = want_pattern;
             color = want_color;
         }
         portEXIT_CRITICAL(&lock);
+
+        if (gauge >= 0) {
+            rgb_color_t px[LED_STRIP_LED_COUNT];
+            // Rounded up, and never fewer than one: a ring showing nothing at all reads as broken
+            // rather than as quiet, and the volume this device can be set to is never actually zero.
+            int lit = (gauge * LED_STRIP_LED_COUNT + 99) / 100;
+            if (lit < 1) {
+                lit = 1;
+            }
+            for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
+                // The unlit part stays faintly on, so the arc is read against a full ring rather
+                // than against darkness — three lit pixels and four dark ones is a fraction; three
+                // lit pixels alone is just three pixels.
+                px[i] = i < lit ? color : scale(color, 12);
+            }
+            paint(px);
+            vTaskDelay(pdMS_TO_TICKS(TICK_MS));
+            continue;
+        }
 
         render(pattern, color, tick);
         vTaskDelay(pdMS_TO_TICKS(TICK_MS));
@@ -218,7 +245,17 @@ void rgb_show(rgb_pattern_t pattern, rgb_color_t color)
 void rgb_flash(rgb_color_t color)
 {
     portENTER_CRITICAL(&lock);
-    flash_color = color;
-    flash_left = FLASH_TICKS;
+    overlay_color = color;
+    overlay_gauge = -1;
+    overlay_left = FLASH_TICKS;
+    portEXIT_CRITICAL(&lock);
+}
+
+void rgb_gauge(int percent, rgb_color_t color)
+{
+    portENTER_CRITICAL(&lock);
+    overlay_color = color;
+    overlay_gauge = percent < 0 ? 0 : percent > 100 ? 100 : percent;
+    overlay_left = GAUGE_TICKS;
     portEXIT_CRITICAL(&lock);
 }
