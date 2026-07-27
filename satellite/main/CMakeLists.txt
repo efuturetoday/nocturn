@@ -7,6 +7,7 @@ set(SOURCES
     "./net/wifi.c"
     "./net/discover.c"
     "./net/link.c"
+    "./net/uplink.c"
     "./audio_out/audio_out.c"
     "./state/state.c"
     "./button/button.c"

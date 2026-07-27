@@ -73,6 +73,16 @@ void rgb_show(rgb_pattern_t pattern, rgb_color_t color);
 // Giving those a state of their own would mean a state the machine leaves on the next tick.
 void rgb_flash(rgb_color_t color);
 
+// rgb_gauge shows a value as a filled arc of the ring, then restores what rgb_show last set.
+//
+// For the things a person adjusts and needs to see the result of at once — volume, and nothing else
+// so far. A number has to be readable in the half second before the hand leaves the button, which
+// rules out anything that has to be counted: the arc is read by how far round it goes.
+//
+// Held for about a second, because it is feedback on an action rather than a state, and because
+// pressing again while it shows simply restarts the hold.
+void rgb_gauge(int percent, rgb_color_t color);
+
 #ifdef __cplusplus
 }
 #endif

@@ -60,6 +60,7 @@ typedef enum {
     SAT_EV_LINK_REJECTED,  // the daemon does not accept this device's token; retrying cannot fix it
     SAT_EV_UNPROVISIONED,  // no credentials in NVS
     SAT_EV_REMOTE_STATE,   // the daemon's view of the conversation; data is a NUL-terminated string
+    SAT_EV_BARGE_IN,       // a person talked over the reply; posted BY this module, see state.c
     SAT_EV_BUTTON_DOWN,    // a button went down; data is a button_id_t
     SAT_EV_BUTTON_UP,      // and back up
 } sat_event_id_t;

@@ -186,10 +186,14 @@ static void on_voice(void)
         ESP_LOGD(TAG, "voice during the amplifier's own click — ignored");
         return;
     }
-    // Barge-in. The local half is instant; telling the daemon so it stops generating is separate,
-    // and deliberately after, because the person must see the interruption land immediately.
+    // Barge-in. What this module can do is decide that it happened; silencing the speaker and
+    // telling the daemon belong to whoever owns those, so it says so and they act.
+    //
+    // Announced rather than acted on, because the audio path is not this module's to reach into —
+    // and because the daemon needs telling too, on a queue this module does not have.
     ESP_LOGI(TAG, "barge-in");
     rgb_flash(RGB_WHITE);
+    esp_event_post(SAT_EVENT, SAT_EV_BARGE_IN, NULL, 0, 0);
     f.remote_known = false; // the daemon's "speaking" is now wrong; it will say so shortly
     settle();
 }

@@ -50,6 +50,21 @@ void audio_out_silence(int ms);
 // cause, and only separate counters tell them apart.
 void audio_out_stats(uint32_t *chunks, uint32_t *samples, int *err);
 
+// audio_out_capacity is the size of the queue, in bytes. The initial credit.
+size_t audio_out_capacity(void);
+
+// audio_out_take_freed reports how many bytes have been played since the last call, and forgets
+// them. That number IS the credit to hand back to the sender.
+//
+// Freed, not depth: what the sender needs to know is how much more it may send, and only what has
+// actually left the queue answers that. Depth would count bytes still waiting to be played, which is
+// room the queue does not have.
+size_t audio_out_take_freed(void);
+
+// audio_out_depth is what is queued but unplayed, in bytes. Instrumentation only: a credit window is
+// sized against how close the queue came to empty, and a maximum tells you nothing about that.
+size_t audio_out_depth(void);
+
 #ifdef __cplusplus
 }
 #endif
