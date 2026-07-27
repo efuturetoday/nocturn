@@ -634,6 +634,63 @@ func TestAssemble_SystemPromptEphemeral(t *testing.T) {
 	}
 }
 
+// TestSystemFunc_WinsOverSystem: a provider function supersedes the static prompt, so a consumer can
+// fold in context that only exists at turn time.
+func TestSystemFunc_WinsOverSystem(t *testing.T) {
+	llm := &stepLLM{steps: []agentkit.Step{answerStep("ok")}}
+	if _, err := agentkit.Once(context.Background(), llm, "q",
+		agentkit.WithSystem("STATIC"), agentkit.WithSystemFunc(func() string { return "DYNAMIC" })); err != nil {
+		t.Fatalf("Once err = %v", err)
+	}
+	conv := llm.convAt(0)
+	if len(conv) == 0 || conv[0].Role != agentkit.RoleSystem {
+		t.Fatalf("no system message: %+v", conv)
+	}
+	if !strings.Contains(conv[0].Content, "DYNAMIC") || strings.Contains(conv[0].Content, "STATIC") {
+		t.Fatalf("system prompt = %q, want the func's value to win", conv[0].Content)
+	}
+}
+
+// TestSystemFunc_ReevaluatedPerTurn is the point of the option: a value that changes between turns
+// must reach the model on the very next turn, not only in a fresh session.
+func TestSystemFunc_ReevaluatedPerTurn(t *testing.T) {
+	llm := &stepLLM{steps: []agentkit.Step{answerStep("one"), answerStep("two")}}
+	prompt := "FIRST"
+	sess := agentkit.NewSession(context.Background(), llm,
+		agentkit.WithSystemFunc(func() string { return prompt }))
+	defer sess.Close()
+	sub := sess.Subscribe()
+
+	awaitTurn := func() {
+		t.Helper()
+		for {
+			select {
+			case ev, ok := <-sub:
+				if !ok {
+					t.Fatal("event stream closed before TurnEnd")
+				}
+				if _, done := ev.(agentkit.TurnEnd); done {
+					return
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("turn did not end")
+			}
+		}
+	}
+	sess.Submit("a")
+	awaitTurn()
+	prompt = "SECOND" // changed between turns, with the session still open
+	sess.Submit("b")
+	awaitTurn()
+
+	if got := llm.convAt(0); len(got) == 0 || !strings.Contains(got[0].Content, "FIRST") {
+		t.Fatalf("turn 1 system prompt = %+v, want FIRST", got)
+	}
+	if got := llm.convAt(1); len(got) == 0 || !strings.Contains(got[0].Content, "SECOND") {
+		t.Fatalf("turn 2 system prompt = %+v, want SECOND", got)
+	}
+}
+
 func TestToolset_SkillsAddsLoadSkillTool(t *testing.T) {
 	set := newSet(t, echoTool(t, "echo", "R"))
 	skills, err := agentkit.NewSkillSet(agentkit.Skill{Name: "pdf", Description: "handle pdfs", Body: "b"})

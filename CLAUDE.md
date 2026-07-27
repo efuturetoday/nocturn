@@ -95,11 +95,22 @@ tools/`uses` cage/credentials and is reviewed WITHOUT running the artifact) ·
 `mcp` (+`/authflow`) (stdlib-only protocol client over an injected transport + the gated
 connection layer).
 
-**Context & composition:** `skill` (agentskills.io skills from disk → `agentkit.SkillSet`) ·
+**Context & composition:** `memory` (the assistant's durable notes; catalog DERIVED from the notes
+on disk and folded into every prompt, bodies on demand — control-plane folder, one writer) ·
+`frontmatter` (the shared `---` YAML preamble parser/renderer: skills and memory notes) ·
+`skill` (agentskills.io skills from disk → `agentkit.SkillSet`) ·
 `discovery` (the shared name/skip rules for agents, skills, plugins, MCP — one rule, four kinds) ·
 `chat` (file-backed transcript store + Manager) · `agent` (declaration + cron only; execution is
 injected by the workspace) · `workspace` (the composition root) · `serve` (WebSocket surface,
-tagged JSON, one file per domain).
+tagged JSON, one file per domain) ·
+`speaker` (who spoke: Kaldi-compatible filterbank → embedding → cosine. **Differentiation, not
+authentication.** As recognition it is strong — 100% top-1 among 2–6 enrolled voices, 0.83% EER
+against strangers — so the shipped threshold (0.50) only has to catch visitors. It still carries no
+authority: the threat is audio played at the microphone, not a lookalike, and no accuracy fixes that
+because the attacker owns the in-band channel — which is the same reason approval is out of band.
+Both measurements and the full argument: `internal/speaker/testdata/README.md`) ·
+`onnx` (the inference engine `speaker` runs on: a deliberately narrow ONNX subset in pure Go, no
+CGO — the package doc says why not onnxruntime, wasm or a tensor framework, with the measurements).
 
 **The tools that exist today** (`internal/tools`, plus the two heavy ones):
 
@@ -109,6 +120,8 @@ tagged JSON, one file per domain).
 | `file_read` `file_list` `file_stat` `file_search` `file_write` `file_remove` `file_move` | `FileKind`, target = path, workspace-confined |
 | `notify` | `NotifyKind` |
 | `remind` `remind_list` `remind_cancel` | `RemindKind` |
+| `memory_write` (`internal/memory`) | `memory.Kind`, target = note path, **outside `mnt`**; allowed in chat, asked in agent runs |
+| `memory_read` (`internal/memory`) | **ungated** — context, never authority (same argument as `skill_read`) |
 | `time_now` `wake` | **ungated** — zero authority (no wall-clock in the guest), `wake` bounded |
 | `code_run` (`internal/script`) | woven per cage by `tools.Compose`, so a script's reach is its cage |
 | `skill_read` (`internal/skill`), `skill_load` (agentkit) | context, never authority |
@@ -128,9 +141,17 @@ Read this before touching anything security-shaped — it is easy to assume the 
 
 - **Two separate questions.** WHICH tools an agent has at all = agentkit's `ToolSet` (bound once,
   statically, via `Select`). WHAT a tool may DO = `gate` (per action, asked when risky, remembered).
-- **The workspace root policy** (`internal/workspace/workspace.go:policy`): `NetKind` and
-  `FileKind` → **ask, remembered for the session**; every other kind → **allow**. It is *not*
-  deny-by-default. Tightening it is a deliberate change, not a bugfix.
+- **The workspace root policy** (`internal/workspace/workspace.go:policy`): `NetKind` and `FileKind`
+  → **ask, remembered for the session**; every other kind → **allow**. It is *not* deny-by-default.
+  Tightening it is a deliberate change, not a bugfix.
+- **`agentPolicy` is `policy` plus `memory.Kind` → ask** — the one axis staggered by who is watching.
+  A chat shows the write in its transcript as it happens, so asking would only buy "before" instead
+  of "after"; an unattended run has no reader, so it asks out of band (and with no device, denies).
+- **The system prompt is live, the identity is not.** `resolvePersona` is evaluated ONCE at `Open`;
+  the memory index is folded in per turn via `agentkit.WithSystemFunc` (`composePrompt`). The block
+  is omitted when memory is empty or the runner's cage holds no memory tool — a narrowed agent must
+  not be handed the user's notes. Agent runs and sub-agents get the same treatment, so a cron agent
+  and the evening chat share one picture of the user.
 - **Grants** are durable per workspace (`grants.json`, written 0600 via a temp file) and
   implement `gate.Grants`. Recall: never / session / always.
 - **Agent autonomy** (`internal/agent`): `Strict` (the zero value) gets **no approver**, so a
@@ -182,6 +203,16 @@ Read this before touching anything security-shaped — it is easy to assume the 
 - **LLMs are never fireproof.** Robustness = structured `tool_calls` + schema as a guardrail + our
   own argument validation and retry (the error is fed back to the model).
 - **`.env` is gitignored**; `godotenv.Load()` reads from CWD and real env vars win.
+- **A model's documented default is not the default it was trained with.** `internal/speaker`
+  implemented Kaldi's filterbank from the specification and used Kaldi's own default window,
+  `povey`; WeSpeaker overrides it to `hamming`. All nine property tests passed — window shape, tone
+  in the right Mel bin, gain absorbed — and same-speaker similarity sat at 0.73 instead of 0.98.
+  Read the training code, and pin the frontend against the implementation, not against a reading
+  of it. Anything that feeds a pretrained network deserves this suspicion.
+- **A nested `go.mod` needs `GOWORK=off`.** `internal/onnx/reference/` is its own module so gomlx
+  stays out of nocturn's graph. That works — the parent skips it — but `go.work` does not cover it
+  either, so plain `go build ./...` inside it fails with "directory prefix . does not contain
+  modules listed in go.work".
 
 ---
 
@@ -213,6 +244,15 @@ go test -race ./...
 
 wat2wasm internal/sandbox/testdata/echo.wat -o internal/sandbox/testdata/echo.wasm
 internal/script/qjs/build.sh          # only when the QuickJS shim changes (needs wasi-sdk)
+
+# Speaker recognition. The checkpoint (~26 MB) and the evaluation corpus are NOT committed; the
+# tests needing them skip when unset. Everything about regenerating the two golden files, and the
+# measured thresholds, is in internal/{onnx,speaker}/testdata/README.md.
+export NOCTURN_SPEAKER_MODEL=…/wespeaker_en_voxceleb_resnet34.onnx
+go test ./internal/speaker/ ./internal/onnx/
+internal/speaker/reference/corpus.sh /tmp/corpus   # 40 LibriSpeech speakers, needs ffmpeg
+NOCTURN_SPEAKER_CORPUS=/tmp/corpus go test ./internal/speaker/ -run Evaluate -v -timeout 30m
+internal/speaker/reference/setup.sh   # torch venv, ONLY to regenerate the filterbank reference
 
 cp .env.example .env                  # FREELLM_BASE_URL / _MODEL / _API_KEY
 go run ./cmd/nocturn                  # interactive terminal chat
