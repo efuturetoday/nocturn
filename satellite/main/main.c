@@ -20,6 +20,7 @@
 
 #include "audio_out.h"
 #include "bsp_board.h"
+#include "button.h"
 #include "discover.h"
 #include "link.h"
 #include "mic_speech.h"
@@ -69,6 +70,8 @@ static void on_pcm(const int16_t *pcm, size_t samples, void *user)
     }
     peak = p;
 
+    // While a hand-held recording runs, capture regardless of the wake word: the point is to hear
+    // what the microphone path produces, and that must not depend on the part being debugged.
     if (playing_back || captured >= CAPTURE_SAMPLES) {
         return;
     }
@@ -89,12 +92,41 @@ static void on_pcm(const int16_t *pcm, size_t samples, void *user)
 // Anything else says the acoustics have to be fixed first, and no amount of protocol will help.
 static uint32_t voice_while_playing;
 
+// Hold to record, release to hear it back.
+//
+// The wake word is a poor bench tool: it needs a quiet room to trigger, it decides for itself when
+// the utterance ended, and it is one of the things under test. Holding a button decides none of
+// that, which is what listening to a gain change or an echo-cancellation setting actually needs.
+//
+// Held rather than toggled, because the button IS the state. A toggle needs the person to know which
+// half of it they are in, and a device with seven LEDs and no screen has no good way to tell them —
+// so they press, wonder, and press again to find out, which stops the recording they just started.
+static volatile bool hand_recording;
+
 // on_sat drives the recording, and nothing else. The ring belongs to the state module now — this
 // used to paint colours here, which is how an unprovisioned board and a listening one ended up
 // looking identical.
 static void on_sat(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     switch (id) {
+    case SAT_EV_BUTTON_DOWN:
+        if (*(button_id_t *)data != BUTTON_A) {
+            return;
+        }
+        hand_recording = true;
+        captured = 0;
+        mic_speech_hold(true);
+        ESP_LOGI(TAG, "button held — recording");
+        return;
+    case SAT_EV_BUTTON_UP:
+        if (*(button_id_t *)data != BUTTON_A || !hand_recording) {
+            return;
+        }
+        hand_recording = false;
+        mic_speech_hold(false);
+        playing_back = true;
+        ESP_LOGI(TAG, "button released — replaying");
+        return;
     case SAT_EV_WAKE:
         captured = 0;
         return;
@@ -104,7 +136,11 @@ static void on_sat(void *arg, esp_event_base_t base, int32_t id, void *data)
         }
         return;
     case SAT_EV_UTTERANCE_END:
-        playing_back = true;
+        // A hand-held recording outlasts the front end's idea of an utterance: it ends when the
+        // button says so, not when someone happens to pause.
+        if (!hand_recording) {
+            playing_back = true;
+        }
         return;
     default:
         return;
@@ -252,6 +288,7 @@ void app_main(void)
     ESP_ERROR_CHECK(audio_out_init());
     ESP_LOGI(TAG, "step: mic");
     ESP_ERROR_CHECK(mic_speech_start(on_pcm, NULL));
+    ESP_ERROR_CHECK(button_start());
     ESP_LOGI(TAG, "step: done");
 
     xTaskCreate(report, "report", 3 * 1024, NULL, 2, NULL);
