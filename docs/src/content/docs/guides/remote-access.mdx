@@ -77,10 +77,11 @@ Two consequences worth knowing:
 
 ## Speaking, on the same connection
 
-Voice is a domain on the protocol above, not a separate channel: `voice.wake` opens a spoken session
-and `voice.end` closes it, and the audio itself is binary frames — the only frames on the socket that
-are not commands. The daemon answers with `voice.state` on each transition and `voice.interrupt` when
-you talk over it, which tells the device to drop whatever it has buffered but not yet played.
+Voice is a domain on the protocol above, not a separate channel: `voice.wake` opens a spoken session,
+`voice.credit` says how much speech the device can hold, and the audio itself is binary frames — the
+only frames on the socket that are not commands. The daemon answers with `voice.state` on each
+transition and `voice.interrupt` when you talk over it, which tells the device to drop whatever it
+has buffered but not yet played.
 
 One connection carries all of it because a second one would need a second copy of everything that
 already hangs off a device's connection — pairing, the approval routing, presence. It also means a
@@ -97,16 +98,27 @@ Three ways this differs from chat, all deliberate:
   because its answer is still worth reading when you come back. Audio has nobody to play to, and a
   live model bills for every second of it.
 
-Speech comes back **paced**, not as it is produced. A live model emits a sentence far faster than it
-is spoken, and handing that to a device as it lands makes the device's problem: it would need seconds
-of buffer to absorb a burst, and a codec that runs dry between bursts repeats its last block, which
-is heard as a skipping record. The daemon holds the burst and releases it at the rate speech is
-actually heard, so a client needs only enough buffer for network jitter.
+Speech comes back **credited**, not paced. A live model emits a sentence far faster than it is
+spoken, so something has to decide the rate — and the only real clock in the system is the far
+speaker's own crystal. The device grants its whole playout queue when a session opens and grants more
+as playback consumes it; the daemon sends what it has been granted and holds the rest. Nothing is
+metered by a timer, so there is no rate to get wrong, and overflow is structurally impossible rather
+than merely unlikely.
 
-That also decides what `voice.interrupt` can achieve. The backlog is discarded here first and the
-message sent second, so a device only has its own small buffer left to flush. Audio queued ahead on a
-device cannot be taken back — interrupt it and the speaker talks on for whatever is buffered — which
-is the difference between a device that stops when you speak over it and one that does not.
+The window is deliberately much larger than the round trip that reopens it. Sized the other way — a
+buffer about as deep as the delay in refilling it — the queue is empty every time credit arrives, and
+no amount of tuning either number helps.
+
+Blocking the write until the device's socket accepts it looks simpler and is not: a device blocks in
+its own receive callback, that callback runs on the task driving the connection's keepalive, and a
+wait longer than the client's read timeout looks to it like a dead socket. Flow control that drops
+the link under load is not flow control.
+
+**Interrupting is decided on the device.** Its voice detector runs on the echo-cancelled microphone
+signal, so it knows you have started talking without asking anyone — going via the daemon would add a
+round trip to a decision that has to feel immediate. It silences itself first and says
+`voice.barge` afterwards; `voice.interrupt` is the daemon's own version of the same message, for when
+it decides a turn is over.
 
 A daemon with no live model configured refuses `voice.wake` and says so, rather than opening a
 session that can never answer.
