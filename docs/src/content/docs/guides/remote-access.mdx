@@ -97,6 +97,17 @@ Three ways this differs from chat, all deliberate:
   because its answer is still worth reading when you come back. Audio has nobody to play to, and a
   live model bills for every second of it.
 
+Speech comes back **paced**, not as it is produced. A live model emits a sentence far faster than it
+is spoken, and handing that to a device as it lands makes the device's problem: it would need seconds
+of buffer to absorb a burst, and a codec that runs dry between bursts repeats its last block, which
+is heard as a skipping record. The daemon holds the burst and releases it at the rate speech is
+actually heard, so a client needs only enough buffer for network jitter.
+
+That also decides what `voice.interrupt` can achieve. The backlog is discarded here first and the
+message sent second, so a device only has its own small buffer left to flush. Audio queued ahead on a
+device cannot be taken back — interrupt it and the speaker talks on for whatever is buffered — which
+is the difference between a device that stops when you speak over it and one that does not.
+
 A daemon with no live model configured refuses `voice.wake` and says so, rather than opening a
 session that can never answer.
 
