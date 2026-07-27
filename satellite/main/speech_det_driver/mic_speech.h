@@ -43,8 +43,18 @@ typedef void (*mic_pcm_sink_t)(const int16_t *pcm, size_t samples, void *user);
 esp_err_t mic_speech_start(mic_pcm_sink_t sink, void *user);
 
 // mic_speech_voice reports the detector's current answer: is a voice present right now. The level to
-// MIC_EVT_VOICE's edge, for anything that needs to ask rather than be told.
+// SAT_EV_VOICE's edge, for anything that needs to ask rather than be told.
 bool mic_speech_voice(void);
+
+// mic_speech_hold forces the sink open, or lets it close again.
+//
+// Streaming normally begins at the wake word and ends when the front end decides the utterance is
+// over. Held, it does neither: it starts now and runs until released. That is what a bench tool
+// needs — the wake word is one of the things being changed, and an utterance boundary chosen by the
+// front end is not a boundary a person is trying to test.
+//
+// It does not suppress the wake word, so a session opened by voice while held simply stays open.
+void mic_speech_hold(bool on);
 
 #ifdef __cplusplus
 }

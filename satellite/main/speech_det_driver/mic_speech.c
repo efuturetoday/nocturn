@@ -28,6 +28,8 @@ static volatile bool running;
 static volatile bool session;
 // The detector's last answer. Held so the edge can be found, and readable from outside.
 static volatile bool voice;
+// Forces streaming on regardless of the wake word — see mic_speech_hold.
+static volatile bool held;
 
 static mic_pcm_sink_t pcm_sink;
 static void *cb_user;
@@ -127,12 +129,13 @@ static void detect_task(void *arg)
             }
         }
 
-        if (session) {
+        if (session || held) {
             if (pcm_sink) {
                 pcm_sink(res->data, res->data_size / sizeof(int16_t), cb_user);
             }
             silence_ms = res->vad_state == VAD_SPEECH ? 0 : silence_ms + frame_ms;
-            if (silence_ms >= SILENCE_TO_END_MS) {
+            // A held stream has no silence timeout: it ends when the holder says so.
+            if (session && !held && silence_ms >= SILENCE_TO_END_MS) {
                 session = false;
                 emit(SAT_EV_UTTERANCE_END);
                 // Wakenet is suppressed while a session runs, so the wake word inside a sentence
@@ -265,3 +268,5 @@ esp_err_t mic_speech_start(mic_pcm_sink_t sink, void *user)
 }
 
 bool mic_speech_voice(void) { return voice; }
+
+void mic_speech_hold(bool on) { held = on; }
