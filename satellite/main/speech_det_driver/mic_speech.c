@@ -15,15 +15,25 @@
 
 static const char *TAG = "sat/mic";
 
-// How long silence must hold before an utterance counts as finished. Short enough that the person
-// is not left waiting after they stop, long enough to survive the pause in the middle of a
-// sentence. The front end's own VAD supplies the per-frame decision; this only debounces it.
-#define SILENCE_TO_END_MS 900
+// How long silence must hold before the CONVERSATION counts as over.
+//
+// Not an utterance boundary: turn-taking belongs to the model, which decides from the audio stream
+// itself when somebody stopped talking. This is the coarser question of whether anyone is still
+// there, so it is measured in tens of seconds — end it at the length of a sentence and every pause
+// to think hangs up on the person.
+#define SILENCE_TO_END_MS 20000
 
 static esp_afe_sr_iface_t *afe_handle;
 static esp_afe_sr_data_t *afe_data;
 static volatile bool running;
 static volatile bool session;
+
+// Peak amplitude of what the front end produces, measured whether or not a conversation is open.
+//
+// Measuring only during a session makes the instrument useless for the question that actually comes
+// up: the wake word did not fire, and nobody can tell whether the microphone heard nothing or heard
+// plenty and the model disagreed.
+static volatile int32_t idle_peak;
 
 static mic_pcm_sink_t pcm_sink;
 static mic_speech_event_cb_t event_cb;
@@ -94,6 +104,18 @@ static void detect_task(void *arg)
             }
         }
 
+        {
+            const int16_t *d = res->data;
+            int32_t p = idle_peak;
+            for (int i = 0; i < res->data_size / (int)sizeof(int16_t); i++) {
+                int32_t v = d[i] < 0 ? -d[i] : d[i];
+                if (v > p) {
+                    p = v;
+                }
+            }
+            idle_peak = p;
+        }
+
         if (session) {
             if (pcm_sink) {
                 pcm_sink(res->data, res->data_size / sizeof(int16_t), cb_user);
@@ -155,11 +177,27 @@ esp_err_t mic_speech_start(mic_pcm_sink_t sink, mic_speech_event_cb_t on_event, 
     }
 
     running = true;
-    // Opposite cores: feeding is I2S-bound and fetching is compute-bound, and letting them share a
-    // core reintroduces exactly the stall the queueing elsewhere exists to avoid.
+    // BOTH on core 1, and the network alone on core 0.
+    //
+    // Splitting them across cores is the obvious arrangement and was wrong here: the WiFi driver
+    // runs at priority 23 on core 0, far above these, so it preempts whichever of them shares that
+    // core. Feeding is a blocking I2S read, and a read that does not run in time overruns its DMA —
+    // the front end then sees a stream with holes in it. Levels still look right, because the frames
+    // that do arrive are intact, but the wake word stops firing: a neural model matching a phrase
+    // needs the phrase to be continuous.
+    //
+    // Observed exactly that way. The wake word worked in every build before the network existed, and
+    // in none after it.
     xTaskCreatePinnedToCore(detect_task, "mic_detect", 8 * 1024, NULL, 5, NULL, 1);
-    xTaskCreatePinnedToCore(feed_task, "mic_feed", 8 * 1024, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(feed_task, "mic_feed", 8 * 1024, NULL, 6, NULL, 1);
     return ESP_OK;
 }
 
 bool mic_speech_session_open(void) { return session; }
+
+int32_t mic_speech_peak(void)
+{
+    int32_t p = idle_peak;
+    idle_peak = 0;
+    return p;
+}

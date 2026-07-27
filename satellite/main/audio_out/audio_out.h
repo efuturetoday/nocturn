@@ -45,7 +45,7 @@ void audio_out_silence(int ms);
 // audio_out_stats reports and resets what the drain task has done since the last call: how many
 // chunks and samples reached the codec, and the last error it returned. Silence has more than one
 // cause, and only separate counters tell them apart.
-void audio_out_stats(uint32_t *chunks, uint32_t *samples, int *err);
+void audio_out_stats(uint32_t *chunks, uint32_t *samples, int *err, uint32_t *dry);
 
 #ifdef __cplusplus
 }

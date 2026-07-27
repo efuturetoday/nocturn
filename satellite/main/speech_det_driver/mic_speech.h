@@ -42,6 +42,11 @@ esp_err_t mic_speech_start(mic_pcm_sink_t sink, mic_speech_event_cb_t on_event, 
 // mic_speech_session_open reports whether an utterance is currently being streamed.
 bool mic_speech_session_open(void);
 
+// mic_speech_peak returns and resets the loudest sample the front end has produced since the last
+// call, whether or not a conversation is open. It answers the question a silent device raises: did
+// the microphone hear nothing, or did it hear plenty and the wake word simply not match?
+int32_t mic_speech_peak(void);
+
 #ifdef __cplusplus
 }
 #endif
