@@ -13,3 +13,7 @@
 # build volume for it.
 /.tools/
 /.flash/
+
+# Work parked out of the tree rather than committed — the full-duplex audio path, kept so the reset
+# to record-then-replay stays reversible. Restore with `git apply .fullduplex.patch`.
+/.fullduplex.patch
