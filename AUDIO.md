@@ -1,216 +1,157 @@
 # The audio path
 
-A design for the speech path between a live model and a satellite, replacing one that was arrived at
-by patching symptoms. Written after measuring what the current one actually does.
+> **The path described here does not exist in the tree right now.** The satellite has been reset to
+> the record-then-replay build of `804dc51` — wake word, five seconds of capture, replay through the
+> speaker, and a WebSocket connection that is established but carries no audio. Full duplex is parked
+> in `satellite/.fullduplex.patch`. This document is kept because its measurements and its account of
+> what went wrong are what the rebuild has to start from.
+
+The speech path between a live model and a satellite: what it does, and why it is shaped this way.
+
+An earlier version of this document diagnosed the stutter as clock drift and proposed credit-based
+flow control against a 128 ms playout buffer. That diagnosis was wrong and the design that followed
+from it would have reproduced the failure it was meant to fix. What is below replaces it.
 
 ---
 
-## What is wrong
+## The fault, and what it actually was
 
-### The architectural error
+The board ran dry roughly two thirds of the time: `played=19/17620 dry=30` over three seconds is
+17,620 real samples against 30 blocks of invented silence, adding to 3.02 s. The playback loop was
+exactly real-time — it is codec-clocked, and correct. Speech was simply not arriving.
 
-The daemon meters speech out on a Go `time.Ticker` at 32 ms. The board consumes it at whatever rate
-its codec crystal runs at. Nothing connects the two.
+**The live model produces speech FASTER than real time.** Supply was therefore never the constraint,
+which leaves exactly one candidate: the transport delivered below real time. It did, and the reason
+was structural.
 
-> *"A push pacer is never correct as the sole rate control. The receiver consumes at exactly the rate
-> set by its crystal. If the sender emits at anything else, the difference integrates without bound;
-> there is no equilibrium."*
+Flow control was TCP's: the board blocks in its WebSocket receive callback while its playout ring is
+full, lwIP stops being drained, the receive window closes, and the daemon's write blocks. Sound in
+principle. But the ring was **200 ms** and `CONFIG_LWIP_TCP_WND_DEFAULT` is 5760 B — **180 ms** of
+audio. Refills happen only when the board frees space and lwIP sends a window update, which it does
+once per couple of segments. So the whole pipe was ~380 ms and it was refilled one round trip at a
+time: a stop-and-wait loop whose throughput is window ÷ round trip, and which starves outright on a
+single lwIP retransmit (minimum timeout in the hundreds of milliseconds).
 
-There is no buffer size that fixes this, because the error accumulates. Every deep buffer only
-changes how long it takes to fail.
+Playback started at a **40 ms** cushion, well under that round trip, so the ring was empty at every
+refill boundary. The drain task then wrote a full block of silence each time it found nothing —
+correct behaviour, since the write is what clocks the loop, but two thirds of the output was that
+silence. That is the stutter.
 
-The board already contains the correct clock and does not use it as one: `i2s_channel_write()`
-blocks until the DMA accepts, so a task looping on it **is** a hardware-paced clock, exact to the
-crystal by construction.
+### The mistake that was worse
 
-### What the measurements said
+Dropping the DMA on a barge-in means `i2s_channel_disable` on the TX half of a full-duplex pair, and
+this board takes the echo canceller's reference from that same I2S instance. Cycling TX leaves the
+reference no longer describing what the speaker emitted, so the canceller stops cancelling — and it
+was cycled on **every wake**, since a session start flushes.
 
-From `played=19/17620 dry=30` over a three-second window:
+Measured on 2026-07-27 at 14:02:32: the model's first audio went out at `.593`, `live interrupted`
+arrived at `.819`. 226 ms. What came back up the uplink was transcribed as ` بگید. <noise>` — the
+board's own voice, mistaken for a person interrupting. Every reply died on its first word.
 
-- 17,620 real samples + 30 × 1024 invented silence samples = 48,340 ≈ 3.02 s. The playback loop runs
-  at exactly real time — it is codec-clocked and correct.
-- **64 % of what the speaker emitted was silence the board made up.** That is the stutter. Not a
-  buffer that is too small; a sender that is not sending.
+This is the trap described under *Barge-in* below, walked straight into. Ninety milliseconds of
+uncancellable tail is far cheaper than a canceller that has diverged.
 
-### What the audit found
+### The mistake behind the number
+
+**Capacity is not latency.** What delays the first word is the fill level at which playback starts.
+Capacity only decides how much jitter can be swallowed before the buffer runs dry. With a source that
+outruns the speaker, a deep ring fills at line speed and then sits full — it costs nothing.
+
+The 200 ms was chosen to keep a barge-in's reach short, on the belief that *audio already on a device
+cannot be taken back*. It can. `audio_out_flush` empties the ring, and `esp_audio_drop_pending`
+disables the I2S channel to discard the committed DMA descriptors. Both are local and immediate.
+
+What actually survives an interrupt is fixed and independent of the ring:
 
 | | |
 |---|---|
-| `pacer.buf` | **unbounded** — the only unbounded allocation in the path. A long turn holds the entire remaining reply in RAM. |
-| `conn.audio` | 48 frames = **1536 ms**, documented as "roughly a second" |
-| `Manager.mic` | 48 × 64 ms = **3072 ms**, documented as "a second or so" |
-| **Interrupt** | drops the pacer backlog but **not `conn.audio`** — so after a barge-in the board flushes, then receives up to 1.5 s of exactly the speech it was told to abandon, and plays it |
-| WebSocket task | **not pinned**, despite a comment claiming core 0 — it can land on core 1 with the audio front end |
-| `on_event` | blocks the front end's fetch loop for **≥530 ms** at every session end |
-| `esp_audio_mono16` | mallocs and frees 8 KB every 64 ms, and expands 4× so the bus carries 128 kB/s to deliver 32 kB/s |
-| `audio_out_silence` | unbounded retry loop, called from the WebSocket receive task |
-| Timing | **nothing anywhere measures time.** Every number is a count over a 3 s window. `dry=30` cannot distinguish "the daemon under-sent" from "the link stalled" from "the clocks drifted" — three different faults with three different fixes. |
+| TCP in flight | ≤ the receive window, ~180 ms |
+| I2S DMA descriptors | 6 × 240 frames, ~90 ms — dropped by disabling the channel |
+| Codec filter delay + flight time speaker→microphone | 30–60 ms |
+
+Roughly 300 ms with the DMA left alone, roughly 240 ms with it dropped — the same either way whether
+the ring holds 128 ms or two seconds.
+
+### Why drift needs no machinery
+
+At 16 kHz a 100 ppm mismatch — worst case for two consumer crystals — is 6 ms per minute. Draining an
+80 ms buffer would take thirteen minutes. No utterance is thirteen minutes long, and between
+utterances the buffer empties and refills, so drift cannot accumulate past a single reply. The
+silence between turns is a free resynchronisation point.
+
+This removes the entire apparatus the literature would otherwise demand: no time-scale modification,
+no asynchronous resampling, no clock servo, and no credit protocol to absorb a drift that is not
+there.
 
 ---
 
 ## The design
 
-### Credit-based flow control
-
-The board tells the daemon how much room it has. The daemon sends only that much. Nothing else
-decides the rate.
+**The daemon pushes. TCP stops it. The board buffers deep and flushes locally.**
 
 ```
-board  ──▶ {"cmd":"voice.credit","bytes":16384}   at connect, and as playback frees space
-daemon ──▶ binary frames, while credit remains — no timer, at line speed
-board  ──▶ {"cmd":"voice.credit","bytes":4096}    each time a quarter of the buffer drains
+model (faster than real time)
+   │
+   ├─ downsample 24 kHz → 16 kHz                      internal/serve/voice.go
+   ├─ deviceSink.backlog        capped at 60 s, discarded on Interrupt
+   ├─ conn.audio                48 frames of 20 ms
+   ▼
+TCP ── the daemon's write blocks when the board stops reading
+   ▼
+board  ring 2 s in PSRAM        blocking write in the receive callback IS the flow control
+   ▼
+drain task ── esp_codec_dev_write blocks on DMA, so the loop is crystal-clocked
+   ▼
+ES8311
 ```
 
-Why this and not a better timer:
+Nothing meters, nothing paces, nothing counts credits. The only rate control in the system is the
+codec accepting a write, which is the one clock that is real.
 
-- **Overflow becomes structurally impossible.** The board never receives more than it can hold, so
-  the drop path stops being load-bearing.
-- **Drift stops mattering.** Credits are issued by playback, which is clocked by the crystal. The
-  loop closes on the only real clock in the system.
-- **The buffer fills at line speed, not at speaking speed.** The first sentence arrives as fast as
-  the network allows, so playback starts immediately rather than after a timer has dribbled out a
-  cushion.
-- **The backlog stays where it can be discarded.** Audio held in the daemon is audio a barge-in can
-  throw away; audio on the device is not, and audio in the codec's DMA is not recoverable at all.
-
-Credit updates are batched — one message per quarter buffer, not per byte — so the control channel
-carries a handful of messages a second rather than flooding.
-
-### What must be bounded, and to what
-
-Every number below is derived rather than chosen.
-
-**Board playout buffer: 128 ms, refill floor 40 ms, ceiling 200 ms.**
-
-Sized for TCP over WiFi, not for a LAN. The dominant term is not jitter: **TCP turns a lost segment
-into a stall of at least one RTT**, and lwIP's minimum retransmit timeout is in the hundreds of
-milliseconds. One retransmit costs more than all the jitter combined. WebRTC's own cold-start target
-is 80 ms and its steady-state target is the 95th percentile of observed delay — 128 ms sits above
-both with room for a single retransmit.
-
-**Daemon backlog: bounded, and the bound is the model's turn.** It holds what the model produced and
-has not yet been credited out. It needs a cap and a policy for exceeding it — dropping the oldest
-audio is wrong (the reply becomes incoherent), so the cap should end the turn and say so.
-
-**Uplink: 32 ms frames, matching the front end's chunk.** ESP-SR's echo canceller works in 32 ms
-frames in this mode, and an uplink frame that is not a multiple of that forces a second re-buffering
-stage with its own latency and its own bugs.
-
-**Downlink: 20 ms frames.** Opus's default for the same reason — the point where header overhead
-(~7 %) stops mattering and latency starts to.
-
-### Drift needs no machinery
-
-At 16 kHz, a 100 ppm mismatch — the worst case for two consumer crystals — is **6 ms per minute**.
-It would take 13 minutes to drain a 80 ms buffer.
-
-No utterance is 13 minutes long. And between utterances the buffer drains to empty and refills, so
-drift **cannot accumulate past a single reply**. Ten seconds of speech at 100 ppm is one millisecond.
-
-This removes the entire apparatus the literature would otherwise demand: no time-scale modification,
-no asynchronous resampling, no clock servo. The silence between turns is the resynchronisation
-point, and it is free.
-
-Frame drop and insert stays available as a safety valve, for a pathologically long single reply. It
-should never fire.
-
-### Barge-in
-
-Hybrid, because the two halves answer different questions.
-
-**The board stops itself.** Its voice-activity detector already runs on every frame and already
-reports on the same call that delivers echo-cancelled audio. Local detection is 50–100 ms; going via
-the daemon is 150–250 ms on a LAN, and the target for barge-in feeling natural is under 200 ms
-total. So the board flushes on its own VAD and tells the daemon afterwards.
-
-**The daemon decides what it meant.** Whether that was an interruption or somebody saying "mhm" is a
-semantic question the board cannot answer, and the daemon may resume.
-
-**What has to be discarded, in order:** the daemon's backlog and the model's generation itself
-(which otherwise keeps producing, and billing, into nothing); the bytes already in flight, which
-cannot be recalled and are the reason to keep the in-flight window small; the board's playout
-buffer; and the I2S DMA descriptors, which only `i2s_channel_disable()` can drop and which otherwise
-play out regardless.
-
-**The tail that cannot be cancelled** is roughly 30–60 ms: DMA descriptors, the codec's own filter
-delay, and the flight time from speaker to microphone.
-
-**The trap that matters more than the tail.** The echo canceller's reference must match what the
-speaker actually emitted. Flush the playout buffer while the DMA keeps playing what was already
-committed, and the reference and the microphone signal disagree — *precisely at the moment of
-barge-in*, which is exactly when the canceller must be at its best. It then diverges, the
-assistant's own voice leaks into the uplink, and the VAD may re-trigger on it.
-
-This board takes its reference in hardware — the codec presents it as a channel alongside the
-microphones — so it is aligned by construction and no software flush can desynchronise it. That is
-worth stating explicitly, because it is the reason a whole class of failure does not apply here.
-
-### Capture overflow must not be silent
-
-Today an overflowing uplink ring drops frames and splices what remains. That is the one thing every
-audio stack agrees you must not do — WASAPI, PortAudio and ALSA all raise an explicit discontinuity
-rather than splice.
-
-The acoustic harm is survivable: a splice is a transient, and a recogniser produces a substitution
-around it. The timeline harm is not. Every downstream sample count is silently wrong from then on:
-endpointing desynchronises, word timestamps skew, and anything aligning the microphone stream
-against the playback stream is permanently off by the dropped amount.
-
-So a drop becomes a **gap marker** — `{"cmd":"voice.gap","samples":N}` — and the daemon inserts
-silence to keep the timeline exact. And the ring is sized so that overflow means the network is
-gone, not that the board was briefly busy.
-
-### Instrumentation
-
-Nothing in the path measures time. Every number is a count over a three-second window, which is why
-`dry=30` cannot distinguish a daemon that under-sent from a link that stalled from clocks that
-drifted — three faults, three different fixes, one indistinguishable symptom.
-
-Two numbers earn their place, and they are built with the credit loop rather than before it. A
-baseline taken today would not be comparable, because credits change the regime entirely.
-
-**Playout buffer depth** — minimum, mean and maximum over a window. It answers the only question
-that matters at the speaker: how close did it come to empty? A count of underruns says one happened;
-a minimum says whether the next one is imminent.
-
-**Credit round-trip** — from the board freeing space to audio arriving because of it. This is the
-control loop's latency, and it is the design's precondition: if the round-trip exceeds the buffer's
-depth, the buffer starves no matter how deep it is. Without this number, 128 ms is another guess of
-the same kind as the 150 ms it replaces.
-
-Deliberately not measured:
-
-- **Drift.** Credits absorb it by construction, so the number would not be acted on.
-- **Time blocked in the codec write.** Already answered: 17,620 real plus 30 × 1024 invented samples
-  is 3.02 s in a three-second window, so the playback loop is exactly real-time. The board is not the
-  bottleneck.
-- **Frames sent versus played.** Worth checking once while building; not worth carrying.
-
----
-
-## Parameters
+### Numbers, and where each comes from
 
 | | Value | Why |
 |---|---|---|
-| Downlink frame | 20 ms / 640 B | overhead ~7 %, standard for Opus-class voice |
+| Board playout ring | **2 s** (64,000 B, PSRAM) | capacity is free with a faster-than-real-time source; swallows retransmits |
+| Prebuffer | **200 ms** (6,400 B) | the only latency the listener pays; must exceed one WiFi round trip |
+| Ring write timeout | 5 s | blocking is the normal state; a return means playback is wedged |
+| Downlink frame | 20 ms / 640 B | header overhead ~7 %, standard for Opus-class voice |
 | Uplink frame | 32 ms / 1024 B | matches the echo canceller's chunk exactly |
-| Board playout buffer | 128 ms, floor 40, ceiling 200 | one TCP retransmit, not jitter |
-| Credit grant | quarter buffer | a handful of messages a second |
-| Daemon backlog | capped, turn ends on overflow | the only unbounded thing today |
-| I2S DMA | `dma_frame_num=160`, `dma_desc_num=4` | 40 ms, 100 Hz interrupt — two orders below where boards fail |
-| `auto_clear` | true | an underrun emits zeros instead of replaying stale samples |
-| `TCP_NODELAY` | both ends | Nagle plus delayed ACK adds up to 40 ms of nothing |
-| `WIFI_PS_NONE` | board | power save adds up to a beacon interval |
+| Codec scratch | 640 samples, static | was a malloc/free every 20 ms |
+| `auto_clear` | **true** | an underrun emits zeros instead of replaying the last descriptor |
+| `WIFI_PS_NONE` | set | modem sleep adds a beacon interval to every frame |
+
+Reference points, all of which buffer far deeper than 200 ms and none of which run an application
+flow-control protocol: ESPHome's `i2s_audio` speaker defaults to a 500 ms buffer and its media player
+holds a 1 MB source ring; ESP32 streaming players (ESP32-audioI2S, snapclient) run 1–10 s in PSRAM.
+
+### Barge-in
+
+Three things hold speech and two are reachable.
+
+1. **The daemon's backlog and the model's generation.** Discarded on `Interrupt`, which also drains
+   `conn.audio` — otherwise the board flushes and is then handed the same speech again.
+2. **The board's ring and DMA.** `voice.interrupt` triggers `audio_out_flush`; the drain task drops
+   the DMA on its next pass and then waits for a fresh prebuffer.
+3. **The bytes in the TCP window.** Not recallable. This is why `conn.audio` stays short.
+
+The echo canceller's reference is taken in hardware on this board — the codec presents it as a
+channel alongside the microphones — so a software flush cannot desynchronise it against the
+microphone signal. That removes the failure mode that normally makes barge-in delicate.
 
 ---
 
-## Order of work
+## Still open
 
-1. **Credit-based flow control, with its two measurements built in.** Removes the ticker, the
-   overflow path and the drift question in one change, and reports whether it is working.
-2. **Fix what the audit found** — the interrupt that does not drain `conn.audio`, the unpinned
-   WebSocket task, the blocking in the fetch loop, the per-frame malloc.
-3. **Local barge-in**, with the daemon arbitrating.
-4. **Gap markers** on capture overflow.
-
-Step 1 is the design. The rest are corrections that stand on their own.
+- **Local barge-in.** The board's VAD already runs on every frame; detecting locally is 50–100 ms
+  against 150–250 ms via the daemon, and natural barge-in wants under 200 ms total. The board should
+  flush on its own and tell the daemon afterwards; the daemon decides whether that was an
+  interruption or somebody saying "mhm", and may resume.
+- **Gap markers on capture overflow.** An overflowing uplink ring currently drops frames and splices
+  what remains. The acoustic harm is survivable; the timeline harm is not — every downstream sample
+  count is silently wrong from then on. `{"cmd":"voice.gap","samples":N}` and the daemon inserts
+  silence to keep the timeline exact.
+- **`on_event` blocks the front end's fetch loop** for ≥ 200 ms at every session end.
+- **Instrumentation measures counts, not time.** `dry=30` cannot by itself separate a daemon that
+  under-sent from a link that stalled. Playout depth (min/mean/max over a window) is the number worth
+  carrying: a count of underruns says one happened, a minimum says how close the next one is.

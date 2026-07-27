@@ -38,11 +38,17 @@ esp_err_t link_start(const char *host, uint16_t port, const char *path, const ch
 // link_connected reports whether the socket is up right now.
 bool link_connected(void);
 
-// link_send_text sends one tagged command. Returns false when the link is down — the caller decides
-// whether that is worth reporting, because during a reconnect it is expected.
+// link_send_text queues one tagged command. Returns false when it could not be queued — the link is
+// down, or the queue is full because the socket has stopped draining. A caller whose message carries
+// state rather than news must treat false as "not sent" and keep the state.
+//
+// Both senders queue rather than send: the socket has exactly one writing task, because the client
+// serialises sends on a lock with a timeout and answers a lost race with a write error, which it
+// then treats as reason to drop the connection.
 bool link_send_text(const char *json);
 
-// link_send_audio sends one chunk of microphone PCM.
+// link_send_audio queues one chunk of microphone PCM. A dropped frame is not worth retrying: by the
+// time the link is back the audio is stale, and the far side would hear a jump rather than a pause.
 bool link_send_audio(const uint8_t *pcm, size_t bytes);
 
 #ifdef __cplusplus

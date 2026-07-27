@@ -7,7 +7,6 @@ set(SOURCES
     "./net/wifi.c"
     "./net/discover.c"
     "./net/link.c"
-    "./net/uplink.c"
     "./audio_out/audio_out.c"
     "./hardeware_driver/bsp_board.c"
     "./speech_det_driver/mic_speech.c"
