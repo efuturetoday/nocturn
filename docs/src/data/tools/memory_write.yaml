@@ -1,0 +1,66 @@
+title: memory_write
+description: Store something the assistant should still know in a future conversation.
+
+kind:
+  name: memory
+  href: /reference/gate/memory/
+  target: the path relative to the memory folder
+gated: true
+axis: write
+
+intro: >-
+  The assistant's only way to remember something past the end of a chat. One fact is **one note**:
+  a Markdown file with a one-line summary, replaced whole (so an amendment means reading it first).
+  The memory catalog in the system prompt is **derived** from these notes — there is no index file
+  to keep in step, and deleting a note deletes its line.
+
+  Whether the call stops for a human depends on who is running it. In a chat you are watching it
+  writes and the call shows up in the transcript; an unattended agent run asks out of band. See the
+  [`memory` kind](/reference/gate/memory/).
+
+input:
+  - field: path
+    type: string
+    required: true
+    notes: >-
+      Path relative to the memory folder, must end in `.md`. Group related notes in folders, e.g.
+      `people/lina.md` or `prefs/coding.md`.
+  - field: summary
+    type: string
+    required: true
+    notes: >-
+      The single line that appears in the memory catalog every turn. Clipped to a sane length and
+      collapsed to one line before it is stored, so what is approved is what the prompt will carry.
+  - field: content
+    type: string
+    required: true
+    notes: >-
+      The note body as Markdown. Capped at 64 KiB and leak-scanned together with the summary —
+      content carrying a vault secret is blocked **before** the gate asks.
+
+output:
+  text: "The written path, the stored summary and the file size:"
+  code: |
+    { "path": "people/lina.md", "summary": "daughter, 7 years old", "bytesWritten": 186 }
+  lang: json
+
+js:
+  wrapper: null
+  call: |
+    nocturn.call("memory_write", {
+      path: "people/lina.md",
+      summary: "daughter, 7 years old",
+      content: "Likes dinosaurs. Starts school in August.",
+    });
+
+notes: >-
+  `summary` is its own argument rather than something the model is asked to spell as a frontmatter
+  block inside `content`. The schema then makes it non-optional and the tool owns the serialization,
+  so a note can neither arrive without a catalog line nor carry a hand-built YAML header that a colon
+  or a quote in the text would silently break. On disk the note is ordinary Markdown with a
+  `description:` preamble — editable in any text editor, which is the whole reason memory is files.
+
+  The catalog is capped, and because it is derived the cap is **enforced**: entries past the budget
+  are dropped and the drop is stated, rather than the model being asked to tidy up and maybe not
+  doing it. The egress scan runs before the gate on purpose — a vault secret must not even be offered
+  for approval, because approving it would park the value in a file read into every prompt.

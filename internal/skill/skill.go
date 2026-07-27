@@ -15,6 +15,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/internal/discovery"
+	"github.com/efuturetoday/nocturn/internal/frontmatter"
 )
 
 const (
@@ -29,9 +30,6 @@ const (
 	// with a huge tree does not bloat the load output.
 	maxResourceListing = 40
 )
-
-// errNoFrontmatter is returned when a SKILL.md lacks a --- delimited frontmatter.
-var errNoFrontmatter = errors.New("skill: no frontmatter (expected a leading --- block)")
 
 // Discover scans dir (a workspace's skills/ folder) for immediate subdirectories that contain a
 // SKILL.md, and returns an agentkit.SkillSet plus a name->absolute-directory map used by skill_read.
@@ -98,7 +96,7 @@ func loadOne(skillDir, dirName string, diag *agentkit.Diagnostics) (agentkit.Ski
 	if len(data) > maxBodyBytes {
 		data = data[:maxBodyBytes]
 	}
-	m, body, err := parseFrontmatter(data)
+	m, body, err := frontmatter.Parse(data)
 	if err != nil {
 		discovery.Diagnose(diag, "skill:"+dirName, "skipped (unparseable SKILL.md): "+err.Error())
 		return agentkit.Skill{}, false

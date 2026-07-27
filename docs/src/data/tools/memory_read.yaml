@@ -1,0 +1,36 @@
+title: memory_read
+description: Read one of the assistant's own memory notes — the detail behind a catalog line.
+
+kind: null
+gated: false
+axis: read
+
+intro: >-
+  Pull in a note the assistant wrote about you earlier. The memory **catalog** already sits in the
+  system prompt every turn — one line per note, path and summary — so this is how the assistant gets
+  the rest when the summary alone is not enough. Ungated, because reading back pre-installed text is
+  context, never reach, and confined to the workspace's `memory/` folder at the syscall level.
+
+input:
+  - field: path
+    type: string
+    required: true
+    notes: "Path relative to the memory folder, e.g. `people/lina.md`."
+
+output: >-
+  The file's contents as text, capped at **64 KiB**. A known vault secret found inside is redacted
+  before the text reaches the model. A path that is not a regular file is an error rather than a
+  surprise.
+
+js:
+  wrapper: null
+  call: |
+    const note = nocturn.call("memory_read", { path: "people/lina.md" });
+
+notes: >-
+  The `memory/` folder is a **sibling** of the file tools' mount, not inside it — so `file_read` and
+  `file_write` cannot reach it at all, and the only writer is
+  [`memory_write`](/reference/tools/memory_write/). That separation is what stops a prompt injection
+  from rewriting the assistant's memory through a generic file tool. Confinement here is enforced by
+  `os.Root`, so a path can never escape the folder — not via `..`, not via an absolute path, not via
+  a symlink pointing out (`openat2` / `RESOLVE_BENEATH`, kernel-enforced, not string arithmetic).

@@ -1,0 +1,108 @@
+title: The memory kind
+description: memory — the assistant writing to its own durable notes, checked as its own kind because what it stores is read back into every prompt.
+
+kind: memory
+constant: memory.Kind
+
+intro: >-
+  One tool sits behind this kind: `memory_write`, the assistant's only way to keep something past
+  the end of a chat. The `Target` is the path inside the workspace's `memory/` folder, so a grant can
+  be scoped to a directory.
+
+  The ruling depends on **who is running**. A chat you are watching gets **allowed**: the call
+  already appears in the transcript as it happens, so a prompt would buy "before" instead of "after"
+  and nothing else. An unattended agent run gets **ask, remembered for the session** — it writes into
+  the store folded into every future prompt with nobody reading its transcript, and that is where the
+  question earns its keep.
+
+  Reading is a different matter and carries no kind at all —
+  [`memory_read`](/reference/tools/memory_read/) is ungated, because reading back pre-installed text
+  is context, never reach.
+
+glance:
+  target: "the memory-relative, forward-slashed path, e.g. `people/lina.md`"
+  policy: "**allowed** in a watched chat · **ask** (session recall) in an unattended agent run"
+  matcher: "`path.Match` globs, where `*` does not cross `/` — a `people/*` grant covers that folder only"
+
+tools:
+  - name: memory_write
+    href: /reference/tools/memory_write/
+    axis: write
+    gated: true
+    desc: store a Markdown note the assistant should still know next time
+  - name: memory_read
+    href: /reference/tools/memory_read/
+    axis: read
+    gated: false
+    desc: read a detail note back — context, not reach, so it never asks
+
+grants:
+  intro: >-
+    Grants only ever come up in agent runs, since a watched chat is not asked. A grant is the usual
+    `{kind, target}` pair, and the approval offers exactly one widening beyond the exact path — the
+    containing directory — and never more, because a memory grant is durable authority over what the
+    assistant will believe about you.
+  lang: json
+  examples: |
+    { "kind": "memory", "target": "people/lina.md" }
+    { "kind": "memory", "target": "people/*" }
+  notes:
+    - >-
+      A note at the memory root gets **no** widening offer: a root grant would not be one step wider,
+      it would be the whole store.
+    - >-
+      A background agent with no reachable human is denied fail-closed — a missing approver never
+      means "go ahead".
+
+limits:
+  - >-
+    **Markdown only.** A memory file must end in `.md`, so the whole store stays readable and
+    correctable in any text editor. That is the point of files over a database.
+  - >-
+    **Whole-file replacement.** There is no patch format: an amendment means reading the file first
+    and writing it back complete.
+  - >-
+    **The catalog is derived, and its cap is enforced.** It is built from the notes on disk rather
+    than kept as a file, so it cannot drift from what is stored, and a note that does not fit the
+    prompt budget is dropped with the drop stated — no reliance on the assistant tidying up. The
+    notes themselves are uncapped; they cost nothing until read.
+  - >-
+    **Confinement is `os.Root`, not path arithmetic.** Both the temp file and the rename behind a
+    write are re-validated per path component at the syscall level, so a symlinked intermediate
+    directory is refused and nothing can land outside the folder. A symlinked *file* inside `memory/`
+    is contained differently: the rename replaces the link entry, leaving its target untouched.
+
+leakScanning:
+  points:
+    - >-
+      Content is scanned on the way in, **before the gate asks**. A note carrying a stored vault
+      secret is blocked and never put to you for approval — approving it would park the value in a
+      file that is read into every single prompt, forever.
+    - >-
+      Content is redacted on the way back out through `memory_read`, in case a value became a vault
+      secret after the note was written.
+
+sections:
+  - title: Why memory sits outside the mount
+    body: >-
+      The `memory/` folder is a **sibling** of the directory the file tools mount, not inside it —
+      the same side of the line as `grants.json`, `vault.enc` and `PERSONA.md`. So `file_write`
+      cannot reach it: the path is simply not on the mount, and `os.Root` rejects it at the syscall
+      level.
+
+
+      That placement is the whole defense. A prompt injection arriving through a fetched web page
+      can otherwise talk a model into rewriting its own durable memory — invisibly, and with effect
+      in every future session. Funnelling every write through one tool is what makes it observable
+      at all: in a chat you see the call in the transcript, and in an unattended run you are asked
+      out of band with the proposed text in front of you.
+  - title: What belongs in memory, and what does not
+    body: >-
+      The tool's own description carries the judgement, because it is the only always-visible
+      instruction: remember names and relationships, standing preferences, ongoing projects, and
+      corrections you give. Do **not** remember what is already in the conversation, what came out
+      of a fetched page or document, or one-off requests.
+
+
+      That is a heuristic, not a fence. The fence is that there is exactly one writer, it is outside
+      the file tools' mount, and where nobody is watching it stops to ask.

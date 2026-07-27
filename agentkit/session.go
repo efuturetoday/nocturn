@@ -27,6 +27,7 @@ type Session struct {
 	tools      ToolSet
 	skills     SkillSet
 	system     string
+	systemFn   func() string // optional: supplies the system prompt per turn; wins over system
 	timeout    time.Duration
 	tokenLimit int
 	tokenizer  Tokenizer // optional: estimate Step.Tokens when the provider reports none
@@ -54,7 +55,15 @@ type Option func(*Session)
 func WithTools(t ToolSet) Option      { return func(s *Session) { s.tools = t } }
 func WithSkills(sk SkillSet) Option   { return func(s *Session) { s.skills = sk } }
 func WithSystem(system string) Option { return func(s *Session) { s.system = system } }
-func WithEffort(e Effort) Option      { return func(s *Session) { s.effort = e } }
+
+// WithSystemFunc supplies the system prompt through a function evaluated once per turn, for a prompt
+// whose content can change over a session's lifetime (a consumer folding in mutable context). It
+// wins over WithSystem when both are set. Safe because the system message is ephemeral — assemble
+// prepends it to the durable history rather than storing it — so a changed prompt cannot corrupt a
+// persisted transcript. fn must be safe for concurrent use only insofar as the caller shares it
+// across sessions; one session evaluates it on its own turn goroutine.
+func WithSystemFunc(fn func() string) Option { return func(s *Session) { s.systemFn = fn } }
+func WithEffort(e Effort) Option             { return func(s *Session) { s.effort = e } }
 
 func WithLogger(l Logger) Option {
 	return func(s *Session) {
@@ -389,6 +398,9 @@ func (s *Session) assemble() []Message {
 
 func (s *Session) systemPrompt() string {
 	sys := s.system
+	if s.systemFn != nil {
+		sys = s.systemFn()
+	}
 	if len(s.skills) > 0 {
 		sys += "\n\n" + skillsCatalog(s.skills)
 	}
