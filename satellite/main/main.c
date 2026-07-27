@@ -77,14 +77,39 @@ static void on_pcm(const int16_t *pcm, size_t samples, void *user)
     captured += take;
 }
 
+// How many times voice activity was detected while the speaker was running.
+//
+// This is the barge-in question asked for free. During replay the only voice in the room is the
+// board's own, coming out of its own speaker — so every count here is the echo canceller failing to
+// remove it, and a barge-in built on this detector would interrupt the assistant on its own voice.
+// Which is exactly what the full-duplex build did: 226 ms into every reply.
+//
+// Zero counts across a replay the person stayed quiet through is the permission to build barge-in.
+// Anything else says the acoustics have to be fixed first, and no amount of protocol will help.
+static uint32_t voice_while_playing;
+
 static void on_event(mic_speech_event_t event, void *user)
 {
-    if (event == MIC_EVT_AWAKE) {
+    // Switched rather than branched on AWAKE: an else-branch here silently made every new event mean
+    // "the utterance ended", so adding one started playback at the wrong moment.
+    switch (event) {
+    case MIC_EVT_AWAKE:
         captured = 0;
-        rgb_set_solid(RGB_COLOR_RED);
-    } else {
-        rgb_set_solid(RGB_COLOR_GREEN); // playing back what was just heard
+        // Green breathing, and green appears nowhere else. The single question the ring has to
+        // answer is "may I talk now", and one colour should answer it.
+        rgb_show(RGB_BREATHE, RGB_GREEN);
+        return;
+    case MIC_EVT_VOICE:
+        if (playing_back) {
+            voice_while_playing++;
+        }
+        return;
+    case MIC_EVT_SPEECH_END:
+        // The wave stands in for the assistant talking, which in this build is the replay. Cyan and
+        // not green: the person should not feel invited to speak while it does.
+        rgb_show(RGB_WAVE, RGB_CYAN);
         playing_back = true;
+        return;
     }
 }
 
@@ -116,7 +141,7 @@ static void playback_task(void *arg)
         audio_out_amp(false);
         captured = 0;
         playing_back = false;
-        rgb_set_solid(RGB_COLOR_BLUE);
+        rgb_show(RGB_SOLID, RGB_DIM_BLUE);
         ESP_LOGI(TAG, "replay done");
     }
 }
@@ -134,8 +159,9 @@ static void report(void *arg)
         uint32_t chunks = 0, samples = 0;
         int werr = 0;
         audio_out_stats(&chunks, &samples, &werr);
-        ESP_LOGI(TAG, "alive — link=%d session=%d peak=%ld queued_drop=%lu played=%lu chunks/%lu samples werr=%d",
-                 link_connected(), mic_speech_session_open(), (long)peak, dropped, chunks, samples, werr);
+        ESP_LOGI(TAG, "alive — link=%d session=%d voice=%d self_trig=%lu peak=%ld queued_drop=%lu played=%lu chunks/%lu samples werr=%d",
+                 link_connected(), mic_speech_session_open(), mic_speech_voice(), voice_while_playing,
+                 (long)peak, dropped, chunks, samples, werr);
         peak = 0;
         dropped = 0;
     }
@@ -165,7 +191,10 @@ static void network(void *arg)
     provision_t prov;
     if (provision_load(&prov) != ESP_OK) {
         ESP_LOGE(TAG, "not provisioned — flash an NVS image with ssid, pass and bearer");
-        rgb_set_solid(RGB_COLOR_RED);
+        // Blinking, not solid: this needs a person, and it has to be tellable from a board that is
+        // merely waiting for the network. Previously both were solid red and looked identical.
+        // The slow blink, because nothing is waiting on an answer — it is broken, not asking.
+        rgb_show(RGB_BLINK_SLOW, RGB_RED);
         vTaskDelete(NULL);
         return;
     }
@@ -205,11 +234,9 @@ void app_main(void)
     ESP_LOGI(TAG, "step: tca");
     tca9555_driver_init();
     ESP_LOGI(TAG, "step: rgb");
-    // RGB_Example, not configure_led: the latter returns a handle and assigns it to a LOCAL, so the
-    // static one set_rgb_color posts against stays null — along with the queue it posts to. Calling
-    // it directly and then setting a colour dereferences both.
-    RGB_Example();
-    rgb_set_solid(RGB_COLOR_BLUE);
+    ESP_ERROR_CHECK(rgb_start());
+    // Booting: white, breathing slowly. Alive, nothing decided yet, and nothing expected of anyone.
+    rgb_show(RGB_BREATHE_SLOW, RGB_WHITE);
     ESP_LOGI(TAG, "step: volume");
     esp_audio_set_play_vol(TEST_VOLUME);
     ESP_LOGI(TAG, "step: audio_out");

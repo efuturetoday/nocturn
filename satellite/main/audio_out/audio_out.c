@@ -65,12 +65,33 @@ esp_err_t audio_out_init(void)
     // The speaker amplifier is on the I/O expander, not the codec. The vendor enabled it inside the
     // media player, so removing that left a board that renders audio perfectly into silence. It
     // starts DOWN here and is raised only while something is actually playing.
+    //
+    // The switching is not free — see audio_out_amp — but leaving it up is worse: an amplifier held
+    // on hisses audibly into a quiet room, and this device sits in one all day. Tried and reverted
+    // on that basis.
     Set_EXIO(IO_EXPANDER_PIN_NUM_8, false);
 
     ESP_LOGI(TAG, "playback queue up (%d bytes)", RING_BYTES);
     return ESP_OK;
 }
 
+// audio_out_amp raises or drops the speaker amplifier.
+//
+// Raising it CLICKS, and the microphone hears the click. That click is invisible to echo
+// cancellation, which is the part worth remembering: the canceller subtracts the playback signal it
+// is handed digitally, and the click happens AFTER the DAC, in the amplifier itself. Digitally there
+// is silence at that moment, so there is nothing to subtract. No amount of NLP, BSS or detector
+// tuning reaches it — those all work on what the canceller leaves behind, and here it never had the
+// signal to begin with.
+//
+// Measured: exactly one spurious voice detection per playback, at the start, independent of how long
+// the playback ran. A five second replay triggered as often as a three second one, and the
+// microphone was silent in between. One switch-on, one false trigger.
+//
+// It is therefore NOT the audio path's job to suppress: whoever raises the amplifier knows it just
+// did, and discards voice activity for a moment afterwards. Tuning the detector for this would blunt
+// it for real speech as well, and holding the amplifier up to avoid the click trades it for an
+// audible hiss in a quiet room.
 void audio_out_amp(bool on)
 {
     Set_EXIO(IO_EXPANDER_PIN_NUM_8, on);

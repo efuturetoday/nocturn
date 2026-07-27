@@ -33,9 +33,12 @@ void audio_out_flush(void);
 
 // audio_out_amp raises or drops the speaker amplifier.
 //
-// Dropping it between utterances is not power saving, it is silence: with nothing queued the codec
-// keeps repeating whatever was last in its DMA buffer, which is audible as a held tone. Flush with
-// audio_out_silence first, then drop the amplifier.
+// Dropping it between utterances is not power saving, it is silence: an amplifier held up hisses
+// into a quiet room. Flush with audio_out_silence first, then drop it.
+//
+// Raising it clicks, and the microphone hears it as a voice — see the definition for why nothing in
+// the front end can remove that. The caller is expected to ignore voice activity briefly afterwards,
+// since it is the only party that knows the click was its own doing.
 void audio_out_amp(bool on);
 
 // audio_out_silence queues ms of zeros, so the codec's last buffer is overwritten with nothing

@@ -1,262 +1,224 @@
 #include "rgb_led_driver.h"
 
-#include <stdio.h>
-#include "esp_log.h"
-#include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "bsp_board.h"
+#include "esp_log.h"
+#include "led_strip.h"
 
-static const char *TAG = "rgb_led_driver";
+static const char *TAG = "sat/rgb";
 
-typedef struct {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-} rgb_color_t;
+// How often the renderer redraws. 50 ms is 20 Hz: fast enough that a breath looks continuous and a
+// travelling pixel does not stutter, slow enough that the whole thing is a rounding error against
+// the audio front end it shares a core with.
+#define TICK_MS 50
 
-// 3. 用定义的结构体类型创建映射数组
-static const rgb_color_t color_rgb_map[RGB_COLOR_MAX] = {
-    [RGB_COLOR_RED]    = {255, 0,   0},     // 红色
-    [RGB_COLOR_BLUE]   = {0,   0,   255},   // 蓝色
-    [RGB_COLOR_GREEN]  = {0,   255, 0},     // 绿色
-    [RGB_COLOR_WHITE]  = {255, 255, 255},   // 白色
-};
+// One breath, in ticks. Two seconds — the pace of calm breathing, which is the point: it should read
+// as waiting, not as loading. Double that when the device is waiting on something other than the
+// person, so patience and invitation are distinguishable without looking closely.
+#define BREATHE_TICKS 40
+#define BREATHE_SLOW_TICKS 80
 
-typedef enum {
-    RGB_CMD_SET_MODE = 1,
-    RGB_CMD_SET_COLOR, 
-} rgb_queue_cmd_t;
+// Ticks per step of the travelling pixel. 100 ms per LED is a little under a second for the full
+// ring, which reads as deliberate rather than frantic.
+#define SPIN_TICKS 2
 
-typedef struct {
-    rgb_queue_cmd_t cmd;     // 命令
-    union {                    // 嵌套联合体：
-        RGB_example_mode_t mode;    // 模式
-        RGB_example_color_t color;     // 颜色
-    } param;
-} rgb_queue_data_t;
+// One full pass of the crest, in ticks. Faster than a breath and slower than a blink, so speech does
+// not get confused with either.
+#define WAVE_TICKS 24
 
+// Half a blink. 400 ms on, 400 ms off — insistent without being an alarm. The slow one is half that
+// rate: something is broken and needs a person, but nothing is waiting on the answer.
+#define BLINK_TICKS 8
+#define BLINK_SLOW_TICKS 16
 
-static led_strip_handle_t led_strip;
-static QueueHandle_t g_msg_queue;
-static RGB_example_color_t RGB_color = RGB_COLOR_WHITE;
+// How long rgb_flash holds. Long enough to be seen, short enough not to read as a state.
+#define FLASH_TICKS 3
 
-led_strip_handle_t configure_led(void)
+const rgb_color_t RGB_OFF = {0, 0, 0};
+const rgb_color_t RGB_WHITE = {255, 255, 255};
+const rgb_color_t RGB_RED = {255, 0, 0};
+const rgb_color_t RGB_GREEN = {0, 255, 0};
+const rgb_color_t RGB_BLUE = {0, 0, 255};
+// Deliberately faint. This is the resting state, and the device sits in a room people sleep in.
+const rgb_color_t RGB_DIM_BLUE = {0, 0, 24};
+const rgb_color_t RGB_CYAN = {0, 200, 255};
+const rgb_color_t RGB_AMBER = {255, 120, 0};
+const rgb_color_t RGB_MAGENTA = {255, 0, 200};
+
+static led_strip_handle_t strip;
+
+// What the renderer is drawing, and what it should go back to after a flash. Written by callers,
+// read by the renderer, so both sides take the spinlock — the pair must change together or the ring
+// briefly shows one state's colour in another state's pattern.
+static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
+static rgb_pattern_t want_pattern = RGB_SOLID;
+static rgb_color_t want_color;
+static rgb_color_t flash_color;
+static int flash_left;
+
+// scale dims a colour to `level` out of 255.
+static rgb_color_t scale(rgb_color_t c, int level)
 {
-    // LED strip general initialization, according to your led board design
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = LED_STRIP_GPIO_PIN, // The GPIO that connected to the LED strip's data line
-        .max_leds = LED_STRIP_LED_COUNT,      // The number of LEDs in the strip,
-        .led_model = LED_MODEL_WS2812,        // LED strip model
-        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_RGB, // The color order of the strip: GRB
-        .flags = {
-            .invert_out = false, // don't invert the output signal
-        }
+    return (rgb_color_t){
+        .r = (uint8_t)(c.r * level / 255),
+        .g = (uint8_t)(c.g * level / 255),
+        .b = (uint8_t)(c.b * level / 255),
     };
-
-    // LED strip backend configuration: RMT
-    led_strip_rmt_config_t rmt_config = {
-        .clk_src = RMT_CLK_SRC_DEFAULT,        // different clock source can lead to different power consumption
-        .resolution_hz = 10 * 1000 * 1000, // RMT counter clock frequency
-        .mem_block_symbols = 0, // the memory block size used by the RMT channel
-        .flags = {
-            .with_dma = 0,     // Using DMA can improve performance when driving more LEDs
-        }
-    };
-
-    // LED Strip object handle
-    led_strip_handle_t led_strip;
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
-    ESP_LOGI(TAG, "Created LED strip object with RMT backend");
-    return led_strip;
 }
 
-
-void _set_single_led_color(RGB_example_color_t color ,uint32_t led_index)
-{
-    rgb_color_t current_color = color_rgb_map[color];
-
-    /*
-    
-    */
-    ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, led_index, current_color.r, current_color.g, current_color.b));
-    /* Refresh the strip to send data */
-    ESP_ERROR_CHECK(led_strip_refresh(led_strip));
-}
-
-// rgb_set_solid lights the whole ring in one colour, immediately.
+// ramp returns a triangle over `period` ticks, squared.
 //
-// set_rgb_color cannot do this: it only records the colour, and the strip is written by the demo's
-// mode handlers — of which the default, RGB_MODE_IDLE, writes nothing at all. A satellite shows
-// state, not an animation, so it writes the pixels itself.
-void rgb_set_solid(RGB_example_color_t color)
+// Squaring is not decoration. Perceived brightness is roughly the square root of emitted light, so a
+// linear ramp looks like it lingers at the top and jumps at the bottom. Squaring the triangle
+// cancels that out closely enough that the result reads as a breath rather than a sawtooth.
+static int ramp(int phase, int period)
 {
-    if (!led_strip) {
-        return;
-    }
-    rgb_color_t c = color_rgb_map[color];
+    int half = period / 2;
+    int tri = phase < half ? phase * 255 / half : (period - phase) * 255 / half;
+    return tri * tri / 255;
+}
+
+// paint writes one frame: every pixel, then one refresh. Never partial — a refresh per pixel is what
+// made the old driver seven times as likely to collide with anything else touching the strip.
+static void paint(const rgb_color_t *pixels)
+{
     for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
-        led_strip_set_pixel(led_strip, i, c.r, c.g, c.b);
+        led_strip_set_pixel(strip, i, pixels[i].r, pixels[i].g, pixels[i].b);
     }
-    led_strip_refresh(led_strip);
+    // Return value ignored on purpose. A dropped frame is invisible at 20 Hz and the next tick fixes
+    // it; aborting the firmware because an LED did not light is the wrong trade for a device whose
+    // actual job is listening.
+    led_strip_refresh(strip);
 }
 
-//100ms scan
-void _example_playing(bool *reset)
+static void render(rgb_pattern_t pattern, rgb_color_t color, int tick)
 {
-    static uint16_t time_count = 0;
-    static uint8_t led_num = 0;
-    static bool clean_flag = 0;
-    if(*reset)
-    {
-        time_count = 0;
-        led_num = 0;
-        *reset = 0;
-        ESP_ERROR_CHECK(led_strip_clear(led_strip));
-    }
+    rgb_color_t px[LED_STRIP_LED_COUNT];
 
-    time_count++;
-    if(time_count>=5)
-    {
-        time_count=0;
-
-        if(clean_flag!=1)
-        {
-            _set_single_led_color(RGB_color,led_num++);
-            if(led_num>=LED_STRIP_LED_COUNT)
-            {
-                led_num=0;
-                clean_flag = 1;
-            }
+    switch (pattern) {
+    case RGB_SOLID:
+        for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
+            px[i] = color;
         }
-        else
-        {
-            ESP_ERROR_CHECK(led_strip_clear(led_strip));
-            clean_flag = 0;
+        break;
+
+    case RGB_BREATHE:
+    case RGB_BREATHE_SLOW: {
+        int period = pattern == RGB_BREATHE ? BREATHE_TICKS : BREATHE_SLOW_TICKS;
+        // Never fully dark at the bottom. A breath that reaches zero reads as a blink with a long
+        // pause, which is a different signal — and on a device that says everything through seven
+        // pixels, "off" has to keep meaning off.
+        rgb_color_t c = scale(color, 20 + ramp(tick % period, period) * 235 / 255);
+        for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
+            px[i] = c;
         }
-            
+        break;
     }
-}
 
-//100ms scan
-void _example_esp_sr_rec()
-{
-    static uint16_t time_count = 0;
-    static bool led_on_off = 0;
-
-    time_count++;
-    if(time_count>=2)
-    {
-        time_count=0;
-        if (led_on_off) 
-        {
-            for (int i = 0; i < LED_STRIP_LED_COUNT; i++) 
-            {
-                _set_single_led_color(RGB_color,i);
-            }
-        } 
-        else 
-        {
-            ESP_ERROR_CHECK(led_strip_clear(led_strip));
+    case RGB_SPIN: {
+        // A bright head with a fading tail behind it, which is what makes the direction of travel
+        // readable. A single lit pixel just looks like it is flickering somewhere on the ring.
+        int head = (tick / SPIN_TICKS) % LED_STRIP_LED_COUNT;
+        for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
+            int behind = (head - i + LED_STRIP_LED_COUNT) % LED_STRIP_LED_COUNT;
+            px[i] = scale(color, behind < 3 ? 255 >> behind : 0);
         }
-
-        led_on_off = !led_on_off;
+        break;
     }
-        
 
-}
-
-void _RGB_Example(void *arg)
-{
-    static RGB_example_mode_t RGB_mode = RGB_MODE_IDLE;
-    rgb_queue_data_t msg;
-    bool reset_playing_color = 0;
-    for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
-        _set_single_led_color(RGB_color,i);
-    }
-    while (1) 
-    {
-        BaseType_t ret = xQueueReceive(g_msg_queue, &msg, pdMS_TO_TICKS(100));
-        if (ret == pdPASS) 
-        {
-            switch (msg.cmd)
-            {
-                case RGB_CMD_SET_MODE:
-                    RGB_mode = msg.param.mode;
-                    //ESP_LOGI(TAG, "收到消息: 模式=%d", msg.param.mode);
-                    ESP_ERROR_CHECK(led_strip_clear(led_strip));
-                    if(RGB_mode == RGB_MODE_IDLE)
-                    {
-                        for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
-                            _set_single_led_color(RGB_color,i);
-                        }
-                    }
-                    break;
-                case RGB_CMD_SET_COLOR:
-                    RGB_color = msg.param.color;   
-                    reset_playing_color=1;
-                    //ESP_LOGI(TAG, "收到消息: 颜色=%d", msg.param.color);
-                    break;
-                default:
-                    break;
-            }
-            
-
-        } 
-        else 
-        {
-            switch (RGB_mode)
-            {
-                case RGB_MODE_IDLE:
-                    
-                    break;
-                case RGB_MODE_PLAYING:
-                    _example_playing(&reset_playing_color);
-                    break;
-                case RGB_MODE_REC_COMMAND:
-                    _example_esp_sr_rec();
-                    break;
-                default:
-                    break;
-            }
+    case RGB_WAVE: {
+        // A crest running round the ring, every pixel lit at some level. Reads as one thing moving
+        // rather than several things blinking, which is what separates it from SPIN at a glance.
+        int phase = tick % WAVE_TICKS;
+        for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
+            int at = (phase * LED_STRIP_LED_COUNT / WAVE_TICKS + i) % LED_STRIP_LED_COUNT;
+            px[i] = scale(color, 40 + ramp(at, LED_STRIP_LED_COUNT) * 215 / 255);
         }
+        break;
+    }
+
+    case RGB_BLINK:
+    case RGB_BLINK_SLOW: {
+        int half = pattern == RGB_BLINK ? BLINK_TICKS : BLINK_SLOW_TICKS;
+        bool on = (tick / half) % 2 == 0;
+        for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
+            px[i] = on ? color : RGB_OFF;
+        }
+        break;
+    }
+    }
+
+    paint(px);
+}
+
+// render_task is the only thing in the firmware that writes to the strip.
+static void render_task(void *arg)
+{
+    for (int tick = 0;; tick++) {
+        rgb_pattern_t pattern;
+        rgb_color_t color;
+
+        portENTER_CRITICAL(&lock);
+        if (flash_left > 0) {
+            flash_left--;
+            pattern = RGB_SOLID;
+            color = flash_color;
+        } else {
+            pattern = want_pattern;
+            color = want_color;
+        }
+        portEXIT_CRITICAL(&lock);
+
+        render(pattern, color, tick);
+        vTaskDelay(pdMS_TO_TICKS(TICK_MS));
     }
 }
 
-void RGB_Example(void)
+esp_err_t rgb_start(void)
 {
-    led_strip = configure_led();
-    g_msg_queue = xQueueCreate(3, sizeof(rgb_queue_data_t));
-    if (g_msg_queue == NULL) {
-        ESP_LOGE(TAG, "队列创建失败");
-        return;
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = LED_STRIP_GPIO_PIN,
+        .max_leds = LED_STRIP_LED_COUNT,
+        .led_model = LED_MODEL_WS2812,
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_RGB,
+        .flags = {.invert_out = false},
+    };
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000,
+        .mem_block_symbols = 0,
+        .flags = {.with_dma = 0},
+    };
+
+    esp_err_t err = led_strip_new_rmt_device(&strip_config, &rmt_config, &strip);
+    if (err != ESP_OK) {
+        return err;
     }
-    xTaskCreatePinnedToCore(_RGB_Example, "RGB Demo",4096, NULL, 2, NULL, 0);
+    want_color = RGB_OFF;
+
+    // Core 0, with the network. Core 1 carries the audio front end's fetch loop, and a stall there
+    // is what breaks echo cancellation — the ring is not worth a millisecond of that.
+    if (xTaskCreatePinnedToCore(render_task, "rgb", 3 * 1024, NULL, 2, NULL, 0) != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_LOGI(TAG, "ring up (%d pixels)", LED_STRIP_LED_COUNT);
+    return ESP_OK;
 }
 
-
-void set_rgb_mode(RGB_example_mode_t mode)
+void rgb_show(rgb_pattern_t pattern, rgb_color_t color)
 {
-    rgb_queue_data_t msg;
-    msg.cmd = RGB_CMD_SET_MODE;
-    msg.param.mode = mode;
-        
-    // 发送到队列（超时100ms）
-    BaseType_t ret = xQueueSend(g_msg_queue, &msg, pdMS_TO_TICKS(1000));
-    if (ret != pdPASS) 
-    {
-        ESP_LOGE(TAG, "指令发送失败！队列已满");
-    }
+    portENTER_CRITICAL(&lock);
+    want_pattern = pattern;
+    want_color = color;
+    portEXIT_CRITICAL(&lock);
 }
 
-void set_rgb_color(RGB_example_color_t color)
+void rgb_flash(rgb_color_t color)
 {
-    rgb_queue_data_t msg;
-    msg.cmd = RGB_CMD_SET_COLOR;
-    msg.param.color = color;
-        
-    // 发送到队列（超时100ms）
-    BaseType_t ret = xQueueSend(g_msg_queue, &msg, pdMS_TO_TICKS(1000));
-    if (ret != pdPASS) 
-    {
-        ESP_LOGE(TAG, "指令发送失败！队列已满");
-    }
+    portENTER_CRITICAL(&lock);
+    flash_color = color;
+    flash_left = FLASH_TICKS;
+    portEXIT_CRITICAL(&lock);
 }

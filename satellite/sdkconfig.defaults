@@ -44,6 +44,12 @@ CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
 CONFIG_ESP_WIFI_RX_BA_WIN=6
 CONFIG_FREERTOS_ENABLE_BACKWARD_COMPATIBILITY=y
 CONFIG_LOG_COLORS=y
+# Raise the CEILING only; the default level stays INFO, so nothing gets noisier on its own. Without
+# this, esp_log_level_set() cannot lift any tag above INFO and the front end's configuration dump —
+# the only place fields like vad_mute_playback are reported — is unreachable. That dump is how a
+# setting the front end silently overrode gets told apart from one it accepted, which has already
+# mattered twice: the WebRTC AGC was refused, and NS lost to BSS.
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 CONFIG_LWIP_HOOK_IP6_INPUT_NONE=y
 CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE=16000
 CONFIG_ESP_AUDIO_SIMPLE_PLAYER_CH_CVT_EN=y
