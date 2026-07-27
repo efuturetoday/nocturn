@@ -1,5 +1,7 @@
 #include "mic_speech.h"
 
+#include "state.h"
+
 #include "esp_afe_config.h"
 #include "esp_afe_sr_iface.h"
 #include "esp_afe_sr_models.h"
@@ -28,14 +30,16 @@ static volatile bool session;
 static volatile bool voice;
 
 static mic_pcm_sink_t pcm_sink;
-static mic_speech_event_cb_t event_cb;
 static void *cb_user;
 
-static void emit(mic_speech_event_t ev)
+// emit reports one edge, and does it by POSTING rather than calling.
+//
+// This runs on the detect loop, which must keep fetching or the front end's echo cancellation loses
+// the alignment it depends on. A direct callback puts whatever the consumer does on this task;
+// posting bounds it to a queue write and hands the work to the event loop's own task.
+static void emit(sat_event_id_t ev)
 {
-    if (event_cb) {
-        event_cb(ev, cb_user);
-    }
+    esp_event_post(SAT_EVENT, ev, NULL, 0, 0);
 }
 
 static void feed_task(void *arg)
@@ -91,7 +95,7 @@ static void detect_task(void *arg)
         // this fires once when a voice appears rather than on every frame it stays.
         bool speaking = res->vad_state == VAD_SPEECH;
         if (speaking && !voice) {
-            emit(MIC_EVT_VOICE);
+            emit(SAT_EV_VOICE);
         }
         voice = speaking;
 
@@ -103,7 +107,7 @@ static void detect_task(void *arg)
         if (woke && !session) {
             session = true;
             silence_ms = 0;
-            emit(MIC_EVT_AWAKE);
+            emit(SAT_EV_WAKE);
             // The front end holds back the audio from just before the trigger. Without it the
             // first word of the request is missing — the person says "nocturn, what time is it"
             // and the far side receives "at time is it".
@@ -130,7 +134,7 @@ static void detect_task(void *arg)
             silence_ms = res->vad_state == VAD_SPEECH ? 0 : silence_ms + frame_ms;
             if (silence_ms >= SILENCE_TO_END_MS) {
                 session = false;
-                emit(MIC_EVT_SPEECH_END);
+                emit(SAT_EV_UTTERANCE_END);
                 // Wakenet is suppressed while a session runs, so the wake word inside a sentence
                 // does not restart it. Re-arm now that the session is over.
                 afe_handle->enable_wakenet(afe_data);
@@ -138,14 +142,17 @@ static void detect_task(void *arg)
         }
         esp_task_wdt_reset();
     }
-    ESP_LOGW(TAG, "detect loop exited");
+    // Say so on the way out. Nothing else can notice: the link stays up, the heartbeat keeps
+    // printing "alive", and the board is simply deaf from here on — broken, and indistinguishable
+    // from healthy. That is the worst failure this device has, and it is one post away from visible.
+    ESP_LOGE(TAG, "detect loop exited — the board is deaf");
+    emit(SAT_EV_MIC_DEAD);
     vTaskDelete(NULL);
 }
 
-esp_err_t mic_speech_start(mic_pcm_sink_t sink, mic_speech_event_cb_t on_event, void *user)
+esp_err_t mic_speech_start(mic_pcm_sink_t sink, void *user)
 {
     pcm_sink = sink;
-    event_cb = on_event;
     cb_user = user;
 
     // The front end dumps its resolved configuration at DEBUG, including fields the pipeline printout
@@ -256,7 +263,5 @@ esp_err_t mic_speech_start(mic_pcm_sink_t sink, mic_speech_event_cb_t on_event, 
     xTaskCreatePinnedToCore(feed_task, "mic_feed", 8 * 1024, NULL, 5, NULL, 0);
     return ESP_OK;
 }
-
-bool mic_speech_session_open(void) { return session; }
 
 bool mic_speech_voice(void) { return voice; }

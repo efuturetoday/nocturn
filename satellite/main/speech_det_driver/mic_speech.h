@@ -19,21 +19,18 @@ extern "C" {
 // What leaves this module is cleaned 16 kHz mono PCM16 — echo-cancelled against the speaker,
 // noise-suppressed, and gated by the wake word — which is exactly the format a live session wants.
 
-// mic_speech_event_t marks the edges of an utterance.
-typedef enum {
-    MIC_EVT_AWAKE,      // the wake word fired; PCM starts flowing
-    MIC_EVT_VOICE,      // voice activity began — see below; fires with no session open
-    MIC_EVT_SPEECH_END, // silence held long enough to call the utterance over; PCM stops
-} mic_speech_event_t;
-
-// MIC_EVT_VOICE is the raw leading edge of voice activity, reported whether or not a session is
-// open. It is the local half of a barge-in: while the assistant is talking, this is the board
-// noticing that a person started talking over it, and it costs one detector frame instead of a round
-// trip to the daemon and back.
+// The edges of an utterance are reported as events on the default loop — SAT_EV_WAKE,
+// SAT_EV_VOICE, SAT_EV_UTTERANCE_END, and SAT_EV_MIC_DEAD when this module gives up. See state.h.
 //
-// It is NOT an utterance boundary and must not be treated as one. It fires on any voice the front end
-// hears, including a cough and including — if echo cancellation is not holding — the board's own
-// speaker. Whoever consumes it decides what it means.
+// Posted rather than called back, because this runs on the detect loop: whatever a consumer does
+// would otherwise run on the task that must keep fetching, and a stall there costs the front end the
+// alignment its echo cancellation depends on.
+//
+// SAT_EV_VOICE in particular is the RAW leading edge of voice activity, reported whether or not a
+// session is open — the moment it matters most is while the assistant is talking, which is exactly
+// when the old code was not looking. It is not an utterance boundary and must not be treated as one:
+// it fires on any voice the front end hears, including a cough and including the board's own
+// speaker. What it means is the state machine's to decide.
 
 // mic_pcm_sink_t receives one chunk of cleaned mono PCM16 while a session is open.
 //
@@ -42,15 +39,8 @@ typedef enum {
 // needs between what is playing and what the microphone hears.
 typedef void (*mic_pcm_sink_t)(const int16_t *pcm, size_t samples, void *user);
 
-// mic_speech_event_cb_t is called on the same loop, under the same rule.
-typedef void (*mic_speech_event_cb_t)(mic_speech_event_t event, void *user);
-
-// mic_speech_start brings up the front end and begins listening for the wake word. Either callback
-// may be NULL.
-esp_err_t mic_speech_start(mic_pcm_sink_t sink, mic_speech_event_cb_t on_event, void *user);
-
-// mic_speech_session_open reports whether an utterance is currently being streamed.
-bool mic_speech_session_open(void);
+// mic_speech_start brings up the front end and begins listening for the wake word. sink may be NULL.
+esp_err_t mic_speech_start(mic_pcm_sink_t sink, void *user);
 
 // mic_speech_voice reports the detector's current answer: is a voice present right now. The level to
 // MIC_EVT_VOICE's edge, for anything that needs to ask rather than be told.

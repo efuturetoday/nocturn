@@ -25,6 +25,7 @@
 #include "mic_speech.h"
 #include "provision.h"
 #include "rgb_led_driver.h"
+#include "state.h"
 #include "tca9555_driver.h"
 #include "wifi.h"
 
@@ -88,27 +89,24 @@ static void on_pcm(const int16_t *pcm, size_t samples, void *user)
 // Anything else says the acoustics have to be fixed first, and no amount of protocol will help.
 static uint32_t voice_while_playing;
 
-static void on_event(mic_speech_event_t event, void *user)
+// on_sat drives the recording, and nothing else. The ring belongs to the state module now — this
+// used to paint colours here, which is how an unprovisioned board and a listening one ended up
+// looking identical.
+static void on_sat(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    // Switched rather than branched on AWAKE: an else-branch here silently made every new event mean
-    // "the utterance ended", so adding one started playback at the wrong moment.
-    switch (event) {
-    case MIC_EVT_AWAKE:
+    switch (id) {
+    case SAT_EV_WAKE:
         captured = 0;
-        // Green breathing, and green appears nowhere else. The single question the ring has to
-        // answer is "may I talk now", and one colour should answer it.
-        rgb_show(RGB_BREATHE, RGB_GREEN);
         return;
-    case MIC_EVT_VOICE:
+    case SAT_EV_VOICE:
         if (playing_back) {
             voice_while_playing++;
         }
         return;
-    case MIC_EVT_SPEECH_END:
-        // The wave stands in for the assistant talking, which in this build is the replay. Cyan and
-        // not green: the person should not feel invited to speak while it does.
-        rgb_show(RGB_WAVE, RGB_CYAN);
+    case SAT_EV_UTTERANCE_END:
         playing_back = true;
+        return;
+    default:
         return;
     }
 }
@@ -124,6 +122,9 @@ static void playback_task(void *arg)
         }
         size_t n = captured;
         ESP_LOGI(TAG, "replaying %u samples (%u ms)", (unsigned)n, (unsigned)(n * 1000 / 16000));
+        // BEFORE the amplifier, not after. Raising it is what clicks, and the window that discards
+        // that click only opens once this has been seen.
+        esp_event_post(SAT_EVENT, SAT_EV_PLAYBACK_START, NULL, 0, portMAX_DELAY);
         audio_out_amp(true);
 
         // In chunks, so the queue is never asked for more than it holds.
@@ -139,9 +140,9 @@ static void playback_task(void *arg)
         audio_out_silence(120);
         vTaskDelay(pdMS_TO_TICKS(n * 1000 / 16000 + 600));
         audio_out_amp(false);
+        esp_event_post(SAT_EVENT, SAT_EV_PLAYBACK_END, NULL, 0, 0);
         captured = 0;
         playing_back = false;
-        rgb_show(RGB_SOLID, RGB_DIM_BLUE);
         ESP_LOGI(TAG, "replay done");
     }
 }
@@ -159,8 +160,8 @@ static void report(void *arg)
         uint32_t chunks = 0, samples = 0;
         int werr = 0;
         audio_out_stats(&chunks, &samples, &werr);
-        ESP_LOGI(TAG, "alive — link=%d session=%d voice=%d self_trig=%lu peak=%ld queued_drop=%lu played=%lu chunks/%lu samples werr=%d",
-                 link_connected(), mic_speech_session_open(), mic_speech_voice(), voice_while_playing,
+        ESP_LOGI(TAG, "alive — %s voice=%d self_trig=%lu peak=%ld queued_drop=%lu played=%lu chunks/%lu samples werr=%d",
+                 state_name(state_get()), mic_speech_voice(), voice_while_playing,
                  (long)peak, dropped, chunks, samples, werr);
         peak = 0;
         dropped = 0;
@@ -191,10 +192,7 @@ static void network(void *arg)
     provision_t prov;
     if (provision_load(&prov) != ESP_OK) {
         ESP_LOGE(TAG, "not provisioned — flash an NVS image with ssid, pass and bearer");
-        // Blinking, not solid: this needs a person, and it has to be tellable from a board that is
-        // merely waiting for the network. Previously both were solid red and looked identical.
-        // The slow blink, because nothing is waiting on an answer — it is broken, not asking.
-        rgb_show(RGB_BLINK_SLOW, RGB_RED);
+        esp_event_post(SAT_EVENT, SAT_EV_UNPROVISIONED, NULL, 0, 0);
         vTaskDelete(NULL);
         return;
     }
@@ -233,10 +231,18 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_board_init(16000, 2, 32)); // match the bus: 32-bit stereo slots
     ESP_LOGI(TAG, "step: tca");
     tca9555_driver_init();
+    // The shared things are created HERE, by the one place that can order them, and handed to the
+    // modules that use them. No module creates what it merely needs first — wifi.c and state.c both
+    // creating the event loop is how this became a boot loop whose message pointed at neither.
+    ESP_LOGI(TAG, "step: event loop");
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_LOGI(TAG, "step: rgb");
     ESP_ERROR_CHECK(rgb_start());
-    // Booting: white, breathing slowly. Alive, nothing decided yet, and nothing expected of anyone.
-    rgb_show(RGB_BREATHE_SLOW, RGB_WHITE);
+    ESP_LOGI(TAG, "step: state");
+    // Before any source can post: an event delivered with nobody listening is a transition the ring
+    // never learns about.
+    ESP_ERROR_CHECK(state_start());
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(SAT_EVENT, ESP_EVENT_ANY_ID, on_sat, NULL, NULL));
     ESP_LOGI(TAG, "step: volume");
     esp_audio_set_play_vol(TEST_VOLUME);
     ESP_LOGI(TAG, "step: audio_out");
@@ -245,7 +251,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(audio_out_init());
     ESP_LOGI(TAG, "step: mic");
-    ESP_ERROR_CHECK(mic_speech_start(on_pcm, on_event, NULL));
+    ESP_ERROR_CHECK(mic_speech_start(on_pcm, NULL));
     ESP_LOGI(TAG, "step: done");
 
     xTaskCreate(report, "report", 3 * 1024, NULL, 2, NULL);
