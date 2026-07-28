@@ -252,11 +252,17 @@ esp_err_t mic_speech_start(void)
     // having WakeNet in the pipeline.
     cfg->agc_init = true;
     cfg->agc_mode = AFE_AGC_MODE_WAKENET;
+    // Explicit rather than default: at the defaults (9 dB / -3 dBFS) this stage is measurably
+    // absent — fetch output stays at exactly afe_linear_gain times the raw microphone, wake word
+    // armed or not. Field reports with these two set say the stage does track; the report line's
+    // raw/clean pair is the judge.
+    cfg->agc_compression_gain_db = 10;
+    cfg->agc_target_level_dbfs = 8;
 
     // A fixed multiplier on top, because AGC only tracks — it does not raise a quiet room to a
-    // usable level on its own. Conservative: this scales the amplitude directly, so too much
-    // clips before it gets louder.
-    cfg->afe_linear_gain = 3.0f;
+    // usable level on its own. 2.5 keeps the AGC's ceiling under full scale: the compressor levels
+    // loud input at -8 dBFS (~13000), and 2.5 times that is the last value that does not clip.
+    cfg->afe_linear_gain = 2.5f;
 
     afe_handle = esp_afe_handle_from_config(cfg);
     afe_data = afe_handle->create_from_config(cfg);
