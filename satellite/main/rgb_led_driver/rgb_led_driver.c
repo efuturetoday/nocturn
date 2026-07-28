@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 
 #include "bsp_board.h"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "led_strip.h"
 
@@ -331,17 +332,14 @@ esp_err_t rgb_start(void)
         .flags = {.with_dma = 0},
     };
 
-    esp_err_t err = led_strip_new_rmt_device(&strip_config, &rmt_config, &strip);
-    if (err != ESP_OK) {
-        return err;
-    }
+    ESP_RETURN_ON_ERROR(led_strip_new_rmt_device(&strip_config, &rmt_config, &strip), TAG,
+                        "Failed to create LED strip");
     want_color = RGB_OFF;
 
     // Core 0, with the network. Core 1 carries the audio front end's fetch loop, and a stall there
     // is what breaks echo cancellation — the ring is not worth a millisecond of that.
-    if (xTaskCreatePinnedToCore(render_task, "rgb", 3 * 1024, NULL, 2, NULL, 0) != pdPASS) {
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_FALSE(xTaskCreatePinnedToCore(render_task, "rgb", 3 * 1024, NULL, 2, NULL, 0) == pdPASS,
+                        ESP_ERR_NO_MEM, TAG, "Failed to create render task");
     ESP_LOGI(TAG, "ring up (%d pixels)", LED_STRIP_LED_COUNT);
     return ESP_OK;
 }

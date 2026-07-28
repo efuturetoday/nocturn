@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 
 #include "esp_heap_caps.h"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "link.h"
 #include "micbuf.h"
@@ -83,9 +84,9 @@ esp_err_t uplink_start(void)
 {
     // Core 0, away from the audio front end's fetch loop on core 1: the network stack is bursty, and
     // letting it share a core with the loop reintroduces exactly the stall this task prevents.
-    if (xTaskCreatePinnedToCore(drain_task, "uplink", 4 * 1024, NULL, 4, NULL, 0) != pdPASS) {
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_FALSE(
+        xTaskCreatePinnedToCore(drain_task, "uplink", 4 * 1024, NULL, 4, NULL, 0) == pdPASS,
+        ESP_ERR_NO_MEM, TAG, "Failed to create sender task");
     ESP_LOGI(TAG, "uplink up (%d ms frames, %d ms pre-trigger)", SEND_SAMPLES * 1000 / 16000,
              PRETRIGGER_SAMPLES * 1000 / 16000);
     return ESP_OK;

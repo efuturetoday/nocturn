@@ -10,6 +10,7 @@
 #include "rgb_led_driver.h"
 #include "state.h"
 #include "esp_heap_caps.h"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -201,14 +202,12 @@ esp_err_t audio_out_init(void)
     // front end already compete for. Nothing reads it by DMA — the drain task copies each block into
     // an internal scratch on its way to the codec — so the usual PSRAM-and-DMA trap does not apply.
     ring = xRingbufferCreateWithCaps(RING_BYTES, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM);
-    if (!ring) {
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_FALSE(ring != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create playback ring");
     // Pinned opposite the fetch loop: the two must not compete for one core, or the stall this
     // whole module exists to prevent comes back through the scheduler.
-    if (xTaskCreatePinnedToCore(drain_task, "audio_out", 4 * 1024, NULL, 5, NULL, 0) != pdPASS) {
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_FALSE(
+        xTaskCreatePinnedToCore(drain_task, "audio_out", 4 * 1024, NULL, 5, NULL, 0) == pdPASS,
+        ESP_ERR_NO_MEM, TAG, "Failed to create drain task");
     // Down until something actually plays: an amplifier held up hisses audibly into a quiet room,
     // and this device sits in one all day.
     esp_audio_amp(false);

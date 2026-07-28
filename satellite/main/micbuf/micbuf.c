@@ -7,6 +7,7 @@
 #include "freertos/semphr.h"
 
 #include "esp_heap_caps.h"
+#include "esp_check.h"
 #include "esp_log.h"
 
 static const char *TAG = "sat/micbuf";
@@ -36,9 +37,7 @@ esp_err_t micbuf_init(void)
     ring = heap_caps_malloc(CAPACITY * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     lock = xSemaphoreCreateMutex();
     fresh = xEventGroupCreate();
-    if (!ring || !lock || !fresh) {
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_FALSE(ring && lock && fresh, ESP_ERR_NO_MEM, TAG, "Failed to allocate history");
     ESP_LOGI(TAG, "microphone history up (%d ms)", CAPACITY * 1000 / 16000);
     return ESP_OK;
 }

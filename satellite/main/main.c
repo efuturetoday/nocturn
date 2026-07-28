@@ -245,7 +245,7 @@ static void network(void *arg)
         daemon.port = prov.port;
         strlcpy(daemon.path, "/ws", sizeof(daemon.path));
     } else {
-        discover_init();
+        ESP_ERROR_CHECK(discover_init());
         while (!discover_find(&daemon, 3000)) {
             ESP_LOGW(TAG, "nocturn not found, retrying");
             vTaskDelay(pdMS_TO_TICKS(5000));
