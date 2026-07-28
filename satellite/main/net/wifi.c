@@ -9,6 +9,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 
 static const char *TAG = "sat/wifi";
@@ -22,7 +23,10 @@ static const char *TAG = "sat/wifi";
 #define RETRY_MAX_MS 30000
 
 static EventGroupHandle_t events;
+static esp_timer_handle_t retry_timer;
 static int retry_ms = RETRY_MIN_MS;
+
+static void retry(void *arg) { esp_wifi_connect(); }
 
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -33,11 +37,12 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(events, GOT_IP);
         ESP_LOGW(TAG, "disconnected, retrying in %d ms", retry_ms);
-        vTaskDelay(pdMS_TO_TICKS(retry_ms));
+        // A timer, never a sleep: this handler runs on the default event loop, and sleeping here
+        // stalls every WiFi and IP event in the system for the whole backoff.
+        esp_timer_start_once(retry_timer, (uint64_t)retry_ms * 1000);
         if (retry_ms < RETRY_MAX_MS) {
             retry_ms *= 2;
         }
-        esp_wifi_connect();
         return;
     }
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -52,6 +57,9 @@ esp_err_t wifi_start(const char *ssid, const char *pass)
 {
     events = xEventGroupCreate();
     ESP_RETURN_ON_FALSE(events != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create event group");
+
+    const esp_timer_create_args_t timer = {.callback = retry, .name = "wifi_retry"};
+    ESP_RETURN_ON_ERROR(esp_timer_create(&timer, &retry_timer), TAG, "Failed to create retry timer");
 
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "Failed to init netif");
     // The default event loop is app_main's to create, not this module's. Several things here need it
