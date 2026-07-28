@@ -212,6 +212,9 @@ static void on_sat(void *arg, esp_event_base_t base, int32_t id, void *data)
             voice_while_playing++;
         }
         return;
+    case SAT_EV_SPEECH:
+        link_send_text("{\"cmd\":\"voice.speech\",\"ws\":\"main\"}");
+        return;
     case SAT_EV_BARGE_IN:
         // Instant mute, and that is the whole local job. Everything queued answers a question the
         // person has already abandoned, and it is the one part of this that must not wait for a round
@@ -332,6 +335,7 @@ static void on_control(const char *json, void *user)
         return;
     }
     if (strstr(json, "voice.interrupt")) {
+        state_report_remote_interrupt();
         // The daemon agreeing with a barge-in this board already made, or making one of its own.
         // Either way what is queued answers a question already abandoned.
         audio_out_flush();

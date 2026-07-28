@@ -58,7 +58,19 @@ typedef enum {
     RGB_WAVE,         // a brightness crest moving round. talking
     RGB_BLINK,        // on/off, ~0.8 s. wants a decision
     RGB_BLINK_SLOW,   // on/off, ~1.6 s. wants repair
+    RGB_SIRI,         // four drifting colours, loudness-driven. the assistant is speaking
+    RGB_SIRI_THINK,   // the same colours pulled tight and circling. it is working
 } rgb_pattern_t;
+
+// THE TWO SIRI PATTERNS CARRY THEIR OWN COLOURS and ignore the colour passed to rgb_show.
+//
+// They have to. What makes that look recognisable is not a shape but the mixture — blue sliding
+// through purple into pink — and a mixture cannot be tinted by one triple without becoming a
+// different thing. Call them with RGB_OFF so the call site shows that the argument is unused.
+//
+// They are also the only two patterns that react to anything outside themselves: RGB_SIRI is driven
+// by rgb_level below, so the ring swells with the actual speech instead of running an animation that
+// merely coincides with it.
 
 // rgb_start brings up the strip and its renderer. Call once, before anything else here.
 esp_err_t rgb_start(void);
@@ -66,6 +78,18 @@ esp_err_t rgb_start(void);
 // rgb_show sets what the ring displays until the next call. Pattern and colour change together, so
 // the renderer never draws one against the other.
 void rgb_show(rgb_pattern_t pattern, rgb_color_t color);
+
+// rgb_level reports how loud the speaker is RIGHT NOW, 0..255, and RGB_SIRI swells with it.
+//
+// Called from whoever moves the samples, because that is the only party that knows. Routing this
+// through the state module would mean an event every 20 ms carrying a number that is stale by the
+// next frame — and state is about what the device IS, while this is about how loud it is being.
+//
+// Attack is immediate and release is a decay in the renderer: speech is full of short gaps, and a
+// ring that dropped into every one of them would read as flicker rather than as a voice. Stop
+// calling this and the level falls to a floor on its own, so a reply the board is not measuring
+// still animates.
+void rgb_level(uint8_t level);
 
 // rgb_flash interrupts with a brief full-brightness pulse, then restores whatever rgb_show last set.
 //

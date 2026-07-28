@@ -54,12 +54,20 @@ type Sink interface {
 // underneath is untouched, ready for the next wake word.
 var errSessionOver = errors.New("voice: session ended")
 
+// errHungUp unwinds Run when the model calls hang_up. It is a normal ending, not a failure, and Run
+// converts it back to a nil error — a caller that logged this as a fault would be reporting good
+// manners as a bug.
+var errHungUp = errors.New("voice: the model hung up")
+
 // session is one running conversation: the handle that stops it, and the microphone queue the
 // connection feeds.
 type session struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	mic    chan []byte
+	// The device's own detector reporting a voice. Depth one and never blocking: what matters is
+	// THAT someone spoke, not how many times, and the only consumer resets a timer on it.
+	heard chan struct{}
 }
 
 // deviceView is the Device the driver sees: a caller's Sink for writing, this session's queue for
@@ -67,9 +75,17 @@ type session struct {
 // as long as the device is switched on.
 type deviceView struct {
 	Sink
-	mic  chan []byte
-	done chan struct{}
+	mic   chan []byte
+	heard chan struct{}
+	done  chan struct{}
 }
+
+// Heard is the device's own voice detector, not the model's transcript.
+//
+// It arrives from the board within about 200 ms of someone starting to speak, against the model's
+// transcript which only appears once something has been UNDERSTOOD. For deciding whether anyone is
+// still there, the difference is the whole point.
+func (d *deviceView) Heard() <-chan struct{} { return d.heard }
 
 // Recv returns the next microphone chunk, or ends the session.
 //
@@ -118,18 +134,21 @@ func (m *Manager) Start(deviceID string, out Sink, conv []agentkit.Message, ende
 		}
 	}
 
-	// Background, not a connection's context: the session's lifetime is this Manager's to end, and
-	// tying it to whichever request happened to start it would make an unrelated cancellation look
-	// like the person hanging up.
+	// Background, not the context of the connection that asked. A device holds two connections while a
+	// dropped one times out, and it says the wake word again on the new one during exactly that window
+	// — so a session parented on a connection would be cancelled by the OTHER connection's teardown,
+	// moments after it started and often while the provider was still setting it up. The lifetime here
+	// is the Manager's to end, and Stop/CloseAll are the only two things that may end it.
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &session{
 		cancel: cancel,
 		done:   make(chan struct{}),
 		// A second or so of speech. Deeper only hides a link that cannot keep up, and stale
 		// microphone audio is worth less than knowing the link is congested.
-		mic: make(chan []byte, 48),
+		mic:   make(chan []byte, 48),
+		heard: make(chan struct{}, 1),
 	}
-	dev := &deviceView{Sink: out, mic: s.mic, done: s.done}
+	dev := &deviceView{Sink: out, mic: s.mic, heard: s.heard, done: s.done}
 	m.active[deviceID] = s
 	m.wg.Add(1)
 	m.mu.Unlock()
@@ -192,6 +211,21 @@ func (m *Manager) Feed(deviceID string, pcm []byte) {
 	case s.mic <- pcm:
 	default:
 		m.log.Debug("microphone frame dropped", "device", deviceID)
+	}
+}
+
+// Heard reports that the device's detector picked up a voice. Dropped if one is already pending:
+// the consumer only ever resets a timer, and two resets are the same as one.
+func (m *Manager) Heard(deviceID string) {
+	m.mu.Lock()
+	s := m.active[deviceID]
+	m.mu.Unlock()
+	if s == nil {
+		return
+	}
+	select {
+	case s.heard <- struct{}{}:
+	default:
 	}
 }
 

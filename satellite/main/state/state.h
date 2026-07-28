@@ -61,9 +61,25 @@ typedef enum {
     SAT_EV_UNPROVISIONED,  // no credentials in NVS
     SAT_EV_REMOTE_STATE,   // the daemon's view of the conversation; data is a NUL-terminated string
     SAT_EV_BARGE_IN,       // a person talked over the reply; posted BY this module, see state.c
+    SAT_EV_SPEECH,         // a voice was heard with no reply playing; posted BY this module
     SAT_EV_BUTTON_DOWN,    // a button went down; data is a button_id_t
     SAT_EV_BUTTON_UP,      // and back up
 } sat_event_id_t;
+
+// BARGE_IN_LOCAL decides who stops the speaker when a person talks over it.
+//
+// On: this board does it, on its own voice detector, and tells the daemon afterwards.
+// Off: nothing local happens and the model works it out for itself — it is receiving the microphone
+// either way — and the daemon sends voice.interrupt when it does.
+//
+// A flag rather than a decision, because the answer is a measurement nobody has yet: local detection
+// costs 160-220 ms (the detector cannot fire on the first frame, and waits for vad_min_speech_ms of
+// held speech), and going via the model costs that plus a round trip plus however long the model
+// takes to notice. If the difference turns out to be small, everything upstream is less machinery
+// for the same behaviour.
+//
+// Either way the board LOGS both moments, so the comparison is a number rather than an impression.
+#define BARGE_IN_LOCAL 1
 
 // state_start registers the handlers and paints the initial state.
 //
@@ -75,6 +91,11 @@ esp_err_t state_start(void);
 // state_get is the current state, for the heartbeat line. Nothing should branch on it: whoever needs
 // to act on a change should be reacting to the event that caused it.
 sat_state_t state_get(void);
+
+// state_report_remote_interrupt notes that the daemon's interrupt arrived, and says how long after
+// this board heard the voice itself. That gap IS the cost of deciding upstream, and it is the number
+// BARGE_IN_LOCAL exists to be chosen against.
+void state_report_remote_interrupt(void);
 
 // state_name is the short lowercase name, for logs.
 const char *state_name(sat_state_t state);
