@@ -157,7 +157,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         up = true;
         // Posted rather than acted on. This handler runs on the client's own task, which also drives
         // the keepalive, so what a consumer does with the news must not happen here.
-        esp_event_post(SAT_EVENT, SAT_EV_LINK_UP, NULL, 0, 0);
+        state_post(SAT_EV_LINK_UP, NULL, 0);
         ESP_LOGI(TAG, "connected to nocturn");
         break;
     case WEBSOCKET_EVENT_DISCONNECTED:
@@ -165,7 +165,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         // Whatever is still queued belongs to the connection that just went away. Sending it over the
         // next one would put the tail of one conversation in front of another.
         drain_outq();
-        esp_event_post(SAT_EVENT, SAT_EV_LINK_DOWN, NULL, 0, 0);
+        state_post(SAT_EV_LINK_DOWN, NULL, 0);
         ESP_LOGW(TAG, "disconnected, reconnecting");
         break;
     case WEBSOCKET_EVENT_ERROR:
@@ -181,12 +181,12 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
                     // Not a transient failure: reconnecting cannot fix a token the daemon does not
                     // know, and a device that retries forever in silence looks identical to one that
                     // is simply unreachable.
-                    esp_event_post(SAT_EVENT, SAT_EV_LINK_REJECTED, NULL, 0, 0);
+                    state_post(SAT_EV_LINK_REJECTED, NULL, 0);
                     ESP_LOGE(TAG, "rejected: this device's token is not accepted — re-enrol it");
                 }
             }
             up = false;
-            esp_event_post(SAT_EVENT, SAT_EV_LINK_DOWN, NULL, 0, 0);
+            state_post(SAT_EV_LINK_DOWN, NULL, 0);
             break;
         }
         if (ev->op_code == 0x02 && audio_cb) { // binary: speech

@@ -1,341 +1,405 @@
 #include "state.h"
 
+#include <stdatomic.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
 
+#include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 
+#include "audio_out.h"
+#include "mic_speech.h"
 #include "rgb_led_driver.h"
+#include "uplink.h"
 
 static const char *TAG = "sat/state";
 
 ESP_EVENT_DEFINE_BASE(SAT_EVENT);
 
-// How long after playback starts that voice activity is discarded.
-//
-// Raising the speaker amplifier clicks, and the microphone hears the click as a voice. It is
-// invisible to echo cancellation — the canceller subtracts the playback signal it is handed
-// DIGITALLY, and the click happens after the DAC, inside the amplifier, where digitally there is
-// silence. Nothing downstream can reach it, and measurement agreed: exactly one spurious detection
-// per playback, always at the start, the same for a three second replay as for a five second one.
-//
-// So it belongs here. This module raised the amplifier, so this module discards what the amplifier
-// caused — a self-inflicted observation is not evidence. The cost is nothing real: the assistant has
-// barely started its first word, and nobody interrupts a sentence that has not begun.
-#define SPEAKING_DEAF_US 200000
+// (state, signal) -> state, with actions on entry and exit. transition() lists every way each state
+// can be left.
 
-// What this module believes. Written only by the event handler, which runs on one task, so no lock:
-// the alternative would be a mutex protecting data that has exactly one writer.
-static struct {
-    bool provisioned;
-    bool has_address;
-    bool has_link;
-    bool link_rejected;
-    bool mic_alive;
-    bool session; // an utterance is being streamed
-    bool playing;  // the speaker is running
-    sat_state_t remote; // what the daemon last said the conversation was doing
-    bool remote_known;
-    int64_t speaking_since; // for SPEAKING_DEAF_US; 0 when not speaking
-} f = {.mic_alive = true, .provisioned = true};
+// Its own task and queue, not the system loop: transitions call into drivers, and the system loop
+// belongs to WiFi and lwIP.
+static esp_event_loop_handle_t loop;
+static esp_timer_handle_t ticker;
+#define QUEUE_DEPTH 16
+#define TASK_STACK (4 * 1024)
+#define TASK_PRIORITY 3 // below the audio tasks; a late colour is invisible, a late fetch is not
 
-// When a voice was last heard over a reply. The daemon's interrupt is timed against it, which is the
-// only way to compare deciding here with deciding upstream.
-static int64_t heard_at;
+// Voice activity is ignored this long after the AMPLIFIER is raised — not after playback starts,
+// which is a different moment on every path but the bench replay. Raising it clicks, the microphone
+// hears it, and echo cancellation cannot remove it: the click happens after the DAC, where the
+// canceller's reference is silent. Measured at one false trigger per playback.
+#define AMP_DEAF_US 200000
 
-static sat_state_t current = SAT_BOOT;
-static bool started; // BOOT ends at the first fact of any kind
+// A wake word left UNACKNOWLEDGED this long is abandoned. voice.wake can be lost, and a conversation
+// has the wake word switched off, so without this the board can never start another one.
+#define WAKE_ACK_US 5000000
 
-// resolve derives the state rather than storing it.
-//
-// A stored state has to be transitioned correctly from everywhere, and one missed transition strands
-// the ring on a lie until something else happens to move it. Derived, there is nothing to get out of
-// step: the facts are whatever they are and the answer follows.
-//
-// The order is total and fixed. Reachability outranks conversation because it is the truth — a
-// device with no socket cannot be listening, whatever it was doing a moment ago, and showing green
-// then would be a lie. APPROVAL outranks the conversation because an approval nobody notices stalls
-// everything behind it, and because the person's attention has to move to another device, which is
-// exactly when this ring must stop describing this one.
-static sat_state_t resolve(void)
-{
-    if (!f.provisioned || f.link_rejected || !f.mic_alive) {
-        return SAT_FAULT;
-    }
-    if (!f.has_address) {
-        return started ? SAT_NO_NETWORK : SAT_BOOT;
-    }
-    if (!f.has_link) {
-        return SAT_NO_DAEMON;
-    }
-    if (f.remote_known && f.remote == SAT_APPROVAL) {
-        return SAT_APPROVAL;
-    }
-    // SPEAKING is a LOCAL fact — the speaker is running — and not the daemon's report that the model
-    // is talking. The two are nearly the same thing and the difference is load-bearing.
-    //
-    // Entering this state starts the window in which voice activity is discarded, and that window
-    // exists to cover the amplifier's switch-on click. The click is a hardware event on this board,
-    // at a moment this board chooses. Hanging its suppression on a message from the daemon would put
-    // the daemon's latency in charge of a window covering something the daemon never sees, and the
-    // click would land outside it exactly when the network is slow.
-    //
-    // It also outranks the session for the same reason it is local: while the speaker runs, the ring
-    // must not show green, whatever anyone else believes.
-    if (f.playing) {
-        return SAT_SPEAKING;
-    }
-    // The daemon knows things this board cannot: that the model is composing, that a tool is running,
-    // that speech is on its way but has not arrived. But only while a session is open — outside one
-    // its last word is stale, and a device sitting on "thinking" after the conversation ended is the
-    // same failure as one sitting on green.
-    if (f.session) {
-        if (f.remote_known && f.remote == SAT_THINKING) {
-            return SAT_THINKING;
-        }
-        return SAT_LISTENING;
-    }
-    return SAT_IDLE;
-}
+// The machine's clock, so it can notice what did NOT arrive.
+#define TICK_US 500000
 
-// paint maps a state onto the ring.
+static sat_state_t state = SAT_BOOT;
+
+// Guards, not states: conditions a transition tests.
+static bool has_address;
+static bool has_link;
+
+static int64_t entered_at; // for WAKE_ACK_US — this task's alone
+
+// Last voice over a reply, to time the daemon's interrupt against. Atomic because the daemon's side
+// of that measurement arrives on the WebSocket task: 64 bits read in halves across a write is a
+// number that was never true, and this one exists to be believed.
+static _Atomic int64_t heard_at;
+
+// Whether the daemon has confirmed the conversation this board asked for.
 //
-// Tempo carries as much meaning as colour here. A slow breath is patience — something is wrong and
-// the device is waiting it out. A normal breath is an invitation — it is waiting on YOU. Across a
-// room the tempo is the only thing separating them.
-//
-// Green appears exactly once, on LISTENING. The single question a person asks this ring is "may I
-// talk now", and one colour should answer it.
+// voice.state carries no session identity, so an "idle" cannot be attributed to the session it came
+// from. "listening" confirms THIS session; until it arrives, every "idle" belongs to a conversation
+// already over. It also separates an unanswered wake word from a conversation in progress — see
+// WAKE_ACK_US.
+static bool acked;
+
+static const char *ev_name(sat_event_id_t ev);
+
+// Green is held for LISTENING alone: the ring's one question is "may I talk now". Tempo carries
+// meaning too — a slow breath is patience, a normal breath is an invitation. The flash on LINK_UP is
+// the one exception, and a flash is not a state.
 static void paint(sat_state_t s)
 {
     switch (s) {
-    case SAT_BOOT:
-        rgb_show(RGB_BREATHE_SLOW, RGB_WHITE);
-        return;
-    case SAT_NO_NETWORK:
-        rgb_show(RGB_BREATHE_SLOW, RGB_AMBER);
-        return;
-    case SAT_NO_DAEMON:
-        // Spinning, because discovery genuinely is running. Amber against THINKING's blue: the shape
-        // means "working on it" in both cases, and learning two shapes beats learning nine.
-        rgb_show(RGB_SPIN, RGB_AMBER);
-        return;
-    case SAT_FAULT:
-        // The slow blink: broken, but nothing is waiting on an answer.
-        rgb_show(RGB_BLINK_SLOW, RGB_RED);
-        return;
-    case SAT_IDLE:
-        // Dim on purpose. This is the resting state and the device sits in a room people sleep in.
-        rgb_show(RGB_SOLID, RGB_DIM_BLUE);
-        return;
-    case SAT_LISTENING:
-        rgb_show(RGB_BREATHE, RGB_GREEN);
-        return;
-    case SAT_THINKING:
-        // The four drifting colours, pulled tight and circling. RGB_OFF because the pattern carries
-        // its own palette — see rgb_led_driver.h.
-        rgb_show(RGB_SIRI_THINK, RGB_OFF);
-        return;
-    case SAT_SPEAKING:
-        // The same colours, loose and swelling with the actual speech: the ring is driven by the
-        // samples leaving the speaker, so it moves with the words rather than beside them.
-        //
-        // Not green, and now not a single hue at all: the person should not feel invited to talk
-        // while the assistant does, and nothing on this ring says "this is the assistant's turn"
-        // more plainly than the one pattern no other state uses.
-        rgb_show(RGB_SIRI, RGB_OFF);
-        return;
-    case SAT_APPROVAL:
-        // The only magenta and the only quick blink. It means: go look at your phone.
-        rgb_show(RGB_BLINK, RGB_MAGENTA);
-        return;
+    case SAT_BOOT:       rgb_show(RGB_BREATHE_SLOW, RGB_WHITE); return;
+    case SAT_NO_NETWORK: rgb_show(RGB_BREATHE_SLOW, RGB_AMBER); return;
+    case SAT_NO_DAEMON:  rgb_show(RGB_SPIN, RGB_AMBER);         return; // discovery is running
+    case SAT_FAULT:      rgb_show(RGB_BLINK_SLOW, RGB_RED);     return;
+    case SAT_IDLE:       rgb_show(RGB_SOLID, RGB_DIM_BLUE);     return; // dim: people sleep here
+    case SAT_LISTENING:  rgb_show(RGB_BREATHE, RGB_GREEN);      return;
+    case SAT_THINKING:   rgb_show(RGB_SPIN, RGB_BLUE);          return;
+    case SAT_SPEAKING:   rgb_show(RGB_WAVE, RGB_CYAN);          return; // not green: do not talk
+    case SAT_APPROVAL:   rgb_show(RGB_BLINK, RGB_MAGENTA);      return; // go look at your phone
     }
 }
 
-// settle recomputes, and repaints only on a change.
-static void settle(void)
+// The four states of an exchange in progress. Microphone, uplink and amplifier are up for all of
+// them, so entering and leaving the group are the only moments those change.
+static bool in_conversation(sat_state_t s)
 {
-    sat_state_t next = resolve();
-    if (next == current) {
-        return;
+    return s == SAT_LISTENING || s == SAT_THINKING || s == SAT_SPEAKING || s == SAT_APPROVAL;
+}
+
+// The only place any driver is commanded, and mic_arm's two halves are paired here so they cannot be
+// separated.
+//
+// Nothing starts or stops the microphone: the front end writes every frame into micbuf regardless,
+// and uplink_open/close decide only whether any of it leaves the building. A conversation is a
+// reason to send, not a reason to listen.
+static void leave(sat_state_t s, sat_state_t to)
+{
+    if (in_conversation(s) && !in_conversation(to)) {
+        uplink_close();
+        audio_out_amp(false);
+        audio_out_flush();
+        audio_out_take_freed(); // as entering does; credit for a finished session belongs to nobody
+        mic_arm(true);
     }
-    // Entering SPEAKING starts the deaf window; leaving it clears the clock rather than leaving a
-    // stale timestamp that would suppress the first barge-in of the NEXT reply.
-    f.speaking_since = next == SAT_SPEAKING ? esp_timer_get_time() : 0;
-
-    ESP_LOGI(TAG, "%s → %s", state_name(current), state_name(next));
-    current = next;
-    paint(next);
 }
 
-// remote_state maps what the daemon says onto a state. Unknown strings are ignored rather than
-// guessed at: a daemon that grows a state this firmware has not heard of should leave the ring
-// showing what it last knew, not blank it.
-static bool remote_state(const char *name, sat_state_t *out)
+static void enter(sat_state_t s, sat_state_t from)
 {
-    if (strcmp(name, "listening") == 0) { *out = SAT_LISTENING; return true; }
-    if (strcmp(name, "thinking") == 0)  { *out = SAT_THINKING;  return true; }
-    if (strcmp(name, "speaking") == 0)  { *out = SAT_SPEAKING;  return true; }
-    if (strcmp(name, "approval") == 0)  { *out = SAT_APPROVAL;  return true; }
-    if (strcmp(name, "idle") == 0)      { *out = SAT_IDLE;      return true; }
-    ESP_LOGW(TAG, "daemon reported an unknown state: %s", name);
-    return false;
+    entered_at = esp_timer_get_time();
+    // Half duplex: the microphone goes silent upstream for exactly as long as the speaker runs.
+    // See uplink_gate for why this is an invariant and not a tuning choice.
+    if (s == SAT_SPEAKING) {
+        uplink_gate(true);
+    } else if (from == SAT_SPEAKING) {
+        uplink_gate(false);
+    }
+    if (in_conversation(s) && !in_conversation(from)) {
+        acked = false;  // nothing the daemon said before belongs to this conversation
+        mic_arm(false); // saying it mid-sentence must not restart a conversation
+        uplink_open();
+        audio_out_flush();
+        audio_out_take_freed();
+        audio_out_amp(true);
+    }
 }
 
-// on_voice decides what a detected voice MEANS, which is the whole reason the raw signal is routed
-// here instead of acted on where it is produced.
+static void go(sat_state_t to)
+{
+    if (to == state) {
+        return; // a signal that does not move the machine must not re-run its actions
+    }
+    ESP_LOGI(TAG, "%s → %s", state_name(state), state_name(to));
+    sat_state_t from = state;
+    leave(from, to);
+    state = to;
+    enter(to, from);
+    paint(to);
+}
+
+// Signals that mean the same from every state. Each is a fact that outranks the conversation: a
+// device with no socket cannot be listening, whatever it believed a moment ago.
+static bool universal(sat_event_id_t ev)
+{
+    switch (ev) {
+    case SAT_EV_UNPROVISIONED:
+        go(SAT_FAULT);
+        return true;
+    case SAT_EV_LINK_REJECTED:
+        ESP_LOGE(TAG, "the daemon does not accept this device's token — re-enrol it");
+        go(SAT_FAULT);
+        return true;
+    case SAT_EV_MIC_DEAD:
+        ESP_LOGE(TAG, "front end stopped — the board is deaf");
+        go(SAT_FAULT);
+        return true;
+    case SAT_EV_NET_DOWN:
+        has_address = false;
+        has_link = false; // the socket cannot survive the network
+        go(SAT_NO_NETWORK);
+        return true;
+    case SAT_EV_LINK_DOWN:
+        has_link = false;
+        go(has_address ? SAT_NO_DAEMON : SAT_NO_NETWORK);
+        return true;
+    case SAT_EV_NET_UP:
+        has_address = true;
+        if (state == SAT_BOOT || state == SAT_NO_NETWORK) {
+            go(SAT_NO_DAEMON);
+        }
+        return true;
+    case SAT_EV_LINK_UP:
+        if (!has_link) {
+            rgb_flash(RGB_GREEN); // connecting is a moment, not a state
+        }
+        has_link = true;
+        if (!in_conversation(state)) {
+            go(SAT_IDLE);
+        }
+        return true;
+    default:
+        return false;
+    }
+}
+
+// What a detected voice MEANS — which is why the raw signal is routed here rather than acted on
+// where it is produced.
 static void on_voice(void)
 {
-    if (current != SAT_SPEAKING) {
-        // Not a barge-in, but still worth saying: the daemon hangs up on silence, and only this
-        // board can tell it the room is not silent. Its own microphone stream would do it eventually
-        // — the model transcribes what it understood — but that arrives later and only for speech
-        // that made sense, which is the wrong test for whether anyone is still here.
-        if (f.session) {
-            esp_event_post(SAT_EVENT, SAT_EV_SPEECH, NULL, 0, 0);
+    // Asked of the amplifier, not of the state: on the real path it is raised when a conversation
+    // begins and stays up, so no state marks the click.
+    if (audio_out_amp_age_us() < AMP_DEAF_US) {
+        return;
+    }
+    if (state != SAT_SPEAKING) {
+        if (in_conversation(state)) {
+            state_post(SAT_EV_SPEECH, NULL, 0); // the daemon hangs up on silence; this is not silence
         }
         return;
     }
-    if (esp_timer_get_time() - f.speaking_since < SPEAKING_DEAF_US) {
-        ESP_LOGD(TAG, "voice during the amplifier's own click — ignored");
+    atomic_store(&heard_at, esp_timer_get_time());
+#if BARGE_IN_LOCAL
+    ESP_LOGI(TAG, "barge-in");
+    rgb_flash(RGB_WHITE);
+    state_post(SAT_EV_BARGE_IN, NULL, 0);
+    go(SAT_LISTENING);
+#endif
+}
+
+// The states the daemon owns. SPEAKING is not among them: it is entered from PLAYBACK_START, because
+// the window that discards the amplifier's click must open when the click happens.
+static void remote(const char *name)
+{
+    if (!in_conversation(state)) {
+        return; // stale: it describes a conversation this board has already left
+    }
+    if (strcmp(name, "idle") == 0) {
+        if (!acked) {
+            return; // the previous conversation's ending, arriving after this one began
+        }
+        go(SAT_IDLE);
+    } else if (strcmp(name, "listening") == 0) {
+        acked = true; // the daemon has the session this board asked for
+        go(SAT_LISTENING);
+    } else if (strcmp(name, "thinking") == 0) {
+        go(SAT_THINKING);
+    } else if (strcmp(name, "approval") == 0) {
+        go(SAT_APPROVAL);
+    } else if (strcmp(name, "speaking") != 0) {
+        ESP_LOGW(TAG, "daemon reported an unknown state: %s", name);
+    }
+}
+
+static void transition(sat_event_id_t ev, const void *data)
+{
+    switch (ev) {
+    case SAT_EV_WAKE:
+        if (!has_link) {
+            ESP_LOGW(TAG, "wake word with no link — ignored");
+            return; // it would silence the wake word and reach nobody
+        }
+        if (state == SAT_IDLE) {
+            go(SAT_LISTENING);
+        }
+        return;
+    case SAT_EV_VOICE:
+        on_voice();
+        return;
+    case SAT_EV_PLAYBACK_START:
+        if (in_conversation(state)) {
+            go(SAT_SPEAKING);
+        }
+        return;
+    case SAT_EV_PLAYBACK_END:
+        if (state == SAT_SPEAKING) {
+            go(SAT_LISTENING);
+        }
+        return;
+    case SAT_EV_REMOTE_STATE:
+        remote((const char *)data);
+        return;
+    case SAT_EV_TICK:
+        // The one thing no signal can announce: an answer that never came.
+        if (state == SAT_LISTENING && !acked && esp_timer_get_time() - entered_at > WAKE_ACK_US) {
+            ESP_LOGW(TAG, "no answer to the wake word — giving up on it");
+            go(SAT_IDLE);
+        }
+        return;
+    default:
         return;
     }
-    // A person talking over the reply. Whether that stops anything is BARGE_IN_LOCAL's answer; the
-    // moment is recorded either way, because the whole question is how long the other route takes.
-    heard_at = esp_timer_get_time();
-#if BARGE_IN_LOCAL
-    // What this module can do is decide it happened; silencing the speaker and telling the daemon
-    // belong to whoever owns those, so it says so and they act.
-    ESP_LOGI(TAG, "barge-in (local)");
-    rgb_flash(RGB_WHITE);
-    esp_event_post(SAT_EVENT, SAT_EV_BARGE_IN, NULL, 0, 0);
-#else
-    ESP_LOGI(TAG, "voice over the reply — waiting for the daemon to say so");
-    return; // the ring keeps showing SPEAKING; the model has the microphone and will notice
-#endif
-    f.remote_known = false; // the daemon's "speaking" is now wrong; it will say so shortly
-    settle();
 }
 
 static void on_sat(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    switch (id) {
-    case SAT_EV_WAKE:
-        started = true;
-        f.session = true;
-        f.remote_known = false;
-        break;
-    case SAT_EV_VOICE:
-        on_voice();
-        return; // on_voice settles for itself, or deliberately does not
-    case SAT_EV_UTTERANCE_END:
-        f.session = false;
-        break;
-    case SAT_EV_PLAYBACK_START:
-        f.playing = true;
-        break;
-    case SAT_EV_PLAYBACK_END:
-        f.playing = false;
-        break;
-    case SAT_EV_MIC_DEAD:
-        // The worst failure this device has: deaf, while the link stays up and the heartbeat keeps
-        // printing "alive". Nothing else notices, so the dying task says so on its way out.
-        ESP_LOGE(TAG, "front end stopped — the board is deaf");
-        f.mic_alive = false;
-        break;
-    case SAT_EV_LINK_UP:
-        started = true;
-        if (!f.has_link) {
-            rgb_flash(RGB_GREEN); // connecting is a moment, not a state
-        }
-        f.has_link = true;
-        break;
-    case SAT_EV_LINK_DOWN:
-        f.has_link = false;
-        f.remote_known = false;
-        break;
-    case SAT_EV_LINK_REJECTED:
-        ESP_LOGE(TAG, "the daemon does not accept this device's token — re-enrol it");
-        f.link_rejected = true;
-        break;
-    case SAT_EV_UNPROVISIONED:
-        f.provisioned = false;
-        break;
-    case SAT_EV_REMOTE_STATE:
-        f.remote_known = remote_state((const char *)data, &f.remote);
-        break;
-    default:
-        return;
+    if (state == SAT_FAULT) {
+        return; // only a person recovers a fault, and that means a reset
     }
-    settle();
+    if (!universal((sat_event_id_t)id)) {
+        transition((sat_event_id_t)id, data);
+    }
 }
 
+// Runs on the SYSTEM loop, so it does one thing: forward.
 static void on_net(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        started = true;
-        f.has_address = true;
+        state_post(SAT_EV_NET_UP, NULL, 0);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        started = true;
-        f.has_address = false;
-        // Losing the network takes the socket with it, and the WebSocket client will say so in its
-        // own time. Saying it here as well means the ring never shows NO_DAEMON for a board that has
-        // no network at all — which would send someone to check the wrong machine.
-        f.has_link = false;
-        f.remote_known = false;
-    } else {
-        return;
+        state_post(SAT_EV_NET_DOWN, NULL, 0);
     }
-    settle();
 }
 
-// state_start registers and paints. It creates NOTHING.
-//
-// The event loop and the ring are both shared, and this module is merely their first user — being
-// first is not ownership. Creating them here is how the loop came to be created twice, once here and
-// once in wifi_start, which was a boot loop whose symptom pointed at neither.
-//
-// Both belong to app_main, which is the only place that can order them, and the ordering is real:
-// the loop before any handler, the ring before anything paints, this module before any source posts.
+// A machine driven only by signals cannot notice something that failed to arrive.
+static void tick(void *arg) { state_post(SAT_EV_TICK, NULL, 0); }
+
 esp_err_t state_start(void)
 {
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(SAT_EVENT, ESP_EVENT_ANY_ID, on_sat, NULL, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, on_net, NULL, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_net, NULL, NULL));
+    esp_event_loop_args_t args = {
+        .queue_size = QUEUE_DEPTH,
+        .task_name = "state",
+        .task_priority = TASK_PRIORITY,
+        .task_stack_size = TASK_STACK,
+        .task_core_id = 0, // core 1 carries the audio front end's fetch loop
+    };
+    ESP_RETURN_ON_ERROR(esp_event_loop_create(&args, &loop), TAG, "loop");
+    ESP_RETURN_ON_ERROR(
+        esp_event_handler_instance_register_with(loop, SAT_EVENT, ESP_EVENT_ANY_ID, on_sat, NULL, NULL),
+        TAG, "handler");
+    ESP_RETURN_ON_ERROR(
+        esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, on_net, NULL, NULL),
+        TAG, "wifi");
+    ESP_RETURN_ON_ERROR(
+        esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_net, NULL, NULL),
+        TAG, "ip");
 
-    paint(current);
+    // Static, not local: the handle is the only way to ever stop or free this timer.
+    const esp_timer_create_args_t timer = {.callback = tick, .name = "state_tick"};
+    ESP_RETURN_ON_ERROR(esp_timer_create(&timer, &ticker), TAG, "timer");
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(ticker, TICK_US), TAG, "timer start");
+
+    paint(state);
     return ESP_OK;
 }
 
-sat_state_t state_get(void) { return current; }
+esp_err_t state_subscribe(esp_event_handler_t handler)
+{
+    if (!loop) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return esp_event_handler_instance_register_with(loop, SAT_EVENT, ESP_EVENT_ANY_ID, handler, NULL, NULL);
+}
+
+// Never waits: every caller is on a deadline of its own, and a full queue is a bug to see in the log
+// rather than a reason to stall one of them.
+void state_post(sat_event_id_t ev, const void *data, size_t len)
+{
+    if (!loop) {
+        return;
+    }
+    if (esp_event_post_to(loop, SAT_EVENT, ev, (void *)data, len, 0) != ESP_OK) {
+        ESP_LOGW(TAG, "event %s dropped — queue full", ev_name(ev));
+    }
+}
 
 void state_report_remote_interrupt(void)
 {
-    if (heard_at == 0) {
-        ESP_LOGI(TAG, "daemon interrupt, with no voice heard here — the model decided on its own");
+    // One step: read-then-clear would let a voice landing between the two be credited to the wrong
+    // interrupt.
+    int64_t at = atomic_exchange(&heard_at, 0);
+    if (at == 0) {
+        ESP_LOGI(TAG, "daemon interrupt with no voice heard here");
         return;
     }
     ESP_LOGI(TAG, "daemon interrupt %lld ms after this board heard the voice",
-             (esp_timer_get_time() - heard_at) / 1000);
-    heard_at = 0;
+             (esp_timer_get_time() - at) / 1000);
 }
 
-const char *state_name(sat_state_t state)
+sat_state_t state_get(void) { return state; }
+
+bool state_conversation_active(void) { return in_conversation(state); }
+
+const char *state_name(sat_state_t s)
 {
-    switch (state) {
-    case SAT_BOOT: return "boot";
+    switch (s) {
+    case SAT_BOOT:       return "boot";
     case SAT_NO_NETWORK: return "no-network";
-    case SAT_NO_DAEMON: return "no-daemon";
-    case SAT_FAULT: return "fault";
-    case SAT_IDLE: return "idle";
-    case SAT_LISTENING: return "listening";
-    case SAT_THINKING: return "thinking";
-    case SAT_SPEAKING: return "speaking";
-    case SAT_APPROVAL: return "approval";
+    case SAT_NO_DAEMON:  return "no-daemon";
+    case SAT_FAULT:      return "fault";
+    case SAT_IDLE:       return "idle";
+    case SAT_LISTENING:  return "listening";
+    case SAT_THINKING:   return "thinking";
+    case SAT_SPEAKING:   return "speaking";
+    case SAT_APPROVAL:   return "approval";
+    }
+    return "?";
+}
+
+static const char *ev_name(sat_event_id_t ev)
+{
+    switch (ev) {
+    case SAT_EV_NET_UP:            return "net-up";
+    case SAT_EV_NET_DOWN:          return "net-down";
+    case SAT_EV_WAKE:              return "wake";
+    case SAT_EV_VOICE:             return "voice";
+    case SAT_EV_PLAYBACK_START:    return "playback-start";
+    case SAT_EV_PLAYBACK_END:      return "playback-end";
+    case SAT_EV_MIC_DEAD:          return "mic-dead";
+    case SAT_EV_LINK_UP:           return "link-up";
+    case SAT_EV_LINK_DOWN:         return "link-down";
+    case SAT_EV_LINK_REJECTED:     return "link-rejected";
+    case SAT_EV_UNPROVISIONED:     return "unprovisioned";
+    case SAT_EV_REMOTE_STATE:      return "remote-state";
+    case SAT_EV_BARGE_IN:          return "barge-in";
+    case SAT_EV_SPEECH:            return "speech";
+    case SAT_EV_BUTTON_DOWN:       return "button-down";
+    case SAT_EV_BUTTON_UP:         return "button-up";
+    case SAT_EV_TICK:              return "tick";
     }
     return "?";
 }

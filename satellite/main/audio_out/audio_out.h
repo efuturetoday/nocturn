@@ -37,9 +37,14 @@ void audio_out_flush(void);
 // into a quiet room. Flush with audio_out_silence first, then drop it.
 //
 // Raising it clicks, and the microphone hears it as a voice — see the definition for why nothing in
-// the front end can remove that. The caller is expected to ignore voice activity briefly afterwards,
-// since it is the only party that knows the click was its own doing.
+// the front end can remove that.
 void audio_out_amp(bool on);
+
+// audio_out_amp_age_us is how long ago the amplifier was raised, or INT64_MAX while it is down.
+//
+// Whoever judges voice activity discards what arrives just after that moment. The amplifier is
+// raised from more than one path, so the moment is only known here.
+int64_t audio_out_amp_age_us(void);
 
 // audio_out_silence queues ms of zeros, so the codec's last buffer is overwritten with nothing
 // rather than left ringing.
