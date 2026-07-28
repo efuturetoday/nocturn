@@ -263,7 +263,7 @@ void app_main(void)
     // clock, so the board has exactly one rate. Audio arriving at another rate is resampled
     // upstream, never here.
     ESP_LOGI(TAG, "step: board");
-    ESP_ERROR_CHECK(esp_board_init(16000, 2, 32)); // match the bus: 32-bit stereo slots
+    ESP_ERROR_CHECK(esp_board_init()); // the bus format is the board's, not a parameter
     ESP_LOGI(TAG, "step: tca");
     ESP_ERROR_CHECK(tca9555_driver_init());
     // The shared things are created HERE, by the one place that can order them, and handed to the

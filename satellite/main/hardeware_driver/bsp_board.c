@@ -1,54 +1,36 @@
 #include "bsp_board.h"
 
 #include <stdbool.h>
-#include "esp_err.h"
-#include "tca9555_driver.h"
+#include <stdlib.h>
+
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-#include "string.h"
-#include "driver/gpio.h"
+#include "freertos/task.h"
+
+#include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
-#include "esp_rom_sys.h"
-#include "esp_check.h"
-#include "esp_vfs_fat.h"
-#include "sdmmc_cmd.h"
 
-
-#include <sys/unistd.h>
-#include <sys/stat.h>
-#include "dirent.h"
-#include "driver/sdmmc_host.h"
-#include <errno.h>
-
-#if ((SOC_SDMMC_HOST_SUPPORTED) && (FUNC_SDMMC_EN))
-#include "driver/sdmmc_host.h"
-#endif /* ((SOC_SDMMC_HOST_SUPPORTED) && (FUNC_SDMMC_EN)) */
-
+#include "tca9555_driver.h"
 
 #define ADC_I2S_CHANNEL 4
 
-static sdmmc_card_t *card;
 static const char *TAG = "board";
-static int s_play_sample_rate = 16000;
-static int s_play_channel_format = 1;
-static int s_bits_per_chan = 16;
 
-static i2s_chan_handle_t            tx_handle = NULL;        // I2S tx channel handler
-static i2s_chan_handle_t            rx_handle = NULL;        // I2S rx channel handler
-static audio_codec_data_if_t *record_data_if  = NULL;
-static audio_codec_ctrl_if_t *record_ctrl_if  = NULL;
-static audio_codec_if_t *record_codec_if      = NULL;
-static esp_codec_dev_handle_t record_dev      = NULL;
+static i2s_chan_handle_t tx_handle = NULL;
+static i2s_chan_handle_t rx_handle = NULL;
 
-static audio_codec_data_if_t *play_data_if    = NULL;
-static audio_codec_ctrl_if_t *play_ctrl_if    = NULL;
-static audio_codec_gpio_if_t *play_gpio_if    = NULL;
-static audio_codec_if_t *play_codec_if        = NULL;
-static esp_codec_dev_handle_t play_dev        = NULL;
+static const audio_codec_data_if_t *record_data_if  = NULL;
+static const audio_codec_ctrl_if_t *record_ctrl_if  = NULL;
+static const audio_codec_if_t      *record_codec_if = NULL;
+static esp_codec_dev_handle_t       record_dev      = NULL;
+
+static const audio_codec_data_if_t *play_data_if  = NULL;
+static const audio_codec_ctrl_if_t *play_ctrl_if  = NULL;
+static const audio_codec_gpio_if_t *play_gpio_if  = NULL;
+static const audio_codec_if_t      *play_codec_if = NULL;
+static esp_codec_dev_handle_t       play_dev      = NULL;
+
 static i2c_master_bus_handle_t i2c_bus_handle = NULL;
-static uint32_t SDCard_Size  = 0;
-
 
 esp_codec_dev_handle_t esp_ret_play_dev(void)
 {
@@ -60,13 +42,12 @@ i2c_master_bus_handle_t esp_ret_i2c_handle(void)
     return i2c_bus_handle;
 }
 
-uint32_t Get_SD_Size(void)
-{
-    return SDCard_Size;
-}
-
 static esp_err_t i2c_master_init(void)
 {
+    if (i2c_bus_handle != NULL) {
+        return ESP_OK;
+    }
+
     const i2c_master_bus_config_t bus_config = {
         .i2c_port = I2C_NUM,
         .sda_io_num = GPIO_I2C_SDA,
@@ -74,76 +55,83 @@ static esp_err_t i2c_master_init(void)
         .clk_source = I2C_CLK_SRC_DEFAULT,
     };
 
-    esp_err_t ret = i2c_new_master_bus(&bus_config, &i2c_bus_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize I2C bus: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    ESP_LOGI(TAG, "I2C bus initialized successfully");
-    return ESP_OK;  // 返回 ESP_OK 表示成功
+    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &i2c_bus_handle), TAG,
+                        "Failed to initialize I2C bus");
+    return ESP_OK;
 }
 
-
-esp_err_t bsp_codec_adc_init(int sample_rate)
+static esp_err_t bsp_codec_adc_init(int sample_rate)
 {
-    esp_err_t ret_val = ESP_OK;
+    ESP_RETURN_ON_FALSE(i2c_bus_handle != NULL, ESP_ERR_INVALID_STATE, TAG,
+                        "I2C must be initialized before ADC");
 
-    // Do initialize of related interface: data_if, ctrl_if and gpio_if
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port = I2S_NUM_1,
         .rx_handle = rx_handle,
         .tx_handle = NULL,
     };
     record_data_if = audio_codec_new_i2s_data(&i2s_cfg);
+    ESP_RETURN_ON_FALSE(record_data_if != NULL, ESP_FAIL, TAG, "Failed to create record data IF");
 
-    audio_codec_i2c_cfg_t i2c_cfg = {.addr = ES7210_CODEC_DEFAULT_ADDR,.bus_handle = i2c_bus_handle};
+    audio_codec_i2c_cfg_t i2c_cfg = {
+        .addr = ES7210_CODEC_DEFAULT_ADDR,
+        .bus_handle = i2c_bus_handle,
+    };
     record_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
-    // New input codec interface
+    ESP_RETURN_ON_FALSE(record_ctrl_if != NULL, ESP_FAIL, TAG, "Failed to create record ctrl IF");
+
     es7210_codec_cfg_t es7210_cfg = {
         .ctrl_if = record_ctrl_if,
         .mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2 | ES7210_SEL_MIC3 | ES7210_SEL_MIC4,
-    };  
+    };
     record_codec_if = es7210_codec_new(&es7210_cfg);
-    // New input codec device
+    ESP_RETURN_ON_FALSE(record_codec_if != NULL, ESP_FAIL, TAG, "Failed to create ES7210 codec");
+
     esp_codec_dev_cfg_t dev_cfg = {
         .codec_if = record_codec_if,
         .data_if = record_data_if,
         .dev_type = ESP_CODEC_DEV_TYPE_IN,
     };
     record_dev = esp_codec_dev_new(&dev_cfg);
+    ESP_RETURN_ON_FALSE(record_dev != NULL, ESP_FAIL, TAG, "Failed to create record device");
 
     esp_codec_dev_sample_info_t fs = {
-        .sample_rate = 16000,
+        .sample_rate = sample_rate,
         .channel = 2,
         .bits_per_sample = 32,
     };
-    esp_codec_dev_open(record_dev, &fs);
-    // esp_codec_dev_set_in_gain(record_dev, RECORD_VOLUME);
+    ESP_RETURN_ON_ERROR(esp_codec_dev_open(record_dev, &fs), TAG, "Failed to open record device");
+
     esp_codec_dev_set_in_channel_gain(record_dev, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), RECORD_VOLUME);
     esp_codec_dev_set_in_channel_gain(record_dev, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1), RECORD_VOLUME);
     esp_codec_dev_set_in_channel_gain(record_dev, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2), RECORD_VOLUME);
     esp_codec_dev_set_in_channel_gain(record_dev, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(3), RECORD_VOLUME);
 
-    return ret_val;
+    return ESP_OK;
 }
 
-esp_err_t bsp_codec_dac_init(int sample_rate, int channel_format, int bits_per_chan)
+static esp_err_t bsp_codec_dac_init(int sample_rate, int channel_format, int bits_per_chan)
 {
-    esp_err_t ret_val = ESP_OK;
+    ESP_RETURN_ON_FALSE(i2c_bus_handle != NULL, ESP_ERR_INVALID_STATE, TAG,
+                        "I2C must be initialized before DAC");
 
-    // Do initialize of related interface: data_if, ctrl_if and gpio_if
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port = I2S_NUM_1,
         .rx_handle = NULL,
         .tx_handle = tx_handle,
     };
     play_data_if = audio_codec_new_i2s_data(&i2s_cfg);
+    ESP_RETURN_ON_FALSE(play_data_if != NULL, ESP_FAIL, TAG, "Failed to create play data IF");
 
-    audio_codec_i2c_cfg_t i2c_cfg = {.addr = ES8311_CODEC_DEFAULT_ADDR,.bus_handle = i2c_bus_handle};
+    audio_codec_i2c_cfg_t i2c_cfg = {
+        .addr = ES8311_CODEC_DEFAULT_ADDR,
+        .bus_handle = i2c_bus_handle,
+    };
     play_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
+    ESP_RETURN_ON_FALSE(play_ctrl_if != NULL, ESP_FAIL, TAG, "Failed to create play ctrl IF");
     play_gpio_if = audio_codec_new_gpio();
-    // New output codec interface
+    ESP_RETURN_ON_FALSE(play_gpio_if != NULL, ESP_FAIL, TAG, "Failed to create play gpio IF");
+
     es8311_codec_cfg_t es8311_cfg = {
         .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC,
         .ctrl_if = play_ctrl_if,
@@ -152,272 +140,92 @@ esp_err_t bsp_codec_dac_init(int sample_rate, int channel_format, int bits_per_c
         .use_mclk = false,
     };
     play_codec_if = es8311_codec_new(&es8311_cfg);
-    // New output codec device
+    ESP_RETURN_ON_FALSE(play_codec_if != NULL, ESP_FAIL, TAG, "Failed to create ES8311 codec");
+
     esp_codec_dev_cfg_t dev_cfg = {
         .codec_if = play_codec_if,
         .data_if = play_data_if,
         .dev_type = ESP_CODEC_DEV_TYPE_OUT,
     };
     play_dev = esp_codec_dev_new(&dev_cfg);
+    ESP_RETURN_ON_FALSE(play_dev != NULL, ESP_FAIL, TAG, "Failed to create play device");
 
     esp_codec_dev_sample_info_t fs = {
         .bits_per_sample = bits_per_chan,
         .sample_rate = sample_rate,
         .channel = channel_format,
     };
-    esp_codec_dev_set_out_vol(play_dev, PLAYER_VOLUME);
-    esp_codec_dev_open(play_dev, &fs);
+    ESP_RETURN_ON_ERROR(esp_codec_dev_set_out_vol(play_dev, PLAYER_VOLUME), TAG,
+                        "Failed to set out volume");
+    ESP_RETURN_ON_ERROR(esp_codec_dev_open(play_dev, &fs), TAG, "Failed to open play device");
 
-    return ret_val;
-}
-
-static esp_err_t bsp_codec_adc_deinit()
-{
-    esp_err_t ret_val = ESP_OK;
-
-    if (record_dev) {
-        esp_codec_dev_close(record_dev);
-        esp_codec_dev_delete(record_dev);
-        record_dev = NULL;
-    }
-
-    // Delete codec interface
-    if (record_codec_if) {
-        audio_codec_delete_codec_if(record_codec_if);
-        record_codec_if = NULL;
-    }
-    
-    // Delete codec control interface
-    if (record_ctrl_if) {
-        audio_codec_delete_ctrl_if(record_ctrl_if);
-        record_ctrl_if = NULL;
-    }
-    
-    // Delete codec data interface
-    if (record_data_if) {
-        audio_codec_delete_data_if(record_data_if);
-        record_data_if = NULL;
-    }
-
-    return ret_val;
-}
-
-static esp_err_t bsp_codec_dac_deinit()
-{
-    esp_err_t ret_val = ESP_OK;
-
-    if (play_dev) {
-        esp_codec_dev_close(play_dev);
-        esp_codec_dev_delete(play_dev);
-        play_dev = NULL;
-    }
-
-    // Delete codec interface
-    if (play_codec_if) {
-        audio_codec_delete_codec_if(play_codec_if);
-        play_codec_if = NULL;
-    }
-    
-    // Delete codec control interface
-    if (play_ctrl_if) {
-        audio_codec_delete_ctrl_if(play_ctrl_if);
-        play_ctrl_if = NULL;
-    }
-    
-    if (play_gpio_if) {
-        audio_codec_delete_gpio_if(play_gpio_if);
-        play_gpio_if = NULL;
-    }
-    
-    // Delete codec data interface
-    if (play_data_if) {
-        audio_codec_delete_data_if(play_data_if);
-        play_data_if = NULL;
-    }
-
-    return ret_val;
+    return ESP_OK;
 }
 
 esp_err_t esp_audio_set_play_vol(int volume)
 {
-    if (!play_dev) {
-        ESP_LOGE(TAG, "DAC codec init fail");
-        return ESP_FAIL;
-    }
-    esp_codec_dev_set_out_vol(play_dev, volume);
-    return ESP_OK;
+    ESP_RETURN_ON_FALSE(play_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "DAC codec not initialized");
+    return esp_codec_dev_set_out_vol(play_dev, volume);
 }
 
 esp_err_t esp_audio_get_play_vol(int *volume)
 {
-    if (!play_dev) {
-        ESP_LOGE(TAG, "DAC codec init fail");
-        return ESP_FAIL;
-    }
-    esp_codec_dev_get_out_vol(play_dev, volume);
+    ESP_RETURN_ON_FALSE(play_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "DAC codec not initialized");
+    ESP_RETURN_ON_FALSE(volume != NULL, ESP_ERR_INVALID_ARG, TAG, "volume pointer is NULL");
+    return esp_codec_dev_get_out_vol(play_dev, volume);
+}
+
+static esp_err_t bsp_i2s_init(i2s_port_t i2s_num)
+{
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(i2s_num, I2S_ROLE_MASTER);
+    // An underrun must emit silence, not repeat the last descriptor. The default is false, and the
+    // symptom is unmistakable once heard: "the speaker re-re-repeats it-it-itself". TX only, though
+    // one config creates both channels here.
+    chan_cfg.auto_clear = true;
+
+    ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle), TAG,
+                        "Failed to create I2S channels");
+
+    i2s_std_config_t std_cfg = I2S_CONFIG_DEFAULT();
+
+    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(tx_handle, &std_cfg), TAG, "Failed to init TX std mode");
+    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(rx_handle, &std_cfg), TAG, "Failed to init RX std mode");
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(tx_handle), TAG, "Failed to enable TX channel");
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(rx_handle), TAG, "Failed to enable RX channel");
+
     return ESP_OK;
 }
 
-// static esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate, i2s_channel_fmt_t channel_format, i2s_bits_per_chan_t bits_per_chan)
-static esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate, int channel_format, int bits_per_chan)
-{
-    esp_err_t ret_val = ESP_OK;
+// Static conversion scratch, 8 kB of .bss. The drain task calls esp_audio_mono16 fifty times a
+// second and never stops, so a per-call malloc is continuous heap churn on the core the network is
+// on. Safe as one shared buffer because that task is the only caller.
+#define AUDIO_CHUNK_SAMPLES 1024
+static int32_t s_audio_conv_buf[AUDIO_CHUNK_SAMPLES * 2];
 
-    i2s_slot_mode_t channel_fmt = I2S_SLOT_MODE_STEREO;
-    if (channel_format == 1) {
-        channel_fmt = I2S_SLOT_MODE_MONO;
-    } else if (channel_format == 2) {
-        channel_fmt = I2S_SLOT_MODE_STEREO;
-    } else {
-        ESP_LOGE(TAG, "Unable to configure channel_format %d", channel_format);
-        channel_format = 1;
-        channel_fmt = I2S_SLOT_MODE_MONO;
-    }
-
-    if (bits_per_chan != 16 && bits_per_chan != 32) {
-        ESP_LOGE(TAG, "Unable to configure bits_per_chan %d", bits_per_chan);
-        bits_per_chan = 32;
-    }
-
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(i2s_num, I2S_ROLE_MASTER);
-    // An underrun must emit silence, not repeat the last descriptor. The default is false, and the
-    // symptom is unmistakable once heard: "the speaker re-re-repeats it-it-itself", because the DMA
-    // plays its last buffer again every time nobody wrote a new one in time.
-    // TX only, though one config creates both channels here.
-    chan_cfg.auto_clear = true;
-    ret_val |= i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle);
-    i2s_std_config_t std_cfg = I2S_CONFIG_DEFAULT(sample_rate, channel_fmt, bits_per_chan);
-    ret_val |= i2s_channel_init_std_mode(tx_handle, &std_cfg);
-    ret_val |= i2s_channel_init_std_mode(rx_handle, &std_cfg);
-    ret_val |= i2s_channel_enable(tx_handle);
-    ret_val |= i2s_channel_enable(rx_handle);
-
-    return ret_val;
-}
-
-static esp_err_t bsp_i2s_deinit(i2s_port_t i2s_num)
-{
-    esp_err_t ret_val = ESP_OK;
-
-    if (i2s_num == I2S_NUM_1 && rx_handle) {
-        ret_val |= i2s_channel_disable(rx_handle);
-        ret_val |= i2s_del_channel(rx_handle);
-        rx_handle = NULL;
-    } else if (i2s_num == I2S_NUM_0  && tx_handle) {
-        ret_val |= i2s_channel_disable(tx_handle);
-        ret_val |= i2s_del_channel(tx_handle);
-        tx_handle = NULL;
-    }
-
-    return ret_val;
-}
-
-static esp_err_t bsp_codec_init(int adc_sample_rate, int dac_sample_rate, int dac_channel_format, int dac_bits_per_chan)
-{
-    esp_err_t ret_val = ESP_OK;
-
-    ret_val |= bsp_codec_adc_init(adc_sample_rate);
-    ret_val |= bsp_codec_dac_init(dac_sample_rate, dac_channel_format, dac_bits_per_chan);
-
-    return ret_val;
-}
-
-static esp_err_t bsp_codec_deinit()
-{
-    esp_err_t ret_val = ESP_OK;
-
-    ret_val |= bsp_codec_adc_deinit();
-    ret_val |= bsp_codec_dac_deinit();
-    return ret_val;
-}
-
-// esp_audio_mono16 plays mono 16-bit PCM, converting it to what the I2S bus actually carries.
-//
-// That conversion is not optional, and the reason is in I2S_CONFIG_DEFAULT: the macro ignores its
-// own sample_rate, channel_fmt and bits_per_chan arguments and hard-codes 16 kHz, 32-bit slots,
-// stereo. So the bus consumes 8 bytes per frame at 16 kHz — 128 kB/s — no matter what
-// esp_board_init was asked for. Handing it 16-bit mono supplies a quarter of that and plays back at
-// four times the speed; 16-bit stereo supplies half, and plays at double. Both were heard before
-// this was traced.
-//
-// Each sample therefore becomes two 32-bit words, left and right. The record side declares the same
-// shape (channel = 2, bits_per_sample = 32) — the hardware's format, not a requested one.
+// The one and only conversion onto the bus. I2S_CONFIG_DEFAULT fixes the hardware format at 16 kHz,
+// 32-bit slots, stereo — 8 bytes per frame — whatever anyone asks for, so mono PCM16 must be
+// expanded fourfold or it plays at the wrong speed. Both wrong speeds were heard before this was
+// traced.
 esp_err_t esp_audio_mono16(const int16_t *data, int samples, uint32_t ticks_to_wait)
 {
     (void)ticks_to_wait;
-    if (!play_dev) {
-        return ESP_FAIL;
-    }
-    int32_t *frames = malloc(samples * 2 * sizeof(int32_t));
-    if (!frames) {
-        return ESP_ERR_NO_MEM;
-    }
-    for (int i = 0; i < samples; i++) {
-        int32_t v = (int32_t)data[i] << 16; // 16-bit sample in the top half of a 32-bit slot
-        frames[2 * i] = v;
-        frames[2 * i + 1] = v;
-    }
-    esp_err_t ret = esp_codec_dev_write(play_dev, frames, samples * 2 * (int)sizeof(int32_t));
-    free(frames);
-    return ret;
-}
+    ESP_RETURN_ON_FALSE(play_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "Play dev not initialized");
 
-esp_err_t esp_audio_play(const int16_t* data, int length, uint32_t ticks_to_wait)
-{
-    size_t bytes_write = 0;
-    esp_err_t ret = ESP_OK;
-    if (!play_dev) {
-        return ESP_FAIL;
-    }
-
-    int out_length= length;
-    int audio_time = 1;
-    audio_time *= (16000 / s_play_sample_rate);
-    audio_time *= (2 / s_play_channel_format);
-
-    int *data_out = NULL;
-    if (s_bits_per_chan != 32) {
-        out_length = length * 2;
-        data_out = malloc(out_length);
-        for (int i = 0; i < length / sizeof(int16_t); i++) {
-            int ret = data[i];
-            data_out[i] = ret << 16;
+    int processed = 0;
+    while (processed < samples) {
+        int chunk = samples - processed > AUDIO_CHUNK_SAMPLES ? AUDIO_CHUNK_SAMPLES : samples - processed;
+        for (int i = 0; i < chunk; i++) {
+            int32_t v = (int32_t)data[processed + i] << 16; // 16-bit sample in the top half of a slot
+            s_audio_conv_buf[2 * i] = v;
+            s_audio_conv_buf[2 * i + 1] = v;
         }
+        ESP_RETURN_ON_ERROR(
+            esp_codec_dev_write(play_dev, s_audio_conv_buf, chunk * 2 * sizeof(int32_t)),
+            TAG, "Audio write failed during chunk");
+        processed += chunk;
     }
 
-    int *data_out_1 = NULL;
-    if (s_play_channel_format != 2 || s_play_sample_rate != 16000) {
-        out_length *= audio_time;
-        data_out_1 = malloc(out_length);
-        int *tmp_data = NULL;
-        if (data_out != NULL) {
-            tmp_data = data_out;
-        } else {
-            tmp_data = (int *)data;
-        }
-
-        for (int i = 0; i < out_length / (audio_time * sizeof(int)); i++) {
-            for (int j = 0; j < audio_time; j++) {
-                data_out_1[audio_time * i + j] = tmp_data[i];
-            }
-        }
-        if (data_out != NULL) {
-            free(data_out);
-            data_out = NULL;
-        }
-    }
-
-    if (data_out != NULL) {
-        ret = esp_codec_dev_write(play_dev, (void *)data_out, out_length);
-        free(data_out);
-    } else if (data_out_1 != NULL) {
-        ret = esp_codec_dev_write(play_dev, (void *)data_out_1, out_length);
-        free(data_out_1);
-    } else {
-        ret = esp_codec_dev_write(play_dev, (void *)data, length);
-    }
-
-    return ret;
+    return ESP_OK;
 }
 
 esp_err_t esp_audio_amp(bool on)
@@ -429,12 +237,14 @@ esp_err_t esp_audio_amp(bool on)
 
 esp_err_t esp_get_feed_data(bool is_get_raw_channel, int16_t *buffer, int buffer_len)
 {
-    esp_err_t ret = ESP_OK;
-    size_t bytes_read;
-    int audio_chunksize = buffer_len / (sizeof(int16_t) * ADC_I2S_CHANNEL);
+    ESP_RETURN_ON_FALSE(record_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "Record dev not initialized");
+    ESP_RETURN_ON_FALSE(buffer != NULL, ESP_ERR_INVALID_ARG, TAG, "Buffer is NULL");
 
-    ret = esp_codec_dev_read(record_dev, (void *)buffer, buffer_len);
+    ESP_RETURN_ON_ERROR(esp_codec_dev_read(record_dev, (void *)buffer, buffer_len), TAG,
+                        "Codec read failed");
+
     if (!is_get_raw_channel) {
+        int audio_chunksize = buffer_len / (sizeof(int16_t) * ADC_I2S_CHANNEL);
         for (int i = 0; i < audio_chunksize; i++) {
             int16_t ref = buffer[4 * i + 0];
             buffer[3 * i + 0] = buffer[4 * i + 1];
@@ -443,7 +253,7 @@ esp_err_t esp_get_feed_data(bool is_get_raw_channel, int16_t *buffer, int buffer
         }
     }
 
-    return ret;
+    return ESP_OK;
 }
 
 int esp_get_feed_channel(void)
@@ -451,236 +261,16 @@ int esp_get_feed_channel(void)
     return ADC_I2S_CHANNEL;
 }
 
-char* esp_get_input_format(void)
+char *esp_get_input_format(void)
 {
     return "RMNM";
 }
 
-
-
-
-
-esp_err_t esp_board_init(uint32_t sample_rate, int channel_format, int bits_per_chan)
+esp_err_t esp_board_init(void)
 {
-    /*!< Initialize I2C bus, used for audio codec*/
-
-    i2c_master_init();
-    s_play_sample_rate = sample_rate;
-
-    if (channel_format != 2 && channel_format != 1) {
-        ESP_LOGE(TAG, "Unable to configure channel_format");
-        channel_format = 2;
-    }
-    s_play_channel_format = channel_format;
-
-    if (bits_per_chan != 32 && bits_per_chan != 16) {
-        ESP_LOGE(TAG, "Unable to configure bits_per_chan");
-        bits_per_chan = 32;
-    }
-    s_bits_per_chan = bits_per_chan;
-
-    bsp_i2s_init(I2S_NUM_1, 16000, 2, 32);
-    // Because record and play use the same i2s.
-    bsp_codec_init(16000, 16000, 2, 32);
-
-    /* Initialize PA */
-     /*gpio_config_t  io_conf;
-     memset(&io_conf, 0, sizeof(io_conf));
-     io_conf.intr_type = GPIO_INTR_DISABLE;
-     io_conf.mode = GPIO_MODE_OUTPUT;
-     io_conf.pin_bit_mask = ((1ULL << GPIO_PWR_CTRL));
-     io_conf.pull_down_en = 0;
-     io_conf.pull_up_en = 0;
-     gpio_config(&io_conf);
-     gpio_set_level(GPIO_PWR_CTRL, 1);*/
-
+    ESP_RETURN_ON_ERROR(i2c_master_init(), TAG, "Failed to init I2C");
+    ESP_RETURN_ON_ERROR(bsp_i2s_init(I2S_NUM_1), TAG, "Failed to init I2S");
+    ESP_RETURN_ON_ERROR(bsp_codec_adc_init(16000), TAG, "Failed to init ADC codec");
+    ESP_RETURN_ON_ERROR(bsp_codec_dac_init(16000, 2, 32), TAG, "Failed to init DAC codec");
     return ESP_OK;
-}
-
-esp_err_t esp_sdcard_init(char *mount_point, size_t max_files)
-{
-    if (NULL != card) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    /* Check if SD crad is supported */
-    if (!FUNC_SDMMC_EN && !FUNC_SDSPI_EN) {
-        ESP_LOGE(TAG, "SDMMC and SDSPI not supported on this board!");
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-
-    esp_err_t ret_val = ESP_OK;
-
-    /**
-     * @brief Options for mounting the filesystem.
-     *   If format_if_mount_failed is set to true, SD card will be partitioned and
-     *   formatted in case when mounting fails.
-     *
-     */
-    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = false,
-        .max_files = max_files,
-        .allocation_unit_size = 16 * 1024
-    };
-
-    /**
-     * @brief Use settings defined above to initialize SD card and mount FAT filesystem.
-     *   Note: esp_vfs_fat_sdmmc/sdspi_mount is all-in-one convenience functions.
-     *   Please check its source code and implement error recovery when developing
-     *   production applications.
-     *
-     */
-    sdmmc_host_t host =
-#if FUNC_SDMMC_EN
-        SDMMC_HOST_DEFAULT();
-#else
-        SDSPI_HOST_DEFAULT();
-    spi_bus_config_t bus_cfg = {
-        .mosi_io_num = GPIO_SDSPI_MOSI,
-        .miso_io_num = GPIO_SDSPI_MISO,
-        .sclk_io_num = GPIO_SDSPI_SCLK,
-        .quadwp_io_num = GPIO_NUM_NC,
-        .quadhd_io_num = GPIO_NUM_NC,
-        .max_transfer_sz = 4000,
-    };
-    ret_val = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
-    if (ret_val != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize bus.");
-        return ret_val;
-    }
-#endif
-
-    /**
-     * @brief This initializes the slot without card detect (CD) and write protect (WP) signals.
-     *   Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
-     *
-     */
-#if FUNC_SDMMC_EN
-    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
-#else
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-#endif
-
-#if FUNC_SDMMC_EN
-    /* Config SD data width. 0, 4 or 8. Currently for SD card, 8 bit is not supported. */
-    slot_config.width = SDMMC_BUS_WIDTH;
-
-    /**
-     * @brief On chips where the GPIOs used for SD card can be configured, set them in
-     *   the slot_config structure.
-     *
-     */
-#if SOC_SDMMC_USE_GPIO_MATRIX
-    slot_config.clk = GPIO_SDMMC_CLK;
-    slot_config.cmd = GPIO_SDMMC_CMD;
-    slot_config.d0 = GPIO_SDMMC_D0;
-    slot_config.d1 = GPIO_SDMMC_D1;
-    slot_config.d2 = GPIO_SDMMC_D2;
-    slot_config.d3 = GPIO_SDMMC_D3;
-#endif
-    slot_config.cd = GPIO_SDMMC_DET;
-    slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
-#else
-    slot_config.gpio_cs = GPIO_SDSPI_CS;
-    slot_config.host_id = host.slot;
-#endif
-    /**
-     * @brief Enable internal pullups on enabled pins. The internal pullups
-     *   are insufficient however, please make sure 10k external pullups are
-     *   connected on the bus. This is for debug / example purpose only.
-     */
-
-    /* get FAT filesystem on SD card registered in VFS. */
-    ret_val =
-#if FUNC_SDMMC_EN
-        esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
-#else
-        esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_config, &mount_config, &card);
-#endif
-
-    /* Check for SDMMC mount result. */
-    if (ret_val != ESP_OK) {
-        if (ret_val == ESP_FAIL) {
-            ESP_LOGE(TAG, "Failed to mount filesystem. "
-                     "If you want the card to be formatted, set the EXAMPLE_FORMAT_IF_MOUNT_FAILED menuconfig option.");
-        } else {
-            ESP_LOGE(TAG, "Failed to initialize the card (%s). "
-                     "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(ret_val));
-        }
-        return ret_val;
-    }
-
-    /* Card has been initialized, print its properties. */
-    sdmmc_card_print_info(stdout, card);
-    SDCard_Size = ((uint64_t) card->csd.capacity) * card->csd.sector_size / (1024 * 1024);
-    return ret_val;
-}
-
-esp_err_t esp_sdcard_deinit(char *mount_point)
-{
-    if (NULL == mount_point) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    /* Unmount an SD card from the FAT filesystem and release resources acquired */
-    esp_err_t ret_val = esp_vfs_fat_sdcard_unmount(mount_point, card);
-
-    /* Make SD/MMC card information structure pointer NULL */
-    card = NULL;
-
-    return ret_val;
-}
-
-#define MOUNT_POINT "/sdcard"
-
-static const char *SD_TAG = "SD";
-
-
-
-uint16_t Folder_retrieval(const char* directory, const char* fileExtension, char File_Name[][MAX_FILE_NAME_SIZE], uint16_t maxFiles)    
-{
-    DIR *dir = opendir(directory);  
-    if (dir == NULL) {
-        ESP_LOGE(SD_TAG, "Path: <%s> does not exist", directory); 
-        return 0;  
-    }
-
-    uint16_t fileCount = 0;  
-    struct dirent *entry;   
-
-    while ((entry = readdir(dir)) != NULL && fileCount < maxFiles) {
-
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-
-        const char *dot = strrchr(entry->d_name, '.');  
-        if (dot != NULL && dot != entry->d_name) { 
-
-            if (strcasecmp(dot, fileExtension) == 0) {  
-                strncpy(File_Name[fileCount], entry->d_name, MAX_FILE_NAME_SIZE - 1);
-                File_Name[fileCount][MAX_FILE_NAME_SIZE - 1] = '\0';  
-
-                char filePath[MAX_PATH_SIZE];
-                snprintf(filePath, MAX_PATH_SIZE, "%s/%s", directory, entry->d_name);
-
-                //printf("File found: %s\r\n", filePath); 
-                fileCount++;  
-            }
-        }
-        else{
-           
-            // printf("No extension found for file: %s\r\n", entry->d_name);
-        }
-    }
-
-    closedir(dir);  
-
-    if (fileCount > 0) {
-        ESP_LOGI(SD_TAG, "Retrieved %d files with extension '%s'", fileCount, fileExtension);  
-    } else {
-        ESP_LOGW(SD_TAG, "No files with extension '%s' found in directory: %s", fileExtension, directory); 
-    }
-
-    return fileCount; 
 }
