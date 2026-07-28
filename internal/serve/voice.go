@@ -378,12 +378,10 @@ func (s *deviceSink) close() { close(s.done) }
 // this path is kept short. The control message travels on its own queue and overtakes audio, so it
 // lands before whatever survives.
 func (s *deviceSink) Interrupt() error {
+	// The credit stays: it counts room in the device's queue, and discarding our backlog changes
+	// that room not at all. The device's flush credits back what it actually freed.
 	s.mu.Lock()
 	s.backlog = s.backlog[:0]
-	// The credit goes too. The device is about to flush a buffer it has already been credited for,
-	// and it will grant the whole thing again — keeping the old number would let this side send twice
-	// what the device can hold.
-	s.credit = 0
 	s.mu.Unlock()
 
 	s.hub.dropAudio(s.device)
