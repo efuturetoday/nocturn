@@ -88,12 +88,16 @@ static volatile bool up;
 static void send_one(out_msg_t *msg)
 {
     if (link_connected()) {
-        if (msg->text) {
-            esp_websocket_client_send_text(client, (const char *)msg->data, msg->len,
-                                           pdMS_TO_TICKS(SEND_TIMEOUT_MS));
-        } else {
-            esp_websocket_client_send_bin(client, (const char *)msg->data, msg->len,
-                                          pdMS_TO_TICKS(SEND_TIMEOUT_MS));
+        int sent = msg->text
+                       ? esp_websocket_client_send_text(client, (const char *)msg->data, msg->len,
+                                                        pdMS_TO_TICKS(SEND_TIMEOUT_MS))
+                       : esp_websocket_client_send_bin(client, (const char *)msg->data, msg->len,
+                                                       pdMS_TO_TICKS(SEND_TIMEOUT_MS));
+        if (sent < (int)msg->len) {
+            // The client is already tearing the connection down; this line is how a message that
+            // mattered — a wake, a credit grant — is tellable from one that merely rode along.
+            ESP_LOGW(TAG, "send failed: %d of %u bytes (%s)", sent, (unsigned)msg->len,
+                     msg->text ? "text" : "audio");
         }
     }
     heap_caps_free(msg->data);
@@ -195,6 +199,15 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             break;
         }
         if (ev->op_code == 0x01 && control_cb) { // text: a tagged command
+            // A message larger than the receive buffer arrives as several events (the header says
+            // so: "payloads exceeding buffer will be posted through multiple events"). For audio
+            // that is fine — a byte stream in pieces is still a byte stream — but a command parsed
+            // from half its JSON is silent corruption, so it is refused by name instead.
+            if (ev->payload_len != ev->data_len) {
+                ESP_LOGW(TAG, "control message fragmented (%d bytes > %d buffer) — dropped",
+                         ev->payload_len, RX_BUFFER);
+                break;
+            }
             // The client hands out a length, not a string. Copying is what makes it one, and it
             // keeps the callback from reading past a buffer the client reuses.
             static char buf[RX_BUFFER];
@@ -255,6 +268,16 @@ esp_err_t link_start(const char *host, uint16_t port, const char *path, const ch
 
 bool link_connected(void) { return up && client && esp_websocket_client_is_connected(client); }
 
-bool link_send_text(const char *json) { return enqueue_on(ctrlq, json, strlen(json), true); }
+// A dropped control message is logged where a dropped audio frame is not: the uplink counts its
+// drops itself, but each of these is a fact the daemon cannot infer, and there are few enough that
+// a log line per loss costs nothing.
+bool link_send_text(const char *json)
+{
+    if (!enqueue_on(ctrlq, json, strlen(json), true)) {
+        ESP_LOGW(TAG, "control message dropped: %.48s", json);
+        return false;
+    }
+    return true;
+}
 
 bool link_send_audio(const uint8_t *pcm, size_t bytes) { return enqueue_on(outq, pcm, bytes, false); }
