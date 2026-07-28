@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "esp_err.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,7 +29,7 @@ typedef struct {
 } daemon_addr_t;
 
 // discover_init brings up mDNS. Call once, after the network is up.
-void discover_init(void);
+esp_err_t discover_init(void);
 
 // discover_find looks for the daemon for up to ms and fills out. Returns whether one was found.
 bool discover_find(daemon_addr_t *out, int ms);

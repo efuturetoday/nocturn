@@ -49,9 +49,7 @@ static void on_up(void *handle, void *user)
 static esp_err_t add(button_id_t id)
 {
     expander_button_t *btn = calloc(1, sizeof(expander_button_t));
-    if (!btn) {
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_FALSE(btn != NULL, ESP_ERR_NO_MEM, TAG, "Failed to allocate button");
     btn->id = id;
     btn->base.get_key_level = read_level;
 

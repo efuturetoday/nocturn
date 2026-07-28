@@ -7,6 +7,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_websocket_client.h"
@@ -240,17 +241,14 @@ esp_err_t link_start(const char *host, uint16_t port, const char *path, const ch
 
     outq = xQueueCreate(OUT_DEPTH, sizeof(out_msg_t));
     ctrlq = xQueueCreate(CTRL_DEPTH, sizeof(out_msg_t));
-    if (!outq || !ctrlq) {
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_FALSE(outq && ctrlq, ESP_ERR_NO_MEM, TAG, "Failed to create send queues");
     client = esp_websocket_client_init(&cfg);
-    if (!client) {
-        return ESP_ERR_NO_MEM;
-    }
-    if (xTaskCreatePinnedToCore(sender_task, "ws_send", 4 * 1024, NULL, 5, NULL, 0) != pdPASS) {
-        return ESP_ERR_NO_MEM;
-    }
-    ESP_ERROR_CHECK(esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, on_event, NULL));
+    ESP_RETURN_ON_FALSE(client != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create websocket client");
+    ESP_RETURN_ON_FALSE(
+        xTaskCreatePinnedToCore(sender_task, "ws_send", 4 * 1024, NULL, 5, NULL, 0) == pdPASS,
+        ESP_ERR_NO_MEM, TAG, "Failed to create sender task");
+    ESP_RETURN_ON_ERROR(esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, on_event, NULL),
+                        TAG, "Failed to register websocket events");
     ESP_LOGI(TAG, "connecting to ws://%s:%u%s", host, port, path);
     return esp_websocket_client_start(client);
 }

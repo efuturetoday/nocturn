@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "esp_check.h"
 #include "esp_log.h"
 #include "mdns.h"
 
@@ -13,12 +14,12 @@ static const char *TAG = "sat/find";
 #define PROTO "_tcp"
 #define DEFAULT_PATH "/ws"
 
-void discover_init(void)
+esp_err_t discover_init(void)
 {
-    ESP_ERROR_CHECK(mdns_init());
+    ESP_RETURN_ON_ERROR(mdns_init(), TAG, "Failed to init mdns");
     // The hostname is what shows up when someone looks at their network. A satellite that appears as
     // an unnamed device is one nobody can identify later.
-    mdns_hostname_set("nocturn-satellite");
+    return mdns_hostname_set("nocturn-satellite");
 }
 
 bool discover_find(daemon_addr_t *out, int ms)

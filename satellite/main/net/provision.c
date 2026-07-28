@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "esp_check.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -24,9 +25,7 @@ static esp_err_t read_key(nvs_handle_t h, const char *key, char *out, size_t cap
 
 esp_err_t provision_load(provision_t *out)
 {
-    if (!out) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    ESP_RETURN_ON_FALSE(out != NULL, ESP_ERR_INVALID_ARG, TAG, "out pointer is NULL");
     memset(out, 0, sizeof(*out));
 
     esp_err_t err = nvs_flash_init();
