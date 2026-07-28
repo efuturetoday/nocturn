@@ -297,7 +297,104 @@ with a long pause; and the crest in `WAVE` sits on a floor so every pixel stays 
 makes it one moving thing rather than several blinking ones — the difference from `SPIN` at a
 glance.
 
-## 9. Where it lives
+## 9. Dumb drivers, one brain
+
+The rule: **a driver reports what happened and executes what it is told. The state machine decides.**
+Nothing else holds state that describes the conversation.
+
+This is not tidiness. It was arrived at through a failure that could not have happened otherwise.
+
+### The bug that made the case
+
+`mic_speech` ran a session state machine of its own — `session`, `held`, `voice`, a silence timer —
+next to the one in `state/`. The wake word is suppressed while a session runs, and it was re-armed in
+exactly one place: the branch where a session ends on silence. Holding the stream open for a whole
+conversation is precisely what stops it ever reaching that branch, so releasing the hold left the
+session set and the wake word off. Permanently.
+
+The board went deaf after its first conversation, reported `peak=0`, and looked healthy. Neither
+machine was wrong on its own; they simply did not know about each other.
+
+### Where state lives today
+
+| Module | State | Decisions it makes |
+|---|---|---|
+| `mic_speech` | `session`, `held`, `voice`, `silence_ms` | when an utterance ends, whether to stream, when the wake word is armed |
+| `main.c` | `hand_recording`, `confirmed`, `playing_back` | uplink open/closed, amplifier up/down, what `voice.state idle` means |
+| `audio_out` | `playing`, `refill`, `freed` | when playback starts |
+| `state/` | the machine | — and it can reach none of the above |
+
+### Where it goes
+
+**`mic_speech` becomes a detector.** It emits PCM and two edges — wake word heard, voice began — and
+takes two commands:
+
+```c
+void mic_arm(bool);     // is the wake word listening
+void mic_stream(bool);  // does PCM leave this module
+```
+
+Gone: `session`, the silence timer, `SILENCE_TO_END_MS`. When an utterance ended is a conversation
+question, not a signal-processing one, and the module that answers it must be the one that also knows
+whether a reply is playing.
+
+**`audio_out` keeps its playout logic and loses nothing.** The prebuffer, the drain clock and the
+credit accounting are the mechanics of getting samples to a codec — they are the driver's job, not
+policy. It gains no state.
+
+**`uplink` becomes `uplink_enable(bool)`** and stops calling anything a session.
+
+**`state/` gains the actuators.** It already holds the facts and the precedence; the transitions now
+also carry the commands — arm the wake word on the way into `IDLE`, raise the amplifier on the way
+into `SPEAKING`, open the uplink for the length of a conversation. What is currently an invisible
+side effect somewhere becomes a line in a transition.
+
+**`main.c` becomes composition plus the bench button.** No `confirmed`, no `playing_back` as control
+state.
+
+The test that this worked: the wake-word bug becomes impossible to write. "Arm the wake word" is a
+line in the transition into `IDLE`, not a consequence of a timer in a driver.
+
+## 10. The model's state has to reach the ring
+
+`THINKING` and `APPROVAL` are in the enum, in the ring mapping and in the protocol — and **nothing
+ever produces them**. `internal/serve/voice.go` sends exactly two states, `listening` and `idle`, and
+those are the only two `VoiceState` literals in the tree. `SPEAKING` works only because the board
+derives it locally from its own amplifier.
+
+So the ring cannot show that the model is composing, that a tool is running, or that an approval is
+waiting on a phone — the last of which is the one nocturn most needs, since a person who is not told
+to look at their phone will simply stand there.
+
+The driver sees all of it: `LiveTurnDone`, `LiveToolCall`, `LiveAudio`, and every approval passes
+through its own `announcing` wrapper. It keeps all of it.
+
+There is already a port: `voice.Observer`, with `Said` and `ToolRan`. It is never set — the workspace
+passes only `WithSystem` and `WithLogger` — and it has no notion of state. It grows one:
+
+```go
+type Observer interface {
+    Said(role agentkit.Role, text string)
+    ToolRan(name, args, result string, err error)
+    Turn(TurnState) // Composing | Speaking | AwaitingApproval | Done
+}
+```
+
+Three layers, one job each, and the same rule as §3 all the way down:
+
+| | Knows |
+|---|---|
+| driver | what the model is doing |
+| `serve` | how to put that on a wire |
+| `state/` | what a person should see of it |
+
+The driver never learns that a ring exists; the board never learns that tool calls do.
+
+`SPEAKING` stays derived from the local amplifier even so. The daemon's version arrives later and is
+about generation rather than sound, and the suppression window in §4 covers a hardware event this
+board causes — that cannot depend on a message.
+
+## 11. Where it lives
 
 A new module, `satellite/main/state/`, owning the enum, the precedence rule and the LED mapping.
 Nothing else calls `rgb_show`.
@@ -320,7 +417,7 @@ from stranding the ring: there is no accumulated state to get out of step, only 
 
 One timestamp is stored: when `SPEAKING` was entered, for the 200 ms suppression in §4.
 
-## 10. Order of work, and the precondition
+## 12. Order of work, and the precondition
 
 1. ~~**The pattern renderer** in `rgb_led_driver`.~~ **Done** — one owner, seven patterns, RGB
    triples, `rgb_flash`. It also removed a real defect: two tasks were calling `led_strip_refresh`
