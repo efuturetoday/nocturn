@@ -239,17 +239,25 @@ static void network(void *arg)
         ESP_LOGW(TAG, "no network yet, still trying");
     }
 
+    // Discovery first, the provisioned address as the fallback — not the other way round. The
+    // address in NVS is a snapshot of one DHCP lease; the advertisement is the daemon saying where
+    // it is right now. A provisioned host also used to disable discovery entirely, which is how a
+    // broken discovery path stayed broken unnoticed: nothing ever exercised it.
+    // Three windows, not one, before giving up: a freshly joined client sits behind the access
+    // point's IGMP snooping until its group membership propagates, so the first query after boot
+    // may go unanswered on a network where the tenth works fine.
     daemon_addr_t daemon = {0};
-    if (prov.host[0]) {
-        strlcpy(daemon.host, prov.host, sizeof(daemon.host));
-        daemon.port = prov.port;
-        strlcpy(daemon.path, "/ws", sizeof(daemon.path));
-    } else {
-        ESP_ERROR_CHECK(discover_init());
-        while (!discover_find(&daemon, 3000)) {
-            ESP_LOGW(TAG, "nocturn not found, retrying");
-            vTaskDelay(pdMS_TO_TICKS(5000));
+    ESP_ERROR_CHECK(discover_init());
+    for (int attempt = 1; !discover_find(&daemon, 3000); attempt++) {
+        if (prov.host[0] && attempt >= 3) {
+            ESP_LOGW(TAG, "discovery found nothing — using the provisioned address %s", prov.host);
+            strlcpy(daemon.host, prov.host, sizeof(daemon.host));
+            daemon.port = prov.port;
+            strlcpy(daemon.path, "/ws", sizeof(daemon.path));
+            break;
         }
+        ESP_LOGW(TAG, "nocturn not found, retrying");
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 
     ESP_ERROR_CHECK(link_start(daemon.host, daemon.port, daemon.path, prov.bearer,
