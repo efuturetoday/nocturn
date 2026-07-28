@@ -30,7 +30,10 @@ extern "C" {
 #define GPIO_I2S_SDIN   (GPIO_NUM_15)
 #define GPIO_I2S_DOUT   (GPIO_NUM_16)
 
-#define RECORD_VOLUME   (30.0)
+// Analog input gain in dB, ES7210 tops out at 37.5. Normal speech across a room peaks near
+// -35 dBFS at 30 dB, which no later stage recovers: the AFE's AGC only compresses toward its
+// target, it does not lift a weak signal. Raising the level belongs here, before quantisation.
+#define RECORD_VOLUME   (36.0)
 #define PLAYER_VOLUME   (60)
 
 // No pin: the amplifier is on the I/O expander, driven via esp_audio_amp, not by the codec driver.
