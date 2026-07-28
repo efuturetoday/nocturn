@@ -64,8 +64,13 @@ limits:
   - >-
     **The catalog is derived, and its cap is enforced.** It is built from the notes on disk rather
     than kept as a file, so it cannot drift from what is stored, and a note that does not fit the
-    prompt budget is dropped with the drop stated — no reliance on the assistant tidying up. The
-    notes themselves are uncapped; they cost nothing until read.
+    prompt budget is dropped with the drop stated — no reliance on the assistant tidying up.
+  - >-
+    **A note's size costs nothing until it is read.** Building the catalog runs on every turn, so it
+    reads only the head of each note — enough for the `description:` line or the first line of the
+    body, and no further. A note may be as long as you like; only `memory_read` pulls the whole
+    thing, and only when the assistant asks for it. The one edge: if you hand-write a note whose
+    summary sits far past that head, the catalog will not find it and the entry shows no summary.
   - >-
     **Confinement is `os.Root`, not path arithmetic.** Both the temp file and the rename behind a
     write are re-validated per path component at the syscall level, so a symlinked intermediate
