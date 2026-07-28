@@ -129,11 +129,13 @@ its own receive callback, that callback runs on the task driving the connection'
 wait longer than the client's read timeout looks to it like a dead socket. Flow control that drops
 the link under load is not flow control.
 
-**Interrupting is decided on the device.** Its voice detector runs on the echo-cancelled microphone
-signal, so it knows you have started talking without asking anyone — going via the daemon would add a
-round trip to a decision that has to feel immediate. It silences itself first and says
-`voice.barge` afterwards; `voice.interrupt` is the daemon's own version of the same message, for when
-it decides a turn is over.
+**Interrupting a reply is currently off — the session is half duplex.** While the speaker runs, the
+device sends silence upstream instead of the microphone, because the model must never hear the
+device's own voice: what echo cancellation leaves of a reply still measures louder than a person,
+and no voice detector on either side can tell the two apart. Until the canceller is measured good
+enough, talking over a reply reaches nobody — let it finish. `voice.interrupt` remains the daemon's
+message to drop buffered, unplayed speech, and `voice.barge` is reserved for the device-side
+detector (`BARGE_IN_LOCAL`, parked behind the same measurement).
 
 A daemon with no live model configured refuses `voice.wake` and says so, rather than opening a
 session that can never answer.
