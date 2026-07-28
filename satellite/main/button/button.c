@@ -26,7 +26,12 @@ static uint8_t read_level(button_driver_t *driver)
     expander_button_t *btn = __containerof(driver, expander_button_t, base);
     // Active low — pressing pulls the pin down, which is how the expander's inputs are wired. The
     // component wants 1 for "pressed", so the inversion belongs here rather than in its logic.
-    return Read_EXIO(1ULL << btn->id) ? 0 : 1;
+    // A failed read reports released: inventing a press would start a recording nobody asked for.
+    bool high = true;
+    if (tca9555_read_exio(1UL << btn->id, &high) != ESP_OK) {
+        return 0;
+    }
+    return high ? 0 : 1;
 }
 
 static void on_down(void *handle, void *user)

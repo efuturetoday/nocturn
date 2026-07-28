@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include "esp_err.h"
+#include "tca9555_driver.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "string.h"
@@ -33,10 +34,8 @@ static int s_play_sample_rate = 16000;
 static int s_play_channel_format = 1;
 static int s_bits_per_chan = 16;
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 static i2s_chan_handle_t            tx_handle = NULL;        // I2S tx channel handler
 static i2s_chan_handle_t            rx_handle = NULL;        // I2S rx channel handler
-#endif
 static audio_codec_data_if_t *record_data_if  = NULL;
 static audio_codec_ctrl_if_t *record_ctrl_if  = NULL;
 static audio_codec_if_t *record_codec_if      = NULL;
@@ -93,10 +92,8 @@ esp_err_t bsp_codec_adc_init(int sample_rate)
     // Do initialize of related interface: data_if, ctrl_if and gpio_if
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port = I2S_NUM_1,
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
         .rx_handle = rx_handle,
         .tx_handle = NULL,
-#endif
     };
     record_data_if = audio_codec_new_i2s_data(&i2s_cfg);
 
@@ -138,10 +135,8 @@ esp_err_t bsp_codec_dac_init(int sample_rate, int channel_format, int bits_per_c
     // Do initialize of related interface: data_if, ctrl_if and gpio_if
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port = I2S_NUM_1,
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
         .rx_handle = NULL,
         .tx_handle = tx_handle,
-#endif
     };
     play_data_if = audio_codec_new_i2s_data(&i2s_cfg);
 
@@ -268,7 +263,6 @@ static esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate, int chan
 {
     esp_err_t ret_val = ESP_OK;
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
     i2s_slot_mode_t channel_fmt = I2S_SLOT_MODE_STEREO;
     if (channel_format == 1) {
         channel_fmt = I2S_SLOT_MODE_MONO;
@@ -297,36 +291,6 @@ static esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate, int chan
     ret_val |= i2s_channel_init_std_mode(rx_handle, &std_cfg);
     ret_val |= i2s_channel_enable(tx_handle);
     ret_val |= i2s_channel_enable(rx_handle);
-#else
-    i2s_channel_fmt_t channel_fmt = I2S_CHANNEL_FMT_RIGHT_LEFT;
-    if (channel_format == 1) {
-        channel_fmt = I2S_CHANNEL_FMT_ONLY_LEFT;
-    } else if (channel_format == 2) {
-        channel_fmt = I2S_CHANNEL_FMT_RIGHT_LEFT;
-    } else {
-        ESP_LOGE(TAG, "Unable to configure channel_format %d", channel_format);
-        channel_format = 1;
-        channel_fmt = I2S_CHANNEL_FMT_ONLY_LEFT;
-    }
-
-    if (bits_per_chan != 16 && bits_per_chan != 32) {
-        ESP_LOGE(TAG, "Unable to configure bits_per_chan %d", bits_per_chan);
-        bits_per_chan = 16;
-    }
-
-    i2s_config_t i2s_config = I2S_CONFIG_DEFAULT(sample_rate, channel_fmt, bits_per_chan);
-
-    i2s_pin_config_t pin_config = {
-        .bck_io_num = GPIO_I2S_SCLK,
-        .ws_io_num = GPIO_I2S_LRCK,
-        .data_out_num = GPIO_I2S_DOUT,
-        .data_in_num = GPIO_I2S_SDIN,
-        .mck_io_num = GPIO_I2S_MCLK,
-    };
-
-    ret_val |= i2s_driver_install(i2s_num, &i2s_config, 0, NULL);
-    ret_val |= i2s_set_pin(i2s_num, &pin_config);
-#endif
 
     return ret_val;
 }
@@ -335,7 +299,6 @@ static esp_err_t bsp_i2s_deinit(i2s_port_t i2s_num)
 {
     esp_err_t ret_val = ESP_OK;
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
     if (i2s_num == I2S_NUM_1 && rx_handle) {
         ret_val |= i2s_channel_disable(rx_handle);
         ret_val |= i2s_del_channel(rx_handle);
@@ -345,10 +308,6 @@ static esp_err_t bsp_i2s_deinit(i2s_port_t i2s_num)
         ret_val |= i2s_del_channel(tx_handle);
         tx_handle = NULL;
     }
-#else
-    ret_val |= i2s_stop(i2s_num);
-    ret_val |= i2s_driver_uninstall(i2s_num);
-#endif
 
     return ret_val;
 }
@@ -458,6 +417,13 @@ esp_err_t esp_audio_play(const int16_t* data, int length, uint32_t ticks_to_wait
         ret = esp_codec_dev_write(play_dev, (void *)data, length);
     }
 
+    return ret;
+}
+
+esp_err_t esp_audio_amp(bool on)
+{
+    esp_err_t ret = tca9555_set_exio(IO_EXPANDER_PIN_NUM_8, on);
+    vTaskDelay(pdMS_TO_TICKS(10)); // settle: switching is audible until the rail is stable
     return ret;
 }
 

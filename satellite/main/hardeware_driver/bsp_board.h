@@ -98,8 +98,6 @@ extern "C" {
 #define GPIO_PWR_CTRL       (-1)
 #define GPIO_PWR_ON_LEVEL   (1)
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-
 #define I2S_CONFIG_DEFAULT(sample_rate, channel_fmt, bits_per_chan) { \
         .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(16000), \
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(32, I2S_SLOT_MODE_STEREO), \
@@ -111,26 +109,6 @@ extern "C" {
             .din  = GPIO_I2S_SDIN, \
         }, \
     }
-
-#else
-
-#define I2S_CONFIG_DEFAULT(sample_rate, channel_fmt, bits_per_chan) { \
-    .mode                   = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_TX, \
-    .sample_rate            = 16000, \
-    .bits_per_sample        = I2S_BITS_PER_SAMPLE_32BIT, \
-    .channel_format         = I2S_CHANNEL_FMT_RIGHT_LEFT, \
-    .communication_format   = I2S_COMM_FORMAT_STAND_I2S, \
-    .intr_alloc_flags       = ESP_INTR_FLAG_LEVEL1, \
-    .dma_buf_count          = 6, \
-    .dma_buf_len            = 160, \
-    .use_apll               = false, \
-    .tx_desc_auto_clear     = true, \
-    .fixed_mclk             = 0, \
-    .mclk_multiple          = I2S_MCLK_MULTIPLE_DEFAULT, \
-    .bits_per_chan          = I2S_BITS_PER_CHAN_32BIT, \
-}
-
-#endif
 
 
 /* LCD settings */
@@ -198,6 +176,12 @@ int esp_get_feed_channel(void);
 char* esp_get_input_format(void);
 esp_err_t esp_audio_set_play_vol(int volume);
 esp_err_t esp_audio_get_play_vol(int *volume);
+
+/**
+ * @brief Raise or drop the speaker amplifier and wait out its settle time. Which pin that is, and
+ *        how long it needs, are this board's wiring — no caller should know either.
+ */
+esp_err_t esp_audio_amp(bool on);
 
 i2c_master_bus_handle_t esp_ret_i2c_handle(void);
 esp_codec_dev_handle_t esp_ret_play_dev();

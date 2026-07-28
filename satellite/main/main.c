@@ -265,7 +265,7 @@ void app_main(void)
     ESP_LOGI(TAG, "step: board");
     ESP_ERROR_CHECK(esp_board_init(16000, 2, 32)); // match the bus: 32-bit stereo slots
     ESP_LOGI(TAG, "step: tca");
-    tca9555_driver_init();
+    ESP_ERROR_CHECK(tca9555_driver_init());
     // The shared things are created HERE, by the one place that can order them, and handed to the
     // modules that use them. No module creates what it merely needs first — wifi.c and state.c both
     // creating the event loop is how this became a boot loop whose message pointed at neither.
