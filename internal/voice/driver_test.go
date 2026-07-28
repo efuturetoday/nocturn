@@ -64,6 +64,8 @@ func (s *fakeSession) push(ev agentkit.LiveEvent)        { s.events <- ev }
 
 // fakeDevice is a satellite that never speaks unless the test tells it to.
 type fakeDevice struct {
+	heard chan struct{}
+
 	mic        chan []byte
 	played     chan []byte
 	interrupts chan struct{}
@@ -90,6 +92,10 @@ func (d *fakeDevice) Recv(ctx context.Context) ([]byte, error) {
 }
 
 func (d *fakeDevice) Play(pcm []byte) error { d.played <- pcm; return nil }
+
+// Heard: silent by default, so a test that does not care about the idle window never trips it. A
+// test that does sends on heard itself.
+func (d *fakeDevice) Heard() <-chan struct{} { return d.heard }
 func (d *fakeDevice) Interrupt() error      { d.interrupts <- struct{}{}; return nil }
 
 // fakeObserver reports what the session committed, which is also how a test observes that the
@@ -278,8 +284,15 @@ func TestOnlyCagedToolsAreDeclared(t *testing.T) {
 	for _, s := range live.spec {
 		names[s.Name] = true
 	}
-	if len(names) != 2 || !names["file_read"] || !names["time_now"] {
-		t.Errorf("declared %v, want exactly the caged two", names)
+	// The caged two, plus hang_up. hang_up is named here rather than filtered out, because the point
+	// of this test is that NOTHING reaches the model without being written down somewhere on purpose
+	// — and the driver adding a tool of its own is exactly the case that should have to be admitted.
+	//
+	// It is admissible because it steers the session rather than reaching into the world: there is
+	// nothing to permit or deny, and it never enters the ToolSet. Any other addition here is a
+	// security decision, not a test fix.
+	if len(names) != 3 || !names["file_read"] || !names["time_now"] || !names["hang_up"] {
+		t.Errorf("declared %v, want the caged two plus hang_up", names)
 	}
 }
 

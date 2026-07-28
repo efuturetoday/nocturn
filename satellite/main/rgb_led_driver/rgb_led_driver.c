@@ -1,5 +1,7 @@
 #include "rgb_led_driver.h"
 
+#include <math.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -33,6 +35,17 @@ static const char *TAG = "sat/rgb";
 #define BLINK_TICKS 8
 #define BLINK_SLOW_TICKS 16
 
+// How fast the speech level falls when nothing new is reported, per tick, in 1/256ths.
+//
+// 216/256 is about a third left after five ticks — a quarter of a second. Speech is full of stops
+// between words that are shorter than that, so they never reach the ring; a real pause does. The
+// attack is not damped at all: a voice starting is the moment worth being immediate about.
+#define LEVEL_DECAY 216
+
+// Where the level sits when nobody is reporting one, out of 255. RGB_SIRI never freezes: a ring
+// that stood still during a reply the board happens not to be measuring would read as a hang.
+#define LEVEL_FLOOR 40
+
 // How long rgb_flash holds. Long enough to be seen, short enough not to read as a state.
 #define FLASH_TICKS 3
 
@@ -50,6 +63,23 @@ const rgb_color_t RGB_DIM_BLUE = {0, 0, 24};
 const rgb_color_t RGB_CYAN = {0, 200, 255};
 const rgb_color_t RGB_AMBER = {255, 120, 0};
 const rgb_color_t RGB_MAGENTA = {255, 0, 200};
+
+// The four colours RGB_SIRI is made of. Not a palette anyone picks from — the look IS these four
+// overlapping, and the hues that carry it (the violet between blue and pink, the sea-green between
+// teal and blue) exist only where two of them add. Which is also why it suits this device: the
+// diffuser blends the ring a second time, after the arithmetic already did.
+static const rgb_color_t SIRI_LOBES[] = {
+    {59, 125, 255},  // blue
+    {164, 75, 255},  // purple
+    {255, 61, 139},  // pink
+    {35, 211, 211},  // teal
+};
+#define SIRI_LOBE_COUNT (sizeof(SIRI_LOBES) / sizeof(SIRI_LOBES[0]))
+
+// How loud the speaker is, 0..255. Written by whoever moves the samples, decayed by the renderer.
+// A single byte, so neither side needs the lock: the renderer reading a value one tick stale is
+// invisible, and a torn read is impossible.
+static volatile uint8_t level;
 
 static led_strip_handle_t strip;
 
@@ -84,6 +114,65 @@ static int ramp(int phase, int period)
     int half = period / 2;
     int tri = phase < half ? phase * 255 / half : (period - phase) * 255 / half;
     return tri * tri / 255;
+}
+
+// siri draws four coloured lobes on the ring and ADDS them, per channel.
+//
+// The sum is the whole trick. Nobody sees four blobs; what reads is where blue slides through purple
+// into pink, and that hue exists only because the channels add where two lobes overlap. A palette
+// rotated around the ring would give bands. This gives the drifting, liquid thing.
+//
+// float and not the integer arithmetic the rest of this file uses, deliberately: the S3 has a
+// hardware FPU, this is 28 expf and 8 sinf per frame at 20 Hz, and the alternative is three lookup
+// tables to save microseconds on a core whose real work is the network. The integer style elsewhere
+// buys determinism in patterns a person compares side by side; here it would buy nothing.
+//
+// `drift` is revolutions per tick, `together` makes every lobe travel the same way — one object
+// circling, rather than something alive and undirected.
+static void siri(rgb_color_t *px, int tick, float drift, float breathe, float width, float gain,
+                 float floor_blue, bool together)
+{
+    float acc[LED_STRIP_LED_COUNT][3] = {{0}};
+
+    for (int j = 0; j < (int)SIRI_LOBE_COUNT; j++) {
+        float dir = together ? 1.0f : (j % 2 ? -1.0f : 1.0f);
+        float pos = fmodf(tick * drift * (1.0f + j * 0.22f) * dir * LED_STRIP_LED_COUNT
+                              + j * (float)LED_STRIP_LED_COUNT / SIRI_LOBE_COUNT,
+                          LED_STRIP_LED_COUNT);
+        if (pos < 0) {
+            pos += LED_STRIP_LED_COUNT;
+        }
+        float w = width * (0.85f + 0.3f * sinf(tick * 0.017f + j * 1.9f));
+        if (w < 0.35f) {
+            w = 0.35f;
+        }
+        float amp = gain * (0.55f + 0.45f * sinf(tick * breathe * (1.0f + j * 0.3f) + j * 2.4f));
+        if (amp <= 0) {
+            continue;
+        }
+        for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
+            // Distance the short way round: a lobe at pixel 6 lights pixel 0, because the strip is
+            // a ring and the seam between its ends is not a wall.
+            float raw = fabsf(i - pos);
+            float d = raw < LED_STRIP_LED_COUNT - raw ? raw : LED_STRIP_LED_COUNT - raw;
+            float k = amp * expf(-(d * d) / (2.0f * w * w));
+            acc[i][0] += SIRI_LOBES[j].r * k;
+            acc[i][1] += SIRI_LOBES[j].g * k;
+            acc[i][2] += SIRI_LOBES[j].b * k;
+        }
+    }
+
+    // The floor is blue rather than grey. Between two lobes the ring must not go dark — that would
+    // read as gaps — but it must not go neutral either: a white residue is what makes cheap RGB look
+    // cheap, and this whole pattern is a claim about colour.
+    for (int i = 0; i < LED_STRIP_LED_COUNT; i++) {
+        float r = acc[i][0] + 64.0f * floor_blue;
+        float g = acc[i][1] + 38.0f * floor_blue;
+        float b = acc[i][2] + 255.0f * floor_blue;
+        px[i].r = r > 255.0f ? 255 : (uint8_t)r;
+        px[i].g = g > 255.0f ? 255 : (uint8_t)g;
+        px[i].b = b > 255.0f ? 255 : (uint8_t)b;
+    }
 }
 
 // paint writes one frame: every pixel, then one refresh. Never partial — a refresh per pixel is what
@@ -154,6 +243,21 @@ static void render(rgb_pattern_t pattern, rgb_color_t color, int tick)
         }
         break;
     }
+
+    case RGB_SIRI: {
+        // The one pattern driven from outside: loudness sets how far the lobes swell and how wide
+        // they spread, so a loud syllable is a wide bright surge and a quiet one barely moves. The
+        // colour argument is unused — see the header.
+        float loud = level / 255.0f;
+        siri(px, tick, 0.010f, 0.05f, 0.85f + 0.35f * loud, 0.45f + 0.55f * loud, 0.05f, false);
+        break;
+    }
+
+    case RGB_SIRI_THINK:
+        // Same colours, pulled tight and all circling one way: unmistakably the same device doing
+        // something else. Deaf to the level on purpose — nothing is being said yet.
+        siri(px, tick, 0.034f, 0.02f, 0.6f, 0.85f, 0.03f, true);
+        break;
     }
 
     paint(px);
@@ -199,6 +303,14 @@ static void render_task(void *arg)
         }
 
         render(pattern, color, tick);
+
+        // The release side of the envelope. Decayed here rather than by the reporter, because the
+        // frame is what it is for: whoever writes the level knows when a chunk was loud, not how
+        // long the ring should still show it.
+        uint8_t now = level;
+        uint8_t next = (uint8_t)((now * LEVEL_DECAY) / 256);
+        level = next < LEVEL_FLOOR ? LEVEL_FLOOR : next;
+
         vTaskDelay(pdMS_TO_TICKS(TICK_MS));
     }
 }
@@ -240,6 +352,15 @@ void rgb_show(rgb_pattern_t pattern, rgb_color_t color)
     want_pattern = pattern;
     want_color = color;
     portEXIT_CRITICAL(&lock);
+}
+
+void rgb_level(uint8_t value)
+{
+    // Attack only. A quieter chunk never pulls the ring down at once — that is the renderer's decay,
+    // and letting a single quiet 20 ms window do it would flicker on every consonant.
+    if (value > level) {
+        level = value;
+    }
 }
 
 void rgb_flash(rgb_color_t color)

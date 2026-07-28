@@ -97,6 +97,16 @@ func (c *conn) voice(ctx context.Context, cmd string, data []byte) {
 		if s := sinkOf(c.device); s != nil {
 			s.grant(m.Bytes)
 		}
+	case "voice.speech":
+		// The device's detector heard someone. It carries nothing but the fact, which is all a
+		// silence timer needs, and it is deliberately not audio: audio says what was said, this says
+		// somebody is still there.
+		for _, ws := range c.spaces {
+			if sessions := ws.VoiceSessions(); sessions != nil && sessions.Active(c.device) {
+				sessions.Heard(c.device)
+				return
+			}
+		}
 	default:
 		c.badRequest(ctx, "unknown voice command: "+cmd)
 	}

@@ -269,4 +269,23 @@ esp_err_t mic_speech_start(mic_pcm_sink_t sink, void *user)
 
 bool mic_speech_voice(void) { return voice; }
 
-void mic_speech_hold(bool on) { held = on; }
+// Releasing a hold ends the stream, and that is more than clearing a flag.
+//
+// The wake word is SUPPRESSED for as long as a session runs, so that saying it mid-sentence does not
+// restart one. It is re-armed exactly where a session ends on silence — a path a held stream never
+// takes, since holding is what stops it taking it. So releasing left the board with session still
+// set and wakenet still off: deaf, permanently, after the first conversation. Measured as peak=0
+// with the detector stuck reporting a voice.
+void mic_speech_hold(bool on)
+{
+    held = on;
+    if (on) {
+        return;
+    }
+    session = false;
+    voice = false;
+    if (afe_handle && afe_data) {
+        afe_handle->enable_wakenet(afe_data);
+        ESP_LOGI(TAG, "listening for the wake word again");
+    }
+}

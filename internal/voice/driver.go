@@ -31,6 +31,40 @@ import (
 // time, not on the user remembering to disconnect.
 const DefaultBudget = 15 * time.Minute
 
+// DefaultIdle is how long a conversation waits after a reply before hanging up on its own.
+//
+// Two scenarios pull in opposite directions and this is where they meet. "What time is it" wants the
+// session shut immediately afterwards, or the device sits there listening to the room and the model
+// answers half-sentences it was never asked. "What's on today" — "and tomorrow?" wants it open, or
+// every follow-up needs the wake word again.
+//
+// So: open long enough for a follow-up, closed before it becomes an open microphone. Alexa and
+// Google settled on a few seconds for the same reason.
+//
+// It is measured from LiveTurnDone, which is the model finishing GENERATION — the device may still
+// have a couple of seconds of it queued. The window therefore covers both, and the silence a person
+// actually experiences is shorter than the number. Waiting for the device to report itself drained
+// would be exact and needs a round trip to learn something this can simply absorb.
+const DefaultIdle = 10 * time.Second
+
+// hangUp is how the model ends a conversation, and it is NOT one of the caged tools.
+//
+// It steers the session rather than reaching into the world, which is a different kind of thing:
+// there is nothing here to permit or deny, and a gate check would be asking whether the assistant may
+// stop listening to you. It is answered by the driver directly and never enters the ToolSet.
+//
+// It exists because the alternative endings are both worse manners. Waiting out the silence window
+// leaves ten seconds of dead air after "goodbye"; waiting out the budget leaves fifteen minutes of
+// an open microphone. A person who says they are done should be taken at their word.
+const hangUp = "hang_up"
+
+var hangUpSpec = agentkit.ToolSpec{
+	Name: hangUp,
+	Description: "End the spoken conversation. Call this when the person has said goodbye, said " +
+		"they are done, or otherwise signalled that the exchange is over. The microphone stops " +
+		"listening until they say the wake word again.",
+}
+
 // Device is the satellite end of a session: a microphone, a speaker, and the one control signal a
 // duplex conversation needs. A browser tab and an ESP32 implement the same three methods, which is
 // why the PoC client is not throwaway work.
@@ -43,6 +77,13 @@ type Device interface {
 	// Interrupt tells the device to DROP whatever it has buffered but not yet played. Without it a
 	// barge-in still lets the speaker finish answering a question the user already abandoned.
 	Interrupt() error
+	// Heard fires when the DEVICE's own voice detector picks up a voice — not when the model has
+	// understood something. It is what tells a conversation that somebody is still there.
+	//
+	// It comes from the device because that is where the detector is, running on the echo-cancelled
+	// microphone signal about 200 ms after a person starts. The model's transcript arrives later and
+	// only for speech it made sense of, which is the wrong test for "is anyone still in the room".
+	Heard() <-chan struct{}
 }
 
 // Observer watches a session without steering it — for logging, for showing the phone what the
@@ -69,12 +110,17 @@ type Driver struct {
 
 	system   string
 	budget   time.Duration
+	idle     time.Duration
 	observer Observer
 	log      *slog.Logger
 }
 
 // Option configures a Driver.
 type Option func(*Driver)
+
+// WithIdle overrides DefaultIdle. A non-positive value disables hanging up on silence, which leaves
+// only the budget — deliberately possible, and deliberately not the default.
+func WithIdle(t time.Duration) Option { return func(d *Driver) { d.idle = t } }
 
 // WithSystem sets the persona handed to the model as its system instruction.
 func WithSystem(s string) Option { return func(d *Driver) { d.system = s } }
@@ -121,6 +167,7 @@ func New(live agentkit.LiveLLM, tools agentkit.ToolSet, policy gate.Policy, gran
 		grants:   grants,
 		approver: approver,
 		budget:   DefaultBudget,
+		idle:     DefaultIdle,
 		log:      slog.Default(),
 	}
 	for _, o := range opts {
@@ -142,7 +189,7 @@ func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message) (
 	if d.system != "" {
 		seed = append([]agentkit.Message{{Role: agentkit.RoleSystem, Content: d.system}}, conv...)
 	}
-	sess, err := d.live.Open(ctx, seed, d.tools.Specs())
+	sess, err := d.live.Open(ctx, seed, append(d.tools.Specs(), hangUpSpec))
 	if err != nil {
 		return conv, fmt.Errorf("voice: open session: %w", err)
 	}
@@ -171,6 +218,12 @@ func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message) (
 		sess.Close()
 	}()
 
+	// The silence timer. Stopped means nothing is counting: it runs only between a finished reply and
+	// the next sign of life, so a conversation is never hung up while anything is still happening.
+	idle := time.NewTimer(d.budget)
+	idle.Stop()
+	defer idle.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -182,13 +235,60 @@ func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message) (
 			return c.tr.messages(), nil
 		case err := <-uplink:
 			return c.tr.messages(), err
+		case <-dev.Heard():
+			// Somebody is still there. This is the device's own detector, so it arrives while a person
+			// is drawing breath rather than after the model has understood a sentence.
+			c.stopIdle(idle)
+		case <-idle.C:
+			d.log.Info("voice session ended on silence", "idle", d.idle)
+			return c.tr.messages(), nil
 		case ev, ok := <-sess.Events():
 			if !ok {
 				return c.tr.messages(), nil
 			}
 			if err := d.handle(toolCtx, c, ev); err != nil {
+				if errors.Is(err, errHungUp) {
+					return c.tr.messages(), nil
+				}
 				return c.tr.messages(), err
 			}
+			d.armIdle(c, idle, ev)
+		}
+	}
+}
+
+// armIdle starts or stops the silence timer according to what just happened.
+//
+// Only a finished reply starts it. Everything else stops it, and the two cases worth naming are the
+// ones that stop it for a LONG time: a tool call, which may be doing something slow, and an approval,
+// which is waiting on a person walking to another room. Hanging up on either would be hanging up
+// precisely when the conversation is most valuable — and, in the approval case, when the human has
+// already been asked to do something.
+func (d *Driver) armIdle(c *conversation, idle *time.Timer, ev agentkit.LiveEvent) {
+	if d.idle <= 0 {
+		return
+	}
+	switch ev.(type) {
+	case agentkit.LiveTurnDone:
+		// Not while a tool is still in flight: the model has finished SPEAKING, and the reply that
+		// matters may still be waiting on what the tool returns.
+		if c.running() > 0 {
+			return
+		}
+		c.stopIdle(idle)
+		idle.Reset(d.idle)
+	default:
+		c.stopIdle(idle)
+	}
+}
+
+// stopIdle stops the timer and drains it, so a fire that raced the stop does not end the next
+// silence early.
+func (c *conversation) stopIdle(t *time.Timer) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
 		}
 	}
 }
@@ -209,6 +309,14 @@ type conversation struct {
 	// work it started. Written by the event loop and by each tool goroutine as it finishes.
 	mu       sync.Mutex
 	inflight map[string]context.CancelFunc
+}
+
+// running is how many calls are in flight. The silence timer needs to ask, and a WaitGroup can only
+// be waited on: a reply that finished while a tool is still working is not the end of anything.
+func (c *conversation) running() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.inflight)
 }
 
 // start registers a call and returns the ctx its work runs under.
@@ -283,6 +391,14 @@ func (d *Driver) handle(ctx context.Context, c *conversation, ev agentkit.LiveEv
 			}
 		}
 	case agentkit.LiveToolCall:
+		if e.Tool == hangUp {
+			// Answered before ending, so the provider is not left with a call it never got a result
+			// for — and answered synchronously, because there is nothing to do and the session is
+			// about to go away underneath any goroutine that tried.
+			_ = c.sess.SendResult(ctx, agentkit.ToolResult{ID: e.ID, Tool: e.Tool, Result: "ended"})
+			d.log.Info("voice session ended by the model")
+			return errHungUp
+		}
 		// Concurrent on purpose: a gated call can block for as long as a human takes to answer on
 		// another device. Running it inline would stall the audio path — including the model's own
 		// "hold on, I need permission for that".

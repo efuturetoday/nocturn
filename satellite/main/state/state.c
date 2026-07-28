@@ -43,6 +43,10 @@ static struct {
     int64_t speaking_since; // for SPEAKING_DEAF_US; 0 when not speaking
 } f = {.mic_alive = true, .provisioned = true};
 
+// When a voice was last heard over a reply. The daemon's interrupt is timed against it, which is the
+// only way to compare deciding here with deciding upstream.
+static int64_t heard_at;
+
 static sat_state_t current = SAT_BOOT;
 static bool started; // BOOT ends at the first fact of any kind
 
@@ -132,11 +136,18 @@ static void paint(sat_state_t s)
         rgb_show(RGB_BREATHE, RGB_GREEN);
         return;
     case SAT_THINKING:
-        rgb_show(RGB_SPIN, RGB_BLUE);
+        // The four drifting colours, pulled tight and circling. RGB_OFF because the pattern carries
+        // its own palette — see rgb_led_driver.h.
+        rgb_show(RGB_SIRI_THINK, RGB_OFF);
         return;
     case SAT_SPEAKING:
-        // Cyan and not green: the person should not feel invited to talk while the assistant does.
-        rgb_show(RGB_WAVE, RGB_CYAN);
+        // The same colours, loose and swelling with the actual speech: the ring is driven by the
+        // samples leaving the speaker, so it moves with the words rather than beside them.
+        //
+        // Not green, and now not a single hue at all: the person should not feel invited to talk
+        // while the assistant does, and nothing on this ring says "this is the assistant's turn"
+        // more plainly than the one pattern no other state uses.
+        rgb_show(RGB_SIRI, RGB_OFF);
         return;
     case SAT_APPROVAL:
         // The only magenta and the only quick blink. It means: go look at your phone.
@@ -180,20 +191,32 @@ static bool remote_state(const char *name, sat_state_t *out)
 static void on_voice(void)
 {
     if (current != SAT_SPEAKING) {
-        return; // outside a reply it is the session's own audio, already handled by the wake word
+        // Not a barge-in, but still worth saying: the daemon hangs up on silence, and only this
+        // board can tell it the room is not silent. Its own microphone stream would do it eventually
+        // — the model transcribes what it understood — but that arrives later and only for speech
+        // that made sense, which is the wrong test for whether anyone is still here.
+        if (f.session) {
+            esp_event_post(SAT_EVENT, SAT_EV_SPEECH, NULL, 0, 0);
+        }
+        return;
     }
     if (esp_timer_get_time() - f.speaking_since < SPEAKING_DEAF_US) {
         ESP_LOGD(TAG, "voice during the amplifier's own click — ignored");
         return;
     }
-    // Barge-in. What this module can do is decide that it happened; silencing the speaker and
-    // telling the daemon belong to whoever owns those, so it says so and they act.
-    //
-    // Announced rather than acted on, because the audio path is not this module's to reach into —
-    // and because the daemon needs telling too, on a queue this module does not have.
-    ESP_LOGI(TAG, "barge-in");
+    // A person talking over the reply. Whether that stops anything is BARGE_IN_LOCAL's answer; the
+    // moment is recorded either way, because the whole question is how long the other route takes.
+    heard_at = esp_timer_get_time();
+#if BARGE_IN_LOCAL
+    // What this module can do is decide it happened; silencing the speaker and telling the daemon
+    // belong to whoever owns those, so it says so and they act.
+    ESP_LOGI(TAG, "barge-in (local)");
     rgb_flash(RGB_WHITE);
     esp_event_post(SAT_EVENT, SAT_EV_BARGE_IN, NULL, 0, 0);
+#else
+    ESP_LOGI(TAG, "voice over the reply — waiting for the daemon to say so");
+    return; // the ring keeps showing SPEAKING; the model has the microphone and will notice
+#endif
     f.remote_known = false; // the daemon's "speaking" is now wrong; it will say so shortly
     settle();
 }
@@ -289,6 +312,17 @@ esp_err_t state_start(void)
 }
 
 sat_state_t state_get(void) { return current; }
+
+void state_report_remote_interrupt(void)
+{
+    if (heard_at == 0) {
+        ESP_LOGI(TAG, "daemon interrupt, with no voice heard here — the model decided on its own");
+        return;
+    }
+    ESP_LOGI(TAG, "daemon interrupt %lld ms after this board heard the voice",
+             (esp_timer_get_time() - heard_at) / 1000);
+    heard_at = 0;
+}
 
 const char *state_name(sat_state_t state)
 {

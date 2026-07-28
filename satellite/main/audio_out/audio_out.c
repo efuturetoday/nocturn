@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 
 #include "bsp_board.h"
+#include "rgb_led_driver.h"
 #include "tca9555_driver.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -44,6 +45,18 @@ static const char *TAG = "sat/out";
 // One fetch chunk is well under this; the drain task reads whatever has accumulated.
 #define DRAIN_BYTES 640
 
+// What counts as a fully lit ring, as a mean absolute sample value.
+//
+// Mean absolute and not peak: a single clipped sample says nothing about how loud a syllable was,
+// and peak-driven lighting sits at full brightness through an entire sentence. 6000 of 32767 is
+// roughly a loud vowel on this codec, so ordinary speech uses most of the range and a shout merely
+// saturates it.
+#define LEVEL_FULL_SCALE 6000
+
+// Only every fourth sample is measured. At 16 kHz that is still 80 samples per 20 ms chunk, which
+// is far more than an envelope needs, and it keeps this off the core's budget entirely.
+#define LEVEL_STRIDE 4
+
 static RingbufHandle_t ring;
 
 // Written by the drain task, read by whoever reports. A silent speaker has several possible causes
@@ -61,6 +74,25 @@ static volatile size_t freed;
 // Set by a flush. After a barge-in the queue is empty by definition, so playback waits for a cushion
 // again rather than starting on the first chunk of whatever comes next.
 static volatile bool refill;
+
+// report_level hands the ring the loudness of one chunk. Integer throughout: this runs per 20 ms
+// chunk on the core the network is on, and an envelope does not need a divide it cannot afford.
+static void report_level(const int16_t *mono, size_t samples)
+{
+    if (samples == 0) {
+        return;
+    }
+    uint32_t sum = 0;
+    size_t counted = 0;
+    for (size_t i = 0; i < samples; i += LEVEL_STRIDE) {
+        int32_t v = mono[i];
+        sum += v < 0 ? -v : v;
+        counted++;
+    }
+    uint32_t mean = sum / counted;
+    uint32_t scaled = mean * 255 / LEVEL_FULL_SCALE;
+    rgb_level(scaled > 255 ? 255 : (uint8_t)scaled);
+}
 
 // drain_task moves queued samples into the codec. It is the only caller of esp_audio_play, which
 // is what keeps that call off the fetch loop.
@@ -106,6 +138,15 @@ static void drain_task(void *arg)
             playing = false;
             continue;
         }
+        // How loud this chunk is, straight to the ring. Measured HERE because this is the last place
+        // the samples exist as numbers, and because it is what is about to be heard rather than what
+        // was queued a second ago: the ring moves with the words instead of beside them.
+        //
+        // It leads the speaker by the codec's own DMA buffer, tens of milliseconds. Under the ~200 ms
+        // that reads as immediate, and in the right direction — light arriving fractionally before
+        // its sound reads as the source of it. The other way round reads as lag.
+        report_level(mono, got / sizeof(int16_t));
+
         esp_err_t err = esp_audio_mono16(mono, got / sizeof(int16_t), portMAX_DELAY);
         if (err != ESP_OK) {
             last_write_err = err;
