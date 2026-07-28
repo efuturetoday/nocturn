@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -9,32 +10,31 @@
 extern "C" {
 #endif
 
-// uplink is the microphone side of the link: a queue in front of the socket, drained by its own task.
+// uplink is the microphone side of the link: one task reading micbuf and writing the socket.
 //
-// It exists for the same reason audio_out does, mirrored. The samples arrive on the audio front
-// end's fetch loop, which must never wait — a missed fetch starves the front end, and a starved
-// front end loses the alignment its echo canceller needs between what is playing and what the
-// microphone hears. Sending on a socket can block for as long as the network feels like, so the two
-// cannot touch.
+// It takes audio from nobody, so it can block nobody. Samples are produced on the front end's fetch
+// loop, which must never wait, and a socket write can block for as long as the network likes; the
+// two never touch.
 
-// uplink_start begins draining. Call once, after the link exists.
+// uplink_start begins the sender. Call once, after micbuf and the link exist.
 esp_err_t uplink_start(void);
 
-// uplink_write queues one chunk of mono 16 kHz PCM16 and returns immediately.
-//
-// A full queue drops the chunk rather than waiting: a dropped frame costs a click at the far end,
-// while a blocked fetch loop costs the echo cancellation this whole device depends on. Returns
-// ESP_ERR_NO_MEM on a drop, which the caller should count.
-esp_err_t uplink_write(const int16_t *pcm, size_t samples);
+// uplink_stats reports and resets what reached the socket since the last call, plus how often the
+// sender fell far enough behind that micbuf lapped it.
+void uplink_stats(uint32_t *bytes, uint32_t *fails, uint32_t *late);
 
-// uplink_stats reports and resets what actually reached the socket since the last call. A far side
-// that says nothing has two very different causes, and only this tells them apart.
-void uplink_stats(uint32_t *bytes, uint32_t *fails);
-
-// uplink_open and uplink_close gate the queue: audio only leaves while a conversation is open, so a
-// board that is merely switched on is not streaming a room to a daemon.
+// uplink_open and uplink_close decide whether audio leaves at all, so a board that is merely
+// switched on is not streaming a room to a daemon. Opening also picks where in micbuf to start.
 void uplink_open(void);
 void uplink_close(void);
+
+// uplink_gate replaces the microphone with silence while muted — half duplex.
+//
+// The model must never hear this board's own voice, and the echo canceller does not remove enough
+// of it to guarantee that (its residue measures louder than a person). Silence rather than a pause,
+// so the far side's voice detection sees a turn end instead of a stalled stream. The cost is
+// barge-in: a person talking over the reply is inaudible upstream while the gate is closed.
+void uplink_gate(bool muted);
 
 #ifdef __cplusplus
 }

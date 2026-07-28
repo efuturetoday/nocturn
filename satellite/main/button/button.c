@@ -32,13 +32,13 @@ static uint8_t read_level(button_driver_t *driver)
 static void on_down(void *handle, void *user)
 {
     button_id_t id = (button_id_t)(intptr_t)user;
-    esp_event_post(SAT_EVENT, SAT_EV_BUTTON_DOWN, &id, sizeof(id), 0);
+    state_post(SAT_EV_BUTTON_DOWN, &id, sizeof(id));
 }
 
 static void on_up(void *handle, void *user)
 {
     button_id_t id = (button_id_t)(intptr_t)user;
-    esp_event_post(SAT_EVENT, SAT_EV_BUTTON_UP, &id, sizeof(id), 0);
+    state_post(SAT_EV_BUTTON_UP, &id, sizeof(id));
 }
 
 static esp_err_t add(button_id_t id)

@@ -1,5 +1,7 @@
 #include "mic_speech.h"
 
+#include <stdatomic.h>
+
 #include "state.h"
 
 #include "esp_afe_config.h"
@@ -14,25 +16,34 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
+#include "micbuf.h"
 
 static const char *TAG = "sat/mic";
 
-// How long silence must hold before an utterance counts as finished. Short enough that the person
-// is not left waiting after they stop, long enough to survive the pause in the middle of a
-// sentence. The front end's own VAD supplies the per-frame decision; this only debounces it.
-#define SILENCE_TO_END_MS 900
-
-static esp_afe_sr_iface_t *afe_handle;
+static const esp_afe_sr_iface_t *afe_handle;
 static esp_afe_sr_data_t *afe_data;
 static volatile bool running;
-static volatile bool session;
 // The detector's last answer. Held so the edge can be found, and readable from outside.
 static volatile bool voice;
-// Forces streaming on regardless of the wake word — see mic_speech_hold.
-static volatile bool held;
 
-static mic_pcm_sink_t pcm_sink;
-static void *cb_user;
+// See mic_stats_t. Atomic because reporting them is a read-and-clear from another task.
+static atomic_uint_least32_t n_fetches;
+static atomic_uint_least32_t n_speech;
+static atomic_uint_least32_t n_wakes;
+static atomic_uint_least32_t n_samples;
+
+// Quieter than the front end can report, so the first frame always wins.
+#define VOLUME_FLOOR (-200.0f)
+static volatile float loudest = VOLUME_FLOOR;
+
+static volatile int armed = -1;
+
+// Loudest raw reference slot and raw microphone slot since the last report, read before the front
+// end sees them. The echo canceller subtracts the reference from the microphone, so a reference that
+// stays near zero while the speaker plays means it has nothing to subtract and cannot work — which
+// no reading taken after the pipeline can distinguish from a canceller that simply failed.
+static volatile int32_t ref_peak;
+static volatile int32_t raw_peak;
 
 // emit reports one edge, and does it by POSTING rather than calling.
 //
@@ -41,7 +52,7 @@ static void *cb_user;
 // posting bounds it to a queue write and hands the work to the event loop's own task.
 static void emit(sat_event_id_t ev)
 {
-    esp_event_post(SAT_EVENT, ev, NULL, 0, 0);
+    state_post(ev, NULL, 0);
 }
 
 static void feed_task(void *arg)
@@ -60,6 +71,28 @@ static void feed_task(void *arg)
         // itself. That reference is what makes echo cancellation possible without any clock work of
         // ours, so it must reach the front end untouched.
         esp_get_feed_data(true, buf, chunk * sizeof(int16_t) * channels);
+
+        // Slot layout is esp_get_input_format(): "RMNM" — reference, microphone, unused, microphone.
+        int32_t r = 0, m = 0;
+        for (int i = 0; i < chunk; i++) {
+            int32_t a = buf[i * channels + 0];
+            int32_t b = buf[i * channels + 1];
+            a = a < 0 ? -a : a;
+            b = b < 0 ? -b : b;
+            if (a > r) {
+                r = a;
+            }
+            if (b > m) {
+                m = b;
+            }
+        }
+        if (r > ref_peak) {
+            ref_peak = r;
+        }
+        if (m > raw_peak) {
+            raw_peak = m;
+        }
+
         afe_handle->feed(afe_data, buf);
         esp_task_wdt_reset();
     }
@@ -69,7 +102,6 @@ static void feed_task(void *arg)
 
 static void detect_task(void *arg)
 {
-    int silence_ms = 0;
     int frame_ms = 0;
 
     esp_task_wdt_add(NULL);
@@ -82,66 +114,48 @@ static void detect_task(void *arg)
         if (!frame_ms) {
             // Derived rather than assumed: the chunk size is the front end's to choose.
             frame_ms = (res->data_size / (int)sizeof(int16_t)) * 1000 / 16000;
-            ESP_LOGI(TAG, "listening — %d ms frames", frame_ms);
+            ESP_LOGI(TAG, "listening — %d ms frames (%d samples)", frame_ms,
+                     res->data_size / (int)sizeof(int16_t));
         }
 
-        // Voice activity is read on EVERY frame, session or not.
+        // Counted before anything is decided, so they describe the loop and not its conclusions.
+        atomic_fetch_add(&n_fetches, 1);
+        atomic_fetch_add(&n_samples, res->data_size / sizeof(int16_t));
+        if (res->data_volume > loudest) {
+            loudest = res->data_volume;
+        }
+
+        // Unconditional: whether anyone wants it is not this loop's question.
+        micbuf_write(res->data, res->data_size / sizeof(int16_t));
+
+        // Voice activity is read on EVERY frame, whatever else is happening.
         //
-        // Reading it only inside a session — which is what this did — means the one moment it matters
-        // most is the one moment nobody is looking: the assistant is talking, and the question is
-        // whether a person just started talking over it. That answer has to come from here, because
-        // the alternative is the daemon noticing and saying so, which is a round trip the far side
-        // cannot make fast enough to feel like an interruption.
+        // The one moment it matters most is while the assistant is talking, and the question there is
+        // whether a person started talking over it. That answer has to come from here: the daemon
+        // noticing and saying so is a round trip the far side cannot make fast enough to feel like an
+        // interruption.
         //
         // The edge, not the level: the detector already debounces internally (vad_min_speech_ms), so
         // this fires once when a voice appears rather than on every frame it stays.
         bool speaking = res->vad_state == VAD_SPEECH;
+        if (speaking) {
+            atomic_fetch_add(&n_speech, 1);
+        }
         if (speaking && !voice) {
             emit(SAT_EV_VOICE);
         }
         voice = speaking;
 
         // A multi-channel front end reports the wake word twice: once on detection, then again once
-        // it has decided which microphone heard it. Waiting for the verified one avoids opening a
-        // session on the array's guess.
+        // it has decided which microphone heard it. Waiting for the verified one avoids acting on
+        // the array's guess.
         bool woke = res->raw_data_channels == 1 ? res->wakeup_state == WAKENET_DETECTED
                                                 : res->wakeup_state == WAKENET_CHANNEL_VERIFIED;
-        if (woke && !session) {
-            session = true;
-            silence_ms = 0;
+        if (woke) {
+            // Only the news. The front end's vad_cache is not needed — micbuf already holds the
+            // audio from before the trigger, for anyone who wants it.
+            atomic_fetch_add(&n_wakes, 1);
             emit(SAT_EV_WAKE);
-            // The front end holds back the audio from just before the trigger. Without it the
-            // first word of the request is missing — the person says "nocturn, what time is it"
-            // and the far side receives "at time is it".
-            //
-            // The cache exists because the detector is late by construction: it cannot fire on the
-            // first frame (1–3 frames of inherent delay) and it waits for vad_min_speech_ms of held
-            // speech before it will say so at all. vad_delay_ms decides how much it keeps; the
-            // default 128 ms covers that, and the symptom of it being too small is a clipped first
-            // syllable rather than anything subtler.
-            //
-            // Read HERE and nowhere else, on purpose. Once a session is open every fetched frame is
-            // forwarded unconditionally, so the cache from any later trigger inside the session is
-            // audio that has already been sent — draining it again would duplicate it. The cache is
-            // only ever the right thing to send at the moment streaming BEGINS.
-            if (res->vad_cache_size > 0 && pcm_sink) {
-                pcm_sink(res->vad_cache, res->vad_cache_size / sizeof(int16_t), cb_user);
-            }
-        }
-
-        if (session || held) {
-            if (pcm_sink) {
-                pcm_sink(res->data, res->data_size / sizeof(int16_t), cb_user);
-            }
-            silence_ms = res->vad_state == VAD_SPEECH ? 0 : silence_ms + frame_ms;
-            // A held stream has no silence timeout: it ends when the holder says so.
-            if (session && !held && silence_ms >= SILENCE_TO_END_MS) {
-                session = false;
-                emit(SAT_EV_UTTERANCE_END);
-                // Wakenet is suppressed while a session runs, so the wake word inside a sentence
-                // does not restart it. Re-arm now that the session is over.
-                afe_handle->enable_wakenet(afe_data);
-            }
         }
         esp_task_wdt_reset();
     }
@@ -153,11 +167,8 @@ static void detect_task(void *arg)
     vTaskDelete(NULL);
 }
 
-esp_err_t mic_speech_start(mic_pcm_sink_t sink, void *user)
+esp_err_t mic_speech_start(void)
 {
-    pcm_sink = sink;
-    cb_user = user;
-
     // The front end dumps its resolved configuration at DEBUG, including fields the pipeline printout
     // does not name — vad_mute_playback among them. Raised here so a setting that was accepted can be
     // told apart from one that was silently overridden, which has already happened twice: the WebRTC
@@ -259,6 +270,15 @@ esp_err_t mic_speech_start(mic_pcm_sink_t sink, void *user)
     // running was a guess. This is the answer, and it costs one line.
     afe_handle->print_pipeline(afe_data);
 
+    // Back down: the dump above is the only reason these were raised, and leaving them at DEBUG
+    // buries the log under the front end's per-frame chatter.
+    esp_log_level_set("AFE", ESP_LOG_INFO);
+    esp_log_level_set("AFE_CONFIG", ESP_LOG_INFO);
+
+    // Asked rather than assumed: afe_config_init arms the wake word when a model is present, but
+    // there is no getter to confirm it. Enabling what is already enabled costs nothing.
+    mic_arm(true);
+
     running = true;
     // Opposite cores: feeding is I2S-bound and fetching is compute-bound, and letting them share a
     // core reintroduces exactly the stall the queueing elsewhere exists to avoid.
@@ -269,23 +289,36 @@ esp_err_t mic_speech_start(mic_pcm_sink_t sink, void *user)
 
 bool mic_speech_voice(void) { return voice; }
 
-// Releasing a hold ends the stream, and that is more than clearing a flag.
-//
-// The wake word is SUPPRESSED for as long as a session runs, so that saying it mid-sentence does not
-// restart one. It is re-armed exactly where a session ends on silence — a path a held stream never
-// takes, since holding is what stops it taking it. So releasing left the board with session still
-// set and wakenet still off: deaf, permanently, after the first conversation. Measured as peak=0
-// with the detector stuck reporting a voice.
-void mic_speech_hold(bool on)
+void mic_speech_stats(mic_stats_t *out)
 {
-    held = on;
-    if (on) {
+    out->fetches = atomic_exchange(&n_fetches, 0);
+    out->speech = atomic_exchange(&n_speech, 0);
+    out->wakes = atomic_exchange(&n_wakes, 0);
+    out->samples = atomic_exchange(&n_samples, 0);
+    out->volume_db = loudest;
+    out->ref_peak = ref_peak;
+    out->raw_peak = raw_peak;
+    out->armed = armed;
+    ref_peak = 0;
+    raw_peak = 0;
+    // Levels, not counts: armed describes the front end right now, and the loudness floor has to be
+    // re-earned so the next report describes the next interval rather than the loudest moment since
+    // the board came up.
+    loudest = VOLUME_FLOOR;
+}
+
+// The result is kept, not the request: enable_wakenet answers with the state the front end is in
+// afterwards, there is no getter for it, and "told to listen" is not "listening".
+void mic_arm(bool on)
+{
+    if (!afe_handle || !afe_data) {
         return;
     }
-    session = false;
-    voice = false;
-    if (afe_handle && afe_data) {
-        afe_handle->enable_wakenet(afe_data);
-        ESP_LOGI(TAG, "listening for the wake word again");
+    int got = on ? afe_handle->enable_wakenet(afe_data) : afe_handle->disable_wakenet(afe_data);
+    armed = got;
+    if (got != (on ? 1 : 0)) {
+        ESP_LOGE(TAG, "wake word refused: asked for %s, front end reports %d", on ? "on" : "off", got);
+        return;
     }
+    ESP_LOGI(TAG, "wake word %s", on ? "armed" : "off");
 }

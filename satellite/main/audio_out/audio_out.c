@@ -1,14 +1,18 @@
 #include "audio_out.h"
 
+#include <stdatomic.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
 #include "freertos/task.h"
 
 #include "bsp_board.h"
 #include "rgb_led_driver.h"
+#include "state.h"
 #include "tca9555_driver.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "sat/out";
 
@@ -57,23 +61,32 @@ static const char *TAG = "sat/out";
 // is far more than an envelope needs, and it keeps this off the core's budget entirely.
 #define LEVEL_STRIDE 4
 
+// How long the queue must stay empty before the reply counts as finished: 300 ms. The loop runs dry
+// constantly between network bursts, so a single empty pass says nothing.
+#define PLAYBACK_END_TICKS 15
+
 static RingbufHandle_t ring;
 
-// Written by the drain task, read by whoever reports. A silent speaker has several possible causes
-// — nothing queued, nothing drained, or the codec refusing the write — and they are only
-// distinguishable by counting each stage separately.
-static volatile uint32_t played_chunks;
-static volatile uint32_t played_samples;
-static volatile int last_write_err;
+// Atomic, not volatile: every one of these is written on one task and read-and-cleared on another,
+// which is a read-modify-write that volatile orders but does not make indivisible.
+//
+// A silent speaker has several possible causes — nothing queued, nothing drained, the codec refusing
+// the write — and only separate counters tell them apart.
+static atomic_uint_least32_t played_chunks;
+static atomic_uint_least32_t played_samples;
+static atomic_int last_write_err;
 
 // Bytes that have left the queue and not yet been credited back to the sender. This is the entire
 // flow control: the sender may have RING_BYTES outstanding, and every byte played here earns it one
-// more. Overflow is structurally impossible rather than merely unlikely.
-static volatile size_t freed;
+// more. Three tasks add to it, one takes it away, and a lost update permanently shrinks the window.
+static atomic_size_t freed;
 
-// Set by a flush. After a barge-in the queue is empty by definition, so playback waits for a cushion
-// again rather than starting on the first chunk of whatever comes next.
-static volatile bool refill;
+// Set by a flush: after a barge-in the queue is empty, so playback waits for a cushion again rather
+// than starting on the first chunk of whatever comes next.
+static atomic_bool refill;
+
+// When the amplifier was last raised — see audio_out_amp for why anyone needs to know.
+static _Atomic int64_t amp_up_at;
 
 // report_level hands the ring the loudness of one chunk. Integer throughout: this runs per 20 ms
 // chunk on the core the network is on, and an envelope does not need a divide it cannot afford.
@@ -107,37 +120,59 @@ static void drain_task(void *arg)
     // is on. Silence is not filler, it is what keeps the loop a clock while nothing is queued.
     static const int16_t quiet[DRAIN_BYTES / sizeof(int16_t)] = {0};
     bool playing = false;
+    // How many passes have been spent waiting for a cushion that has not arrived. Each pass writes
+    // one block of silence, so this is a count of 20 ms units and not of idle time.
     int held = 0;
+    // Consecutive empty passes while a reply is running. See PLAYBACK_END_TICKS.
+    int dry = 0;
 
     for (;;) {
         size_t waiting = RING_BYTES - xRingbufferGetCurFreeSize(ring);
-        if (refill) {
-            refill = false;
-            playing = false;
+        if (atomic_exchange(&refill, false)) {
+            if (playing) {
+                // A flush stops the speaker as surely as running out does.
+                playing = false;
+                state_post(SAT_EV_PLAYBACK_END, NULL, 0);
+            }
+            dry = 0;
         }
         if (!playing) {
-            if (waiting < PREBUFFER_BYTES && held < PREBUFFER_WAIT_TICKS) {
-                held++;
-                vTaskDelay(pdMS_TO_TICKS(10));
-                continue;
-            }
-            if (waiting == 0) {
-                held = 0;
-                vTaskDelay(pdMS_TO_TICKS(10));
+            bool cushioned = waiting >= PREBUFFER_BYTES || (waiting > 0 && held >= PREBUFFER_WAIT_TICKS);
+            if (!cushioned) {
+                // WAIT BY WRITING SILENCE, never by sleeping.
+                //
+                // The codec repeats its last DMA buffer whenever nothing new arrives, so a loop that
+                // pauses to wait is a loop that leaves a syllable stuttering out of the speaker —
+                // "the speaker re-re-repeats it-it-itself". Writing zeros both fills that gap and
+                // keeps this loop clocked by the crystal, which is the only reason it stays in time.
+                esp_audio_mono16(quiet, sizeof(quiet) / sizeof(quiet[0]), portMAX_DELAY);
+                if (waiting > 0) {
+                    held++;
+                }
                 continue;
             }
             held = 0;
+            dry = 0;
             playing = true;
+            // The speaker is running, said by the only task that can know it — audio reaches the
+            // queue from the network and from the bench tool alike, and neither sees this edge.
+            state_post(SAT_EV_PLAYBACK_START, NULL, 0);
         }
 
         size_t got = 0;
         int16_t *mono = xRingbufferReceiveUpTo(ring, &got, 0, DRAIN_BYTES);
         if (!mono) {
-            // Nothing queued. Keep the codec fed, which is what keeps this loop clocked.
+            // Ran dry mid-reply. Silence keeps the codec fed and the loop clocked; going back to
+            // waiting for a cushion is what stops a burst-fed queue from being played as fragments.
             esp_audio_mono16(quiet, sizeof(quiet) / sizeof(quiet[0]), portMAX_DELAY);
-            playing = false;
+            if (++dry >= PLAYBACK_END_TICKS) {
+                dry = 0;
+                playing = false;
+                state_post(SAT_EV_PLAYBACK_END, NULL, 0);
+            }
             continue;
         }
+        dry = 0;
         // How loud this chunk is, straight to the ring. Measured HERE because this is the last place
         // the samples exist as numbers, and because it is what is about to be heard rather than what
         // was queued a second ago: the ring moves with the words instead of beside them.
@@ -149,14 +184,14 @@ static void drain_task(void *arg)
 
         esp_err_t err = esp_audio_mono16(mono, got / sizeof(int16_t), portMAX_DELAY);
         if (err != ESP_OK) {
-            last_write_err = err;
+            atomic_store(&last_write_err, err);
         }
-        played_chunks++;
-        played_samples += got / sizeof(int16_t);
+        atomic_fetch_add(&played_chunks, 1);
+        atomic_fetch_add(&played_samples, got / sizeof(int16_t));
         vRingbufferReturnItem(ring, mono);
         // Earned only once the samples have actually gone. Crediting on receipt would hand the
         // sender room the queue does not have yet.
-        freed += got;
+        atomic_fetch_add(&freed, got);
     }
 }
 
@@ -208,12 +243,27 @@ esp_err_t audio_out_init(void)
 void audio_out_amp(bool on)
 {
     Set_EXIO(IO_EXPANDER_PIN_NUM_8, on);
+    // Noted here, not by the caller: there is more than one caller and the click does not care which
+    // asked. Cleared on the way down — an amplifier that is off cannot click.
+    atomic_store(&amp_up_at, on ? esp_timer_get_time() : 0);
     vTaskDelay(pdMS_TO_TICKS(10));
+}
+
+int64_t audio_out_amp_age_us(void)
+{
+    int64_t at = atomic_load(&amp_up_at);
+    if (at == 0) {
+        return INT64_MAX; // down, and therefore never about to click
+    }
+    return esp_timer_get_time() - at;
 }
 
 void audio_out_silence(int ms)
 {
     static const int16_t zeros[512] = {0};
+    if (!ring) {
+        return; // otherwise the retry below is an infinite loop: a write with no queue never succeeds
+    }
     int samples = 16 * ms; // 16 kHz
     while (samples > 0) {
         int take = samples < (int)(sizeof(zeros) / sizeof(zeros[0])) ? samples : (int)(sizeof(zeros) / sizeof(zeros[0]));
@@ -254,28 +304,20 @@ void audio_out_flush(void)
         // the sender goes on believing this queue holds bytes that were thrown away, and after a
         // couple of barge-ins it has no room left to send into and the conversation goes quiet.
         // Measured — the second turn got no answer at all.
-        freed += got;
+        atomic_fetch_add(&freed, got);
     }
-    refill = true;
+    atomic_store(&refill, true);
 }
 
 size_t audio_out_capacity(void) { return RING_BYTES; }
 
-size_t audio_out_take_freed(void)
-{
-    size_t n = freed;
-    freed -= n;
-    return n;
-}
+size_t audio_out_take_freed(void) { return atomic_exchange(&freed, 0); }
 
 size_t audio_out_depth(void) { return ring ? RING_BYTES - xRingbufferGetCurFreeSize(ring) : 0; }
 
 void audio_out_stats(uint32_t *chunks, uint32_t *samples, int *err)
 {
-    *chunks = played_chunks;
-    *samples = played_samples;
-    *err = last_write_err;
-    played_chunks = 0;
-    played_samples = 0;
-    last_write_err = 0;
+    *chunks = atomic_exchange(&played_chunks, 0);
+    *samples = atomic_exchange(&played_samples, 0);
+    *err = atomic_exchange(&last_write_err, 0);
 }

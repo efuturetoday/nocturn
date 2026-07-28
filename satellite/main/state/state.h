@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 #include "esp_event.h"
 
@@ -33,25 +35,28 @@ typedef enum {
     SAT_APPROVAL,   // a tool is waiting for a human decision on another device
 } sat_state_t;
 
-// Everything that changes the state arrives as an event on the default loop.
+// Everything that changes the state arrives as an event on THIS MODULE'S OWN loop — see state_post.
 //
 // Nothing is polled, and that is not a style preference: a socket that drops and reconnects between
 // two samples is invisible to a poll, and leaves the ring showing a link that briefly did not exist.
 // For a device whose whole job is to be honest about its own state, "we sampled and it looked fine"
 // is the wrong default.
 //
-// Posting also keeps this module off both hot tasks. The front end's callbacks run on its fetch
-// loop, where blocking starves echo cancellation; the socket's run on the WebSocket task, where
+// Posting also keeps this module off both hot tasks. The front end's detect loop must keep fetching
+// or echo cancellation loses its alignment; the socket's callbacks run on the WebSocket task, where
 // blocking drops the connection. A post is bounded and does not block, so both callers stay as
 // trivial as they are required to be.
 //
-// WiFi and IP are not in this list: those are system events this module subscribes to directly.
+// WiFi and IP arrive as SAT_EV_NET_UP and SAT_EV_NET_DOWN. They are system events, which this module
+// subscribes to on the SYSTEM loop and does nothing with but forward here — so that one machine
+// reads one queue, and a reconnect scan cannot hold up a transition.
 ESP_EVENT_DECLARE_BASE(SAT_EVENT);
 
 typedef enum {
+    SAT_EV_NET_UP,         // the board has an address
+    SAT_EV_NET_DOWN,       // it does not
     SAT_EV_WAKE,           // the wake word fired
     SAT_EV_VOICE,          // voice activity began — raw, means nothing on its own. See state.c
-    SAT_EV_UTTERANCE_END,  // silence held long enough to call the utterance over
     SAT_EV_PLAYBACK_START, // the speaker is about to run. Post BEFORE raising the amplifier
     SAT_EV_PLAYBACK_END,   // it has stopped
     SAT_EV_MIC_DEAD,       // the front end's detect loop exited; the board is deaf from here on
@@ -64,6 +69,7 @@ typedef enum {
     SAT_EV_SPEECH,         // a voice was heard with no reply playing; posted BY this module
     SAT_EV_BUTTON_DOWN,    // a button went down; data is a button_id_t
     SAT_EV_BUTTON_UP,      // and back up
+    SAT_EV_TICK,           // 500 ms clock, so the machine can notice what did NOT arrive
 } sat_event_id_t;
 
 // BARGE_IN_LOCAL decides who stops the speaker when a person talks over it.
@@ -79,18 +85,43 @@ typedef enum {
 // for the same behaviour.
 //
 // Either way the board LOGS both moments, so the comparison is a number rather than an impression.
-#define BARGE_IN_LOCAL 1
-
-// state_start registers the handlers and paints the initial state.
 //
-// It creates nothing. The caller must already have created the default event loop and started the
-// LED renderer — this module is the first user of both, and being first is not owning. Call once,
-// BEFORE anything begins posting.
+// OFF until the echo canceller is measured. With it on the board interrupts itself: the speaker
+// starts, the microphone hears the residual echo, the detector calls it a voice, and the reply is
+// flushed before a word of it is audible.
+#define BARGE_IN_LOCAL 0
+
+// state_post hands one event to the state machine's own task. Never blocks; a full queue is logged
+// and dropped, because every caller is on a deadline of its own.
+//
+// Use this rather than esp_event_post: the machine runs on its OWN loop, not the system's, so that a
+// transition calling into a driver cannot hold up WiFi and a reconnect scan cannot hold up a
+// transition.
+void state_post(sat_event_id_t ev, const void *data, size_t len);
+
+// state_subscribe adds a second handler on the state machine's loop, for a consumer that must act on
+// the same events — sending the protocol, driving the bench recording.
+//
+// It runs on the machine's task, serialised with the machine's own handler and with every other
+// subscriber, which is the property worth having: no consumer of these events can see a half-applied
+// transition, and none needs a lock.
+esp_err_t state_subscribe(esp_event_handler_t handler);
+
+// state_start creates this module's event loop and its tick timer, registers the handlers, and
+// paints the initial state.
+//
+// What it does NOT create is the default event loop or the LED renderer: the caller must have both
+// already, because this module is merely the first user of each and being first is not owning. Call
+// once, BEFORE anything begins posting.
 esp_err_t state_start(void);
 
 // state_get is the current state, for the heartbeat line. Nothing should branch on it: whoever needs
-// to act on a change should be reacting to the event that caused it.
+// to act on a CHANGE should be reacting to the event that caused it.
 sat_state_t state_get(void);
+
+// state_conversation_active answers one question at one moment: may I have the speaker. The bench
+// tool is the only caller, asking once per button press — no event expresses that question.
+bool state_conversation_active(void);
 
 // state_report_remote_interrupt notes that the daemon's interrupt arrived, and says how long after
 // this board heard the voice itself. That gap IS the cost of deciding upstream, and it is the number

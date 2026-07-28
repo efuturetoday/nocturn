@@ -1,29 +1,25 @@
-// Step two of bringing the satellite up: prove the acoustics before any networking exists.
+// The process spine: bring the parts up in the one order that works, then speak the protocol.
 //
-// After the wake word, the cleaned microphone audio goes straight back out of the speaker. That
-// makes the one question this hardware has to answer audible: with the board playing and listening
-// at the same time, does the echo canceller hold, or does it hear itself and run away? Every later
-// stage — WebSocket, daemon, live model — assumes it holds, and finding that out here costs an
-// afternoon instead of a fortnight.
-//
-// The loopback is also the seam. Replacing this one sink with "send upstream" is what turns this
-// into a real satellite; nothing else about the audio path changes.
+// It owns no audio and decides nothing about a conversation — the ring belongs to state/, the
+// microphone's past to micbuf/, the speaker to audio_out/, the bench loopback to bench/.
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "esp_log.h"
-#include "esp_system.h"
-#include <string.h>
-#include "esp_heap_caps.h"
+#include <stdatomic.h>
 #include <string.h>
 
+#include "esp_log.h"
+#include "esp_system.h"
+
 #include "audio_out.h"
+#include "bench.h"
 #include "bsp_board.h"
 #include "button.h"
 #include "discover.h"
 #include "link.h"
 #include "mic_speech.h"
+#include "micbuf.h"
 #include "provision.h"
 #include "rgb_led_driver.h"
 #include "state.h"
@@ -66,150 +62,30 @@ static void set_volume(int delta)
     ESP_LOGI(TAG, "volume %d%%", volume);
 }
 
-// Record first, play afterwards — never both at once.
-//
-// A live loopback cannot answer whether the microphone works, because the echo canceller exists
-// precisely to remove the speaker from the microphone: feeding the speaker with what the microphone
-// just heard gives the canceller its own output to subtract, and the better it works the quieter the
-// test gets. Separating the two in time takes it out of the picture entirely — nothing is playing
-// while we capture, and nothing is captured while we play.
-#define CAPTURE_SECONDS 5
-#define CAPTURE_SAMPLES (16000 * CAPTURE_SECONDS)
+// Speech the playback queue could not take, and speech received since the last report. A queue that
+// runs dry has two causes — nothing arriving, or arriving too late — and only comparing the two
+// tells them apart. Written on the WebSocket task, read and cleared on the report task.
+static atomic_uint_least32_t dropped_down;
+static atomic_uint_least32_t down_bytes;
 
-static int16_t *capture;
-static size_t captured;
-static volatile bool playing_back;
-
-// Whether the daemon has acknowledged the session this board asked for. See on_control.
-static volatile bool confirmed;
-
-// Frames the uplink could not take, and speech the playback queue could not.
-static uint32_t dropped_up;
-static uint32_t dropped_down;
-// Speech received from the daemon since the last report. The counterpart to the uplink's: a queue
-// that runs dry has two causes — nothing arriving, or arriving too late — and only comparing what
-// came in against what was played tells them apart.
-static uint32_t down_bytes;
-
-// Peak amplitude of what the front end handed us since the last report. Silence has to be measured
-// at the source: everything downstream can be provably working and still play nothing if the
-// samples arriving here are zeros.
-static volatile int32_t peak;
-
-// on_pcm runs on the fetch loop, so it only queues. Drops are counted rather than logged: printing
-// from here would be the very stall the queue exists to prevent.
-static void on_pcm(const int16_t *pcm, size_t samples, void *user)
-{
-    int32_t p = peak;
-    for (size_t i = 0; i < samples; i++) {
-        int32_t v = pcm[i] < 0 ? -pcm[i] : pcm[i];
-        if (v > p) {
-            p = v;
-        }
-    }
-    peak = p;
-
-    // Upstream FIRST, and before any early return below. This is the real path; the capture that
-    // follows is a bench tool sharing the same samples, and a tool must not be able to silence the
-    // product by returning early.
-    if (uplink_write(pcm, samples) != ESP_OK) {
-        dropped_up++;
-    }
-
-    // While a hand-held recording runs, capture regardless of the wake word: the point is to hear
-    // what the microphone path produces, and that must not depend on the part being debugged.
-    if (playing_back || captured >= CAPTURE_SAMPLES) {
-        return;
-    }
-    size_t room = CAPTURE_SAMPLES - captured;
-    size_t take = samples < room ? samples : room;
-    memcpy(&capture[captured], pcm, take * sizeof(int16_t));
-    captured += take;
-}
-
-// Frames the uplink could not take, and speech the playback queue could not.
-// How many times voice activity was detected while the speaker was running.
-//
-// This is the barge-in question asked for free. During replay the only voice in the room is the
-// board's own, coming out of its own speaker — so every count here is the echo canceller failing to
-// remove it, and a barge-in built on this detector would interrupt the assistant on its own voice.
-// Which is exactly what the full-duplex build did: 226 ms into every reply.
-//
-// Zero counts across a replay the person stayed quiet through is the permission to build barge-in.
-// Anything else says the acoustics have to be fixed first, and no amount of protocol will help.
-static uint32_t voice_while_playing;
-
-// Hold to record, release to hear it back.
-//
-// The wake word is a poor bench tool: it needs a quiet room to trigger, it decides for itself when
-// the utterance ended, and it is one of the things under test. Holding a button decides none of
-// that, which is what listening to a gain change or an echo-cancellation setting actually needs.
-//
-// Held rather than toggled, because the button IS the state. A toggle needs the person to know which
-// half of it they are in, and a device with seven LEDs and no screen has no good way to tell them —
-// so they press, wonder, and press again to find out, which stops the recording they just started.
-static volatile bool hand_recording;
-
-// on_sat drives the recording, and nothing else. The ring belongs to the state module now — this
-// used to paint colours here, which is how an unprovisioned board and a listening one ended up
-// looking identical.
+// on_sat is the protocol side of what the board observes: telling the daemon, and nothing else.
 static void on_sat(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     switch (id) {
     case SAT_EV_BUTTON_DOWN:
         if (*(button_id_t *)data == BUTTON_B) {
             set_volume(-VOLUME_STEP);
-            return;
-        }
-        if (*(button_id_t *)data == BUTTON_C) {
+        } else if (*(button_id_t *)data == BUTTON_C) {
             set_volume(+VOLUME_STEP);
-            return;
         }
-        if (*(button_id_t *)data != BUTTON_A) {
-            return;
-        }
-        hand_recording = true;
-        captured = 0;
-        mic_speech_hold(true);
-        ESP_LOGI(TAG, "button held — recording");
-        return;
-    case SAT_EV_BUTTON_UP:
-        if (*(button_id_t *)data != BUTTON_A || !hand_recording) {
-            return;
-        }
-        hand_recording = false;
-        mic_speech_hold(false);
-        playing_back = true;
-        ESP_LOGI(TAG, "button released — replaying");
-        return;
+        return; // button A is the bench tool's, and it is bench/'s to answer
     case SAT_EV_WAKE:
-        captured = 0;
-        confirmed = false;
-        uplink_open();
-        // Hold the microphone open for the whole conversation, not for one utterance.
-        //
-        // mic_speech closes its own sink after 900 ms of silence, which is the right answer for
-        // "when did this person stop talking" and the wrong one for "should we still be listening".
-        // Full duplex means the stream never stops: it is how the model works out for itself that a
-        // turn ended, and it is the only reason a barge-in can be heard at all — talking over a reply
-        // is by definition talking while no utterance of ours is open.
-        mic_speech_hold(true);
-        // Both sides count a session from zero. Whatever is left over from the last one would
-        // otherwise describe a conversation the daemon has already forgotten.
-        audio_out_flush();
-        audio_out_take_freed();
-        audio_out_amp(true);
         link_send_text("{\"cmd\":\"voice.wake\",\"ws\":\"main\"}");
         {
             char msg[64];
             snprintf(msg, sizeof(msg), "{\"cmd\":\"voice.credit\",\"ws\":\"main\",\"bytes\":%u}",
                      (unsigned)audio_out_capacity());
             link_send_text(msg);
-        }
-        return;
-    case SAT_EV_VOICE:
-        if (playing_back) {
-            voice_while_playing++;
         }
         return;
     case SAT_EV_SPEECH:
@@ -223,57 +99,8 @@ static void on_sat(void *arg, esp_event_base_t base, int32_t id, void *data)
         audio_out_flush();
         link_send_text("{\"cmd\":\"voice.barge\",\"ws\":\"main\"}");
         return;
-    case SAT_EV_UTTERANCE_END:
-        // Deliberately nothing.
-        //
-        // This is the end of an UTTERANCE, not of the conversation, and it used to close the uplink
-        // and send voice.end — which tore the model session down 900 ms after the person stopped
-        // talking, before it could answer. Every reply came back as "messages: 0".
-        //
-        // The model decides for itself when someone has finished speaking; that is what it needs the
-        // stream for. And closing the uplink here would make barge-in impossible, since talking over
-        // a reply is by definition talking while no utterance of ours is open.
-        //
-        // The conversation ends when the DAEMON says so — see on_control.
-        return;
     default:
         return;
-    }
-}
-
-// playback_task waits for a finished recording and plays it. It runs off the audio path so the
-// front end keeps feeding while the speaker works.
-static void playback_task(void *arg)
-{
-    for (;;) {
-        if (!playing_back) {
-            vTaskDelay(pdMS_TO_TICKS(50));
-            continue;
-        }
-        size_t n = captured;
-        ESP_LOGI(TAG, "replaying %u samples (%u ms)", (unsigned)n, (unsigned)(n * 1000 / 16000));
-        // BEFORE the amplifier, not after. Raising it is what clicks, and the window that discards
-        // that click only opens once this has been seen.
-        esp_event_post(SAT_EVENT, SAT_EV_PLAYBACK_START, NULL, 0, portMAX_DELAY);
-        audio_out_amp(true);
-
-        // In chunks, so the queue is never asked for more than it holds.
-        const size_t step = 1024;
-        for (size_t off = 0; off < n; off += step) {
-            size_t take = (n - off) < step ? (n - off) : step;
-            while (audio_out_write(&capture[off], take) != ESP_OK) {
-                vTaskDelay(pdMS_TO_TICKS(10)); // queue full: wait rather than drop, this is a test
-            }
-        }
-        // Trailing silence, then let it all drain. Without the zeros the codec sits on its last
-        // buffer and holds the final sample as a tone until something else is written.
-        audio_out_silence(120);
-        vTaskDelay(pdMS_TO_TICKS(n * 1000 / 16000 + 600));
-        audio_out_amp(false);
-        esp_event_post(SAT_EVENT, SAT_EV_PLAYBACK_END, NULL, 0, 0);
-        captured = 0;
-        playing_back = false;
-        ESP_LOGI(TAG, "replay done");
     }
 }
 
@@ -290,48 +117,54 @@ static void report(void *arg)
         uint32_t chunks = 0, samples = 0;
         int werr = 0;
         audio_out_stats(&chunks, &samples, &werr);
-        uint32_t up_bytes = 0, up_fails = 0;
-        uplink_stats(&up_bytes, &up_fails);
-        ESP_LOGI(TAG, "alive — %s voice=%d self_trig=%lu peak=%ld up=%lums down=%lums played=%lums depth=%ums up_fail=%lu drop=%lu/%lu werr=%d",
-                 state_name(state_get()), mic_speech_voice(), voice_while_playing, (long)peak,
-                 up_bytes / 32, down_bytes / 32, samples / 16,
-                 (unsigned)(audio_out_depth() * 1000 / 32000), up_fails, dropped_up, dropped_down, werr);
-        down_bytes = 0;
+        uint32_t up_bytes = 0, up_fails = 0, up_late = 0;
+        uplink_stats(&up_bytes, &up_fails, &up_late);
+        mic_stats_t mic;
+        mic_speech_stats(&mic);
+        // Read left to right: fetch=0 means the loop is not turning and nothing after it describes
+        // the present; then peak says whether the microphone delivers, speech whether the detector
+        // agrees, armed whether the wake word is listening at all.
+        ESP_LOGI(TAG, "mic — fetch=%lu/%lu speech=%lu wake=%lu ref=%ld raw=%ld clean=%ld armed=%d voice=%d",
+                 mic.fetches, mic.samples, mic.speech, mic.wakes, (long)mic.ref_peak,
+                 (long)mic.raw_peak, (long)micbuf_take_peak(), mic.armed, mic_speech_voice());
+        ESP_LOGI(TAG, "alive — %s up=%lums down=%lums played=%lums depth=%ums up_fail=%lu late=%lu drop=%lu werr=%d",
+                 state_name(state_get()),
+                 up_bytes / 32, atomic_exchange(&down_bytes, 0) / 32, samples / 16,
+                 (unsigned)(audio_out_depth() * 1000 / 32000), up_fails, up_late,
+                 atomic_exchange(&dropped_down, 0), werr);
         (void)chunks;
-        peak = 0;
-        dropped_up = 0;
-        dropped_down = 0;
     }
 }
 
-// on_control is what the daemon says outside the audio stream.
+// state_field lifts the value of "state" out of a daemon message. Extracted rather than matched, so
+// one place answers "which state" and the meaning stays in state/.
 //
-// Matched by substring rather than parsed: there is exactly one message the board must act on, and a
-// JSON parser on the receive path would be more code than the decision it serves. A second message
-// makes this a real parse.
+// Not a JSON parser: the board reads exactly one field, and a parser on the receive path would be
+// more code than the decision it serves.
+static bool state_field(const char *json, char *out, size_t len)
+{
+    static const char key[] = "\"state\":\"";
+    const char *at = strstr(json, key);
+    if (!at) {
+        return false;
+    }
+    at += sizeof(key) - 1;
+    const char *end = strchr(at, '"');
+    if (!end || (size_t)(end - at) >= len) {
+        return false;
+    }
+    memcpy(out, at, end - at);
+    out[end - at] = '\0';
+    return true;
+}
+
+// on_control is what the daemon says outside the audio stream. It forwards and does not interpret:
+// the daemon owns the shape of a conversation, state/ owns what that means here.
 static void on_control(const char *json, void *user)
 {
-    // The daemon owns the end of a conversation: it is the side that knows whether the model is done,
-    // whether a tool is still running, and what the session costs to hold open. The board only knows
-    // that a person stopped making noise, which is a different question.
-    //
-    // But voice.state carries no session identity, so an "idle" cannot be attributed to the session
-    // it came from. The previous conversation's ending arrives AFTER the wake word that started the
-    // next one, and closed it again a fraction of a second after it opened — measured.
-    //
-    // So a wake word waits for its acknowledgement: "listening" is the daemon confirming the session
-    // this board just asked for, and until it arrives every "idle" belongs to a conversation that is
-    // already over.
-    if (strstr(json, "\"state\":\"listening\"")) {
-        confirmed = true;
-        return;
-    }
-    if (confirmed && strstr(json, "\"state\":\"idle\"")) {
-        confirmed = false;
-        mic_speech_hold(false);
-        uplink_close();
-        audio_out_amp(false);
-        ESP_LOGI(TAG, "conversation over");
+    char name[16];
+    if (state_field(json, name, sizeof(name))) {
+        state_post(SAT_EV_REMOTE_STATE, name, strlen(name) + 1);
         return;
     }
     if (strstr(json, "voice.interrupt")) {
@@ -353,11 +186,11 @@ static void on_control(const char *json, void *user)
 // client like a dead socket. It answers by dropping the connection, which was measured.
 static void on_audio(const uint8_t *pcm, size_t bytes, void *user)
 {
-    down_bytes += bytes;
+    atomic_fetch_add(&down_bytes, bytes);
     if (audio_out_write((const int16_t *)pcm, bytes / sizeof(int16_t)) != ESP_OK) {
         // Should be impossible: the sender only has as much outstanding as this queue can hold. A
         // count here means the credit accounting is wrong, not that the network was fast.
-        dropped_down++;
+        atomic_fetch_add(&dropped_down, 1);
     }
 }
 
@@ -394,7 +227,7 @@ static void network(void *arg)
     provision_t prov;
     if (provision_load(&prov) != ESP_OK) {
         ESP_LOGE(TAG, "not provisioned — flash an NVS image with ssid, pass and bearer");
-        esp_event_post(SAT_EVENT, SAT_EV_UNPROVISIONED, NULL, 0, 0);
+        state_post(SAT_EV_UNPROVISIONED, NULL, 0);
         vTaskDelete(NULL);
         return;
     }
@@ -444,24 +277,23 @@ void app_main(void)
     // Before any source can post: an event delivered with nobody listening is a transition the ring
     // never learns about.
     ESP_ERROR_CHECK(state_start());
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(SAT_EVENT, ESP_EVENT_ANY_ID, on_sat, NULL, NULL));
+    ESP_ERROR_CHECK(state_subscribe(on_sat));
     ESP_LOGI(TAG, "step: volume");
     esp_audio_set_play_vol(volume);
     ESP_LOGI(TAG, "step: audio_out");
-    capture = heap_caps_malloc(CAPTURE_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    ESP_ERROR_CHECK(capture ? ESP_OK : ESP_ERR_NO_MEM);
-
     ESP_ERROR_CHECK(audio_out_init());
+    ESP_LOGI(TAG, "step: micbuf");
+    ESP_ERROR_CHECK(micbuf_init()); // before the front end, which writes to it on its first frame
     ESP_LOGI(TAG, "step: mic");
-    ESP_ERROR_CHECK(mic_speech_start(on_pcm, NULL));
+    ESP_ERROR_CHECK(mic_speech_start());
     ESP_ERROR_CHECK(button_start());
     ESP_ERROR_CHECK(uplink_start());
+    ESP_ERROR_CHECK(bench_start());
     xTaskCreate(credit_task, "credit", 3 * 1024, NULL, 3, NULL);
     ESP_LOGI(TAG, "step: done");
 
     xTaskCreate(report, "report", 3 * 1024, NULL, 2, NULL);
     xTaskCreate(network, "network", 5 * 1024, NULL, 3, NULL);
-    xTaskCreate(playback_task, "replay", 4 * 1024, NULL, 4, NULL);
 
-    ESP_LOGI(TAG, "ready — wake word, talk for up to %d s, then it replays", CAPTURE_SECONDS);
+    ESP_LOGI(TAG, "ready — say the wake word, or hold button A to hear the microphone back");
 }

@@ -286,6 +286,11 @@ static esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate, int chan
     }
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(i2s_num, I2S_ROLE_MASTER);
+    // An underrun must emit silence, not repeat the last descriptor. The default is false, and the
+    // symptom is unmistakable once heard: "the speaker re-re-repeats it-it-itself", because the DMA
+    // plays its last buffer again every time nobody wrote a new one in time.
+    // TX only, though one config creates both channels here.
+    chan_cfg.auto_clear = true;
     ret_val |= i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle);
     i2s_std_config_t std_cfg = I2S_CONFIG_DEFAULT(sample_rate, channel_fmt, bits_per_chan);
     ret_val |= i2s_channel_init_std_mode(tx_handle, &std_cfg);
