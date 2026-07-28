@@ -98,6 +98,21 @@ Three ways this differs from chat, all deliberate:
   because its answer is still worth reading when you come back. Audio has nobody to play to, and a
   live model bills for every second of it.
 
+It also ends on its own, three ways, most polite first. **The model hangs up** — it is given a
+`hang_up` it can call when you say goodbye, answered by the driver and never part of the tool cage,
+because it steers the session rather than reaching into the world. **Silence** — about ten seconds
+after a reply with nobody speaking, which is long enough to ask a follow-up without the wake word and
+short enough not to leave an open microphone in the room. **The budget** — fifteen minutes, a cost
+guard rather than a conversation rule.
+
+The silence window pauses while a tool is running or an approval is out on your phone. That is the
+one moment where hanging up would be worst: somebody has already been asked to do something.
+
+Silence is judged by the **device**, not by what the model understood. Its detector fires about
+200 ms after a person starts, on the echo-cancelled signal; a transcript arrives later and only for
+speech that made sense, which is the wrong question when you are asking whether anyone is still
+there.
+
 Speech comes back **credited**, not paced. A live model emits a sentence far faster than it is
 spoken, so something has to decide the rate — and the only real clock in the system is the far
 speaker's own crystal. The device grants its whole playout queue when a session opens and grants more
