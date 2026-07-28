@@ -184,6 +184,47 @@ func TestIndex_SummaryFallbacks(t *testing.T) {
 	}
 }
 
+// TestIndex_OnlyReadsTheHeadOfANote: the catalog runs on EVERY turn, so a note must not be read
+// whole just to pull one line out of it.
+//
+// The note is built so the two behaviours DIVERGE — otherwise the test would pass either way. It
+// carries no frontmatter and nothing but blank lines until well past the read cap, so a bounded read
+// finds no summary at all while an unbounded one would reach the marker. Asserting the marker's
+// absence is therefore evidence about the read, not about summarize.
+func TestIndex_OnlyReadsTheHeadOfANote(t *testing.T) {
+	dir := t.TempDir()
+	writeNote(t, dir, "big.md", strings.Repeat("\n", 64<<10)+"PAST-THE-CAP\n")
+
+	got := memory.New(dir, nil).Index()
+	if !strings.Contains(got, "big.md") {
+		t.Fatalf("the note vanished from the catalog: %q", got)
+	}
+	if strings.Contains(got, "PAST-THE-CAP") {
+		t.Error("the catalog read past its cap — the read is not bounded")
+	}
+	// And a large note whose summary IS in the head keeps it: the cap must not cost anything real.
+	writeNote(t, dir, "ok.md", "---\ndescription: a large note\n---\n"+strings.Repeat("filler\n", 200_000))
+	if got := memory.New(dir, nil).Index(); !strings.Contains(got, "ok.md — a large note") {
+		t.Errorf("summary lost on a large note: %q", got)
+	}
+}
+
+// TestIndex_TruncatedFrontmatterIsNotASummary: a note whose frontmatter runs past the read cap has
+// no closing delimiter left to find, so the parser reports none and hands the opening "---" back as
+// body. That must not become the catalog line.
+func TestIndex_TruncatedFrontmatterIsNotASummary(t *testing.T) {
+	dir := t.TempDir()
+	writeNote(t, dir, "wide.md", "---\n"+strings.Repeat("padding: xxxxxxxxxxxxxxxx\n", 2000)+"description: never reached\n---\nbody\n")
+
+	got := memory.New(dir, nil).Index()
+	if strings.Contains(got, "— ---") || strings.Contains(got, "— ...") {
+		t.Errorf("a bare delimiter became the summary: %q", got)
+	}
+	if !strings.Contains(got, "wide.md") {
+		t.Errorf("the note vanished from the catalog entirely: %q", got)
+	}
+}
+
 // TestIndex_ReadsFreshEveryCall: the human may correct a note in an editor between two turns, so the
 // catalog must not cache.
 func TestIndex_ReadsFreshEveryCall(t *testing.T) {

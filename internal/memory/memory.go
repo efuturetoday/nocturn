@@ -12,6 +12,7 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -47,8 +48,14 @@ const (
 	// every other fact.
 	maxSummaryLen = 120
 
-	// maxNotes bounds the folder walk, a fail-safe against a pathological tree.
+	// maxNotes bounds how MANY files the catalog walk touches, a fail-safe against a pathological
+	// tree. It never shapes the prompt: maxIndexBytes runs out first, around fifty entries.
 	maxNotes = 500
+
+	// maxSummaryBytes bounds how MUCH of each of them is read. summarize looks at the frontmatter
+	// block or the first non-empty body line and discards the rest — but this runs on every turn, so
+	// reading a large note whole to extract one line is work paid over and over.
+	maxSummaryBytes = 8 << 10
 )
 
 // Store is one workspace's memory folder. A missing folder is not an error: the index is empty and
@@ -143,7 +150,7 @@ func (s *Store) notes() []note {
 		if !strings.EqualFold(path.Ext(p), ".md") {
 			return nil
 		}
-		data, err := fs.ReadFile(root.FS(), p)
+		data, err := readHead(root, p)
 		if err != nil {
 			s.log.Warn("memory: reading a note, leaving it out of the catalog", "note", p, "err", err)
 			return nil
@@ -158,6 +165,18 @@ func (s *Store) notes() []note {
 	return out
 }
 
+// readHead reads at most maxSummaryBytes from a note — all summarize can use. Same shape as
+// memory_read and skill_read: opened through the Root, so confinement is the kernel's, then bounded
+// by an io.LimitReader.
+func readHead(root *os.Root, p string) ([]byte, error) {
+	f, err := root.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, maxSummaryBytes))
+}
+
 // summarize derives a note's one-line catalog entry: the frontmatter description, else the first
 // non-empty line of the body with any Markdown heading marker stripped. Never empty — a note with
 // nothing to say still has to appear, or the model would not know it exists.
@@ -170,7 +189,14 @@ func summarize(data []byte) string {
 		body = rest
 	}
 	for line := range strings.SplitSeq(body, "\n") {
-		if t := strings.TrimSpace(strings.TrimLeft(line, "# ")); t != "" {
+		t := strings.TrimSpace(strings.TrimLeft(line, "# "))
+		// A bare delimiter is not a summary. It surfaces when a note opens with a frontmatter block
+		// that readHead's cap cut short, or one that was never terminated — Parse then reports no
+		// frontmatter at all and hands the opening "---" back as ordinary body.
+		if t == "---" || t == "..." {
+			continue
+		}
+		if t != "" {
 			return clip(t)
 		}
 	}
