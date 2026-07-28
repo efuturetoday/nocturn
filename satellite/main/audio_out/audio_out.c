@@ -9,7 +9,6 @@
 #include "bsp_board.h"
 #include "rgb_led_driver.h"
 #include "state.h"
-#include "tca9555_driver.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -210,14 +209,9 @@ esp_err_t audio_out_init(void)
     if (xTaskCreatePinnedToCore(drain_task, "audio_out", 4 * 1024, NULL, 5, NULL, 0) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-    // The speaker amplifier is on the I/O expander, not the codec. The vendor enabled it inside the
-    // media player, so removing that left a board that renders audio perfectly into silence. It
-    // starts DOWN here and is raised only while something is actually playing.
-    //
-    // The switching is not free — see audio_out_amp — but leaving it up is worse: an amplifier held
-    // on hisses audibly into a quiet room, and this device sits in one all day. Tried and reverted
-    // on that basis.
-    Set_EXIO(IO_EXPANDER_PIN_NUM_8, false);
+    // Down until something actually plays: an amplifier held up hisses audibly into a quiet room,
+    // and this device sits in one all day.
+    esp_audio_amp(false);
 
     ESP_LOGI(TAG, "playback queue up (%d bytes)", RING_BYTES);
     return ESP_OK;
@@ -242,11 +236,10 @@ esp_err_t audio_out_init(void)
 // audible hiss in a quiet room.
 void audio_out_amp(bool on)
 {
-    Set_EXIO(IO_EXPANDER_PIN_NUM_8, on);
+    esp_audio_amp(on);
     // Noted here, not by the caller: there is more than one caller and the click does not care which
     // asked. Cleared on the way down — an amplifier that is off cannot click.
     atomic_store(&amp_up_at, on ? esp_timer_get_time() : 0);
-    vTaskDelay(pdMS_TO_TICKS(10));
 }
 
 int64_t audio_out_amp_age_us(void)
