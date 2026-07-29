@@ -146,6 +146,36 @@ detector (`BARGE_IN_LOCAL`, parked behind the same measurement).
 A daemon with no live model configured refuses `voice.wake` and says so, rather than opening a
 session that can never answer.
 
+### Knowing who is speaking
+
+With `NOCTURN_SPEAKER_MODEL` pointing at a speaker-embedding checkpoint, the daemon recognises which
+enrolled voice is talking, continuously, from the audio a session is already sending. Enrolled voices
+live in the workspace's `voices.json`; with none of them, or with no model, nothing below happens and
+the spoken path behaves exactly as it did.
+
+**Nothing waits for it.** A session opens on the wake word as before; recognition runs beside the
+conversation and the answer is simply there by the time anything asks. That is not a shortcut — a
+live session's system instruction travels in its setup frame and cannot be replaced afterwards, so
+identifying first would have meant pausing at the start of every conversation to learn something not
+needed until somebody asks something personal.
+
+The result reaches the model two ways, and the second matters more:
+
+- **`whoami`** returns `{"name", "confidence"}` when asked. An **empty name means unrecognised**, and
+  the model is told not to guess which household member it might be. Outside a spoken session — a
+  typed chat, an agent run — it always answers that, since nothing there is listening.
+- **On the request context**, where a tool acting on somebody's behalf reads it directly. A mail tool
+  asked for "my messages" resolves the mailbox itself; the model never learns whose it was, cannot
+  forget to pass it, and cannot be talked into naming someone else's. The same shape as credential
+  injection, where the guest never sees the value.
+
+Spoken sessions now also carry the memory index, which they did not before: `memory_read` joined the
+voice cage. Reading only — `memory_write` stays out.
+
+A recognised voice chooses context and address, never permission. Speech is a channel like the chat,
+where nobody authenticates the typist either, and a gated action is confirmed out of band on a second
+device in both.
+
 ### Recording the uplink
 
 Setting `NOCTURN_VOICE_CAPTURE` to a directory makes the daemon write what a device's microphone
