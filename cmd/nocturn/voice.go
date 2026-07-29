@@ -203,6 +203,11 @@ func serveVoiceSocket(w http.ResponseWriter, r *http.Request, driver *voice.Driv
 // Play and Interrupt are called only from the driver's event loop — a single goroutine — which is
 // what makes them safe without a write mutex (coder/websocket forbids concurrent writes). Recv runs
 // on the driver's separate microphone pump, and reading concurrently with writing is allowed.
+// Heard is never signalled: the browser client has no voice detector of its own, so a session there
+// is bounded by its budget and by the tab closing. Returning a nil channel is the correct "never" —
+// a receive on it blocks forever, which is exactly what a device with nothing to report means.
+func (b *browserDevice) Heard() <-chan struct{} { return nil }
+
 type browserDevice struct {
 	conn *websocket.Conn
 	ctx  context.Context

@@ -1,8 +1,11 @@
 package serve
 
 import (
+	"errors"
+	"log/slog"
 	"math"
 	"testing"
+	"time"
 )
 
 // The board runs one clock at 16 kHz while the model emits 24 kHz, and the conversion happens here
@@ -58,6 +61,106 @@ func TestDownsample_TinyFrameIsNotCorrupted(t *testing.T) {
 		}
 	}
 }
+
+// A device holds two connections while a dropped one times out, and speech belongs to the newer: the
+// older is the socket the device has already stopped reading.
+func TestHubSendAudio_GoesToTheNewestConnection(t *testing.T) {
+	h, old := hubWith(t, "hallway")
+	fresh := audioConn("hallway")
+	h.add(fresh)
+
+	if !h.sendAudio("hallway", make([]byte, downFrameBytes), nil) {
+		t.Fatal("the frame was refused by a device that has a live connection")
+	}
+	if len(old.audio) != 0 {
+		t.Errorf("%d frames went to the connection the device had already left", len(old.audio))
+	}
+	if got := len(fresh.audio); got != 1 {
+		t.Errorf("the newest connection holds %d frames, want 1", got)
+	}
+}
+
+// The stall this addressing exists to prevent. A connection whose device is gone without a FIN has a
+// writer blocked in a socket write that will not return, so its queue fills and never drains. Sending
+// to every connection would WAIT on that queue, and nothing would end the wait: the session is live so
+// abort stays silent, and the connection is not closed either. The socket that works would go quiet.
+func TestHubSendAudio_ADeadConnectionDoesNotStallTheLiveOne(t *testing.T) {
+	h, dead := hubWith(t, "hallway")
+	for len(dead.audio) < cap(dead.audio) {
+		dead.audio <- nil
+	}
+	fresh := audioConn("hallway")
+	h.add(fresh)
+
+	taken := make(chan bool, 1)
+	go func() { taken <- h.sendAudio("hallway", make([]byte, downFrameBytes), nil) }()
+	select {
+	case ok := <-taken:
+		if !ok {
+			t.Error("the frame was refused")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendAudio blocked on a connection the device had already left")
+	}
+}
+
+// A barge-in must empty the queue the speech actually went to. What it leaves behind arrives after the
+// device has flushed — it would obediently discard its own buffer and then be handed the same speech
+// again.
+func TestHubDropAudio_EmptiesTheConnectionSpeechWentTo(t *testing.T) {
+	h, old := hubWith(t, "hallway")
+	fresh := audioConn("hallway")
+	h.add(fresh)
+
+	old.audio <- make([]byte, downFrameBytes) // stale: sendAudio never fed this one
+	fresh.audio <- make([]byte, downFrameBytes)
+
+	if got, want := h.dropAudio("hallway"), downFrameBytes; got != want {
+		t.Errorf("dropped %d bytes, want %d", got, want)
+	}
+	if len(fresh.audio) != 0 {
+		t.Error("the connection the device is reading still holds speech it was told to drop")
+	}
+}
+
+// A minute of speech nobody has taken is a device that is gone. Continuing would bill a live model
+// into a backlog, and dropping from the middle of a reply only makes what survives incoherent.
+func TestDeviceSink_AFullBacklogEndsTheSession(t *testing.T) {
+	h, _ := hubWith(t, "hallway")
+	s := newTestSink(h, "hallway")
+	s.backlog = make([]byte, maxBacklog)
+
+	if err := s.Play(speech(downFrameBytes)); !errors.Is(err, errDeviceGone) {
+		t.Errorf("play on a full backlog = %v, want %v", err, errDeviceGone)
+	}
+}
+
+// hubWith returns a hub holding one connection for device, with no socket behind it: sendAudio and
+// dropAudio touch nothing but the queue.
+func hubWith(t *testing.T, device string) (*hub, *conn) {
+	t.Helper()
+	h := newHub(defaultHeartbeat)
+	c := audioConn(device)
+	h.add(c)
+	return h, c
+}
+
+// audioConn is a connection with a queue and no socket. Its capacity is the production one, so a test
+// that fills it fills what a real link would.
+func audioConn(device string) *conn {
+	return &conn{
+		device: device,
+		audio:  make(chan []byte, 4),
+		log:    slog.New(slog.DiscardHandler),
+	}
+}
+
+func newTestSink(h *hub, device string) *deviceSink {
+	return &deviceSink{hub: h, device: device, log: slog.New(slog.DiscardHandler)}
+}
+
+// speech is n bytes of 16 kHz output, expressed as the 24 kHz input that produces it.
+func speech(n int) []byte { return pcm(make([]int16, n/2*3/2)) }
 
 func pcm(samples []int16) []byte {
 	b := make([]byte, len(samples)*2)

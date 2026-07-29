@@ -15,7 +15,7 @@ import (
 func testConn() *conn {
 	return &conn{
 		spaces:  map[string]*workspace.Workspace{},
-		hub:     newHub(),
+		hub:     newHub(defaultHeartbeat),
 		log:     slog.New(slog.DiscardHandler),
 		control: make(chan any, 64),
 	}

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -57,7 +58,10 @@ type conn struct {
 	broker *hitl.Broker
 	hub    *hub
 	device string // which device this connection is, for addressed delivery. Identity, not session state.
-	log    *slog.Logger
+	// seq orders this connection against the device's others, assigned by the hub on add. It is how
+	// the voice path tells a reconnect's winner from the loser still timing out.
+	seq uint64
+	log *slog.Logger
 
 	// Two queues, one writer, control first. Audio is a steady twenty-five to fifty frames a second
 	// where JSON is small and bursty, and the drop-when-full policy that suits the second ruins the
@@ -65,15 +69,74 @@ type conn struct {
 	// loss where it is harmless — a dropped audio frame is a click, a dropped event is missing state.
 	control chan any
 	audio   chan []byte
+	// closed releases anyone waiting to queue audio when this connection goes away. Without it a
+	// writer blocked on a dead socket's queue would wait for a reader that is never coming back.
+	closed chan struct{}
 }
 
 func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, device string, log *slog.Logger) *conn {
 	return &conn{
 		ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, device: device, log: log,
 		control: make(chan any, 64),
-		// Roughly a second at the rates a satellite sends. Deeper only delays the moment a congested
-		// link is noticed, and stale audio has no value.
-		audio: make(chan []byte, 48),
+		// Four frames — 80 ms. Short on purpose, and it is a latency budget rather than a buffer: this
+		// queue sits AHEAD of the device's own, so everything in it is speech a barge-in can no longer
+		// take back once written. The device buffers what needs buffering; this only needs enough to
+		// keep the writer from stalling between frames.
+		audio:  make(chan []byte, 4),
+		closed: make(chan struct{}),
+	}
+}
+
+// heartbeat is how often a connection is asked whether its device is still there, and how long an
+// answer may take. It belongs to the daemon rather than the package so a test can run a fast one
+// without changing the timing of every other connection in the binary.
+type heartbeat struct{ every, wait time.Duration }
+
+// defaultHeartbeat is what production runs: twenty-five seconds to notice a device that is gone.
+//
+// Something has to. A device that vanishes without a FIN — power cut, WiFi gone — leaves a connection
+// that looks alive from here: the read loop is waiting for bytes that will never come, and nothing
+// about that is distinguishable from a device with nothing to say. Left alone it is the OS keepalive
+// that notices, after roughly two hours by default, and until then the device's voice session stays
+// open and a live model bills for it.
+//
+// The budget is generous on purpose, and not because a pong is expected to be slow. The satellite
+// answers from the WebSocket client's own task, which by its own contract may never block (link.h:
+// that task drives the keepalive, so stalling it drops the link) — so a pong is prompt or the device
+// is in trouble either way. What the ceiling buys is room for a congested link, and the cost of
+// setting it too low is a working device disconnected mid-sentence. Nothing is won by tightening it:
+// the point is to notice a device that is gone in seconds instead of hours, and ten of them is
+// already three orders of magnitude better than the OS keepalive.
+var defaultHeartbeat = heartbeat{every: 15 * time.Second, wait: 10 * time.Second}
+
+// heartbeat closes a connection whose device has stopped answering.
+//
+// Ping writes a control frame and waits for the pong to be read by the read loop, so this must run
+// alongside it — which it does. Both the write and the wait are bounded, so a writer stuck on a dead
+// socket does not hold this one up: it fails, and failing is the answer.
+func (c *conn) heartbeat(ctx context.Context) {
+	beat := c.hub.beat
+	t := time.NewTicker(beat.every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.closed:
+			return
+		case <-t.C:
+		}
+		ping, cancel := context.WithTimeout(ctx, beat.wait)
+		err := c.ws.Ping(ping)
+		cancel()
+		if err != nil {
+			// CloseNow rather than a graceful close: the peer is not answering, so waiting for it to
+			// acknowledge a close frame would wait for the same silence again. Closing the socket ends
+			// the read loop, which runs the teardown that ends the device's voice session.
+			c.log.Info("no pong — closing a connection whose device is gone", "err", err)
+			_ = c.ws.CloseNow()
+			return
+		}
 	}
 }
 
@@ -104,12 +167,16 @@ func (c *conn) workspace(ctx context.Context, name string) (*workspace.Workspace
 func (c *conn) serve(ctx context.Context) {
 	c.log.Info("ws connection opened")
 	go c.writer(ctx)
+	go c.heartbeat(ctx)
 	if c.broker != nil {
 		c.broker.Attach(ctx, c)
 	}
 	c.hub.add(c)
 	defer func() {
 		c.hub.remove(c)
+		// Release anyone waiting to queue speech before anything else: a voice writer blocked on this
+		// connection's queue must be let go, or the teardown below waits for it.
+		close(c.closed)
 		if c.broker != nil {
 			c.broker.Detach(c)
 		}
@@ -177,14 +244,33 @@ func (c *conn) writeJSON(ctx context.Context, msg any) bool {
 	return true
 }
 
-// sendAudio queues one chunk of speech, dropping it when the queue is full rather than waiting.
-// Blocking here would stall whatever produced the audio, and a late frame is worth less than a
-// missing one: the listener hears a click either way, but a stalled producer stops the conversation.
-func (c *conn) sendAudio(pcm []byte) {
+// sendAudio queues one frame of speech, WAITING for room, and reports whether it was taken. It gives
+// up only when abort is closed — the session ending — or when the connection does.
+//
+// Waiting rather than dropping is what makes the flow control work: this queue is short and it backs
+// onto a socket the device stops reading while its speaker is full, so the wait is the speaker being
+// full, propagated all the way here without a protocol to carry it.
+func (c *conn) sendAudio(pcm []byte, abort <-chan struct{}) bool {
 	select {
 	case c.audio <- pcm:
-	default:
-		c.log.Debug("audio frame dropped, link congested")
+		return true
+	case <-abort:
+		return false
+	case <-c.closed:
+		return false
+	}
+}
+
+// dropAudio discards the queued speech of this connection and reports how many bytes went.
+func (c *conn) dropAudio() int {
+	n := 0
+	for {
+		select {
+		case pcm := <-c.audio:
+			n += len(pcm)
+		default:
+			return n
+		}
 	}
 }
 
