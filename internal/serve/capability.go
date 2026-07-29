@@ -15,14 +15,17 @@ import "github.com/efuturetoday/nocturn/internal/auth"
 // nothing. A class nobody has taught this function about therefore lands on the safe side by
 // construction rather than by anyone remembering to handle it.
 type capabilities struct {
-	approve bool // answer an out-of-band approval
-	enrol   bool // bring further devices into the household
+	approve      bool // answer an out-of-band approval
+	enrol        bool // bring further devices into the household
+	captureAudio bool // make an appliance record its microphone to disk
 }
 
 // covers reports whether c permits everything other does — the subset test behind "you may not
 // enrol a device more capable than yourself".
 func (c capabilities) covers(other capabilities) bool {
-	return (!other.approve || c.approve) && (!other.enrol || c.enrol)
+	return (!other.approve || c.approve) &&
+		(!other.enrol || c.enrol) &&
+		(!other.captureAudio || c.captureAudio)
 }
 
 // capabilitiesOf maps a device class to what it may do.
@@ -31,12 +34,21 @@ func capabilitiesOf(class auth.Class) capabilities {
 	case auth.ClassApp:
 		// Someone identified is holding it, so its answer is that person's answer, and it is the
 		// thing a household is administered from.
-		return capabilities{approve: true, enrol: true}
+		return capabilities{approve: true, enrol: true, captureAudio: true}
 	case auth.ClassAppliance:
 		// Nothing. It has no authenticated input path, so it can neither consent on anyone's behalf
 		// nor vouch for a new device — and the approval broker takes the FIRST answer it receives,
 		// so one that could approve would outrace the phone it exists to defer to.
+		//
+		// Not captureAudio either, and that one is worth saying out loud: an appliance asking a
+		// second appliance to record a room would be a device in the hallway turning on a microphone
+		// in the bedroom, with nobody having asked for it.
 		return capabilities{}
+	case auth.ClassTool:
+		// The local command line. It may start a recording, because enrolling a voice needs one and
+		// whoever runs the binary already holds the workspace. It approves nothing: a tool that can
+		// switch on a microphone must still not be able to release a gated action.
+		return capabilities{captureAudio: true}
 	default:
 		// Including ClassUnknown: an unrecognised class is not a reason to guess generously.
 		return capabilities{}
