@@ -44,7 +44,7 @@ func (p profile) score(query []float32) (centroid, best float32) {
 		mean[i] /= float32(len(p.takes))
 	}
 	// Similarity assumes unit length, which the mean of unit vectors is not.
-	centroid = cosine(normalize(mean), query)
+	centroid = cosine(Normalize(mean), query)
 
 	for _, take := range p.takes {
 		if s := cosine(take, query); s > best {

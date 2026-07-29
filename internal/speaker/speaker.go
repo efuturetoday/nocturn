@@ -13,31 +13,17 @@
 // Which notes belong in the prompt, whose preferences apply, who to address. Among a handful of
 // enrolled people this works essentially perfectly — over twelve thousand queries, households of two
 // to six were identified correctly every time. Being wrong costs a misaddressed sentence, so the
-// threshold exists only to notice a visitor or a television, and 0.50 leaves it there without ever
-// turning a member away. The measurements are in testdata/README.md.
+// threshold exists only to notice a visitor or a television. It belongs to a CHANNEL rather than to
+// this package: a far-field microphone scores the same voice lower than a close one, so the number
+// that suits a laptop turns a household member away in a hallway. See DefaultThreshold, and
+// testdata/README.md for both measurements.
 //
-// # What this is not: an authentication factor
+// A result chooses context and address — whose notes, whose mailbox, what to call someone. It does
+// not stand in for an approval: speech is a channel like the chat, where nobody authenticates the
+// typist either, and a gated action is confirmed out of band on a second device in both. See
+// testdata/README.md if that question comes up in earnest.
 //
-// Documented because the temptation is obvious and the answer is not: a system that reliably knows
-// who is speaking looks like it could decide who is allowed. It cannot, and the reason survives any
-// improvement in accuracy.
-//
-// As pure recognition the checkpoint is strong — 0.83 % equal error rate against a world of
-// strangers. But the threat model is not a stranger guessing; it is someone who can play audio at
-// the microphone. Three seconds of a person's voice is enough to clone it, and a recording is
-// indistinguishable from presence to any embedding, including a perfect one. Defences exist —
-// replay and synthesis detectors, score normalisation against a cohort, challenge phrases — and each
-// raises the cost without changing the shape of the problem: the attacker owns the channel.
-//
-// That is exactly the reasoning behind out-of-band approval. In-band approval sits in the same trust
-// domain as the injection, which is why a privileged action is confirmed on a second device. A voice
-// arriving over that same in-band channel cannot be the thing that skips it. So a result from this
-// package may select which memory notes are folded in and how an answer is addressed; it must never
-// turn a gate's "ask" into an "allow" — the line memory_read and skill_read hold, for the same
-// reason. Honouring it costs nothing here, because differentiation was all that was ever wanted.
-//
-// Voiceprints are still biometric data: profiles belong in the encrypted vault, and enrolment
-// should be something a person did on purpose.
+// Voiceprints are still somebody's, so enrolment should be something a person did on purpose.
 package speaker
 
 import (
@@ -109,12 +95,14 @@ func (e *Embedder) Embed(pcm []int16) ([]float32, error) {
 		}
 	}
 	// normalize allocates, so the result never aliases the graph's weights.
-	return normalize(best.Data), nil
+	return Normalize(best.Data), nil
 }
 
-// normalize scales a vector to unit length. A zero vector cannot arise from a real utterance, but
-// returning it unchanged beats dividing by zero if one ever does.
-func normalize(v []float32) []float32 {
+// Normalize scales a vector to unit length, which is what Similarity assumes of both its arguments.
+// Exported because an average of unit vectors is not one, so anyone combining embeddings has to
+// finish the job here. A zero vector cannot arise from a real utterance, but returning it unchanged
+// beats dividing by zero if one ever does.
+func Normalize(v []float32) []float32 {
 	var sum float64
 	for _, x := range v {
 		sum += float64(x) * float64(x)
