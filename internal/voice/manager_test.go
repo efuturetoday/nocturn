@@ -43,7 +43,7 @@ func TestManager_RunsUntilStopped(t *testing.T) {
 	m := managed(t, sess)
 	ended, done := ending()
 
-	m.Start("hallway", dev, nil, ended)
+	m.Start("hallway", dev, nil, nil, ended)
 
 	// Audio proves the session is really running, not merely registered.
 	sess.push(agentkit.LiveAudio{PCM: []byte{0x01}})
@@ -67,7 +67,7 @@ func TestManager_StopWaitsForTheSessionToUnwind(t *testing.T) {
 	m := managed(t, sess)
 	ended, done := ending()
 
-	m.Start("hallway", dev, nil, ended)
+	m.Start("hallway", dev, nil, nil, ended)
 	sess.push(agentkit.LiveAudio{PCM: []byte{0x01}})
 	<-dev.played
 
@@ -89,12 +89,12 @@ func TestManager_StartReplacesARunningSession(t *testing.T) {
 	t.Cleanup(m.CloseAll)
 
 	ended, done := ending()
-	m.Start("hallway", dev, nil, ended)
+	m.Start("hallway", dev, nil, nil, ended)
 	first.push(agentkit.LiveAudio{PCM: []byte{0x01}})
 	<-dev.played
 
 	// The second Start must have ended the first before it returns.
-	m.Start("hallway", dev, nil, ended)
+	m.Start("hallway", dev, nil, nil, ended)
 	select {
 	case <-done:
 	default:
@@ -116,8 +116,8 @@ func TestManager_DevicesAreIndependent(t *testing.T) {
 	mKitchen := managed(t, kitchen)
 	ended, _ := ending()
 
-	mHall.Start("hallway", hallSink, nil, ended)
-	mKitchen.Start("kitchen", kitchenSink, nil, ended)
+	mHall.Start("hallway", hallSink, nil, nil, ended)
+	mKitchen.Start("kitchen", kitchenSink, nil, nil, ended)
 
 	hall.push(agentkit.LiveAudio{PCM: []byte{0xAA}})
 	if got := <-hallSink.played; got[0] != 0xAA {
@@ -146,7 +146,7 @@ func TestManager_ClosedManagerStartsNothing(t *testing.T) {
 	m := managed(t, sess)
 	m.CloseAll()
 
-	m.Start("hallway", dev, nil, nil)
+	m.Start("hallway", dev, nil, nil, nil)
 	if m.Active("hallway") {
 		t.Error("a closed manager started a session")
 	}
@@ -157,7 +157,7 @@ func TestManager_CloseAllEndsEverything(t *testing.T) {
 	m := managed(t, sess)
 	ended, done := ending()
 
-	m.Start("hallway", dev, nil, ended)
+	m.Start("hallway", dev, nil, nil, ended)
 	sess.push(agentkit.LiveAudio{PCM: []byte{0x01}})
 	<-dev.played
 
@@ -179,7 +179,7 @@ func TestManager_ReportsTheTranscript(t *testing.T) {
 	m := managed(t, sess)
 	ended, done := ending()
 
-	m.Start("hallway", dev, nil, ended)
+	m.Start("hallway", dev, nil, nil, ended)
 	sess.push(agentkit.LiveUserText{Text: "what time is it"})
 	sess.push(agentkit.LiveTurnDone{})
 	// Wait for the turn to be committed before stopping, so the transcript is not raced.
@@ -198,7 +198,7 @@ func TestManager_ReportsTheTranscript(t *testing.T) {
 func TestManager_FeedReachesTheRunningSession(t *testing.T) {
 	sess, out := newSession(), newSink()
 	m := managed(t, sess)
-	m.Start("hallway", out, nil, nil)
+	m.Start("hallway", out, nil, nil, nil)
 
 	m.Feed("hallway", []byte{0x11, 0x22})
 	if got := <-sess.audio; got[0] != 0x11 || got[1] != 0x22 {
@@ -223,7 +223,7 @@ func TestManager_StoppingLeavesTheSinkUsable(t *testing.T) {
 	first, out := newSession(), newSink()
 	m := managed(t, first)
 
-	m.Start("hallway", out, nil, nil)
+	m.Start("hallway", out, nil, nil, nil)
 	first.push(agentkit.LiveAudio{PCM: []byte{0x01}})
 	<-out.played
 	m.Stop("hallway")
@@ -234,7 +234,7 @@ func TestManager_StoppingLeavesTheSinkUsable(t *testing.T) {
 	m2 := voice.NewManager(d, slog.New(slog.DiscardHandler))
 	t.Cleanup(m2.CloseAll)
 
-	m2.Start("hallway", out, nil, nil)
+	m2.Start("hallway", out, nil, nil, nil)
 	second.push(agentkit.LiveAudio{PCM: []byte{0x02}})
 	if got := <-out.played; got[0] != 0x02 {
 		t.Errorf("second session played %v", got)

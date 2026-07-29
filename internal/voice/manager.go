@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/internal/speaker"
 )
 
 // Manager owns the live voice sessions of a workspace, at most one per device.
@@ -117,7 +118,10 @@ func NewManager(d *Driver, log *slog.Logger) *Manager {
 // conversation means the person is addressing the assistant again, not that they want two.
 //
 // ended is called from the session's own goroutine when it finishes, however it finishes.
-func (m *Manager) Start(deviceID string, out Sink, conv []agentkit.Message, ended Ended) {
+// who reports the current speaker, and is consulted rather than captured: recognition keeps running
+// while the conversation does. Nil means no microphone identifies anybody, which is every caller
+// without speaker profiles behind it.
+func (m *Manager) Start(deviceID string, out Sink, conv []agentkit.Message, who func() speaker.Identity, ended Ended) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -157,7 +161,7 @@ func (m *Manager) Start(deviceID string, out Sink, conv []agentkit.Message, ende
 	go func() {
 		defer m.wg.Done()
 		defer close(s.done)
-		transcript, err := m.driver.Run(ctx, dev, conv)
+		transcript, err := m.driver.Run(ctx, dev, conv, who)
 		cancel() // release the context even when Run returned on its own
 
 		m.mu.Lock()

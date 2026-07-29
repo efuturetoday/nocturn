@@ -187,7 +187,8 @@ func serveVoiceSocket(w http.ResponseWriter, r *http.Request, driver *voice.Driv
 	log.Info("voice session opened")
 	// Nothing is seeded: the harness starts a fresh conversation each time, so a measurement is
 	// never coloured by whatever the last one talked about.
-	msgs, err := driver.Run(r.Context(), &browserDevice{conn: conn, ctx: r.Context()}, nil)
+	// No speaker: the microphone here is a browser tab, and nothing has enrolled whoever is at it.
+	msgs, err := driver.Run(r.Context(), &browserDevice{conn: conn, ctx: r.Context()}, nil, nil)
 	if err != nil {
 		log.Warn("voice session ended", "err", err)
 	}

@@ -96,7 +96,7 @@ func (d *fakeDevice) Play(pcm []byte) error { d.played <- pcm; return nil }
 // Heard: silent by default, so a test that does not care about the idle window never trips it. A
 // test that does sends on heard itself.
 func (d *fakeDevice) Heard() <-chan struct{} { return d.heard }
-func (d *fakeDevice) Interrupt() error      { d.interrupts <- struct{}{}; return nil }
+func (d *fakeDevice) Interrupt() error       { d.interrupts <- struct{}{}; return nil }
 
 // fakeObserver reports what the session committed, which is also how a test observes that the
 // event loop has processed a turn — no sleeps.
@@ -141,7 +141,7 @@ func run(t *testing.T, d *voice.Driver, dev voice.Device, conv []agentkit.Messag
 	)
 	go func() {
 		defer close(done)
-		msgs, err = d.Run(t.Context(), dev, conv)
+		msgs, err = d.Run(t.Context(), dev, conv, nil)
 	}()
 	return func() []agentkit.Message {
 		t.Helper()
@@ -346,7 +346,7 @@ func TestTranscript_KeepsSpokenOrderAndSeed(t *testing.T) {
 func TestSystemPersona_IsSeededAheadOfHistory(t *testing.T) {
 	sess, dev := newSession(), newDevice()
 	live := &fakeLive{sess: sess}
-	d := voice.New(live, toolset(t), allow(), gate.NewMemGrants(), nil, voice.WithSystem("be brief"))
+	d := voice.New(live, toolset(t), allow(), gate.NewMemGrants(), nil, voice.WithSystemFunc(func(string) string { return "be brief" }))
 	wait := run(t, d, dev, []agentkit.Message{{Role: agentkit.RoleUser, Content: "hi"}})
 
 	sess.Close()
@@ -376,7 +376,7 @@ func TestDeviceDisconnect_EndsTheSession(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := d.Run(t.Context(), dev, nil)
+		_, err := d.Run(t.Context(), dev, nil, nil)
 		done <- err
 	}()
 	close(dev.mic)
@@ -394,7 +394,7 @@ func TestBudget_EndsTheSessionWithoutAnError(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := d.Run(t.Context(), dev, nil)
+		_, err := d.Run(t.Context(), dev, nil, nil)
 		done <- err
 	}()
 	if err := <-done; err != nil {
