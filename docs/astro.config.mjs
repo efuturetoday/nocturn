@@ -133,6 +133,7 @@ export default defineConfig({
 							label: 'Zero Authority',
 							items: [
 								{ label: 'time_now', link: '/reference/tools/time_now/' },
+								{ label: 'whoami', link: '/reference/tools/whoami/' },
 								{ label: 'wake', link: '/reference/tools/wake/' },
 								{ label: 'code_run', link: '/reference/tools/code_run/' },
 								{ label: 'skill_read', link: '/reference/tools/skill_read/' },
