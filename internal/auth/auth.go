@@ -51,6 +51,10 @@ const (
 	// Named for that property rather than for a product: a voice satellite is one of these, but so
 	// is anything else whose input nobody signed.
 	ClassAppliance Class = "appliance"
+	// ClassTool is a local operator tool — the `nocturn` command talking to its own daemon. It is
+	// not a device anyone carries and nobody is identified at it, so it consents to nothing; what it
+	// may do it may do because whoever runs it already holds the workspace on disk.
+	ClassTool Class = "tool"
 )
 
 // Device is one paired device. The bearer itself is never stored — only its hash.

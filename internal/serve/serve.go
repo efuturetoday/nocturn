@@ -241,11 +241,12 @@ func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Work
 		devices.UpdateLastUsed(bearer)
 		// The one place a class becomes authority for a connection: a device that may not approve is
 		// handed no broker at all, so there is nothing for it to answer with.
+		can := capabilitiesOf(dev.Class)
 		approver := broker
-		if !capabilitiesOf(dev.Class).approve {
+		if !can.approve {
 			approver = nil
 		}
-		newConn(ws, spaces, devices, approver, hub, dev.ID,
+		newConn(ws, spaces, devices, approver, hub, dev.ID, can,
 			log.With("remote", r.RemoteAddr, "device", dev.ID, "class", dev.Class)).serve(r.Context())
 	})
 

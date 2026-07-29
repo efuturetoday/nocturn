@@ -63,6 +63,10 @@ type conn struct {
 	seq uint64
 	log *slog.Logger
 
+	// can is what this connection's device class may do, resolved once at accept so no command has
+	// to re-interpret a class. See capability.go.
+	can capabilities
+
 	// capture is nil unless NOCTURN_VOICE_CAPTURE armed it. It writes uplink audio to WAV so a
 	// voice can be enrolled through the device it will be recognised through.
 	capture *capture
@@ -78,9 +82,9 @@ type conn struct {
 	closed chan struct{}
 }
 
-func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, device string, log *slog.Logger) *conn {
+func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, device string, can capabilities, log *slog.Logger) *conn {
 	return &conn{
-		ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, device: device, log: log,
+		ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, device: device, can: can, log: log,
 		control: make(chan any, 64),
 		// Four frames — 80 ms. Short on purpose, and it is a latency budget rather than a buffer: this
 		// queue sits AHEAD of the device's own, so everything in it is speech a barge-in can no longer
@@ -328,6 +332,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.auth(ctx, env.Cmd, data)
 	case "voice":
 		c.voice(ctx, env.Cmd, data)
+	case "capture":
+		c.captureCmd(ctx, env.Cmd, data)
 	default:
 		c.badRequest(ctx, "unknown domain: "+env.Cmd)
 	}
