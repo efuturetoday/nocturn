@@ -11,7 +11,7 @@ import (
 // broadcast never blocks on a congested connection: a conn whose buffer is full drops the message
 // (and resyncs later), while others still receive it.
 func TestHub_Broadcast_NonBlocking_DropsFullBuffer(t *testing.T) {
-	h := newHub()
+	h := newHub(defaultHeartbeat)
 
 	full := &conn{control: make(chan any, 64)}
 	for range 64 { // saturate the buffer (newConn's cap)
@@ -48,7 +48,7 @@ func TestHub_Broadcast_NonBlocking_DropsFullBuffer(t *testing.T) {
 
 // Concurrent broadcasts with a live reader must be race-clean (run with -race).
 func TestHub_Broadcast_Concurrent(t *testing.T) {
-	h := newHub()
+	h := newHub(defaultHeartbeat)
 	c := &conn{control: make(chan any, 64)}
 	h.add(c)
 

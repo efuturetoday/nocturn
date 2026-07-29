@@ -259,9 +259,9 @@ type deviceSink struct {
 	mu      sync.Mutex
 	backlog []byte
 	// How many bytes the device has said it can still take. Nothing is sent without it.
-	credit  int
-	wake    chan struct{}
-	done    chan struct{}
+	credit int
+	wake   chan struct{}
+	done   chan struct{}
 	// Instrumentation: what was still held when the session ended, and how long the writer spent
 	// blocked on a device that would not take more. The second is the honest measure of whether the
 	// link can carry the conversation.

@@ -20,49 +20,108 @@ import (
 
 // hub is the set of live connections, so a chat change (a turn save, a markRead) can be broadcast to
 // every device — the daemon is the truth, the WebSocket a sink.
+//
+// seq orders connections by arrival so the voice path can name the newest one. A counter rather than
+// a timestamp: what is needed is "which of these two arrived later", which a monotonic count answers
+// exactly and a clock only approximately.
 type hub struct {
+	// beat is the liveness check every connection of this daemon runs. Written once at construction
+	// and read-only after, so a connection reads it without synchronising.
+	beat heartbeat
+
 	mu    sync.Mutex
 	conns map[*conn]struct{}
+	seq   uint64
 }
 
-func newHub() *hub { return &hub{conns: map[*conn]struct{}{}} }
+func newHub(beat heartbeat) *hub { return &hub{beat: beat, conns: map[*conn]struct{}{}} }
 
-func (h *hub) add(c *conn)    { h.mu.Lock(); h.conns[c] = struct{}{}; h.mu.Unlock() }
+func (h *hub) add(c *conn) {
+	h.mu.Lock()
+	h.seq++
+	c.seq = h.seq
+	h.conns[c] = struct{}{}
+	h.mu.Unlock()
+}
 func (h *hub) remove(c *conn) { h.mu.Lock(); delete(h.conns, c); h.mu.Unlock() }
 
-// send delivers msg to the connections of one device, without blocking.
+// sendAudio delivers one frame of speech to a device's NEWEST connection, WAITING for room, and
+// reports whether it was taken. It gives up when abort is closed.
+//
+// Waiting is the point. The queue behind a connection is short and the device stops reading its
+// socket while its speaker is full, so a full queue means the speaker is full — which is exactly when
+// nothing more should be sent. Dropping instead would put a gap in the middle of a sentence to solve
+// a problem that solves itself by waiting.
 //
 // Broadcast is right for chat — every device shows the same conversation — and wrong for audio: a
-// phone should not play what the speaker in the hallway is hearing. A device may hold more than one
-// connection while an old one is still timing out, so this addresses all of them rather than
-// assuming a single winner.
-func (h *hub) send(device string, pcm []byte) {
-	for _, c := range h.of(device) {
-		c.sendAudio(pcm)
+// phone should not play what the speaker in the hallway is hearing.
+//
+// The NEWEST rather than all of them, and this is load-bearing given that waiting is. A device holds
+// two connections while a dead one times out, and a dead one is dead in the way that matters here:
+// its writer is blocked in a socket write that will not return, so its queue fills and never drains.
+// Sending to every connection means waiting on that queue — with the session live, abort silent and
+// the connection not yet closed, the wait has no end, and the frame never reaches the socket that
+// works. Fanning out a stream that must block is fanning out the stall with it.
+func (h *hub) sendAudio(device string, pcm []byte, abort <-chan struct{}) bool {
+	c := h.newest(device)
+	if c == nil {
+		return false
 	}
+	return c.sendAudio(pcm, abort)
 }
 
-// control delivers a JSON message to one device's connections. Unlike send it goes on the control
+// control delivers a JSON message to a device's newest connection. Unlike send it goes on the control
 // queue, so it overtakes whatever speech is already buffered — which matters for the one message
 // that tells a device to throw that speech away.
+//
+// The same connection speech went to, necessarily: an interrupt is only meaningful to whoever holds
+// the audio it cancels.
 func (h *hub) control(device string, msg any) {
-	for _, c := range h.of(device) {
+	if c := h.newest(device); c != nil {
 		c.trySend(msg)
 	}
 }
 
-// of returns the connections belonging to one device. There may be more than one while an old
-// connection is still timing out, so this never assumes a single winner.
-func (h *hub) of(device string) []*conn {
+// dropAudio empties the queued speech of a device's newest connection and reports how much was
+// discarded.
+//
+// An interrupt that only stopped the sender would leave whatever is already queued to arrive after
+// the device has flushed — it would obediently discard its own buffer and then be handed the same
+// speech again.
+func (h *hub) dropAudio(device string) int {
+	if c := h.newest(device); c != nil {
+		return c.dropAudio()
+	}
+	return 0
+}
+
+// newest returns the most recently added connection of one device, or nil if it has none.
+//
+// A device has one at a time in principle and two in practice, for as long as a dropped connection
+// takes to time out. The later one is the one the device is actually reading.
+func (h *hub) newest(device string) *conn {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	conns := make([]*conn, 0, 2)
+	var newest *conn
 	for c := range h.conns {
-		if c.device == device {
-			conns = append(conns, c)
+		if c.device == device && (newest == nil || c.seq > newest.seq) {
+			newest = c
 		}
 	}
-	return conns
+	return newest
+}
+
+// countOf reports how many connections a device holds.
+func (h *hub) countOf(device string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for c := range h.conns {
+		if c.device == device {
+			n++
+		}
+	}
+	return n
 }
 
 // broadcast sends msg to every connection without blocking (a slow one drops it and resyncs).
@@ -101,12 +160,13 @@ func cors(h http.Handler) http.Handler {
 // bootstrap code logged at startup, further devices via POST /join + /join/confirm. One backend,
 // many fronts — the backend is the truth.
 func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger) error {
-	return serveOn(ctx, addr, spaces, devices, broker, log, nil)
+	return serveOn(ctx, addr, spaces, devices, broker, log, defaultHeartbeat, nil)
 }
 
-// serveOn is Serve with a hook for the address it actually bound. It exists so a test can ask for
-// port 0 and still find the daemon; production always passes nil.
-func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger, ready func(string)) error {
+// serveOn is Serve with the two things only a test varies: the liveness check its connections run,
+// and a hook for the address it actually bound (so a test can ask for port 0 and still find the
+// daemon). Production passes defaultHeartbeat and nil.
+func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger, beat heartbeat, ready func(string)) error {
 	log = log.With("component", "serve")
 	if code := devices.Bootstrap(bootstrapTTL); code != "" {
 		log.Info("no devices paired — pair one with POST /pair", "code", code, "validFor", bootstrapTTL)
@@ -115,7 +175,7 @@ func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Work
 	// Every device is a sink of the whole daemon: chat activity (list changes) AND live chat events
 	// (tokens/tools/turnEnd, tagged with chatId) are broadcast to all connections; the client routes
 	// by chatId. So a session's turn is never tied to one connection.
-	hub := newHub()
+	hub := newHub(beat)
 	for name, ws := range spaces {
 		ws.OnChatUpdate(func(m chat.Meta) {
 			hub.broadcast(ChatActivity{Type: "chat.activity", Ws: name, Chat: m})
