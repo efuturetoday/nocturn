@@ -143,6 +143,9 @@ func (c *conn) voiceWake(ctx context.Context, m VoiceWake) {
 
 	device := c.device
 	hub := c.hub
+	// Recognition starts with the session and runs beside it. Nothing waits for it: by the time
+	// anything asks who is talking, seconds of speech have gone past.
+	c.listen = newListener(c.embedder, ws.Voices(), c.log)
 	sink := newDeviceSink(hub, device, c.log)
 	sinksMu.Lock()
 	sinks[device] = sink
@@ -150,7 +153,7 @@ func (c *conn) voiceWake(ctx context.Context, m VoiceWake) {
 
 	// Nothing is seeded. A spoken exchange starts fresh rather than resuming whatever was last said,
 	// because the person at a speaker has no way to see what it thinks the context is.
-	sessions.Start(device, sink, nil, func(_ string, transcript []agentkit.Message, err error) {
+	sessions.Start(device, sink, nil, c.listen.who, func(_ string, transcript []agentkit.Message, err error) {
 		held, blocked := sink.stats()
 		sink.close()
 		c.log.Info("voice session finished", "messages", len(transcript),
@@ -187,6 +190,7 @@ func (c *conn) audioIn(pcm []byte) {
 		c.capture = newCapture(c.device, c.log)
 	}
 	c.capture.add(pcm, time.Now())
+	c.listen.add(pcm)
 
 	for _, ws := range c.spaces {
 		if sessions := ws.VoiceSessions(); sessions != nil && sessions.Active(c.device) {

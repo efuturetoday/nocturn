@@ -16,6 +16,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/auth"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
@@ -71,6 +72,13 @@ type conn struct {
 	// voice can be enrolled through the device it will be recognised through.
 	capture *capture
 
+	// embedder turns speech into a speaker embedding, and is nil when this daemon has no model. It
+	// is shared across every connection: the model is tens of megabytes and immutable once loaded.
+	embedder *speaker.Embedder
+	// listen recognises who is speaking for the session this connection opened, and is nil until one
+	// is open — or stays nil when nothing here can recognise anybody.
+	listen *listener
+
 	// Two queues, one writer, control first. Audio is a steady twenty-five to fifty frames a second
 	// where JSON is small and bursty, and the drop-when-full policy that suits the second ruins the
 	// first: a chat event would be lost because audio filled the buffer. Separating them keeps the
@@ -82,9 +90,10 @@ type conn struct {
 	closed chan struct{}
 }
 
-func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, device string, can capabilities, log *slog.Logger) *conn {
+func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, device string, can capabilities, embedder *speaker.Embedder, log *slog.Logger) *conn {
 	return &conn{
-		ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, device: device, can: can, log: log,
+		ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, device: device, can: can,
+		embedder: embedder, log: log,
 		control: make(chan any, 64),
 		// Four frames — 80 ms. Short on purpose, and it is a latency budget rather than a buffer: this
 		// queue sits AHEAD of the device's own, so everything in it is speech a barge-in can no longer

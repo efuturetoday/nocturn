@@ -29,6 +29,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/push"
 	"github.com/efuturetoday/nocturn/internal/serve"
+	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/tools"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
@@ -77,6 +78,7 @@ func runApp(serveAddr string) int {
 	var approver gate.Approver
 	var broker *hitl.Broker
 	var devices *auth.Store
+	var voices *speaker.Embedder
 	var notifier tools.Notifier
 	if serveAddr == "" {
 		approver = &terminalApprover{in: stdin}
@@ -89,6 +91,19 @@ func runApp(serveAddr string) int {
 			return 1
 		}
 		ensureCLICredential(devices, logger)
+
+		// One embedder for the daemon: the checkpoint is tens of megabytes and immutable once parsed,
+		// so a second copy per workspace would buy nothing. Absent when unconfigured, and absence is
+		// the whole handling — recognition then reports an unknown speaker and everything else runs as
+		// it did before.
+		if path := os.Getenv("NOCTURN_SPEAKER_MODEL"); path != "" {
+			voices, err = speaker.Open(path)
+			if err != nil {
+				logger.Error("speaker model", "path", path, "err", err)
+				return 1
+			}
+			logger.Info("speaker recognition enabled", "model", path)
+		}
 		pushLog := logger.With("component", "push")
 		sender := apnsSender(pushLog) // nil when APNs is not configured
 		broker = hitl.NewBroker(pusherFor(sender, devices, pushLog), logger)
@@ -118,7 +133,7 @@ func runApp(serveAddr string) int {
 		logger.Info("nocturn daemon starting", "addr", serveAddr, "workspaces", len(spaces), "model", model)
 		// serve.Serve wires each workspace's chat subscriptions and only then starts its agent
 		// schedulers, so a scheduled firing can never race the subscription wiring.
-		if err := serve.Serve(ctx, serveAddr, spaces, devices, broker, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := serve.Serve(ctx, serveAddr, spaces, devices, broker, voices, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("serve", "err", err)
 			return 1
 		}
