@@ -33,6 +33,7 @@ typedef enum {
     SAT_THINKING,   // the person stopped, nothing has come back yet
     SAT_SPEAKING,   // the speaker is running — a local fact, see state.c
     SAT_APPROVAL,   // a tool is waiting for a human decision on another device
+    SAT_CAPTURE,    // enrolment: the microphone streams to the daemon and nothing answers
 } sat_state_t;
 
 // Everything that changes the state arrives as an event on THIS MODULE'S OWN loop — see state_post.
@@ -70,6 +71,8 @@ typedef enum {
     SAT_EV_BUTTON_DOWN,    // a button went down; data is a button_id_t
     SAT_EV_BUTTON_UP,      // and back up
     SAT_EV_TICK,           // 500 ms clock, so the machine can notice what did NOT arrive
+    SAT_EV_CAPTURE_START,  // the daemon asks this board to record its microphone for enrolment
+    SAT_EV_CAPTURE_STOP,   // and to stop. The board also stops itself — see CAPTURE_MAX_US
 } sat_event_id_t;
 
 // BARGE_IN_LOCAL decides who stops the speaker when a person talks over it.

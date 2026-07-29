@@ -167,6 +167,14 @@ static void on_control(const char *json, void *user)
         state_post(SAT_EV_REMOTE_STATE, name, strlen(name) + 1);
         return;
     }
+    if (strstr(json, "capture.start")) {
+        state_post(SAT_EV_CAPTURE_START, NULL, 0);
+        return;
+    }
+    if (strstr(json, "capture.stop")) {
+        state_post(SAT_EV_CAPTURE_STOP, NULL, 0);
+        return;
+    }
     if (strstr(json, "voice.interrupt")) {
         state_report_remote_interrupt();
         // The daemon agreeing with a barge-in this board already made, or making one of its own.
