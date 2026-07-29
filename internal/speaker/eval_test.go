@@ -26,6 +26,7 @@ import (
 //	NOCTURN_SPEAKER_MODEL=… NOCTURN_SPEAKER_CORPUS=… go test ./internal/speaker/ -run Evaluate -v
 const (
 	corpusEnv    = "NOCTURN_SPEAKER_CORPUS"
+	focusEnv     = "NOCTURN_SPEAKER_FOCUS"        // report one speaker separately
 	perSpeaker   = "NOCTURN_SPEAKER_MAX_TAKES"    // utterances per speaker, default 6
 	maxSpeakerNo = "NOCTURN_SPEAKER_MAX_SPEAKERS" // speakers, default 40
 )
@@ -206,6 +207,45 @@ func TestEvaluateCorpus(t *testing.T) {
 	t.Logf("equal error rate %.2f%% at threshold %.4f", eer*100, threshold)
 	t.Logf("worst genuine %.4f, best impostor %.4f",
 		slices.Min(same), slices.Max(different))
+
+	// One speaker on their own, when asked for. The aggregate is dominated by whoever is most
+	// numerous in the corpus, so a single voice recorded through a different microphone — the case
+	// worth knowing about — disappears into it. This is how that voice is looked at directly.
+	if focus := os.Getenv(focusEnv); focus != "" {
+		var mine, theirs []float32
+		for i := range kept {
+			for j := range kept {
+				if i == j || (kept[i].speaker != focus && kept[j].speaker != focus) {
+					continue
+				}
+				if j < i && kept[i].speaker == kept[j].speaker {
+					continue // one direction is enough within the focused speaker
+				}
+				if kept[j].speaker == focus && kept[i].speaker != focus {
+					continue // counted from the focused side already
+				}
+				s, err := Similarity(kept[i].embedding, kept[j].embedding)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if kept[i].speaker == kept[j].speaker {
+					mine = append(mine, s)
+				} else {
+					theirs = append(theirs, s)
+				}
+			}
+		}
+		if len(mine) > 0 && len(theirs) > 0 {
+			mineMean, mineSD := summarize(mine)
+			theirsMean, theirsSD := summarize(theirs)
+			t.Logf("focus %q — own pairs      %4d  similarity %.4f ± %.4f (worst %.4f)",
+				focus, len(mine), mineMean, mineSD, slices.Min(mine))
+			t.Logf("focus %q — against others %4d  similarity %.4f ± %.4f (best  %.4f)",
+				focus, len(theirs), theirsMean, theirsSD, slices.Max(theirs))
+			t.Logf("focus %q — margin between worst own and best other: %.4f",
+				focus, slices.Min(mine)-slices.Max(theirs))
+		}
+	}
 
 	// These figures describe open-set verification against a world of strangers, which is the
 	// standard way to characterise a checkpoint but NOT the question a household asks. See
