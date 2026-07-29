@@ -1,0 +1,1653 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nocturn Satellite — LED Ring Simulator</title>
+<style>
+  :root {
+    --bg: #07080b;
+    --panel: #101319;
+    --panel-2: #161a22;
+    --line: #242a35;
+    --text: #d7dce5;
+    --muted: #7d8798;
+    --accent: #4da3ff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    padding: 16px 20px; border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; background: rgba(7,8,11,.92); backdrop-filter: blur(8px); z-index: 20;
+  }
+  h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 0 0 12px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .grow { flex: 1; }
+  main { display: grid; grid-template-columns: 320px 1fr; gap: 0; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  aside {
+    border-right: 1px solid var(--line); padding: 18px 16px 60px;
+    position: sticky; top: 57px; max-height: calc(100vh - 57px); overflow-y: auto;
+  }
+  @media (max-width: 900px) { aside { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--line); } }
+  section { padding: 18px 20px 40px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+  }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .ringbox { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  canvas { display: block; border-radius: 50%; }
+  .name { font-family: var(--mono); font-size: 12px; letter-spacing: .04em; }
+  .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center; }
+  label { display: block; font-size: 11px; color: var(--muted); margin: 10px 0 3px; letter-spacing: .04em; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row > input[type=range] { flex: 1; }
+  .val { font-family: var(--mono); font-size: 11px; color: var(--text); min-width: 58px; text-align: right; }
+  input[type=range] { accent-color: var(--accent); }
+  select, input[type=number], input[type=text] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 7px; font: inherit; font-size: 12px; width: 100%;
+  }
+  input[type=color] { background: none; border: 1px solid var(--line); border-radius: 6px; width: 34px; height: 26px; padding: 2px; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.on { border-color: var(--accent); color: #fff; background: #16324d; }
+  .btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px 14px; margin: 0 0 14px; }
+  legend { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); padding: 0 6px; }
+  pre {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.5; background: #0b0d12;
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow-x: auto; color: #b9c4d4;
+  }
+  .exp { color: #d9a441; }
+  .palette { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .swatch { display: flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .ab { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Nocturn Satellite — LED Ring</h1>
+  <span class="sub">ESP32-S3-AUDIO-Board Ø&nbsp;58&nbsp;mm · 7&nbsp;× WS2812 behind a diffuser ·
+  patterns ported 1:1 from <code>rgb_led_driver.c</code></span>
+  <span class="grow"></span>
+  <button id="pause">Pause</button>
+  <button id="step">Tick +1</button>
+  <span class="sub" id="tickread">tick 0</span>
+</header>
+
+<main>
+<aside>
+  <fieldset>
+    <legend>View</legend>
+    <label>Speed <span class="val" id="speedv"></span></label>
+    <div class="row"><input type="range" id="speed" min="0.1" max="3" step="0.1" value="1"></div>
+    <label>Master brightness <span class="val" id="masterv"></span></label>
+    <div class="row"><input type="range" id="master" min="5" max="100" step="1" value="100"></div>
+    <label>Bloom (eye / camera) <span class="val" id="bloomv"></span></label>
+    <div class="row"><input type="range" id="bloom" min="0" max="1.2" step="0.05" value="0.5"></div>
+    <label>Pixel 0 angle (°) <span class="val" id="angv"></span></label>
+    <div class="row"><input type="range" id="ang" min="-180" max="180" step="15" value="-90"></div>
+    <label><input type="checkbox" id="cw" checked> clockwise</label>
+    <label><input type="checkbox" id="diffuser" checked> diffuser fitted (else bare board)</label>
+    <label><input type="checkbox" id="labels"> show pixel indices</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Optics — ESP32-S3-AUDIO-Board, Ø 58 mm</legend>
+    <div id="optics"></div>
+    <p class="sub" style="margin-top:8px">
+      A sandwich: light leaves only through the seam around the rim, the lid stays dark.
+      Every point of that band is the additive sum of all seven LEDs, per channel, with
+      1−e<sup>−x</sup> tone mapping — red next to green really does turn yellow in between.
+      <code>lid</code> = 0 makes the device fully opaque upwards.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Speech level → RGB_SIRI</legend>
+    <label>Source</label>
+    <select id="lvlMode">
+      <option value="synthetic">synthetic speech</option>
+      <option value="manual">manual</option>
+      <option value="mic">microphone</option>
+      <option value="off">none (floor only)</option>
+    </select>
+    <label>Manual level <span class="val" id="lvlManualv"></span></label>
+    <div class="row"><input type="range" id="lvlManual" min="0" max="255" step="1" value="140"></div>
+    <div class="row" style="margin-top:8px">
+      <span class="sub">now</span>
+      <div style="flex:1;height:8px;border:1px solid var(--line);border-radius:4px;overflow:hidden">
+        <div id="lvlBar" style="height:100%;width:16%;background:linear-gradient(90deg,#3b7dff,#ff3d8b)"></div>
+      </div>
+      <span class="val" id="lvlNow">40</span>
+    </div>
+    <p class="sub" style="margin-top:8px">
+      Attack immediate, release <code>216/256</code> per tick, floor <code>40</code> — the same
+      envelope the firmware runs. On the board the numbers come from the samples leaving the
+      speaker, measured in <code>audio_out.c</code> as a mean absolute value per 20 ms chunk.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Timing (firmware constants)</legend>
+    <div id="timing"></div>
+    <div class="btnrow"><button id="resetTiming">Reset</button></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Shape parameters</legend>
+    <div id="shape"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Palette</legend>
+    <div class="palette" id="palette"></div>
+  </fieldset>
+</aside>
+
+<section>
+  <h2>Every state, in sync</h2>
+  <div class="grid card" id="states" style="background:transparent;border:0;padding:0"></div>
+
+  <h2 style="margin-top:32px">Pattern gallery — all of them at once</h2>
+  <div class="card" style="margin-bottom:14px">
+    <div class="row" style="flex-wrap:wrap">
+      <label style="margin:0"><input type="checkbox" id="galUniform"> one colour for all</label>
+      <input type="color" id="galColor" value="#00c8ff">
+      <span id="galSwatches" class="btnrow" style="margin:0"></span>
+      <span class="grow"></span>
+      <span class="sub">show</span>
+      <select id="galFilter" style="width:auto">
+        <option value="all">all</option>
+        <option value="firmware">firmware only</option>
+        <option value="candidate">candidates only</option>
+        <option value="effect">effects only</option>
+      </select>
+    </div>
+  </div>
+  <div class="grid" id="gallery"></div>
+
+  <h2 style="margin-top:32px">Lab — compare two side by side</h2>
+  <div class="card">
+    <div class="ab">
+      <div>
+        <div class="ringbox">
+          <canvas id="labA" width="260" height="260"></canvas>
+          <div class="name" id="labAname">A</div>
+        </div>
+        <label>Pattern</label>
+        <select id="patA"></select>
+        <label>Colour</label>
+        <div class="row"><input type="color" id="colA" value="#00c8ff"><input type="text" id="colAhex" value="#00c8ff"></div>
+        <div class="btnrow">
+          <button data-flash="A">Flash white</button>
+          <button data-gauge="A">Gauge 60%</button>
+        </div>
+      </div>
+      <div>
+        <div class="ringbox">
+          <canvas id="labB" width="260" height="260"></canvas>
+          <div class="name" id="labBname">B</div>
+        </div>
+        <label>Pattern</label>
+        <select id="patB"></select>
+        <label>Colour</label>
+        <div class="row"><input type="color" id="colB" value="#00ff00"><input type="text" id="colBhex" value="#00ff00"></div>
+        <div class="btnrow">
+          <button data-flash="B">Flash white</button>
+          <button data-gauge="B">Gauge 60%</button>
+        </div>
+      </div>
+    </div>
+    <p class="sub" style="margin-top:14px">
+      <span class="exp">Patterns marked in amber</span> do not exist in the firmware yet — they are
+      candidates to design against. The rest is exactly the C code: same integer arithmetic, same 20 Hz.
+    </p>
+  </div>
+
+  <h2 style="margin-top:32px">State → ring mapping</h2>
+  <div class="card" id="mapping"></div>
+
+  <h2 style="margin-top:32px">Export</h2>
+  <div class="card">
+    <div class="btnrow" style="margin:0 0 10px">
+      <button id="gen">Generate C snippet</button>
+      <button id="copy">Copy</button>
+    </div>
+    <pre id="out">—</pre>
+  </div>
+</section>
+</main>
+
+<script>
+"use strict";
+
+// ── Mirror of the firmware ──────────────────────────────────────────────────
+// Everything here is a 1:1 port of satellite/main/rgb_led_driver/rgb_led_driver.c, integer
+// division included: |0 wherever C truncates, or the ramp comes out a different shape.
+
+const N = 7;                      // LED_STRIP_LED_COUNT
+
+const DEFAULT_TIMING = {
+  TICK_MS: 50,
+  BREATHE_TICKS: 40,
+  BREATHE_SLOW_TICKS: 80,
+  SPIN_TICKS: 2,
+  WAVE_TICKS: 24,
+  BLINK_TICKS: 8,
+  BLINK_SLOW_TICKS: 16,
+  FLASH_TICKS: 3,
+  GAUGE_TICKS: 20,
+};
+const T = { ...DEFAULT_TIMING };
+
+// Shape parameters: literals in the C code today. Dials here, so they get decided against the
+// picture rather than against a guess.
+const S = {
+  breatheFloor: 20,   // scale(color, 20 + ramp*235/255)
+  spinTail: 3,        // behind < 3 ? 255 >> behind : 0
+  waveFloor: 40,      // 40 + ramp*215/255
+  gaugeUnlit: 12,     // scale(color, 12) for the unfilled part
+  // candidate patterns only:
+  cometTail: 2.2,     // in pixels
+  crests: 2,          // wave crests around the ring
+  heartGap: 30,       // ticks of rest between two heartbeats
+  siriWidth: 1.0,     // multiplier on the Siri lobe width. 1.0 is what the firmware does
+  // X_SIRI_TALK only — the motion model, see siriMotionTick().
+  siriOnset: 14,      // rise in the RAW level, per tick, that counts as a syllable starting
+  siriKick: 0.20,     // impulse an onset adds to a lobe, in revolutions per tick
+  siriFlip: 0.5,      // chance that the onset also reverses that lobe
+  siriDrag: 0.28,     // how fast a lobe settles back to its idle drift
+  siriIdle: 0.010,    // that idle drift, in revolutions per tick
+  siriFlare: 1.6,     // how hard an onset lights the lobes it picks
+  siriFlareFall: 0.62,// how fast that flare dies, per tick
+};
+
+// The speech envelope RGB_SIRI is driven by, mirroring rgb_led_driver.c exactly: attack is
+// immediate, release is a decay per tick, and it never falls below a floor — a ring standing still
+// during a reply nobody is measuring would read as a hang.
+const LEVEL_DECAY = 216;   // of 256, per tick
+const LEVEL_FLOOR = 40;    // of 255
+
+// A SECOND, much faster envelope, for the motion model only.
+//
+// The slow one exists so brightness does not flicker through the gaps between words — which is
+// right for RGB_SIRI and exactly wrong for anything meant to look energetic: by the time a lobe
+// reacts to it, the syllable is over. 150/256 is a third left after two ticks, and no floor at all,
+// so this one tracks the voice rather than smoothing it.
+const FAST_DECAY = 150;
+
+const speech = {
+  mode: "synthetic",
+  level: LEVEL_FLOOR,   // the firmware envelope: drives RGB_SIRI
+  fast: 0,              // the fast one: drives the lobes' motion and flares
+  reported: 0,          // what the source said last tick, for onset detection
+  manual: 140, mic: null, micLevel: 0,
+};
+
+const PALETTE = {
+  // RGB_OFF is a real constant in the driver, and it is what the two Siri patterns are called with:
+  // they carry their own colours, so the argument is unused and the call site should show that.
+  RGB_OFF:      [0, 0, 0],
+  RGB_WHITE:    [255, 255, 255],
+  RGB_RED:      [255, 0, 0],
+  RGB_GREEN:    [0, 255, 0],
+  RGB_BLUE:     [0, 0, 255],
+  RGB_DIM_BLUE: [0, 0, 24],
+  RGB_CYAN:     [0, 200, 255],
+  RGB_AMBER:    [255, 120, 0],
+  RGB_MAGENTA:  [255, 0, 200],
+};
+const PALETTE_DEFAULT = JSON.parse(JSON.stringify(PALETTE));
+
+const scale = (c, level) => [
+  (c[0] * level / 255) | 0,
+  (c[1] * level / 255) | 0,
+  (c[2] * level / 255) | 0,
+];
+
+// ramp: a triangle over `period` ticks, squared (perceived brightness ≈ √emitted light).
+function ramp(phase, period) {
+  const half = (period / 2) | 0;
+  const tri = phase < half ? ((phase * 255 / half) | 0) : (((period - phase) * 255 / half) | 0);
+  return ((tri * tri / 255) | 0);
+}
+
+const mod = (a, n) => ((a % n) + n) % n;
+
+// Randomness without random. Math.random() would be wrong here: the same tick has to produce the
+// same frame twice, otherwise the page flickers while paused and single-stepping shows something
+// the run never showed. hash() is deterministic over (step, channel) — on the board it would be
+// an LCG, not rand().
+const hash = (a, b) => {
+  const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+  return x - Math.floor(x);
+};
+
+// hsv exists only for the effects that pick their own colour. State patterns take theirs from the
+// outside — what a state MEANS is not the pattern's decision.
+function hsv(h, s, v) {
+  h = mod(h, 1) * 6;
+  const f = (n) => {
+    const k = (n + h) % 6;
+    return Math.round(255 * v * (1 - s * Math.max(0, Math.min(1, Math.min(k, 4 - k)))));
+  };
+  return [f(5), f(3), f(1)];
+}
+
+// ── Patterns ────────────────────────────────────────────────────────────────
+// firmware: true  = exists in the C code, arithmetic identical.
+// firmware: false = candidate, lives only here.
+
+const PATTERNS = {
+  RGB_SOLID: { firmware: true, doc: "steady. presence without motion", f: (c) => Array(N).fill(c) },
+
+  RGB_BREATHE: { firmware: true, doc: "rise and fall, ~2 s. alive, waiting on you", f: (c, t) => {
+    const p = T.BREATHE_TICKS;
+    const v = scale(c, S.breatheFloor + ((ramp(mod(t, p), p) * (255 - S.breatheFloor) / 255) | 0));
+    return Array(N).fill(v);
+  }},
+
+  RGB_BREATHE_SLOW: { firmware: true, doc: "rise and fall, ~4 s. alive, waiting on something else", f: (c, t) => {
+    const p = T.BREATHE_SLOW_TICKS;
+    const v = scale(c, S.breatheFloor + ((ramp(mod(t, p), p) * (255 - S.breatheFloor) / 255) | 0));
+    return Array(N).fill(v);
+  }},
+
+  RGB_SPIN: { firmware: true, doc: "one pixel travelling the ring. working on something", f: (c, t) => {
+    const head = ((t / T.SPIN_TICKS) | 0) % N;
+    return Array.from({ length: N }, (_, i) => {
+      const behind = mod(head - i, N);
+      return scale(c, behind < S.spinTail ? (255 >> behind) : 0);
+    });
+  }},
+
+  RGB_WAVE: { firmware: true, doc: "a brightness crest moving round. talking", f: (c, t) => {
+    const phase = mod(t, T.WAVE_TICKS);
+    return Array.from({ length: N }, (_, i) => {
+      const at = (((phase * N / T.WAVE_TICKS) | 0) + i) % N;
+      return scale(c, S.waveFloor + ((ramp(at, N) * (255 - S.waveFloor) / 255) | 0));
+    });
+  }},
+
+  RGB_BLINK: { firmware: true, doc: "on/off, ~0.8 s. wants a decision", f: (c, t) => {
+    const on = (((t / T.BLINK_TICKS) | 0) % 2) === 0;
+    return Array(N).fill(on ? c : [0, 0, 0]);
+  }},
+
+  RGB_BLINK_SLOW: { firmware: true, doc: "on/off, ~1.6 s. wants repair", f: (c, t) => {
+    const on = (((t / T.BLINK_SLOW_TICKS) | 0) % 2) === 0;
+    return Array(N).fill(on ? c : [0, 0, 0]);
+  }},
+
+  // The only pattern driven from outside itself: loudness sets how far the lobes swell and how wide
+  // they spread. Colour argument unused — the look IS the palette, see siri() below.
+  RGB_SIRI: { firmware: true, doc: "four drifting colours, swelling with the speech. speaking", f: (_c, t) => {
+    const loud = speech.level / 255;
+    return siri(t, { drift: 0.010, breathe: 0.05, width: 0.85 + 0.35 * loud, gain: 0.45 + 0.55 * loud, floor: 0.05 });
+  }},
+
+  RGB_SIRI_THINK: { firmware: true, doc: "the same colours pulled tight and circling. working", f: (_c, t) =>
+    siri(t, { drift: 0.034, breathe: 0.02, width: 0.6, gain: 0.85, floor: 0.03, together: true })
+  },
+
+  // ── Candidates ────────────────────────────────────────────────────────────
+  X_COMET: { firmware: false, doc: "SPIN with a soft sub-pixel head — travels instead of stepping", f: (c, t) => {
+    const revolution = T.SPIN_TICKS * N;
+    const head = (t % revolution) * N / revolution;
+    return Array.from({ length: N }, (_, i) => {
+      const d = mod(head - i, N);
+      const lvl = Math.max(0, 255 * Math.exp(-d / S.cometTail) - 6);
+      return scale(c, lvl | 0);
+    });
+  }},
+
+  X_COMET_DUAL: { firmware: false, doc: "two heads opposite each other — denser, reads faster", f: (c, t) => {
+    const revolution = T.SPIN_TICKS * N;
+    const head = (t % revolution) * N / revolution;
+    return Array.from({ length: N }, (_, i) => {
+      const a = Math.exp(-mod(head - i, N) / S.cometTail);
+      const b = Math.exp(-mod(head + N / 2 - i, N) / S.cometTail);
+      return scale(c, Math.min(255, 255 * (a + b)) | 0);
+    });
+  }},
+
+  X_RIPPLE: { firmware: false, doc: "sine instead of triangle, several crests — WAVE, but softer", f: (c, t) => {
+    const phase = (t % T.WAVE_TICKS) / T.WAVE_TICKS;
+    return Array.from({ length: N }, (_, i) => {
+      const s = (Math.sin(2 * Math.PI * (S.crests * i / N - phase)) + 1) / 2;
+      return scale(c, (S.waveFloor + s * (255 - S.waveFloor)) | 0);
+    });
+  }},
+
+  X_HEARTBEAT: { firmware: false, doc: "two short beats, then rest — urgent without being an alarm", f: (c, t) => {
+    const period = T.BLINK_TICKS * 2 + S.heartGap;
+    const p = mod(t, period);
+    const beat = T.BLINK_TICKS;
+    let lvl = 0;
+    if (p < beat) lvl = 255 - (p * 255 / beat) | 0;
+    else if (p >= beat + 2 && p < 2 * beat + 2) lvl = 200 - ((p - beat - 2) * 200 / beat) | 0;
+    return Array(N).fill(scale(c, Math.max(S.breatheFloor, lvl)));
+  }},
+
+  X_BREATHE_SPREAD: { firmware: false, doc: "breathing with a phase offset per pixel — alive, not flat", f: (c, t) => {
+    const p = T.BREATHE_TICKS;
+    return Array.from({ length: N }, (_, i) => {
+      const ph = mod(t + ((i * p / N) | 0) / 2, p) | 0;
+      return scale(c, S.breatheFloor + ((ramp(ph, p) * (255 - S.breatheFloor) / 255) | 0));
+    });
+  }},
+
+  X_FILL_SWEEP: { firmware: false, doc: "fills up, drains again — progress without a number", f: (c, t) => {
+    const period = T.SPIN_TICKS * N * 2;
+    const p = mod(t, period);
+    const up = p < period / 2;
+    const k = up ? p / (period / 2) : 1 - (p - period / 2) / (period / 2);
+    const lit = Math.round(k * N);
+    return Array.from({ length: N }, (_, i) => (i < lit ? c : scale(c, S.gaugeUnlit)));
+  }},
+
+  X_PENDULUM: { firmware: false, doc: "head swinging across an arc — attention without rotation", f: (c, t) => {
+    const period = T.SPIN_TICKS * N * 2;
+    const k = (Math.sin(2 * Math.PI * mod(t, period) / period) + 1) / 2;
+    const head = k * (N - 1);
+    return Array.from({ length: N }, (_, i) =>
+      scale(c, Math.max(0, 255 * Math.exp(-Math.abs(head - i) / S.cometTail) - 6) | 0));
+  }},
+
+  X_RAINBOW: { firmware: false, doc: "every LED a different colour — shows how the seam really mixes", f: (c, t) => {
+    const revolution = T.SPIN_TICKS * N * 3;
+    const phase = mod(t, revolution) / revolution;
+    return Array.from({ length: N }, (_, i) => {
+      const hue = ((i / N + phase) % 1) * 6;
+      const k = (n) => {
+        const v = (n + hue) % 6;
+        return Math.round(255 * Math.max(0, Math.min(1, Math.min(v, 4 - v, 1))));
+      };
+      return [k(3), k(1), k(5)];
+    });
+  }},
+
+  X_SPARKLE: { firmware: false, doc: "deterministic glitter — activity without a direction", f: (c, t) => {
+    const step = (t / T.SPIN_TICKS) | 0;
+    return Array.from({ length: N }, (_, i) => {
+      const r = hash(step, i);
+      return scale(c, (S.breatheFloor + r * (255 - S.breatheFloor)) | 0);
+    });
+  }},
+
+  X_THINK_DOTS: { firmware: false, doc: "three dots chasing each other — waiting without nagging", f: (c, t) => {
+    const revolution = T.SPIN_TICKS * N * 1.6;
+    const head = (mod(t, revolution) / revolution) * N;
+    return Array.from({ length: N }, (_, i) => {
+      let best = 0;
+      for (let k = 0; k < 3; k++) {
+        const d = mod(head - k * 0.9 - i, N);
+        best = Math.max(best, Math.exp(-d * d / (2 * 0.55 * 0.55)) * (1 - k * 0.28));
+      }
+      return scale(c, Math.min(255, 255 * best) | 0);
+    });
+  }},
+
+  X_LEVEL_METER: { firmware: false, doc: "an arc rising and falling like a meter — speech as quantity", f: (c, t) => {
+    const env = 0.5 + 0.5 * Math.sin(t * 0.31) * Math.sin(t * 0.11 + 1.3);
+    const lit = env * N;
+    return Array.from({ length: N }, (_, i) => {
+      const k = Math.max(0, Math.min(1, lit - i));
+      return scale(c, (S.waveFloor + k * (255 - S.waveFloor)) | 0);
+    });
+  }},
+
+  X_SPEECH_JITTER: { firmware: false, doc: "wave with a restless amplitude — looks the way talking sounds", f: (c, t) => {
+    const phase = mod(t, T.WAVE_TICKS) / T.WAVE_TICKS;
+    const gain = 0.55 + 0.45 * Math.abs(Math.sin(t * 0.47) * Math.cos(t * 0.19));
+    return Array.from({ length: N }, (_, i) => {
+      const s = (Math.sin(2 * Math.PI * (i / N - phase)) + 1) / 2;
+      return scale(c, (S.waveFloor + gain * s * (255 - S.waveFloor)) | 0);
+    });
+  }},
+
+  X_DUO_ARC: { firmware: false, doc: "two hues on opposite arcs — the seam mixes what is in between", f: (c, t) => {
+    const shift = (v, k) => [v[(0 + k) % 3], v[(1 + k) % 3], v[(2 + k) % 3]];
+    const other = shift(c, 1);
+    const revolution = T.SPIN_TICKS * N * 2;
+    const head = (mod(t, revolution) / revolution) * N;
+    return Array.from({ length: N }, (_, i) => {
+      const a = Math.exp(-Math.pow(mod(head - i, N), 2) / 4);
+      const b = Math.exp(-Math.pow(mod(head + N / 2 - i, N), 2) / 4);
+      return [
+        Math.min(255, c[0] * a + other[0] * b) | 0,
+        Math.min(255, c[1] * a + other[1] * b) | 0,
+        Math.min(255, c[2] * a + other[2] * b) | 0,
+      ];
+    });
+  }},
+
+  X_WARP: { firmware: false, doc: "head speeds up and brakes each lap — reads as effort", f: (c, t) => {
+    const revolution = T.SPIN_TICKS * N * 1.5;
+    const u = mod(t, revolution) / revolution;
+    const eased = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+    const head = eased * N;
+    return Array.from({ length: N }, (_, i) =>
+      scale(c, Math.max(0, 255 * Math.exp(-mod(head - i, N) / S.cometTail) - 6) | 0));
+  }},
+
+  X_BLOOM_OUT: { firmware: false, doc: "a wave leaving pixel 0 both ways — an acknowledgement, not a state", f: (c, t) => {
+    const period = T.WAVE_TICKS * 1.5;
+    const front = (mod(t, period) / period) * (N / 2 + 1.5);
+    return Array.from({ length: N }, (_, i) => {
+      const d = Math.min(mod(i, N), mod(-i, N));
+      const lvl = 255 * Math.exp(-Math.pow(d - front, 2) / 0.9) * (1 - front / (N / 2 + 1.5));
+      return scale(c, Math.max(0, lvl) | 0);
+    });
+  }},
+
+  X_MEET: { firmware: false, doc: "two heads leave the top and meet at the bottom — something connecting", f: (c, t) => {
+    const period = T.SPIN_TICKS * N * 2;
+    const u = mod(t, period) / period;
+    const a = u * (N / 2), b = N - u * (N / 2);
+    return Array.from({ length: N }, (_, i) => {
+      const da = Math.min(Math.abs(i - a), N - Math.abs(i - a));
+      const db = Math.min(Math.abs(i - b), N - Math.abs(i - b));
+      const lvl = 255 * (Math.exp(-da * da / 0.7) + Math.exp(-db * db / 0.7));
+      return scale(c, Math.min(255, lvl) | 0);
+    });
+  }},
+
+  X_STROBE_DOUBLE: { firmware: false, doc: "two hard flashes, long pause — shouts once, then waits", f: (c, t) => {
+    const period = T.BLINK_TICKS * 6;
+    const p = mod(t, period);
+    const on = p < 2 || (p >= 5 && p < 7);
+    return Array(N).fill(on ? c : [0, 0, 0]);
+  }},
+
+  X_DECAY_PULSE: { firmware: false, doc: "hard attack, slow decay — a fault that keeps ringing", f: (c, t) => {
+    const period = T.BLINK_SLOW_TICKS * 3;
+    const p = mod(t, period) / period;
+    return Array(N).fill(scale(c, (255 * Math.exp(-p * 4.5)) | 0));
+  }},
+
+  X_EMBER: { firmware: false, doc: "very dark glow, each pixel its own pace — present in a bedroom", f: (c, t) => {
+    return Array.from({ length: N }, (_, i) => {
+      const s = (Math.sin(t * 0.035 + i * 1.7) + Math.sin(t * 0.021 + i * 3.1)) / 2;
+      return scale(c, (S.breatheFloor * 0.6 + (s + 1) / 2 * 26) | 0);
+    });
+  }},
+
+  X_GRADIENT_ROTATE: { firmware: false, doc: "one soft gradient turning slowly — motion without an event", f: (c, t) => {
+    const revolution = T.BREATHE_SLOW_TICKS;
+    const phase = mod(t, revolution) / revolution;
+    return Array.from({ length: N }, (_, i) => {
+      const s = (Math.cos(2 * Math.PI * (i / N - phase)) + 1) / 2;
+      return scale(c, (S.breatheFloor + Math.pow(s, 1.6) * (255 - S.breatheFloor)) | 0);
+    });
+  }},
+
+  // ── Effects ───────────────────────────────────────────────────────────────
+  // The WLED/FastLED family: patterns that live off many independent pixels rather than off one
+  // shape. On seven pixels behind a diffuser that is a borderline case — several of them smear
+  // into "the ring flickers colourfully". Which is exactly why they are here: the sigmaMM dial
+  // answers in two seconds whether an effect survives this optic, instead of flashing and hoping.
+
+  FX_SNOWFALL: { firmware: false, doc: "flakes light up and fade out — calm, no direction", f: (c, t) => {
+    const rate = Math.max(1, T.SPIN_TICKS), step = (t / rate) | 0;
+    const lvl = new Array(N).fill(0);
+    for (let k = 0; k < 12; k++) {
+      const s = step - k;
+      if (hash(s, 13) > 0.6) continue;
+      const i = (hash(s, 7) * N) | 0;
+      lvl[i] = Math.max(lvl[i], Math.pow(0.74, k));
+    }
+    return lvl.map((v) => scale(c, (v * 255) | 0));
+  }},
+
+  FX_CONFETTI: { firmware: false, doc: "snowfall, but every flake a different colour", f: (_c, t) => {
+    const rate = Math.max(1, T.SPIN_TICKS), step = (t / rate) | 0;
+    const px = Array.from({ length: N }, () => [0, 0, 0]);
+    for (let k = 11; k >= 0; k--) {
+      const s = step - k;
+      if (hash(s, 13) > 0.55) continue;
+      const i = (hash(s, 7) * N) | 0;
+      const v = Math.pow(0.76, k);
+      const col = hsv(hash(s, 3), 1, v);
+      px[i] = [Math.max(px[i][0], col[0]), Math.max(px[i][1], col[1]), Math.max(px[i][2], col[2])];
+    }
+    return px;
+  }},
+
+  FX_METEOR: { firmware: false, doc: "comet with a decaying tail — gaps in the tail make it grainy", f: (c, t) => {
+    const revolution = T.SPIN_TICKS * N;
+    const head = (mod(t, revolution) / revolution) * N;
+    const step = (t / Math.max(1, T.SPIN_TICKS)) | 0;
+    return Array.from({ length: N }, (_, i) => {
+      const d = mod(head - i, N);
+      let v = Math.exp(-d / 1.6);
+      if (d > 0.6 && hash(step, i * 5) < 0.35) v *= 0.35;
+      return scale(c, (v * 255) | 0);
+    });
+  }},
+
+  FX_FIRE: { firmware: false, doc: "fire: warm embers, restless, never cold", f: (_c, t) => {
+    const step = (t / 2) | 0;
+    return Array.from({ length: N }, (_, i) => {
+      const slow = 0.5 + 0.5 * Math.sin(t * 0.09 + i * 2.1);
+      const heat = Math.max(0, Math.min(1, 0.35 + 0.45 * slow + 0.3 * (hash(step, i) - 0.5)));
+      return [255, (40 + 170 * heat * heat) | 0, (18 * Math.pow(heat, 4)) | 0];
+    });
+  }},
+
+  FX_CANDLE: { firmware: false, doc: "a candle: the same warmth, slower and quieter", f: (_c, t) => {
+    const step = (t / 4) | 0;
+    const base = 0.62 + 0.18 * Math.sin(t * 0.06) + 0.12 * (hash(step, 1) - 0.5);
+    return Array.from({ length: N }, (_, i) => {
+      const v = Math.max(0.15, Math.min(1, base + 0.06 * Math.sin(t * 0.13 + i)));
+      return [(255 * v) | 0, (120 * v) | 0, (18 * v) | 0];
+    });
+  }},
+
+  FX_AURORA: { firmware: false, doc: "northern lights: green through cyan into violet, drifting", f: (_c, t) => {
+    return Array.from({ length: N }, (_, i) => {
+      const h = 0.38 + 0.18 * Math.sin(t * 0.021 + i * 0.9) + 0.1 * Math.sin(t * 0.011 + i * 2.2);
+      const v = 0.35 + 0.45 * (0.5 + 0.5 * Math.sin(t * 0.03 + i * 1.4));
+      return hsv(h, 0.85, v);
+    });
+  }},
+
+  FX_PLASMA: { firmware: false, doc: "plasma: stacked sines, colour wandering through everything", f: (_c, t) => {
+    return Array.from({ length: N }, (_, i) => {
+      const n = (Math.sin(i * 0.9 + t * 0.05) + Math.sin(i * 1.7 - t * 0.031) + Math.sin(t * 0.017)) / 3;
+      return hsv(0.5 + n * 0.5, 1, 0.45 + 0.45 * (0.5 + 0.5 * n));
+    });
+  }},
+
+  FX_RAINBOW_BREATHE: { firmware: false, doc: "a rainbow that breathes — colourful without the rush", f: (_c, t) => {
+    const p = T.BREATHE_TICKS;
+    const env = (S.breatheFloor + ramp(mod(t, p), p) * (255 - S.breatheFloor) / 255) / 255;
+    const revolution = T.BREATHE_SLOW_TICKS * 2;
+    const phase = mod(t, revolution) / revolution;
+    return Array.from({ length: N }, (_, i) => hsv(i / N + phase, 1, env));
+  }},
+
+  FX_THEATER_CHASE: { firmware: false, doc: "every third pixel on, marching — classic, hard-edged", f: (c, t) => {
+    const step = (t / Math.max(1, T.SPIN_TICKS)) | 0;
+    return Array.from({ length: N }, (_, i) => (mod(i + step, 3) === 0 ? c : [0, 0, 0]));
+  }},
+
+  FX_COLOR_WIPE: { firmware: false, doc: "fills pixel by pixel, then a new colour — visibly discrete", f: (_c, t) => {
+    const per = Math.max(1, T.SPIN_TICKS);
+    const step = (t / per) | 0;
+    const round = (step / N) | 0;
+    const upto = mod(step, N);
+    const now = hsv(hash(round, 2), 1, 1), prev = hsv(hash(round - 1, 2), 1, 1);
+    return Array.from({ length: N }, (_, i) => (i <= upto ? now : prev));
+  }},
+
+  FX_TWINKLE_STARS: { firmware: false, doc: "a few stars fading in and out — almost dark", f: (c, t) => {
+    return Array.from({ length: N }, (_, i) => {
+      const period = 60 + hash(i, 21) * 120;
+      const ph = mod(t + hash(i, 4) * period, period) / period;
+      const v = Math.pow(Math.max(0, Math.sin(Math.PI * ph)), 3);
+      return scale(c, (10 + v * 245) | 0);
+    });
+  }},
+
+  FX_POLICE: { firmware: false, doc: "red and blue on two halves, alternating — impossible to miss", f: (_c, t) => {
+    const on = (((t / T.BLINK_TICKS) | 0) % 2) === 0;
+    return Array.from({ length: N }, (_, i) => {
+      const left = i < N / 2;
+      return (left === on) ? [255, 0, 0] : [0, 0, 255];
+    });
+  }},
+
+  FX_SIRI_CALM: { firmware: false, doc: "the Siri palette drifting slowly, deaf to any level — a resting look", f: (_c, t) => siri(t, {
+    drift: 0.004, breathe: 0.011, width: 1.2, gain: 0.5, floor: 0.04,
+  })},
+
+  X_SIRI_TALK: { firmware: false, doc: "lobes kicked, flared and turned around by every syllable — motion, not just brightness", f: (_c, t) => {
+    // The FAST envelope, not the firmware one: brightness that has been smoothed for a quarter of a
+    // second cannot look energetic no matter what the lobes do underneath it.
+    const loud = speech.fast / 255;
+    return siri(t, {
+      pos: MOTION.pos, lobeAmp: MOTION.flare, breathe: 0.05,
+      width: 0.7 + 0.35 * loud, gain: 0.32 + 0.68 * loud, floor: 0.04,
+    });
+  }},
+};
+
+
+// ── The Siri look ───────────────────────────────────────────────────────────
+// Four coloured lobes on the ring, each with its own speed, width and swell, summed per channel.
+//
+// The recipe IS the sum. Nobody perceives four blobs — what reads is where blue slides through
+// purple into pink, and that hue only exists because the channels add where the lobes overlap.
+// A palette rotating around the ring gives banded colour; this gives the drifting, liquid thing.
+// Which is also why it suits this device: the seam already blends whatever the pixels do, so the
+// mixing happens twice — once in the arithmetic, once in the diffuser.
+const SIRI_LOBES = [
+  [59, 125, 255],   // blue
+  [164, 75, 255],   // purple
+  [255, 61, 139],   // pink
+  [35, 211, 211],   // teal
+];
+
+function siri(t, o) {
+  const px = Array.from({ length: N }, () => [0, 0, 0]);
+  SIRI_LOBES.forEach((col, j) => {
+    // together: every lobe travels the same way, only slightly staggered — reads as one object
+    // circling. Otherwise they counter-rotate, which reads as something alive and undirected.
+    const dir = o.together ? 1 : (j % 2 ? -1 : 1);
+    const speed = o.drift * (1 + j * 0.22) * dir;
+    // o.pos hands in positions that were integrated over time instead of computed from the tick.
+    // A pattern that can change direction cannot be a function of the clock alone: where a lobe is
+    // depends on every kick it has had, which is the whole difference between motion and animation.
+    const pos = o.pos ? o.pos[j] : mod(t * speed * N + j * N / SIRI_LOBES.length, N);
+    // o.lobeAmp is the per-lobe flare: a syllable throws one or two lobes forward and makes those
+    // briefly brighter AND wider. That is what separates "speaking" from "being lit up".
+    const flare = o.lobeAmp ? o.lobeAmp[j] : 0;
+    const width = Math.max(0.35, S.siriWidth * o.width
+        * (0.85 + 0.3 * Math.sin(t * 0.017 + j * 1.9)) * (1 + 0.35 * flare));
+    const amp = o.gain * (0.55 + 0.45 * Math.sin(t * o.breathe * (1 + j * 0.3) + j * 2.4)) * (1 + flare);
+    if (amp <= 0) return;
+    for (let i = 0; i < N; i++) {
+      const raw = Math.abs(i - pos);
+      const d = Math.min(raw, N - raw);
+      const w = amp * Math.exp(-(d * d) / (2 * width * width));
+      px[i][0] += col[0] * w;
+      px[i][1] += col[1] * w;
+      px[i][2] += col[2] * w;
+    }
+  });
+  // The floor is blue, not grey: between two lobes the ring must not go dark — that reads as gaps —
+  // but a white residue is what makes cheap RGB look cheap, and this pattern is a claim about colour.
+  return px.map((p) => [
+    Math.min(255, p[0] + 64 * o.floor) | 0,
+    Math.min(255, p[1] + 38 * o.floor) | 0,
+    Math.min(255, p[2] + 255 * o.floor) | 0,
+  ]);
+}
+
+// ── Lobe motion (X_SIRI_TALK) ───────────────────────────────────────────────
+// Brightness alone reads as a lamp being dimmed by a voice. What reads as SPEAKING is that the
+// thing MOVES differently when a syllable starts: it lurches, and sometimes it turns around.
+//
+// So each lobe carries a velocity rather than a formula. An onset — the level rising faster than
+// siriOnset within one tick, which is what a syllable's attack looks like — hands out an impulse
+// scaled by how loud it got, and reverses some of the lobes. Between onsets every lobe settles back
+// towards a slow idle drift, so a pause winds the ring down instead of freezing it.
+//
+// Onset and not level: a sustained vowel is loud the whole way through, and a ring that lurched on
+// every loud frame would only shake. The reversals are deterministic (hash of tick and lobe), for
+// the same reason everything else here is — pausing and stepping must show what the run showed.
+//
+// This is state, and state is why it is integrated once per tick from levelTick() rather than
+// inside the pattern: the pattern is called again for every redraw, and a lobe that advanced on
+// each of those would run at the monitor's speed instead of the board's.
+const MOTION = {
+  pos: SIRI_LOBES.map((_, j) => j * N / SIRI_LOBES.length),
+  vel: SIRI_LOBES.map(() => 0),
+  dir: SIRI_LOBES.map((_, j) => (j % 2 ? -1 : 1)),
+  // Per-lobe flare. An onset does not light the whole ring evenly — it picks one or two lobes and
+  // throws them forward, so consecutive syllables land in different colours. That, more than the
+  // overall brightness, is what makes it look like something producing speech rather than
+  // something being illuminated by it.
+  flare: SIRI_LOBES.map(() => 0),
+};
+
+// Exposed so the console can watch the model while the dials are being turned: MOTION.dir tells
+// you whether a setting actually reverses anything, which the eye is bad at judging on a ring.
+window.MOTION = MOTION;
+
+function siriMotionTick(t, level, rise) {
+  const loud = level / 255;
+  const onset = rise > S.siriOnset;
+  // How hard this particular onset hit. A whispered syllable nudges, a stressed one throws.
+  const force = onset ? Math.min(1.6, 0.5 + rise / 120) : 0;
+
+  for (let j = 0; j < SIRI_LOBES.length; j++) {
+    if (onset) {
+      // Not every lobe reacts to every syllable — that is what keeps consecutive onsets from
+      // looking like the same event repeated.
+      const picked = hash(t, j * 31 + 5) < 0.7;
+      if (picked) {
+        if (hash(t, j * 7 + 1) < S.siriFlip) {
+          MOTION.dir[j] = -MOTION.dir[j];
+        }
+        MOTION.vel[j] += MOTION.dir[j] * S.siriKick * force * (0.6 + hash(t, j * 13 + 3));
+        MOTION.flare[j] += S.siriFlare * force * (0.5 + hash(t, j * 17 + 9));
+      }
+    }
+    // Idle drift scales with loudness too: quiet speech drifts, a loud passage keeps circling.
+    const target = MOTION.dir[j] * S.siriIdle * (1 + j * 0.22) * (0.3 + 0.7 * loud);
+    MOTION.vel[j] += (target - MOTION.vel[j]) * S.siriDrag;
+    MOTION.pos[j] = mod(MOTION.pos[j] + MOTION.vel[j] * N, N);
+    MOTION.flare[j] *= S.siriFlareFall;
+  }
+}
+
+// ── States ──────────────────────────────────────────────────────────────────
+// Straight out of satellite/main/state/state.c: paint().
+const STATES = [
+  { name: "SAT_BOOT",       pattern: "RGB_BREATHE_SLOW", color: "RGB_WHITE",    note: "powering up" },
+  { name: "SAT_NO_NETWORK", pattern: "RGB_BREATHE_SLOW", color: "RGB_AMBER",    note: "no association / no address" },
+  { name: "SAT_NO_DAEMON",  pattern: "RGB_SPIN",         color: "RGB_AMBER",    note: "network, but no socket" },
+  { name: "SAT_FAULT",      pattern: "RGB_BLINK_SLOW",   color: "RGB_RED",      note: "needs a person" },
+  { name: "SAT_IDLE",       pattern: "RGB_SOLID",        color: "RGB_DIM_BLUE", note: "waiting for the wake word" },
+  { name: "SAT_LISTENING",  pattern: "RGB_BREATHE",      color: "RGB_GREEN",    note: "you may talk" },
+  { name: "SAT_THINKING",   pattern: "RGB_SIRI_THINK",   color: "RGB_OFF",      note: "nothing back yet" },
+  { name: "SAT_SPEAKING",   pattern: "RGB_SIRI",         color: "RGB_OFF",      note: "the speaker is running" },
+  { name: "SAT_APPROVAL",   pattern: "RGB_BLINK",        color: "RGB_MAGENTA",  note: "waiting on a decision" },
+];
+const STATES_DEFAULT = JSON.parse(JSON.stringify(STATES));
+
+// ── Optics ──────────────────────────────────────────────────────────────────
+// Waveshare ESP32-S3-AUDIO-Board: a round PCB, Ø 58 mm, the seven WS2812 sitting as a ring close
+// to the rim with a diffuser above them. So what gets drawn is not a circle per LED but a LIGHT
+// FIELD: every screen point is the SUM of all seven sources, per channel.
+//
+// That is the difference that matters. Where two scatter cones overlap the channels genuinely
+// add — red beside green turns yellow in between, blue beside red turns violet, and a bright
+// neighbour washes out a dim one. Stacked gradients cannot do that: they show two blobs that
+// know nothing about each other.
+//
+// Dimensions in millimetres, so scatter stays a physical quantity rather than a rendering number.
+//
+// THE DEVICE IS A SANDWICH. The board sits between a black enclosure and the lid, and light only
+// leaves through the seam around the rim. Nothing shines through the top. What is visible is a
+// narrow band — and that band is the entire surface on which the seven colours can meet at all.
+const geo = {
+  boardMM: 58,     // PCB diameter
+  ringMM: 26,      // radius the LEDs sit on
+  gapMM: 3.2,      // width of the light seam — the only window out
+  sigmaMM: 5.5,    // scatter radius in the seam: how far one LED smears along the band
+  haloMM: 14,      // long tail from multiple scattering inside the enclosure
+  wash: 0.04,      // share each LED throws evenly across the whole band
+  lid: 0.05,       // stray light on the lid, close to the seam. 0 = fully opaque
+  exposure: 1.5,   // tone mapping: how fast sums run into saturation
+};
+
+const view = { speed: 1, master: 100, ang: -90, cw: true, labels: false, diffuser: true, bloom: 0.5 };
+
+// One kernel per LED: how strongly it contributes to every point of the (coarse) field. Rebuilt
+// only when geometry or scatter change — per frame this leaves one multiply-add per LED and point.
+let geoVersion = 0;
+let dirty = true;                     // something about the view changed, redraw once
+const bumpGeo = () => { geoVersion++; dirty = true; };
+
+const LUT_N = 1024, LUT_MAX = 6;      // tone-mapping table: channel sums 0..6
+
+class LightField {
+  constructor(canvas) {
+    this.out = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.F = Math.max(56, Math.round(canvas.width / 2.4)); // field resolution, upscaled on draw
+    this.off = document.createElement("canvas");
+    this.off.width = this.off.height = this.F;
+    this.offCtx = this.off.getContext("2d");
+    this.img = this.offCtx.createImageData(this.F, this.F);
+    this.acc = new Float32Array(this.F * this.F * 3);
+    this.version = -1;
+  }
+
+  build() {
+    const F = this.F, sideMM = geo.boardMM * 1.06;
+    const mm = sideMM / F;                       // mm per field pixel
+    const s = geo.sigmaMM / mm, halo = geo.haloMM / mm;
+    const R = (geo.boardMM / 2) / mm, ringR = geo.ringMM / mm;
+    const cx = F / 2, cy = F / 2;
+
+    this.kernels = [];
+    this.mask = new Float32Array(F * F);
+    const rOut = R, rIn = Math.max(1, R - geo.gapMM / mm), soft = 0.9;
+    for (let y = 0; y < F; y++) {
+      for (let x = 0; x < F; x++) {
+        const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+        // The band: full between rIn and rOut, easing out over about one pixel on both sides —
+        // the seam has an edge, but not an infinitely sharp one.
+        let m = 0;
+        if (d <= rOut + soft && d >= rIn - soft) {
+          m = Math.min(1, (rOut + soft - d) / (2 * soft)) * Math.min(1, (d - rIn + soft) / (2 * soft));
+          m = Math.max(0, m);
+        }
+        // The lid itself does not glow. What comes back off it is stray light near the seam,
+        // falling away towards the centre — hence cubed rather than linear.
+        if (d < rIn && geo.lid > 0) {
+          const t = d / rIn;
+          m = Math.max(m, geo.lid * t * t * t);
+        }
+        this.mask[y * F + x] = m;
+      }
+    }
+    for (let i = 0; i < N; i++) {
+      const a = (view.ang * Math.PI / 180) + (view.cw ? 1 : -1) * (i * 2 * Math.PI / N);
+      const lx = cx + Math.cos(a) * ringR, ly = cy + Math.sin(a) * ringR;
+      const k = new Float32Array(F * F);
+      for (let y = 0; y < F; y++) {
+        for (let x = 0; x < F; x++) {
+          const d = Math.hypot(x + 0.5 - lx, y + 0.5 - ly);
+          const core = Math.exp(-(d * d) / (2 * s * s));
+          const tail = Math.exp(-d / halo);
+          k[y * F + x] = (0.8 * core + 0.2 * tail + geo.wash) * this.mask[y * F + x];
+        }
+      }
+      this.kernels.push(k);
+    }
+    this.ledPos = Array.from({ length: N }, (_, i) => {
+      const a = (view.ang * Math.PI / 180) + (view.cw ? 1 : -1) * (i * 2 * Math.PI / N);
+      const rr = (geo.ringMM / geo.boardMM) * this.out.width * 0.94;
+      return [this.out.width / 2 + Math.cos(a) * rr, this.out.height / 2 + Math.sin(a) * rr];
+    });
+    this.version = geoVersion;
+  }
+
+  render(px) {
+    if (this.version !== geoVersion) this.build();
+    const F = this.F, acc = this.acc;
+    acc.fill(0);
+    const m = (view.master / 100) / 255;
+
+    // THE additive sum. Per channel, without clipping — how overlap feels is decided by the tone
+    // mapping below, not by an accidental overflow at 255.
+    for (let i = 0; i < N; i++) {
+      const r = px[i][0] * m, g = px[i][1] * m, b = px[i][2] * m;
+      if (r + g + b <= 0.002) continue;
+      const k = this.kernels[i];
+      for (let p = 0, n = F * F; p < n; p++) {
+        const w = k[p];
+        if (w <= 0) continue;
+        acc[p * 3] += w * r;
+        acc[p * 3 + 1] += w * g;
+        acc[p * 3 + 2] += w * b;
+      }
+    }
+
+    // 1 - e^-x: sums ease into saturation instead of being cut off. Two bright LEDs side by side
+    // therefore get brighter AND whiter, the way real light behaves on a diffuser. Tabulated,
+    // because otherwise it is three exp() per screen point per frame.
+    if (this.lutFor !== geo.exposure) {
+      this.lut = new Uint8ClampedArray(LUT_N);
+      for (let i = 0; i < LUT_N; i++) {
+        this.lut[i] = 255 * (1 - Math.exp(-geo.exposure * (i * LUT_MAX / LUT_N)));
+      }
+      this.lutFor = geo.exposure;
+    }
+    const data = this.img.data, lut = this.lut, k = LUT_N / LUT_MAX, top = LUT_N - 1;
+    for (let p = 0, n = F * F; p < n; p++) {
+      const q = p * 4;
+      let v = acc[p * 3] * k;       data[q]     = lut[v > top ? top : v | 0];
+      v = acc[p * 3 + 1] * k;       data[q + 1] = lut[v > top ? top : v | 0];
+      v = acc[p * 3 + 2] * k;       data[q + 2] = lut[v > top ? top : v | 0];
+      data[q + 3] = 255;
+    }
+    this.offCtx.putImageData(this.img, 0, 0);
+
+    const ctx = this.ctx, w = this.out.width, h = this.out.height;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.filter = "none";
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "#07080b";
+    ctx.fillRect(0, 0, w, h);
+
+    // Enclosure: a black cylinder with the lid on top. Both first and opaque, so the light is
+    // added ON them rather than sitting beside them.
+    ctx.beginPath();
+    ctx.arc(w / 2, h / 2, w * 0.485, 0, Math.PI * 2);
+    ctx.fillStyle = "#0b0c10";
+    ctx.fill();
+    const lidG = ctx.createLinearGradient(0, h * 0.06, 0, h * 0.94);
+    lidG.addColorStop(0, "#20242c");
+    lidG.addColorStop(1, "#14171d");
+    ctx.beginPath();
+    ctx.arc(w / 2, h / 2, w * 0.455, 0, Math.PI * 2);
+    ctx.fillStyle = lidG;
+    ctx.fill();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(w / 2, h / 2, w * 0.47, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.globalCompositeOperation = "lighter";
+    ctx.drawImage(this.off, 0, 0, w, h);
+    ctx.globalCompositeOperation = "source-over";
+
+    if (!view.diffuser) {
+      // Without the diffuser the dies themselves are visible: a hard bright core on the field.
+      ctx.globalCompositeOperation = "lighter";
+      const ledR = w * 0.028;
+      for (let i = 0; i < N; i++) {
+        const [x, y] = this.ledPos[i];
+        const [r, g, b] = px[i];
+        if (r + g + b <= 2) continue;
+        ctx.beginPath();
+        ctx.rect(x - ledR, y - ledR, ledR * 2, ledR * 2);
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = "source-over";
+    }
+
+    // Bloom: scattering in the eye and in the camera, not in the enclosure. Added on top.
+    if (view.bloom > 0) {
+      ctx.globalCompositeOperation = "lighter";
+      ctx.filter = `blur(${w * 0.05}px)`;
+      ctx.globalAlpha = view.bloom;
+      ctx.drawImage(this.off, 0, 0, w, h);
+      ctx.globalAlpha = 1;
+      ctx.filter = "none";
+      ctx.globalCompositeOperation = "source-over";
+    }
+    ctx.restore();
+
+    // The lid's edge, so the ring reads as an object rather than as a smudge.
+    ctx.beginPath();
+    ctx.arc(w / 2, h / 2, w * 0.47, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255,255,255,.06)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    if (view.labels) {
+      ctx.fillStyle = "#aeb7c6";
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (let i = 0; i < N; i++) {
+        const [x, y] = this.ledPos[i];
+        ctx.fillText(String(i), x * 0.86 + (w / 2) * 0.14, y * 0.86 + (h / 2) * 0.14);
+      }
+    }
+  }
+}
+
+// ── Ring instances ──────────────────────────────────────────────────────────
+// Each one owns its overlay (flash/gauge), exactly like the renderer in the C code.
+
+class Ring {
+  constructor(canvas, get) {
+    this.field = new LightField(canvas);
+    this.get = get;                  // () => {pattern, color}
+    this.overlayLeft = 0;
+    this.overlayColor = [255, 255, 255];
+    this.overlayGauge = -1;
+  }
+  flash(color) { this.overlayColor = color; this.overlayGauge = -1; this.overlayLeft = T.FLASH_TICKS; }
+  gauge(pct, color) { this.overlayColor = color; this.overlayGauge = Math.max(0, Math.min(100, pct)); this.overlayLeft = T.GAUGE_TICKS; }
+
+  frame(tick, advanced) {
+    let px;
+    if (this.overlayLeft > 0) {
+      if (advanced) this.overlayLeft--;
+      if (this.overlayGauge >= 0) {
+        let lit = ((this.overlayGauge * N + 99) / 100) | 0;
+        if (lit < 1) lit = 1;
+        px = Array.from({ length: N }, (_, i) =>
+          i < lit ? this.overlayColor : scale(this.overlayColor, S.gaugeUnlit));
+      } else {
+        px = Array(N).fill(this.overlayColor);
+      }
+    } else {
+      const { pattern, color } = this.get();
+      px = PATTERNS[pattern].f(color, tick);
+    }
+    this.field.render(px);
+  }
+}
+
+const rings = [];
+
+// ── UI ──────────────────────────────────────────────────────────────────────
+
+const $ = (id) => document.getElementById(id);
+const hex = (c) => "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
+const unhex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) || 0);
+
+// The state grid
+const statesEl = $("states");
+STATES.forEach((st) => {
+  const box = document.createElement("div");
+  box.className = "card ringbox";
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 170;
+  const name = document.createElement("div");
+  name.className = "name";
+  name.textContent = st.name.replace("SAT_", "");
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  box.append(cv, name, meta);
+  statesEl.append(box);
+  st._meta = meta;
+  rings.push(new Ring(cv, () => ({ pattern: st.pattern, color: PALETTE[st.color] || [255, 0, 255] })));
+  st._ring = rings[rings.length - 1];
+});
+
+// The mapping table: change pattern and colour per state
+const mappingEl = $("mapping");
+{
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  STATES.forEach((st) => {
+    const cell = document.createElement("div");
+    cell.innerHTML = `<div class="name">${st.name}</div><div class="meta" style="text-align:left">${st.note}</div>`;
+    const pat = document.createElement("select");
+    fillPatterns(pat, st.pattern);
+    pat.onchange = () => { st.pattern = pat.value; refreshMeta(); };
+    st._patSel = pat;
+    const col = document.createElement("select");
+    Object.keys(PALETTE).forEach((k) => {
+      const o = document.createElement("option");
+      o.value = k; o.textContent = k;
+      col.append(o);
+    });
+    col.value = st.color;
+    col.onchange = () => { st.color = col.value; refreshMeta(); };
+    st._colSel = col;
+    const l1 = document.createElement("label"); l1.textContent = "Pattern";
+    const l2 = document.createElement("label"); l2.textContent = "Colour";
+    cell.append(l1, pat, l2, col);
+    grid.append(cell);
+  });
+  mappingEl.append(grid);
+  const row = document.createElement("div");
+  row.className = "btnrow";
+  const rb = document.createElement("button");
+  rb.textContent = "Reset mapping";
+  rb.onclick = () => {
+    STATES.forEach((st, i) => {
+      st.pattern = STATES_DEFAULT[i].pattern;
+      st.color = STATES_DEFAULT[i].color;
+      st._patSel.value = st.pattern;
+      st._colSel.value = st.color;
+    });
+    refreshMeta();
+  };
+  row.append(rb);
+  mappingEl.append(row);
+}
+
+function fillPatterns(sel, value) {
+  Object.keys(PATTERNS).forEach((k) => {
+    const o = document.createElement("option");
+    o.value = k;
+    o.textContent = PATTERNS[k].firmware ? k : "◆ " + k;
+    sel.append(o);
+  });
+  sel.value = value;
+}
+
+function refreshMeta() {
+  STATES.forEach((st) => {
+    const exp = PATTERNS[st.pattern].firmware ? "" : "◆ ";
+    st._meta.textContent = `${exp}${st.pattern.replace("RGB_", "").replace("X_", "")} · ${st.color.replace("RGB_", "")}`;
+  });
+}
+refreshMeta();
+
+// The lab
+const lab = {
+  A: { pattern: "RGB_WAVE", color: [0, 200, 255] },
+  B: { pattern: "RGB_BREATHE", color: [0, 255, 0] },
+};
+["A", "B"].forEach((k) => {
+  const sel = $("pat" + k);
+  fillPatterns(sel, lab[k].pattern);
+  sel.onchange = () => { lab[k].pattern = sel.value; labName(k); };
+  const col = $("col" + k), tx = $("col" + k + "hex");
+  col.value = hex(lab[k].color); tx.value = col.value;
+  col.oninput = () => { lab[k].color = unhex(col.value); tx.value = col.value; };
+  tx.onchange = () => { if (/^#[0-9a-f]{6}$/i.test(tx.value)) { col.value = tx.value.toLowerCase(); lab[k].color = unhex(col.value); } };
+  const ring = new Ring($("lab" + k), () => lab[k]);
+  lab[k]._ring = ring;
+  rings.push(ring);
+  labName(k);
+});
+function labName(k) {
+  const p = PATTERNS[lab[k].pattern];
+  $("lab" + k + "name").innerHTML = `${p.firmware ? "" : '<span class="exp">◆ </span>'}${lab[k].pattern} <span class="sub">— ${p.doc}</span>`;
+}
+document.querySelectorAll("[data-flash]").forEach((b) =>
+  b.onclick = () => lab[b.dataset.flash]._ring.flash([255, 255, 255]));
+document.querySelectorAll("[data-gauge]").forEach((b) =>
+  b.onclick = () => lab[b.dataset.gauge]._ring.gauge(60, lab[b.dataset.gauge].color));
+
+// The gallery: every pattern once, same tick. Side by side is the only honest comparison — any
+// pattern looks plausible on its own, and it is the difference to its neighbour that decides
+// whether the two are still tellable apart from across a room.
+//
+// Each one in THE colour it is meant in. Colour and motion are not separate decisions on this
+// device: the same blink means "broken" in red and "decide something" in magenta. A gallery in
+// one colour would hide exactly what is being decided here. The switch above still collapses it
+// to a single colour when only the motion is in question.
+const PATTERN_COLOR = {
+  RGB_SOLID: "RGB_DIM_BLUE",
+  RGB_BREATHE: "RGB_GREEN",
+  RGB_BREATHE_SLOW: "RGB_WHITE",
+  RGB_SPIN: "RGB_AMBER",
+  RGB_WAVE: "RGB_CYAN",
+  RGB_BLINK: "RGB_MAGENTA",
+  RGB_BLINK_SLOW: "RGB_RED",
+  // null = the pattern paints its own colours and ignores the argument.
+  RGB_SIRI: null,
+  RGB_SIRI_THINK: null,
+  FX_SIRI_CALM: null,
+  X_SIRI_TALK: null,
+
+  X_COMET: "RGB_BLUE",
+  X_COMET_DUAL: "RGB_BLUE",
+  X_RIPPLE: "RGB_CYAN",
+  X_HEARTBEAT: "RGB_MAGENTA",
+  X_BREATHE_SPREAD: "RGB_GREEN",
+  X_FILL_SWEEP: "RGB_AMBER",
+  X_PENDULUM: "RGB_AMBER",
+  X_RAINBOW: "RGB_WHITE",
+  X_SPARKLE: "RGB_CYAN",
+  X_THINK_DOTS: "RGB_BLUE",
+  X_LEVEL_METER: "RGB_CYAN",
+  X_SPEECH_JITTER: "RGB_CYAN",
+  X_DUO_ARC: "RGB_GREEN",
+  X_WARP: "RGB_BLUE",
+  X_BLOOM_OUT: "RGB_GREEN",
+  X_MEET: "RGB_AMBER",
+  X_STROBE_DOUBLE: "RGB_MAGENTA",
+  X_DECAY_PULSE: "RGB_RED",
+  X_EMBER: "RGB_AMBER",
+  X_GRADIENT_ROTATE: "RGB_WHITE",
+
+  // The effects that choose their own colour are listed anyway: the entry is what they get when
+  // the gallery is switched to one colour, or when they are pulled into the lab.
+  FX_SNOWFALL: "RGB_WHITE",
+  FX_CONFETTI: "RGB_WHITE",
+  FX_METEOR: "RGB_CYAN",
+  FX_FIRE: "RGB_AMBER",
+  FX_CANDLE: "RGB_AMBER",
+  FX_AURORA: "RGB_GREEN",
+  FX_PLASMA: "RGB_MAGENTA",
+  FX_RAINBOW_BREATHE: "RGB_WHITE",
+  FX_THEATER_CHASE: "RGB_AMBER",
+  FX_COLOR_WIPE: "RGB_WHITE",
+  FX_TWINKLE_STARS: "RGB_WHITE",
+  FX_POLICE: "RGB_RED",
+};
+
+// Three families: what runs on the board, what is meant as a state, and what is pure effect.
+const familyOf = (key) =>
+  PATTERNS[key].firmware ? "firmware" : key.startsWith("FX_") ? "effect" : "candidate";
+
+const gal = { color: [0, 200, 255], uniform: false };
+const galLabels = {};
+const colorName = (key) => PATTERN_COLOR[key] === null ? "own palette"
+  : PATTERN_COLOR[key].replace("RGB_", "").toLowerCase();
+const galColorFor = (key) => gal.uniform ? gal.color : (PALETTE[PATTERN_COLOR[key]] || [0, 200, 255]);
+{
+  const host = $("gallery");
+  Object.keys(PATTERNS).forEach((key) => {
+    const p = PATTERNS[key];
+    const box = document.createElement("div");
+    box.className = "card ringbox";
+    box.dataset.family = familyOf(key);
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = 150;
+    const nm = document.createElement("div");
+    nm.className = "name";
+    nm.innerHTML = (p.firmware ? "" : '<span class="exp">◆ </span>') + key;
+    const doc = document.createElement("div");
+    doc.className = "meta";
+    doc.textContent = p.doc;
+    const col = document.createElement("div");
+    col.className = "meta";
+    col.textContent = colorName(key);
+    const row = document.createElement("div");
+    row.className = "btnrow";
+    ["A", "B"].forEach((k) => {
+      const b = document.createElement("button");
+      b.textContent = "→ " + k;
+      b.onclick = () => {
+        lab[k].pattern = key;
+        $("pat" + k).value = key;
+        labName(k);
+      };
+      row.append(b);
+    });
+    box.append(cv, nm, doc, col, row);
+    host.append(box);
+    rings.push(new Ring(cv, () => ({ pattern: key, color: galColorFor(key) })));
+    galLabels[key] = col;
+  });
+
+  const syncGalLabels = () => {
+    Object.keys(galLabels).forEach((key) => {
+      galLabels[key].textContent =
+        gal.uniform && PATTERN_COLOR[key] !== null ? "uniform" : colorName(key);
+    });
+  };
+  const setGal = (hexStr) => {
+    gal.color = unhex(hexStr);
+    gal.uniform = true;
+    $("galUniform").checked = true;
+    $("galColor").value = hexStr;
+    syncGalLabels();
+    dirty = true;
+  };
+  $("galColor").oninput = () => setGal($("galColor").value);
+  $("galUniform").onchange = (e) => { gal.uniform = e.target.checked; syncGalLabels(); dirty = true; };
+  const sw = $("galSwatches");
+  Object.keys(PALETTE).forEach((k) => {
+    const b = document.createElement("button");
+    b.textContent = k.replace("RGB_", "").toLowerCase();
+    b.onclick = () => setGal(hex(PALETTE[k]));
+    sw.append(b);
+  });
+  $("galFilter").onchange = (e) => {
+    const want = e.target.value;
+    host.querySelectorAll("[data-family]").forEach((el) => {
+      el.style.display = want === "all" || el.dataset.family === want ? "" : "none";
+    });
+  };
+}
+
+// Slider factory
+function sliders(host, obj, defs) {
+  defs.forEach(([key, min, max, step, unit]) => {
+    const lab = document.createElement("label");
+    const val = document.createElement("span");
+    val.className = "val";
+    lab.textContent = key + " ";
+    lab.append(val);
+    const row = document.createElement("div");
+    row.className = "row";
+    const r = document.createElement("input");
+    r.type = "range"; r.min = min; r.max = max; r.step = step; r.value = obj[key];
+    const show = () => { val.textContent = obj[key] + (unit || ""); };
+    r.oninput = () => { obj[key] = parseFloat(r.value); show(); };
+    show();
+    row.append(r);
+    host.append(lab, row);
+    r.dataset.key = key;
+  });
+}
+
+sliders($("timing"), T, [
+  ["TICK_MS", 10, 120, 5, " ms"],
+  ["BREATHE_TICKS", 10, 120, 2],
+  ["BREATHE_SLOW_TICKS", 20, 240, 4],
+  ["SPIN_TICKS", 1, 10, 1],
+  ["WAVE_TICKS", 6, 80, 2],
+  ["BLINK_TICKS", 2, 40, 1],
+  ["BLINK_SLOW_TICKS", 4, 80, 1],
+  ["FLASH_TICKS", 1, 20, 1],
+  ["GAUGE_TICKS", 4, 60, 2],
+]);
+sliders($("shape"), S, [
+  ["breatheFloor", 0, 120, 1],
+  ["spinTail", 1, 7, 1],
+  ["waveFloor", 0, 160, 1],
+  ["gaugeUnlit", 0, 60, 1],
+  ["cometTail", 0.3, 4, 0.1],
+  ["crests", 1, 3, 1],
+  ["heartGap", 4, 80, 2],
+  ["siriWidth", 0.4, 3, 0.1],
+  ["siriOnset", 4, 80, 2],
+  ["siriKick", 0, 0.3, 0.005],
+  ["siriFlip", 0, 1, 0.05],
+  ["siriDrag", 0.02, 0.5, 0.01],
+  ["siriIdle", 0, 0.03, 0.001],
+  ["siriFlare", 0, 4, 0.1],
+  ["siriFlareFall", 0.3, 0.95, 0.01],
+]);
+$("resetTiming").onclick = () => {
+  Object.assign(T, DEFAULT_TIMING);
+  $("timing").querySelectorAll("input[type=range]").forEach((r) => {
+    r.value = T[r.dataset.key];
+    r.dispatchEvent(new Event("input"));
+  });
+};
+
+// Palette
+{
+  const host = $("palette");
+  Object.keys(PALETTE).forEach((k) => {
+    const w = document.createElement("div");
+    w.className = "swatch";
+    const c = document.createElement("input");
+    c.type = "color"; c.value = hex(PALETTE[k]);
+    c.oninput = () => { PALETTE[k] = unhex(c.value); };
+    const t = document.createElement("span");
+    t.textContent = k.replace("RGB_", "");
+    w.append(c, t);
+    host.append(w);
+  });
+}
+
+// Optics: millimetres, not screen numbers. Any change throws the kernels away.
+sliders($("optics"), geo, [
+  ["ringMM", 14, 29, 0.5, " mm"],
+  ["gapMM", 1, 10, 0.2, " mm"],
+  ["sigmaMM", 0.5, 16, 0.5, " mm"],
+  ["haloMM", 2, 40, 1, " mm"],
+  ["wash", 0, 0.3, 0.01],
+  ["lid", 0, 0.4, 0.01],
+  ["exposure", 0.3, 5, 0.1],
+]);
+$("optics").querySelectorAll("input[type=range]").forEach((r) => {
+  const prev = r.oninput;
+  r.oninput = (e) => { prev(e); bumpGeo(); };
+});
+
+// View
+const bindView = (id, key, fmt, geoAffecting) => {
+  const el = $(id), out = $(id + "v");
+  const apply = () => {
+    view[key] = el.type === "checkbox" ? el.checked : parseFloat(el.value);
+    if (out) out.textContent = fmt ? fmt(view[key]) : view[key];
+    if (geoAffecting) bumpGeo();
+  };
+  el.oninput = el.onchange = apply;
+  apply();
+};
+bindView("speed", "speed", (v) => v.toFixed(1) + "×");
+bindView("master", "master", (v) => v + " %");
+bindView("bloom", "bloom", (v) => v.toFixed(2));
+bindView("ang", "ang", (v) => v + "°", true);
+bindView("cw", "cw", null, true);
+bindView("diffuser", "diffuser");
+bindView("labels", "labels");
+
+// ── Speech level ────────────────────────────────────────────────────────────
+// Three ways to feed RGB_SIRI, all ending in the same byte the firmware carries.
+//
+// The microphone is the point of the exercise: talk at the page and the ring moves with the voice,
+// which is what the board does with the samples it is about to play. Synthetic is for judging the
+// look without talking, manual is for holding one value still while the optics get tuned.
+
+// A syllable train. Speech runs at four to six syllables a second, which at 20 Hz is a new attack
+// every three to five ticks — the first version wobbled along at one and a half and no amount of
+// tuning downstream could make the ring look lively against it. Sines alone never produce this:
+// what matters is the hard edge at the start of each syllable, because that edge IS the onset the
+// motion model listens for.
+function syntheticLevel(t) {
+  if (mod(t, 150) > 124) {
+    return 0; // a breath between sentences, about a second and a half in
+  }
+  const len = 3 + ((hash((t / 4) | 0, 41) * 3) | 0);  // 3..5 ticks per syllable
+  const step = (t / len) | 0;
+  const phase = mod(t, len) / len;
+  const loudness = 0.45 + 0.55 * hash(step, 23);      // stressed and unstressed syllables
+  if (hash(step, 57) < 0.18) {
+    return 0;                                          // the odd gap between words
+  }
+  // Hard attack, quick decay: a consonant then a vowel dying away, not a triangle.
+  const env = phase < 0.25 ? 1 : Math.pow(1 - (phase - 0.25) / 0.75, 1.4);
+  return Math.min(255, 255 * loudness * env) | 0;
+}
+
+async function startMic() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = ctx.createMediaStreamSource(stream);
+  const an = ctx.createAnalyser();
+  an.fftSize = 512;
+  src.connect(an);
+  const buf = new Float32Array(an.fftSize);
+  const poll = () => {
+    an.getFloatTimeDomainData(buf);
+    // Mean absolute value, exactly like report_level() in audio_out.c — not peak, which would sit
+    // pinned at full brightness through a whole sentence.
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += Math.abs(buf[i]);
+    const v = Math.min(255, (sum / buf.length) * 255 / 0.08) | 0;
+    // Kept as a running maximum until the next tick reads it, because the board sees two or three
+    // chunks per frame and takes the loudest — the peak of a syllable must not fall between polls.
+    speech.micLevel = Math.max(speech.micLevel, v);
+    speech.mic = requestAnimationFrame(poll);
+  };
+  poll();
+}
+
+function stopMic() {
+  if (speech.mic) cancelAnimationFrame(speech.mic);
+  speech.mic = null;
+  speech.micLevel = 0;
+}
+
+// One tick of the envelope, mirroring rgb_level() plus the decay in render_task.
+function levelTick(t) {
+  let reported = 0;
+  if (speech.mode === "synthetic") reported = syntheticLevel(t);
+  else if (speech.mode === "manual") reported = speech.manual;
+  else if (speech.mode === "mic") { reported = speech.micLevel; speech.micLevel = 0; }
+
+  // Release first, then attack — which is the order a tick boundary imposes on the board: the
+  // renderer decayed the byte at the end of the last frame, and whatever arrived since raises it.
+  const decayed = Math.max(LEVEL_FLOOR, (speech.level * LEVEL_DECAY / 256) | 0);
+  speech.level = Math.max(decayed, reported);
+  speech.fast = Math.max((speech.fast * FAST_DECAY / 256) | 0, reported);
+
+  // The onset is measured on the RAW source, not on either envelope. An envelope is a smoothing
+  // filter, and asking a smoothing filter when something started is what made the first version
+  // feel a beat late: by the time the smoothed value had climbed, the syllable was half over.
+  // A sustained vowel produces no rise at all, which is right — it is loud, not new.
+  const rise = reported - speech.reported;
+  speech.reported = reported;
+  siriMotionTick(t, speech.fast, rise);
+
+  $("lvlBar").style.width = (speech.level * 100 / 255).toFixed(0) + "%";
+  $("lvlNow").textContent = speech.level;
+}
+
+$("lvlMode").onchange = (e) => {
+  speech.mode = e.target.value;
+  if (speech.mode === "mic") {
+    startMic().catch((err) => {
+      e.target.value = "synthetic";
+      speech.mode = "synthetic";
+      alert("microphone unavailable: " + err.message);
+    });
+  } else {
+    stopMic();
+  }
+};
+{
+  const el = $("lvlManual"), out = $("lvlManualv");
+  const apply = () => { speech.manual = parseFloat(el.value); out.textContent = speech.manual; };
+  el.oninput = apply;
+  apply();
+}
+
+// ── Clock ───────────────────────────────────────────────────────────────────
+// One global tick counter, like the single render_task on the board.
+
+let tick = 0, acc = 0, last = performance.now(), paused = false;
+
+$("pause").onclick = (e) => {
+  paused = !paused;
+  e.target.textContent = paused ? "Resume" : "Pause";
+  e.target.classList.toggle("on", paused);
+  last = performance.now();
+};
+$("step").onclick = () => { tick++; draw(true); };
+
+function draw(advanced) {
+  if (advanced) levelTick(tick);
+  rings.forEach((r) => r.frame(tick, advanced));
+  $("tickread").textContent = `tick ${tick} · ${(tick * T.TICK_MS / 1000).toFixed(1)} s`;
+}
+
+// Drawing follows the board's clock, not the monitor's: one frame per tick, otherwise the page
+// computes the same light field three times for the same picture.
+function loop(now) {
+  const dt = now - last;
+  last = now;
+  let advanced = false;
+  if (!paused) {
+    acc += dt * view.speed;
+    while (acc >= T.TICK_MS) { acc -= T.TICK_MS; tick++; advanced = true; }
+  }
+  if (advanced || dirty) { draw(advanced); dirty = false; }
+  requestAnimationFrame(loop);
+}
+document.addEventListener("input", () => { dirty = true; });
+document.addEventListener("change", () => { dirty = true; });
+document.addEventListener("click", () => { dirty = true; });
+requestAnimationFrame(loop);
+
+// ── Export ──────────────────────────────────────────────────────────────────
+
+$("gen").onclick = () => {
+  const L = [];
+  const chg = (k) => T[k] !== DEFAULT_TIMING[k] ? "   // changed" : "";
+  L.push("// rgb_led_driver.c");
+  L.push(`#define TICK_MS ${T.TICK_MS}${chg("TICK_MS")}`);
+  L.push(`#define BREATHE_TICKS ${T.BREATHE_TICKS}${chg("BREATHE_TICKS")}`);
+  L.push(`#define BREATHE_SLOW_TICKS ${T.BREATHE_SLOW_TICKS}${chg("BREATHE_SLOW_TICKS")}`);
+  L.push(`#define SPIN_TICKS ${T.SPIN_TICKS}${chg("SPIN_TICKS")}`);
+  L.push(`#define WAVE_TICKS ${T.WAVE_TICKS}${chg("WAVE_TICKS")}`);
+  L.push(`#define BLINK_TICKS ${T.BLINK_TICKS}${chg("BLINK_TICKS")}`);
+  L.push(`#define BLINK_SLOW_TICKS ${T.BLINK_SLOW_TICKS}${chg("BLINK_SLOW_TICKS")}`);
+  L.push(`#define FLASH_TICKS ${T.FLASH_TICKS}${chg("FLASH_TICKS")}`);
+  L.push(`#define GAUGE_TICKS ${T.GAUGE_TICKS}${chg("GAUGE_TICKS")}`);
+  L.push("");
+  Object.keys(PALETTE).forEach((k) => {
+    const c = PALETTE[k], d = PALETTE_DEFAULT[k];
+    const same = c.join() === d.join();
+    L.push(`const rgb_color_t ${k} = {${c[0]}, ${c[1]}, ${c[2]}};${same ? "" : "   // changed"}`);
+  });
+  L.push("");
+  L.push("// Shape parameters (literals in render() today)");
+  L.push(`//   breathe:  scale(color, ${S.breatheFloor} + ramp(...) * ${255 - S.breatheFloor} / 255)`);
+  L.push(`//   spin:     behind < ${S.spinTail} ? 255 >> behind : 0`);
+  L.push(`//   wave:     ${S.waveFloor} + ramp(at, LED_STRIP_LED_COUNT) * ${255 - S.waveFloor} / 255`);
+  L.push(`//   gauge:    scale(color, ${S.gaugeUnlit}) for the unfilled part`);
+  L.push("");
+  L.push("// state.c — paint()");
+  L.push("static void paint(sat_state_t s)");
+  L.push("{");
+  L.push("    switch (s) {");
+  STATES.forEach((st) => {
+    const exp = PATTERNS[st.pattern].firmware ? "" : "  // CANDIDATE: this pattern is not in the firmware yet";
+    L.push(`    case ${st.name}:`);
+    L.push(`        rgb_show(${st.pattern}, ${st.color});${exp}`);
+    L.push("        break;");
+  });
+  L.push("    }");
+  L.push("}");
+  $("out").textContent = L.join("\n");
+};
+
+$("copy").onclick = async () => {
+  await navigator.clipboard.writeText($("out").textContent);
+  $("copy").textContent = "copied";
+  setTimeout(() => ($("copy").textContent = "Copy"), 1200);
+};
+</script>
+</body>
+</html>
