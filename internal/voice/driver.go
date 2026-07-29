@@ -24,6 +24,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
+	"github.com/efuturetoday/nocturn/internal/speaker"
 )
 
 // DefaultBudget bounds one session's wall clock. A live model bills per audio minute, so a session
@@ -108,7 +109,7 @@ type Driver struct {
 	grants   gate.Grants
 	approver gate.Approver
 
-	system   string
+	system   func(speaker string) string
 	budget   time.Duration
 	idle     time.Duration
 	observer Observer
@@ -122,8 +123,19 @@ type Option func(*Driver)
 // only the budget — deliberately possible, and deliberately not the default.
 func WithIdle(t time.Duration) Option { return func(d *Driver) { d.idle = t } }
 
-// WithSystem sets the persona handed to the model as its system instruction.
-func WithSystem(s string) Option { return func(d *Driver) { d.system = s } }
+// WithSystemFunc sets what builds the system instruction, called once per session.
+//
+// A function rather than a string because the prompt is not a constant: it carries the memory index,
+// which changes as the assistant writes notes, and it names the speaker when one is recognised. A
+// string fixed when the workspace was assembled would hand every session the state of the day the
+// daemon started.
+//
+// Once per session and not more often is not a choice: a live session's system instruction travels
+// in the setup frame and cannot be replaced afterwards. Anything the model needs to learn mid-
+// conversation has to be something it asks for — see the whoami tool.
+func WithSystemFunc(f func(speaker string) string) Option {
+	return func(d *Driver) { d.system = f }
+}
 
 // WithBudget overrides DefaultBudget. A non-positive value is ignored — there is no "unlimited",
 // because unlimited is the failure mode this budget exists to prevent.
@@ -179,15 +191,20 @@ func New(live agentkit.LiveLLM, tools agentkit.ToolSet, policy gate.Policy, gran
 // Run holds one conversation with dev, seeded with conv, until the device disconnects, the budget
 // expires, or ctx is cancelled. It returns the transcript of what was said — the caller decides
 // where that goes, so the driver needs no store.
-func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message) ([]agentkit.Message, error) {
+func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message, who func() speaker.Identity) ([]agentkit.Message, error) {
+	if who == nil {
+		who = func() speaker.Identity { return speaker.Identity{} } // no microphone knows anybody
+	}
 	// Covers the early return below; the normal path cancels explicitly in its teardown closure, and
 	// a second cancel is a no-op.
 	ctx, cancel := context.WithTimeout(ctx, d.budget)
 	defer cancel()
 
 	seed := conv
-	if d.system != "" {
-		seed = append([]agentkit.Message{{Role: agentkit.RoleSystem, Content: d.system}}, conv...)
+	if d.system != nil {
+		if prompt := d.system(who().Name); prompt != "" {
+			seed = append([]agentkit.Message{{Role: agentkit.RoleSystem, Content: prompt}}, conv...)
+		}
 	}
 	sess, err := d.live.Open(ctx, seed, append(d.tools.Specs(), hangUpSpec))
 	if err != nil {
@@ -197,7 +214,11 @@ func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message) (
 	// The gate machinery rides on the ctx every tool Call runs under. This one install covers the
 	// whole session: each tool's own gate.Check finds it here, exactly as it does inside a turn.
 	// The approver is decorated so the conversation is told WHY it is about to wait.
-	toolCtx := gate.WithLogger(gate.With(ctx, d.policy, d.grants, d.announcing(sess)), agentkit.SlogLogger(d.log))
+	// The speaker rides here so a tool can act on the right person's behalf without the model having
+	// to name them — and without being able to name the wrong one.
+	toolCtx := speaker.NewContext(
+		gate.WithLogger(gate.With(ctx, d.policy, d.grants, d.announcing(sess)), agentkit.SlogLogger(d.log)),
+		who)
 
 	// The microphone pump is its own goroutine: it blocks on the device, and the event loop below
 	// blocks on the model. Neither may wait for the other, or the conversation deadlocks. It exits
