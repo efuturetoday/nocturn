@@ -143,6 +143,9 @@ func (c *conn) voiceWake(ctx context.Context, m VoiceWake) {
 
 	device := c.device
 	hub := c.hub
+	if c.capture == nil {
+		c.capture = newCapture(device, c.log)
+	}
 	sink := newDeviceSink(hub, device, c.log)
 	sinksMu.Lock()
 	sinks[device] = sink
@@ -155,6 +158,7 @@ func (c *conn) voiceWake(ctx context.Context, m VoiceWake) {
 		sink.close()
 		c.log.Info("voice session finished", "messages", len(transcript),
 			"undelivered_ms", held, "blocked_ms", blocked, "err", err)
+		c.capture.flush(time.Now())
 		hub.control(device, VoiceState{Type: "voice.state", Ws: m.Ws, State: "idle"})
 	})
 	c.send(ctx, VoiceState{Type: "voice.state", Ws: m.Ws, State: "listening"})
@@ -168,6 +172,7 @@ func (c *conn) voiceEnd(ctx context.Context, m VoiceEnd) {
 	if sessions := ws.VoiceSessions(); sessions != nil {
 		sessions.Stop(c.device)
 	}
+	c.capture.flush(time.Now())
 }
 
 // audioIn hands a binary frame to whichever workspace has a session open for this device.
@@ -179,6 +184,7 @@ func (c *conn) audioIn(pcm []byte) {
 	for _, ws := range c.spaces {
 		if sessions := ws.VoiceSessions(); sessions != nil && sessions.Active(c.device) {
 			sessions.Feed(c.device, pcm)
+			c.capture.add(pcm, time.Now())
 			return
 		}
 	}
@@ -212,6 +218,7 @@ func (c *conn) endVoice() {
 			sessions.Stop(c.device)
 		}
 	}
+	c.capture.flush(time.Now())
 }
 
 // maxBacklog bounds what may pile up waiting for a device that has stopped taking speech. Roughly a
