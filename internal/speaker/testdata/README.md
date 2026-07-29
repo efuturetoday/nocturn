@@ -56,6 +56,11 @@ NOCTURN_SPEAKER_MODEL=… NOCTURN_SPEAKER_CORPUS=/tmp/corpus \
   go test ./internal/speaker/ -run Evaluate -v -timeout 30m
 ```
 
+`NOCTURN_SPEAKER_FOCUS=<speaker>` additionally reports that one speaker on their own. The aggregate
+is dominated by whoever is most numerous in the corpus, so one voice recorded through a different
+microphone disappears into it — adding sixteen satellite recordings to forty LibriSpeech speakers
+moved the equal error rate from 0.83 % to 0.81 %, which says nothing about that microphone.
+
 There are two different questions here and they have very different answers. Both are measured,
 because reading only one of them leads to a wrong decision:
 
@@ -74,14 +79,11 @@ LibriSpeech dev-clean, 40 speakers, 240 recordings, 600 genuine and 28 080 impos
 | Impostor pairs | 0.1116 ± 0.1052 |
 | Equal error rate | **0.83 %** at threshold 0.3983 |
 
-0.83 % is what this checkpoint achieves in its own published evaluation, which is the strongest
-evidence available that the whole chain — filterbank, ONNX executor, GEMM kernels — is correct.
-Anything subtly wrong anywhere would show up as several percent.
-
 0.83 % is what this checkpoint reports in its own published evaluation, which is the strongest
-available evidence that the whole chain is right. It is also the number to quote if identity is ever
-proposed as a security control — see "Why this is not an authentication factor" below, because the
-number is not the reason it fails.
+available evidence that the whole chain — filterbank, ONNX executor, GEMM kernels — is right.
+Anything subtly wrong anywhere would show up as several percent. It is also the number to quote if
+identity is ever proposed as a security control — see "Why this is not an authentication factor"
+below, because the number is not the reason it fails.
 
 ### Identification — closed set, inside a household
 
@@ -127,6 +129,30 @@ same person enrolled on a phone and recognised through a far-field array with ec
 averaged profile lands between two channels and matches neither. That question stays open until
 recordings from the satellite exist, which is why profiles keep every take tagged by device rather
 than collapsing to a centroid.
+
+## A second channel: the satellite
+
+Everything above is close-talking read English. The satellite is a different channel — microphone
+array, beamformer, echo canceller, and the speaker several metres away. Sixteen recordings of one
+voice through it, against the forty LibriSpeech speakers as impostors
+(`NOCTURN_SPEAKER_FOCUS=oliver-satellite`):
+
+| | Close-talking | Satellite |
+|---|---|---|
+| Same person | 0.8137 | **0.6302 ± 0.0609** |
+| Against strangers | 0.1082 | **0.0425 ± 0.0890** |
+| Worst own pair | 0.2916 | 0.4873 |
+| Best impostor pair | 0.5806 | 0.3922 |
+
+Separation is clean — no overlap, margin 0.0952 — but **the threshold has to move**. The 0.50 that
+the close-talking corpus supports would reject that voice's own worst recording at 0.4873. For this
+channel the operating point is nearer 0.45.
+
+Three things keep the number provisional. The recordings run 1.4 to 5.2 seconds, and short
+utterances embed more noisily, so part of the drop from 0.81 to 0.63 is duration rather than
+channel. The impostors read English while the enrolled voice speaks German, which separates more
+easily than a housemate would. And it is one speaker: this shows that voice separating from
+strangers over this channel, not two people in a household separating from each other.
 
 ## Why this is not an authentication factor
 
