@@ -57,6 +57,7 @@ type capture struct {
 	mu      sync.Mutex
 	pcm     []byte
 	silence int // trailing silent bytes in pcm, the candidate cut point
+	n       int // how many recordings have been written, so two never collide
 }
 
 // newCapture returns nil unless capture is armed, so the cost when it is off is one nil check.
@@ -115,7 +116,15 @@ func (c *capture) flush(at time.Time) {
 	if len(pcm) < 2*16000 { // under a second is a throat-clear, not an utterance
 		return
 	}
-	name := filepath.Join(c.dir, fmt.Sprintf("%s-%s.wav", c.device, at.UTC().Format("20060102-150405.000")))
+	// The counter, not the clock, is what makes the name unique: two recordings can end in the same
+	// instant — a silent gap and the length limit can fall together — and a timestamp alone would
+	// then refuse the second and lose it.
+	c.mu.Lock()
+	c.n++
+	seq := c.n
+	c.mu.Unlock()
+	name := filepath.Join(c.dir,
+		fmt.Sprintf("%s-%s-%03d.wav", c.device, at.UTC().Format("20060102-150405"), seq))
 	if err := writeWAV(name, pcm); err != nil {
 		c.log.Error("writing voice capture", "file", name, "err", err)
 		return

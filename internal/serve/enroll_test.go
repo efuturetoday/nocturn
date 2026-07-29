@@ -212,7 +212,7 @@ func TestCaptureWritesAndResets(t *testing.T) {
 	c.add(loud(2*16000), time.Now()) // one second, well above the silence floor
 	c.flush(time.Date(2026, 7, 28, 9, 30, 0, 0, time.UTC))
 
-	want := filepath.Join(dir, "kitchen-20260728-093000.000.wav")
+	want := filepath.Join(dir, "kitchen-20260728-093000-001.wav")
 	if _, err := os.Stat(want); err != nil {
 		t.Fatalf("expected %s: %v", want, err)
 	}
@@ -227,5 +227,26 @@ func TestCaptureWritesAndResets(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Errorf("an empty flush wrote a second file (%d total)", len(entries))
+	}
+}
+
+// Two recordings ending in the same instant must both survive. A silent gap and the length limit can
+// fall together, and a name built from the clock alone would refuse the second and lose the audio.
+func TestCaptureNamesAreUniqueWithinAnInstant(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(captureDirEnv, dir)
+	c := newCapture("kitchen", slog.Default())
+
+	same := time.Date(2026, 7, 28, 9, 30, 0, 0, time.UTC)
+	for range 3 {
+		c.add(loud(2*16000), same)
+		c.flush(same)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("%d recordings survived three flushes in one instant, want 3", len(entries))
 	}
 }

@@ -143,9 +143,6 @@ func (c *conn) voiceWake(ctx context.Context, m VoiceWake) {
 
 	device := c.device
 	hub := c.hub
-	if c.capture == nil {
-		c.capture = newCapture(device, c.log)
-	}
 	sink := newDeviceSink(hub, device, c.log)
 	sinksMu.Lock()
 	sinks[device] = sink
@@ -181,15 +178,24 @@ func (c *conn) voiceEnd(ctx context.Context, m VoiceEnd) {
 // alternative would be a routing header on every twenty-millisecond chunk to say something the wake
 // word already said.
 func (c *conn) audioIn(pcm []byte) {
+	// Recording is deliberately ahead of the session lookup, because the case it exists for has no
+	// session: enrolment opens no conversation, so audio that arrives during one would otherwise fall
+	// straight through to the comment at the bottom. Created here rather than at accept so only a
+	// device that actually streams a microphone gets a recorder — and this runs on the read loop,
+	// which is one goroutine per connection.
+	if c.capture == nil {
+		c.capture = newCapture(c.device, c.log)
+	}
+	c.capture.add(pcm, time.Now())
+
 	for _, ws := range c.spaces {
 		if sessions := ws.VoiceSessions(); sessions != nil && sessions.Active(c.device) {
 			sessions.Feed(c.device, pcm)
-			c.capture.add(pcm, time.Now())
 			return
 		}
 	}
-	// Audio with no session open: the device is streaming into nothing. Not an error — a wake word
-	// may have been cancelled while frames were already in flight.
+	// Audio with no session open: the device is streaming into nothing, which is the normal shape of
+	// an enrolment recording and also what a cancelled wake word leaves in flight.
 }
 
 // endVoice closes this device's session when the connection going away was its last.
