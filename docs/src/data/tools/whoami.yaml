@@ -1,0 +1,50 @@
+title: whoami
+description: Report who is currently speaking, recognised from their voice.
+
+kind: null
+gated: false
+axis: none
+
+intro: >-
+  Who is talking. Ungated and belonging to no kind: it reaches nothing, hands over no authority, and
+  reports only what the microphone already established — the model could equally have asked the
+  person. Zero authority, so nothing to decide.
+
+
+  It exists because a live spoken session **cannot be told anything after it opens**: the system
+  instruction travels in the setup frame, and the only channel that stays open mid-conversation is a
+  tool result. Asking is therefore the way the model learns this, and it means nobody waits at the
+  start of a session for an answer not needed until somebody asks something personal.
+
+input: none
+
+output:
+  text: "The recognised speaker, or an empty name when nobody is recognised:"
+  code: |
+    { "name": "oliver", "confidence": 0.71 }
+    { "name": "" }
+  lang: json
+
+js:
+  wrapper: |
+    const me = JSON.parse(nocturn.call("whoami", {}));
+    console.log(me.name || "nobody I know");
+  call: |
+    const me = JSON.parse(nocturn.call("whoami", {}));
+
+notes: >-
+  **An empty name means unrecognised, and is a legitimate answer.** It is not an invitation to fall
+  back on the most likely household member — say so, or ask. Outside a spoken session (a typed chat,
+  an agent run) the name is always empty, because nothing there is listening.
+
+
+  **Most uses should not go through this tool.** A tool acting on somebody's behalf reads the speaker
+  off the request context itself, so the model never learns whose mailbox it read and cannot name the
+  wrong one. What is left here is what the model genuinely has to know: how to address someone, and
+  whether it knows them at all.
+
+
+  A recognised voice chooses context and address, never permission. Speech is a channel like the
+  chat, where nobody authenticates the typist either, and a gated action is confirmed out of band on
+  a second device in both. Recognition needs `NOCTURN_SPEAKER_MODEL` and enrolled voices — see
+  [remote access](/guides/remote-access/).
