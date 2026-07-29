@@ -88,6 +88,7 @@ func runApp(serveAddr string) int {
 			logger.Error("device store", "err", err)
 			return 1
 		}
+		ensureCLICredential(devices, logger)
 		pushLog := logger.With("component", "push")
 		sender := apnsSender(pushLog) // nil when APNs is not configured
 		broker = hitl.NewBroker(pusherFor(sender, devices, pushLog), logger)

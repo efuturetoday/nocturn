@@ -53,6 +53,17 @@ func dispatch(args []string) int {
 			return code
 		}
 		return cmdVoice(*port, *wsName)
+	case "enroll":
+		fs := flag.NewFlagSet("enroll", flag.ContinueOnError)
+		addr := fs.String("addr", envOr("NOCTURN_ADDR", ":8080"), "address of the running daemon")
+		device := fs.String("device", "", "which satellite should record")
+		seconds := fs.Int("seconds", 60, "how long to record")
+		fs.Usage = usage(fs, "enroll --device <name> [--seconds 60] [--addr :8080]",
+			"Ask a satellite to record its microphone, so a voice can be enrolled through it.")
+		if code, done := parseFlags(fs, args[1:]); done {
+			return code
+		}
+		return cmdEnroll(*addr, *device, *seconds)
 	case "auth":
 		return cmdAuth(args[1:])
 	case "secret":
@@ -81,6 +92,7 @@ Usage:
   nocturn                      Open the interactive terminal assistant (default workspace)
   nocturn serve [--addr :8080] Run the out-of-band WebSocket daemon
   nocturn voice [--port 8788]  Run the browser voice PoC harness (loopback only, no pairing)
+  nocturn enroll --device <n>  Ask a satellite to record its microphone, for voice enrolment
   nocturn auth <provider>      Connect an OAuth account (opens a browser)
   nocturn secret set <target>  Seed a static credential (value read from stdin)
   nocturn secret ls            List the credential names a workspace holds (never values)
