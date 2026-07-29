@@ -63,6 +63,10 @@ type conn struct {
 	seq uint64
 	log *slog.Logger
 
+	// capture is nil unless NOCTURN_VOICE_CAPTURE armed it. It writes uplink audio to WAV so a
+	// voice can be enrolled through the device it will be recognised through.
+	capture *capture
+
 	// Two queues, one writer, control first. Audio is a steady twenty-five to fifty frames a second
 	// where JSON is small and bursty, and the drop-when-full policy that suits the second ruins the
 	// first: a chat event would be lost because audio filled the buffer. Separating them keeps the
