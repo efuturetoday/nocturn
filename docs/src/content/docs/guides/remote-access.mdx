@@ -156,6 +156,27 @@ canceller that will later have to recognise it, which a laptop microphone cannot
 **off unless the variable is set**, because it writes what the room said to disk. Arming it logs a
 warning, every file is logged by name, the directory is created `0700` and the files `0600`.
 
+A recording is asked for rather than waited for:
+
+```bash
+nocturn enroll --device kitchen --seconds 60
+```
+
+This opens no conversation. `capture.start` puts the board in a state where the microphone streams
+and nothing else runs — no live model, no billing, no speaker, and no half-duplex gate muting the
+microphone whenever a reply plays. **The ring goes steady red for as long as it records**, which is a
+deliberate departure from the fault colour: that one blinks slowly, this one is steady, and someone
+walking into the room should be able to tell they are being recorded without knowing the palette.
+
+`capture.stop` ends it, and so does the board on its own after two minutes. The second one is what
+matters: a caller that dies between start and stop must not leave a microphone streaming a room, and
+nothing in the house would say so.
+
+Asking is a capability, not something any device may do. A paired app may (`ClassApp`), and the local
+command line may — it enrols itself once as `ClassTool`, which can start a recording and, pointedly,
+cannot approve a gated action. An **appliance may not**: a speaker in the hallway switching on the
+microphone in the bedroom is exactly the shape this refuses.
+
 Recordings are cut by length and by silence rather than by session — a device opens a voice session
 on the wake word and never closes it, so waiting for one to end would mean never writing a file. A
 recording starts at the first sound, ends after four hundred milliseconds of quiet or eight seconds
