@@ -44,6 +44,14 @@ static esp_timer_handle_t ticker;
 // The machine's clock, so it can notice what did NOT arrive.
 #define TICK_US 500000
 
+// A recording stops itself after this long, whatever the daemon does or fails to do.
+//
+// An enrolment utterance is a minute of talking; two minutes is generous. The limit exists because
+// the failure it prevents is invisible: a caller that crashes between start and stop leaves a
+// microphone streaming a room, and nothing in the house would say so. Fail closed, as everywhere
+// else a default decides how much authority something keeps.
+#define CAPTURE_MAX_US 120000000
+
 static sat_state_t state = SAT_BOOT;
 
 // Guards, not states: conditions a transition tests.
@@ -82,6 +90,10 @@ static void paint(sat_state_t s)
     case SAT_THINKING:   rgb_show(RGB_SPIN, RGB_BLUE);          return;
     case SAT_SPEAKING:   rgb_show(RGB_WAVE, RGB_CYAN);          return; // not green: do not talk
     case SAT_APPROVAL:   rgb_show(RGB_BLINK, RGB_MAGENTA);      return; // go look at your phone
+    // Red, and deliberately so despite SAT_FAULT also being red: that one blinks slowly, this one is
+    // steady, and the two are told apart by motion rather than by colour. The recording convention is
+    // understood by everyone who walks into the room, which is the whole point of showing it.
+    case SAT_CAPTURE:    rgb_show(RGB_SOLID, RGB_RED);           return; // being recorded
     }
 }
 
@@ -100,6 +112,13 @@ static bool in_conversation(sat_state_t s)
 // reason to send, not a reason to listen.
 static void leave(sat_state_t s, sat_state_t to)
 {
+    // A recording is not a conversation, so it is paired here rather than folded into
+    // in_conversation: it must not raise the amplifier, touch playback credit, or arm anything that
+    // could answer. All it ever did was open the uplink.
+    if (s == SAT_CAPTURE) {
+        uplink_close();
+        mic_arm(true);
+    }
     if (in_conversation(s) && !in_conversation(to)) {
         uplink_close();
         audio_out_amp(false);
@@ -118,6 +137,11 @@ static void enter(sat_state_t s, sat_state_t from)
         uplink_gate(true);
     } else if (from == SAT_SPEAKING) {
         uplink_gate(false);
+    }
+    if (s == SAT_CAPTURE) {
+        mic_arm(false);     // the wake word must not turn a recording into a conversation
+        uplink_gate(false); // nothing plays here, so nothing has to be gated against
+        uplink_open();
     }
     if (in_conversation(s) && !in_conversation(from)) {
         acked = false;  // nothing the daemon said before belongs to this conversation
@@ -263,10 +287,28 @@ static void transition(sat_event_id_t ev, const void *data)
     case SAT_EV_REMOTE_STATE:
         remote((const char *)data);
         return;
+    case SAT_EV_CAPTURE_START:
+        // Only from idle: a recording must never interrupt a conversation, and the daemon asking
+        // during one is asking about a board state it has not caught up with.
+        if (state == SAT_IDLE) {
+            ESP_LOGI(TAG, "recording for enrolment");
+            go(SAT_CAPTURE);
+        }
+        return;
+    case SAT_EV_CAPTURE_STOP:
+        if (state == SAT_CAPTURE) {
+            go(SAT_IDLE);
+        }
+        return;
     case SAT_EV_TICK:
         // The one thing no signal can announce: an answer that never came.
         if (state == SAT_LISTENING && !acked && esp_timer_get_time() - entered_at > WAKE_ACK_US) {
             ESP_LOGW(TAG, "no answer to the wake word — giving up on it");
+            go(SAT_IDLE);
+        }
+        // Nor a stop that was never sent.
+        if (state == SAT_CAPTURE && esp_timer_get_time() - entered_at > CAPTURE_MAX_US) {
+            ESP_LOGW(TAG, "recording ran past its limit — stopping");
             go(SAT_IDLE);
         }
         return;
@@ -376,6 +418,7 @@ const char *state_name(sat_state_t s)
     case SAT_THINKING:   return "thinking";
     case SAT_SPEAKING:   return "speaking";
     case SAT_APPROVAL:   return "approval";
+    case SAT_CAPTURE:    return "capture";
     }
     return "?";
 }
@@ -400,6 +443,8 @@ static const char *ev_name(sat_event_id_t ev)
     case SAT_EV_BUTTON_DOWN:       return "button-down";
     case SAT_EV_BUTTON_UP:         return "button-up";
     case SAT_EV_TICK:              return "tick";
+    case SAT_EV_CAPTURE_START:     return "capture-start";
+    case SAT_EV_CAPTURE_STOP:      return "capture-stop";
     }
     return "?";
 }
