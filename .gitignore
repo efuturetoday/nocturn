@@ -28,3 +28,9 @@ internal/script/qjs/.buildcache/
 
 # greenfield app runtime data (chats)
 /nocturn-data/
+
+# the reference environment for internal/speaker (torch/torchaudio, dev-only)
+/internal/speaker/reference/.venv/
+
+# build artefact of the nested reference module
+/internal/onnx/reference/nocturn-onnx-reference
