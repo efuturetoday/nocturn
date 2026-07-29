@@ -103,12 +103,11 @@ on disk and folded into every prompt, bodies on demand — control-plane folder,
 `chat` (file-backed transcript store + Manager) · `agent` (declaration + cron only; execution is
 injected by the workspace) · `workspace` (the composition root) · `serve` (WebSocket surface,
 tagged JSON, one file per domain) ·
-`speaker` (who spoke: Kaldi-compatible filterbank → embedding → cosine. **Differentiation, not
-authentication.** As recognition it is strong — 100% top-1 among 2–6 enrolled voices, 0.83% EER
-against strangers — so the shipped threshold (0.50) only has to catch visitors. It still carries no
-authority: the threat is audio played at the microphone, not a lookalike, and no accuracy fixes that
-because the attacker owns the in-band channel — which is the same reason approval is out of band.
-Both measurements and the full argument: `internal/speaker/testdata/README.md`) ·
+`speaker` (who spoke: Kaldi-compatible filterbank → embedding → cosine, plus `voices.json` per
+workspace. 100% top-1 among 2–6 enrolled voices. **The threshold belongs to a CHANNEL, not to the
+package** — 0.50 fits close-talking, the satellite needs 0.45, measured. Chooses context and address,
+never permission: speech is a channel like the chat, where nobody authenticates the typist either.
+Measurements: `internal/speaker/testdata/README.md`) ·
 `onnx` (the inference engine `speaker` runs on: a deliberately narrow ONNX subset in pure Go, no
 CGO — the package doc says why not onnxruntime, wasm or a tensor framework, with the measurements).
 
@@ -123,6 +122,7 @@ CGO — the package doc says why not onnxruntime, wasm or a tensor framework, wi
 | `memory_write` (`internal/memory`) | `memory.Kind`, target = note path, **outside `mnt`**; allowed in chat, asked in agent runs |
 | `memory_read` (`internal/memory`) | **ungated** — context, never authority (same argument as `skill_read`) |
 | `time_now` `wake` | **ungated** — zero authority (no wall-clock in the guest), `wake` bounded |
+| `whoami` (`internal/speaker`) | **ungated** — reports the recognised speaker; unknown outside a spoken session |
 | `code_run` (`internal/script`) | woven per cage by `tools.Compose`, so a script's reach is its cage |
 | `skill_read` (`internal/skill`), `skill_load` (agentkit) | context, never authority |
 
