@@ -124,6 +124,12 @@ The window is deliberately much larger than the round trip that reopens it. Size
 buffer about as deep as the delay in refilling it — the queue is empty every time credit arrives, and
 no amount of tuning either number helps.
 
+Between the daemon and one connection sits a short queue, four frames of it. A frame that finds it
+full **waits** rather than being discarded: the queue only fills when the socket behind it has stopped
+draining, which is precisely when nothing more should be sent. Dropping instead would put a gap in
+the middle of a sentence to solve a problem that waiting solves by itself. Speech goes to a device's
+newest connection, since a device holds more than one while an old one times out.
+
 Blocking the write until the device's socket accepts it looks simpler and is not: a device blocks in
 its own receive callback, that callback runs on the task driving the connection's keepalive, and a
 wait longer than the client's read timeout looks to it like a dead socket. Flow control that drops
