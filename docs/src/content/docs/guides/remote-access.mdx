@@ -146,6 +146,22 @@ detector (`BARGE_IN_LOCAL`, parked behind the same measurement).
 A daemon with no live model configured refuses `voice.wake` and says so, rather than opening a
 session that can never answer.
 
+### Recording the uplink
+
+Setting `NOCTURN_VOICE_CAPTURE` to a directory makes the daemon write what a device's microphone
+sends to WAV files there — 16 kHz mono, the rate the link already carries.
+
+It exists for one job: obtaining recordings of a voice through the microphone, room and echo
+canceller that will later have to recognise it, which a laptop microphone cannot stand in for. It is
+**off unless the variable is set**, because it writes what the room said to disk. Arming it logs a
+warning, every file is logged by name, the directory is created `0700` and the files `0600`.
+
+Recordings are cut by length and by silence rather than by session — a device opens a voice session
+on the wake word and never closes it, so waiting for one to end would mean never writing a file. A
+recording starts at the first sound, ends after four hundred milliseconds of quiet or eight seconds
+of speech, and is contiguous audio throughout: pauses inside it are kept, so what a file contains is
+what the microphone heard.
+
 ## Approvals when nobody is looking <Badge text="Available now" variant="success" />
 
 This is the reason the daemon exists. An agent running on a schedule hits something that needs your
