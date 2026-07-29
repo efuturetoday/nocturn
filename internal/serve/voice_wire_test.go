@@ -172,7 +172,7 @@ func serveTest(t *testing.T, ctx context.Context, spaces map[string]*workspace.W
 	broker := hitl.NewBroker(nil, log)
 	ready := make(chan string, 1)
 	go func() {
-		_ = serveOn(ctx, "127.0.0.1:0", spaces, devices, broker, log, beat, func(addr string) { ready <- addr })
+		_ = serveOn(ctx, "127.0.0.1:0", spaces, devices, broker, nil, log, beat, func(addr string) { ready <- addr })
 	}()
 	select {
 	case addr := <-ready:

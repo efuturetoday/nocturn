@@ -14,6 +14,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/auth"
 	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/tools"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
@@ -159,14 +160,14 @@ func cors(h http.Handler) http.Handler {
 // connection must carry a paired device's bearer; the first device pairs via POST /pair with the
 // bootstrap code logged at startup, further devices via POST /join + /join/confirm. One backend,
 // many fronts — the backend is the truth.
-func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger) error {
-	return serveOn(ctx, addr, spaces, devices, broker, log, defaultHeartbeat, nil)
+func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, voices *speaker.Embedder, log *slog.Logger) error {
+	return serveOn(ctx, addr, spaces, devices, broker, voices, log, defaultHeartbeat, nil)
 }
 
 // serveOn is Serve with the two things only a test varies: the liveness check its connections run,
 // and a hook for the address it actually bound (so a test can ask for port 0 and still find the
 // daemon). Production passes defaultHeartbeat and nil.
-func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, log *slog.Logger, beat heartbeat, ready func(string)) error {
+func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, voices *speaker.Embedder, log *slog.Logger, beat heartbeat, ready func(string)) error {
 	log = log.With("component", "serve")
 	if code := devices.Bootstrap(bootstrapTTL); code != "" {
 		log.Info("no devices paired — pair one with POST /pair", "code", code, "validFor", bootstrapTTL)
@@ -246,7 +247,7 @@ func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Work
 		if !can.approve {
 			approver = nil
 		}
-		newConn(ws, spaces, devices, approver, hub, dev.ID, can,
+		newConn(ws, spaces, devices, approver, hub, dev.ID, can, voices,
 			log.With("remote", r.RemoteAddr, "device", dev.ID, "class", dev.Class)).serve(r.Context())
 	})
 
