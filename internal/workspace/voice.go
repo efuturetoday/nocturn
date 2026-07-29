@@ -3,6 +3,7 @@ package workspace
 import (
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
+	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/tools"
 	"github.com/efuturetoday/nocturn/internal/voice"
 )
@@ -32,6 +33,27 @@ var voiceCage = map[string]bool{
 	"skill_read":  true,
 	"time_now":    true,
 	"notify":      true,
+	// Reading only. memory_read carries no authority — it is context, the same argument skill_read
+	// rests on — and without it a spoken conversation is the one place the assistant forgets who it
+	// is talking to. memory_write stays out: writing is a decision, and the sentence above about
+	// adding a writing tool applies to it exactly.
+	"memory_read": true,
+	"whoami":      true,
+}
+
+// addressing tells the model what it may assume about who is speaking.
+//
+// Two different sentences rather than one with a hole in it: an unrecognised speaker is a state the
+// model has to handle, not a missing value to work around, and saying so plainly is what stops it
+// addressing whoever it saw last.
+func addressing(speaker string) string {
+	if speaker == "" {
+		return "\n\nYou do not know who is speaking. Do not guess, and do not assume it is whoever " +
+			"you spoke to last. If it matters — anything personal, anything addressed to someone — ask, " +
+			"or call whoami, which may know by now."
+	}
+	return "\n\nThe person speaking is " + speaker + ", recognised by voice. Call whoami if you need " +
+		"to check whether that still holds; an empty name there means it no longer does."
 }
 
 // voicePolicy is the gate policy for a spoken session, and it deliberately differs from policy():
@@ -148,8 +170,13 @@ func (w *Workspace) Voice(live agentkit.LiveLLM, opts ...VoiceOption) *voice.Dri
 		o(&cfg)
 	}
 	caged := w.tools.Select(func(name string) bool { return voiceCage[name] })
+	persona := resolvePersona(w.dir, w.log) + "\n" + voiceRider
 	driver := append([]voice.Option{
-		voice.WithSystem(resolvePersona(w.dir, w.log) + "\n" + voiceRider),
+		// Built per session, so a spoken conversation sees the notes the assistant has written since
+		// the daemon started — the same picture a typed one gets, which it did not have before.
+		voice.WithSystemFunc(func(speaker string) string {
+			return composePrompt(persona+addressing(speaker), w.mem, hasTool(caged))
+		}),
 		voice.WithLogger(w.log.With("component", "voice")),
 	}, cfg.driver...)
 	return voice.New(live, caged, voicePolicy(cfg.ask), w.grants, cfg.approver, driver...)
@@ -178,3 +205,7 @@ func (w *Workspace) VoiceTools() []string {
 	}
 	return names
 }
+
+// Voices are the enrolled speakers of this workspace, used to tell who is talking to a satellite.
+// Never nil: a workspace where nobody has enrolled is an empty set, not a missing one.
+func (w *Workspace) Voices() *speaker.Profiles { return w.voices }

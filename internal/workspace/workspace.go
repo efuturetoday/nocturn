@@ -23,6 +23,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/skill"
+	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/tools"
 	"github.com/efuturetoday/nocturn/internal/voice"
 )
@@ -60,13 +61,14 @@ type Workspace struct {
 	agentRuntimes map[string]*runtime.Runtime // one per declared agent (cage+gate+autonomy), by name
 	readOnly      *runtime.Runtime            // orphaned-run runtime: no tools, view an old transcript only
 	sched         *agent.Scheduler
-	reminders     *tools.Reminders // persistent reminder timers
-	notify        *notifier        // the seam every proactive message leaves through
-	waker         *tools.Waker     // self-continuation timers, bound to the chat manager
-	mem           *memory.Store    // the assistant's durable notes; its index is folded into every prompt
-	voice         *voice.Manager   // live spoken sessions, one per device; nil when Host.Live is unset
-	vault         *secret.Vault    // this workspace's own encrypted credential vault; nil when locked
-	accounts      *MCPAuth         // MCP OAuth session orchestration; nil when the vault is locked
+	reminders     *tools.Reminders  // persistent reminder timers
+	notify        *notifier         // the seam every proactive message leaves through
+	waker         *tools.Waker      // self-continuation timers, bound to the chat manager
+	mem           *memory.Store     // the assistant's durable notes; its index is folded into every prompt
+	voice         *voice.Manager    // live spoken sessions, one per device; nil when Host.Live is unset
+	voices        *speaker.Profiles // enrolled voices, for telling this household apart
+	vault         *secret.Vault     // this workspace's own encrypted credential vault; nil when locked
+	accounts      *MCPAuth          // MCP OAuth session orchestration; nil when the vault is locked
 	log           *slog.Logger
 }
 
@@ -161,9 +163,25 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: memory: %w", name, err)
 	}
 	baseTools = append(baseTools, memTools...)
+
+	// Ungated, and reaching nothing: it reports what the microphone already established, which the
+	// model could equally have asked the person. Outside a spoken session it answers "unknown", since
+	// nothing there installs a speaker.
+	whoami, err := speaker.WhoAmI()
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: whoami: %w", name, err)
+	}
+	baseTools = append(baseTools, whoami)
+
 	base, err := agentkit.NewToolSet(baseTools...)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
+	}
+
+	// Control plane, beside the grants: a voiceprint is not something a file tool should reach.
+	voices, err := speaker.OpenProfiles(filepath.Join(dir, "voices.json"))
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: %w", name, err)
 	}
 
 	gs, err := newGrantStore(filepath.Join(dir, "grants.json"))
@@ -212,6 +230,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	}
 
 	w := &Workspace{
+		voices:   voices,
 		name:     name,
 		dir:      dir,
 		llm:      h.LLM,
