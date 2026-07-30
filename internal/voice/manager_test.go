@@ -31,6 +31,7 @@ func newSink() *sink {
 
 func (s *sink) Play(pcm []byte) error { s.played <- pcm; return nil }
 func (s *sink) Interrupt() error      { s.interrupts <- struct{}{}; return nil }
+func (s *sink) Waiting(bool) error    { return nil }
 
 // ending returns a callback plus the channel it reports through.
 func ending() (voice.Ended, chan []agentkit.Message) {

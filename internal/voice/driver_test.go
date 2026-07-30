@@ -69,10 +69,12 @@ type fakeDevice struct {
 	mic        chan []byte
 	played     chan []byte
 	interrupts chan struct{}
+	waiting    chan bool
 }
 
 func newDevice() *fakeDevice {
 	return &fakeDevice{
+		waiting:    make(chan bool, 4),
 		mic:        make(chan []byte),
 		played:     make(chan []byte, 16),
 		interrupts: make(chan struct{}, 4),
@@ -97,6 +99,16 @@ func (d *fakeDevice) Play(pcm []byte) error { d.played <- pcm; return nil }
 // test that does sends on heard itself.
 func (d *fakeDevice) Heard() <-chan struct{} { return d.heard }
 func (d *fakeDevice) Interrupt() error       { d.interrupts <- struct{}{}; return nil }
+
+// Waiting records that the conversation was blocked on a human, so a test can assert the device was
+// told — and told again when the wait ended.
+func (d *fakeDevice) Waiting(on bool) error {
+	select {
+	case d.waiting <- on:
+	default: // a test that does not care about this must not deadlock the approval it triggered
+	}
+	return nil
+}
 
 // fakeObserver reports what the session committed, which is also how a test observes that the
 // event loop has processed a turn — no sleeps.
@@ -555,6 +567,53 @@ func TestCallsCancelled_UnknownIDsAreHarmless(t *testing.T) {
 	sess.push(agentkit.LiveToolCall{ID: "c1", Tool: "time_now", Args: "{}"})
 	if got := <-sess.results; got.Result != "12:00" {
 		t.Errorf("result = %+v", got)
+	}
+	sess.Close()
+	wait()
+}
+
+// The device is shown the wait, and shown its end.
+//
+// The note in the test above reaches whoever is listening; this reaches whoever walks past the
+// speaker and wonders why it went quiet. Both matter, and only one of them is a sentence.
+func TestPendingApproval_IsShownOnTheDevice(t *testing.T) {
+	sess, dev := newSession(), newDevice()
+	ts := toolset(t, gate.Wrap(tool("file_read", func(context.Context, string) (string, error) { return "ok", nil })))
+	ask := gate.PolicyFunc(func(gate.Action) gate.Ruling { return gate.AskWith(gate.RecallNever) })
+	appr := blockingApprover{release: make(chan struct{})}
+	d := voice.New(&fakeLive{sess: sess}, ts, ask, gate.NewMemGrants(), appr)
+	wait := run(t, d, dev, nil)
+
+	sess.push(agentkit.LiveToolCall{ID: "c1", Tool: "file_read", Args: "{}"})
+
+	// Shown BEFORE the human answers: a ring that only lit up afterwards would have nothing to say.
+	if on := <-dev.waiting; !on {
+		t.Fatal("device was told the wait ended before it began")
+	}
+	close(appr.release)
+	if on := <-dev.waiting; on {
+		t.Error("device was not told the wait ended")
+	}
+	<-sess.results
+	sess.Close()
+	wait()
+}
+
+// With nobody to approve, nothing is pending — so the device must not be left showing a wait that
+// cannot end.
+func TestNoApprover_ShowsNoWait(t *testing.T) {
+	sess, dev := newSession(), newDevice()
+	ts := toolset(t, gate.Wrap(tool("file_read", func(context.Context, string) (string, error) { return "ok", nil })))
+	ask := gate.PolicyFunc(func(gate.Action) gate.Ruling { return gate.AskWith(gate.RecallNever) })
+	d := voice.New(&fakeLive{sess: sess}, ts, ask, gate.NewMemGrants(), nil)
+	wait := run(t, d, dev, nil)
+
+	sess.push(agentkit.LiveToolCall{ID: "c1", Tool: "file_read", Args: "{}"})
+	<-sess.results
+	select {
+	case on := <-dev.waiting:
+		t.Fatalf("showed a wait (%v) with no approver", on)
+	default:
 	}
 	sess.Close()
 	wait()

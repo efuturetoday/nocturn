@@ -107,3 +107,38 @@ func TestCaptureForAnAbsentDeviceIsQuiet(t *testing.T) {
 	default:
 	}
 }
+
+// The device is told about a pending approval on the CONTROL queue, which overtakes audio: showing
+// a wait after the sentence it interrupted has finished playing would be showing it too late.
+func TestWaitingReachesTheDevice(t *testing.T) {
+	h := newHub(defaultHeartbeat)
+	device := testConn()
+	device.hub = h
+	device.device = "kitchen"
+	h.add(device)
+
+	sink := &deviceSink{hub: h, device: "kitchen", ws: "main"}
+
+	for _, tc := range []struct {
+		on    bool
+		state string
+	}{
+		{true, "approval"},
+		{false, "listening"},
+	} {
+		if err := sink.Waiting(tc.on); err != nil {
+			t.Fatal(err)
+		}
+		msg := recv(t, device)
+		got, ok := msg.(VoiceState)
+		if !ok {
+			t.Fatalf("device received %T, want VoiceState", msg)
+		}
+		if got.State != tc.state {
+			t.Errorf("Waiting(%v) sent state %q, want %q", tc.on, got.State, tc.state)
+		}
+		if got.Ws != "main" {
+			t.Errorf("Waiting(%v) sent workspace %q, want main", tc.on, got.Ws)
+		}
+	}
+}

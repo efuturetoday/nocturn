@@ -274,7 +274,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// agent run's continuation must re-open in the agent manager (its own runtime + store), not spawn
 	// a stray user chat under the same id.
 	waker.Bind(sessionRouter{user: w.chats, agent: w.agentChats, agentStore: agentStore})
-	w.startVoice(h.Live)
+	w.startVoice(h.Live, h.Approver)
 	w.sched = agent.NewScheduler(agents, wslog, func(ctx context.Context, a agent.Agent) {
 		// A scheduled firing is fire-and-forget; the run streams + persists like any chat. Surface only
 		// a start-time rejection (unknown agent / shutting down) — the run's own errors land in its
