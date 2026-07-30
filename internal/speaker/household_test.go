@@ -157,7 +157,7 @@ func TestEvaluateHousehold(t *testing.T) {
 	const enrol = 3 // three enrolment recordings, the rest held out as queries
 	bySpeaker := map[string][][]float32{}
 	for _, u := range collect(t, corpus, envInt(maxSpeakerNo, 40), envInt(perSpeaker, 6)) {
-		pcm, err := readWAV(u.path)
+		pcm, err := ReadWAV(u.path)
 		if err != nil {
 			t.Fatalf("%v", err)
 		}
