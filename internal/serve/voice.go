@@ -44,7 +44,7 @@ type VoiceEnd struct {
 type VoiceState struct {
 	Type  string `json:"type"` // always "voice.state"
 	Ws    string `json:"ws"`
-	State string `json:"state"` // "listening" | "idle"
+	State string `json:"state"` // "listening" | "approval" | "idle"
 }
 
 // VoiceCredit is the device saying how many more bytes of speech it can hold.
