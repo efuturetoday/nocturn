@@ -58,6 +58,7 @@ typedef enum {
     SAT_EV_NET_DOWN,       // it does not
     SAT_EV_WAKE,           // the wake word fired
     SAT_EV_VOICE,          // voice activity began — raw, means nothing on its own. See state.c
+    SAT_EV_VOICE_END,      // and stopped. What a person then waits through is the round trip
     SAT_EV_PLAYBACK_START, // the speaker is about to run. Post BEFORE raising the amplifier
     SAT_EV_PLAYBACK_END,   // it has stopped
     SAT_EV_MIC_DEAD,       // the front end's detect loop exited; the board is deaf from here on

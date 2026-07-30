@@ -144,9 +144,11 @@ static void detect_task(void *arg)
         if (speaking && !voice) {
             emit(SAT_EV_VOICE);
         } else if (!speaking && voice) {
-            // The other edge, logged rather than posted: nothing acts on it, but the gap between
-            // this line and the reply becoming audible IS the round trip a person waits through.
-            ESP_LOGI(TAG, "voice ended");
+            // The other edge. The gap between here and the reply becoming audible IS the round trip
+            // a person waits through, so this is where the ring stops saying "I am listening" and
+            // starts saying "I am working on it" — decided here rather than by the daemon, because
+            // the daemon cannot know it any sooner than a round trip later.
+            emit(SAT_EV_VOICE_END);
         }
         voice = speaking;
 
