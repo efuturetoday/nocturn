@@ -85,8 +85,8 @@ export default defineConfig({
 					],
 				},
 				{
-					// The four gate Kinds that exist in the code — no more, no fewer. The kind
-					// entries stay lowercase: they are the literal Kind values, not prose.
+					// The gate Kinds that exist in the code — no more, no fewer. The kind entries
+					// stay lowercase: they are the literal Kind values, not prose.
 					label: 'The Gate',
 					items: [
 						{ label: 'Cage and Gate', slug: 'reference/gate' },
@@ -94,6 +94,7 @@ export default defineConfig({
 						{ label: 'file', link: '/reference/gate/file/' },
 						{ label: 'notify', link: '/reference/gate/notify/' },
 						{ label: 'remind', link: '/reference/gate/remind/' },
+						{ label: 'memory', link: '/reference/gate/memory/' },
 					],
 				},
 				{
@@ -127,6 +128,16 @@ export default defineConfig({
 								{ label: 'remind', link: '/reference/tools/remind/' },
 								{ label: 'remind_list', link: '/reference/tools/remind_list/' },
 								{ label: 'remind_cancel', link: '/reference/tools/remind_cancel/' },
+							],
+						},
+						{
+							// Split across two groups on purpose, because they are not the same kind of
+							// thing: writing a note is gated, reading one back is context and carries no
+							// authority at all — the same argument that leaves skill_read ungated.
+							label: 'Memory',
+							items: [
+								{ label: 'memory_read', link: '/reference/tools/memory_read/' },
+								{ label: 'memory_write', link: '/reference/tools/memory_write/' },
 							],
 						},
 						{
