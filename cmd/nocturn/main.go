@@ -103,6 +103,11 @@ func runApp(serveAddr string) int {
 				return 1
 			}
 			logger.Info("speaker recognition enabled", "model", path)
+		} else {
+			// Absence is a statement, and it belongs in the log as much as its opposite: without this
+			// line, a whoami that answers "unknown" looks like a failure rather than a configuration.
+			logger.Info("speaker recognition off — set NOCTURN_SPEAKER_MODEL to enable it; " +
+				"whoami will report an unknown speaker until then")
 		}
 		pushLog := logger.With("component", "push")
 		sender := apnsSender(pushLog) // nil when APNs is not configured

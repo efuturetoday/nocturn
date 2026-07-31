@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 
@@ -474,5 +476,94 @@ func TestToolCallCancellation_SurfacesTheIDs(t *testing.T) {
 	got := expect[agentkit.LiveCallsCancelled](t, sess)
 	if len(got.IDs) != 2 || got.IDs[0] != "c1" || got.IDs[1] != "c2" {
 		t.Errorf("ids = %v, want [c1 c2]", got.IDs)
+	}
+}
+
+// capturingLogger records Warn lines so a test can read what a diagnostic actually said. Guarded:
+// the session's read loop is its own goroutine.
+type capturingLogger struct {
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *capturingLogger) record(msg string, kv ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	line := msg
+	for _, v := range kv {
+		line += " " + fmt.Sprint(v)
+	}
+	l.warns = append(l.warns, line)
+}
+
+func (l *capturingLogger) Debug(msg string, kv ...any) {}
+func (l *capturingLogger) Info(msg string, kv ...any)  {}
+func (l *capturingLogger) Warn(msg string, kv ...any)  { l.record(msg, kv...) }
+func (l *capturingLogger) Error(msg string, kv ...any) { l.record(msg, kv...) }
+func (l *capturingLogger) With(kv ...any) agentkit.Logger {
+	return l
+}
+
+func (l *capturingLogger) WithContext(context.Context) agentkit.Logger { return l }
+
+func (l *capturingLogger) find(t *testing.T, substr string) string {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, w := range l.warns {
+		if strings.Contains(w, substr) {
+			return w
+		}
+	}
+	t.Fatalf("no warning containing %q; got %v", substr, l.warns)
+	return ""
+}
+
+// A server-side close leaves one question behind — what did we say to earn it — and the frames we
+// last sent are the only answer available. They must be shapes, never content: this log line is
+// written on a path nobody is watching, and a transcript in it would outlive the conversation.
+func TestServerClose_LogsRecentFrameShapesAndNoContent(t *testing.T) {
+	log := &capturingLogger{}
+	f := newFake()
+	f.in <- []byte(`{"setupComplete":{}}`)
+	c := gemini.New(
+		func(context.Context, string) (gemini.Transport, error) { return f, nil },
+		"k", "test-model", gemini.WithLogger(log),
+	)
+	sess, err := c.Open(t.Context(), nil, nil)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { sess.Close() })
+
+	secret := []byte("this is what somebody said out loud")
+	for range 2 {
+		if err := sess.SendAudio(t.Context(), secret); err != nil {
+			t.Fatalf("SendAudio: %v", err)
+		}
+	}
+
+	// The transport dies without the session being closed: that is the "unexpected" branch.
+	f.Close()
+	expect[agentkit.LiveError](t, sess)
+
+	line := log.find(t, "the server ended the session")
+	// Named and measured, so a close after an oversized frame can be told from a protocol one. The
+	// size is the frame's on-the-wire length — base64, not the sample count.
+	want := fmt.Sprintf("realtimeInput(%dB)", len(base64.StdEncoding.EncodeToString(secret)))
+	if got := strings.Count(line, want); got != 2 {
+		t.Errorf("warning = %q, want %s twice", line, want)
+	}
+	// The setup frame is not among them: it goes out during Open, before there is a session to
+	// remember it on. That is the boundary, and it is worth knowing it is there.
+	if strings.Contains(line, "setup") {
+		t.Errorf("warning = %q, unexpectedly carried the setup frame", line)
+	}
+	// And nothing anybody said travels with it, raw or encoded.
+	if strings.Contains(line, string(secret)) {
+		t.Error("the warning carried the audio itself")
+	}
+	if strings.Contains(line, base64.StdEncoding.EncodeToString(secret)) {
+		t.Error("the warning carried the encoded audio")
 	}
 }
