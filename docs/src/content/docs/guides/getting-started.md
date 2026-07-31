@@ -34,20 +34,20 @@ service and a model on your own machine look the same to it.
 Create a `.env` file in the folder you run Nocturn from:
 
 ```ini
-FREELLM_BASE_URL=https://your-provider.example/v1
-FREELLM_API_KEY=your-key-here
-FREELLM_MODEL=your-model
+OPENAI_BASE_URL=https://your-provider.example/v1
+OPENAI_API_KEY=your-key-here
+OPENAI_MODEL=your-model
 ```
 
 | Variable | Meaning |
 |---|---|
-| `FREELLM_BASE_URL` | your provider's OpenAI-compatible endpoint |
-| `FREELLM_API_KEY` | the key for it |
-| `FREELLM_MODEL` | which model to use — defaults to `auto` if unset |
-| `FREELLM_REASONING_EFFORT` | optional: `low`, `medium`, `high`, `xhigh`; endpoint-dependent |
+| `OPENAI_BASE_URL` | your provider's OpenAI-compatible endpoint |
+| `OPENAI_API_KEY` | the key for it |
+| `OPENAI_MODEL` | which model to use — defaults to `auto` if unset |
+| `OPENAI_REASONING_EFFORT` | optional: `low`, `medium`, `high`, `xhigh`; endpoint-dependent |
 
 Real environment variables win over the `.env` file, so you can override one without editing
-anything. The `FREELLM_` prefix is just the name Nocturn reads — any compatible provider works.
+anything. The `OPENAI_` prefix is just the name Nocturn reads — any compatible provider works.
 
 ### Speaking to it (optional)
 
@@ -57,7 +57,7 @@ described; a device asking for a spoken session is simply told the daemon has no
 
 ```ini
 GEMINI_API_KEY=your-key-here
-GEMINI_LIVE_MODEL=the-live-model-id
+GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-latest
 ```
 
 | Variable | Meaning |
@@ -65,11 +65,15 @@ GEMINI_LIVE_MODEL=the-live-model-id
 | `GEMINI_API_KEY` | the key for the live API |
 | `GEMINI_LIVE_MODEL` | which live model — **required**, there is no default |
 
-The model id has no default on purpose. Live-capable ids change often, and they differ in what they
-support: one **without asynchronous function calling** stops the whole conversation whenever the
-assistant uses a tool, which is unusable as soon as anything needs your approval. A built-in default
-would either fail at connect time or, worse, connect and behave subtly wrong. Check what your account
-actually offers rather than copying an id from documentation — the two lists are not the same.
+The id above is the one this was measured against, and the reason to name it rather than leave it to
+you: live-capable models differ in what they support, and one **without asynchronous function
+calling** stops the whole conversation whenever the assistant uses a tool — unusable as soon as
+anything needs your approval.
+
+There is still no built-in default. These ids change often, and a default baked into the binary
+would either fail at connect time or, worse, connect and behave subtly wrong. Check what your own
+account actually offers rather than assuming: the list a key can reach and the list in anybody's
+documentation are not the same.
 
 ## 3. First run
 

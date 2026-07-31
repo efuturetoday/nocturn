@@ -160,8 +160,8 @@ func (d delayedApprover) Ask(ctx context.Context, a gate.Action, _ []gate.Grant)
 // the voice cage holds no sub-agent tool, so nothing in a spoken session reaches a text model.
 func openWorkspace(name string, log *slog.Logger) (*workspace.Workspace, error) {
 	var llm agentkit.LLM
-	if base, key := os.Getenv("FREELLM_BASE_URL"), os.Getenv("FREELLM_API_KEY"); base != "" || key != "" {
-		model := os.Getenv("FREELLM_MODEL")
+	if base, key := os.Getenv("OPENAI_BASE_URL"), os.Getenv("OPENAI_API_KEY"); base != "" || key != "" {
+		model := os.Getenv("OPENAI_MODEL")
 		if model == "" {
 			model = "auto"
 		}

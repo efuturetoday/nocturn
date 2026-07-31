@@ -282,7 +282,29 @@ With no paired device, an agent set to `guarded` behaves as `strict`: the ask is
 reports why. Missing setup reduces authority; it never grants it. See
 [Approvals](/guides/approvals/).
 
+### Setting up push today
+
+Waking a phone that is not on your network needs Apple's notification service, and today that means
+**your own** Apple Developer account: a `.p8` signing key, its key id, your team id and the app's
+bundle id, set as the four `NOCTURN_APNS_*` variables. Nothing else changes — with the variables
+unset, approvals still reach every attached device over the LAN. You simply do not get woken while
+the app is closed.
+
+That is a real barrier, and it is the wrong one for a tool meant to be downloaded and run.
+
+**A hosted relay** <Badge text="Planned" variant="caution" /> will remove it: a small public service
+that holds the APNs credential so you do not have to, and forwards a wake to your device. It stays
+consistent with everything else here only because of what a push already is — a signal with **no
+authority**, carrying no decision and no content. A relay therefore learns that some device should
+look at its daemon, and nothing about what is being asked or how you answered. The decision still
+travels over the authenticated WebSocket, directly between your daemon and your phone, and a relay
+that went hostile could annoy you but never approve anything.
+
 ## Not there yet
+
+**Android** <Badge text="Planned" variant="caution" /> — the companion app is iOS today. The app is
+Angular under Capacitor precisely so that the second platform is a build target rather than a
+rewrite; what genuinely differs is the push transport, since Firebase Cloud Messaging replaces APNs.
 
 **Messaging channels** <Badge text="Planned" variant="caution" /> — starting and steering a
 workspace through WhatsApp or Telegram, with approvals in the same conversation.
