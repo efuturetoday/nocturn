@@ -89,7 +89,7 @@
 	   edge, so the effect is gap-free. The gradient overlay stays put. */
 	background:
 		linear-gradient(to bottom, rgb(18 16 26 / 0.3), rgb(18 16 26 / 0.72) 62%, rgb(18 16 26) 100%),
-		url('/nebula.jpg') center calc(50% + var(--nebula-shift, 0px)) / cover no-repeat;
+		url('/nocturn/nebula.jpg') center calc(50% + var(--nebula-shift, 0px)) / cover no-repeat;
 }
 
 /* The mascot floats on the nebula — a soft purple glow lifts it off the field,

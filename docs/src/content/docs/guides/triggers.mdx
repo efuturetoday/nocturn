@@ -7,7 +7,7 @@ import { Badge } from '@astrojs/starlight/components';
 
 A trigger is what starts an agent. Two exist today; the rest of this page is honest about which.
 
-## By hand <Badge text="Available now" variant="success" />
+## By hand
 
 From the [chat](/nocturn/guides/the-chat/), `/fire` runs an agent now, with an optional one-off task:
 
@@ -20,7 +20,7 @@ From the [chat](/nocturn/guides/the-chat/), `/fire` runs an agent now, with an o
 The run happens in the background and streams into your terminal marked with its run id. This is
 the quickest way to test an agent before letting it run on its own.
 
-## On a schedule <Badge text="Available now" variant="success" />
+## On a schedule
 
 Add a `when: cron("…")` line and the agent fires itself:
 
@@ -62,6 +62,7 @@ failure. It would sit alongside cron as a second kind of trigger. It does not ex
 workflow around it today.
 
 :::note[Why the badges]
-The promise is that you can trust what this tells you, and that includes the docs. A feature is
-marked <Badge text="Available now" variant="success" /> only when you can actually use it.
+The promise is that you can trust what this tells you, and that includes the docs. Anything without
+a badge works today; a badge is there only to warn you off something that does not yet, or that is
+still moving.
 :::
