@@ -64,7 +64,7 @@ func cmdVoice(port int, wsName string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	log := newLogger(os.Stderr)
+	log := newLogger(os.Stderr, slog.LevelInfo)
 	ws, err := openWorkspace(wsName, log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nocturn voice:", err)

@@ -64,9 +64,18 @@ func runApp(serveAddr string) int {
 	stdin := bufio.NewReader(os.Stdin)
 
 	// Logs go to stderr (structured); the terminal UI keeps stdout. In daemon mode, stderr is the
-	// operator's window into the running backend. tint-tinted on a TTY, JSON when piped; level via
-	// NOCTURN_LOG. See newLogger.
-	logger := newLogger(os.Stderr)
+	// operator's window into the running backend. tint-tinted on a TTY, JSON when piped.
+	//
+	// The default level follows who is watching. Serving, that is an operator, and silence would be
+	// the wrong default for a background process. In the terminal chat it is somebody having a
+	// conversation, and on one terminal the two streams interleave: an answer ends up with a
+	// timestamp glued to it and the approval prompt scrolls away under diagnostics. So the chat is
+	// quiet unless something is wrong, and NOCTURN_LOG turns it back up.
+	defaultLevel := slog.LevelWarn
+	if serveAddr != "" {
+		defaultLevel = slog.LevelInfo
+	}
+	logger := newLogger(os.Stderr, defaultLevel)
 
 	llm := openai.New(baseURL, apiKey, model,
 		openai.WithEffort(agentkit.Effort(os.Getenv("OPENAI_REASONING_EFFORT"))),
@@ -78,7 +87,7 @@ func runApp(serveAddr string) int {
 	var approver gate.Approver
 	var broker *hitl.Broker
 	var devices *auth.Store
-	var voices *speaker.Embedder
+	var embedder *speaker.Embedder
 	var notifier tools.Notifier
 	if serveAddr == "" {
 		approver = &terminalApprover{in: stdin}
@@ -97,17 +106,17 @@ func runApp(serveAddr string) int {
 		// the whole handling — recognition then reports an unknown speaker and everything else runs as
 		// it did before.
 		if path := os.Getenv("NOCTURN_SPEAKER_MODEL"); path != "" {
-			voices, err = speaker.Open(path)
+			embedder, err = speaker.Open(path)
 			if err != nil {
 				logger.Error("speaker model", "path", path, "err", err)
 				return 1
 			}
 			logger.Info("speaker recognition enabled", "model", path)
 		} else {
-			// Absence is a statement, and it belongs in the log as much as its opposite: without this
-			// line, a whoami that answers "unknown" looks like a failure rather than a configuration.
+			// Absence is a statement, and it belongs in the log as much as its opposite: otherwise an
+			// assistant that never mentions who is speaking reads as broken rather than as unconfigured.
 			logger.Info("speaker recognition off — set NOCTURN_SPEAKER_MODEL to enable it; " +
-				"whoami will report an unknown speaker until then")
+				"the whoami tool is not registered until then")
 		}
 		pushLog := logger.With("component", "push")
 		sender := apnsSender(pushLog) // nil when APNs is not configured
@@ -126,7 +135,7 @@ func runApp(serveAddr string) int {
 	// session is told so rather than left waiting for audio that cannot come. See liveModel.
 	host := workspace.Host{
 		LLM: llm, Live: liveModel(logger), Approver: approver, Master: master,
-		Notifier: notifier, Active: active, Log: logger,
+		Notifier: notifier, Active: active, Speaker: embedder, Log: logger,
 	}
 
 	spaces, err := workspace.OpenAll(host, wsRoot)
@@ -138,7 +147,7 @@ func runApp(serveAddr string) int {
 		logger.Info("nocturn daemon starting", "addr", serveAddr, "workspaces", len(spaces), "model", model)
 		// serve.Serve wires each workspace's chat subscriptions and only then starts its agent
 		// schedulers, so a scheduled firing can never race the subscription wiring.
-		if err := serve.Serve(ctx, serveAddr, spaces, devices, broker, voices, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := serve.Serve(ctx, serveAddr, spaces, devices, broker, embedder, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("serve", "err", err)
 			return 1
 		}

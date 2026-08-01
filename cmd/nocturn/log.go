@@ -13,18 +13,25 @@ import (
 	"github.com/efuturetoday/nocturn/internal/tools"
 )
 
-// newLogger builds the daemon's DIAGNOSTIC logger — human-readable operator output answering "what
-// is the daemon doing / why did X fail". The level comes from NOCTURN_LOG (debug|info|warn|error,
-// default info). On a TTY it writes level-tinted, human-scannable lines (tint) with the subsystem as
-// a [component] badge before the message; off a TTY (piped to a file / journald) it writes
-// machine-parseable JSON with component as a structured field. Every line is enriched from ctx with
-// the active chat id, so agentkit's own turn/tool/llm lines correlate without each call site passing
-// it. Redaction is by convention: log identifiers, never secret values.
-func newLogger(w io.Writer) *slog.Logger {
-	level := slog.LevelInfo
+// newLogger builds the DIAGNOSTIC logger — human-readable operator output answering "what is it
+// doing / why did X fail". On a TTY it writes level-tinted, human-scannable lines (tint) with the
+// subsystem as a [component] badge before the message; off a TTY (piped to a file / journald) it
+// writes machine-parseable JSON with component as a structured field. Every line is enriched from
+// ctx with the active chat id, so agentkit's own turn/tool/llm lines correlate without each call
+// site passing it. Redaction is by convention: log identifiers, never secret values.
+//
+// def is the level to use when NOCTURN_LOG says nothing, and it differs by what is running rather
+// than being one constant. A daemon has an operator watching stderr and should say what it is doing;
+// the terminal chat has a PERSON watching, and to them the same stream is a second program talking
+// over the one they are using — an approval prompt buried under three DBG lines is a prompt that
+// gets missed. NOCTURN_LOG always wins, so debugging either of them is unchanged.
+func newLogger(w io.Writer, def slog.Level) *slog.Logger {
+	level := def
 	switch strings.ToLower(os.Getenv("NOCTURN_LOG")) {
 	case "debug":
 		level = slog.LevelDebug
+	case "info":
+		level = slog.LevelInfo
 	case "warn":
 		level = slog.LevelWarn
 	case "error":

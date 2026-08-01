@@ -27,7 +27,7 @@ output:
 
 js:
   wrapper: |
-    const me = JSON.parse(nocturn.call("whoami", {}));
+    const me = nocturn.whoami();
     console.log(me.name || "nobody I know");
   call: |
     const me = JSON.parse(nocturn.call("whoami", {}));
@@ -44,7 +44,13 @@ notes: >-
   whether it knows them at all.
 
 
+  **This tool only exists where recognition does.** Without `NOCTURN_SPEAKER_MODEL` pointing at a
+  model, the daemon does not register it at all — and neither does the terminal chat, which has no
+  microphone in the first place. A tool that could answer nothing but "unknown" for the life of the
+  process is worse than a missing one: it costs a slot in every prompt and invites a question whose
+  answer is always no.
+
+
   A recognised voice chooses context and address, never permission. Speech is a channel like the
   chat, where nobody authenticates the typist either, and a gated action is confirmed out of band on
-  a second device in both. Recognition needs `NOCTURN_SPEAKER_MODEL` and enrolled voices — see
-  [remote access](/nocturn/guides/remote-access/).
+  a second device in both. See [speaking to it](/nocturn/guides/speaking/).
