@@ -82,33 +82,42 @@ DevEx sugar, not a security boundary (see below).
 
 ### Sugar over the tools
 
-Each of these maps to exactly one registered tool. The mapping is the contract — if the tool asks,
-the wrapper asks:
+Each of these maps to exactly one registered tool, and that mapping is the whole contract: **a
+wrapper has no permissions of its own.** Whatever the tool it calls does — ask, allow, or never
+reach the gate at all — is what the wrapper does, because it *is* that tool call.
 
-| Wrapper | Tool it calls | Gated? |
-|---|---|---|
-| `fetch(url)` / `fetch(url, {method:"POST",…})` | [`http_read`](/nocturn/reference/tools/http_read/) / [`http_write`](/nocturn/reference/tools/http_write/) | yes, on the host |
-| `nocturn.resolve(host, type?)` | [`dns_resolve`](/nocturn/reference/tools/dns_resolve/) | yes, on the host |
-| `nocturn.ping(host)` | [`ping`](/nocturn/reference/tools/ping/) | yes, on the host |
-| `nocturn.fs.readFile` / `list` / `stat` / `search` | `file_read` / `file_list` / `file_stat` / `file_search` | no |
-| `nocturn.fs.writeFile` / `remove` / `move` | `file_write` / `file_remove` / `file_move` | yes, on the path |
-| `nocturn.notify(message, title?)` | [`notify`](/nocturn/reference/tools/notify/) | checked, allowed today |
-| `nocturn.remind(when, message, title?)` | [`remind`](/nocturn/reference/tools/remind/) | checked, allowed today |
-| `nocturn.wake(seconds, note)` | [`wake`](/nocturn/reference/tools/wake/) | no |
-| `nocturn.now()` | [`time_now`](/nocturn/reference/tools/time_now/) | no |
-| `nocturn.skillFile(skill, path)` | [`skill_read`](/nocturn/reference/tools/skill_read/) | no |
+So the gate status is not repeated here. Follow the tool to its own page; that page is the one place
+it is stated, and the one place that cannot fall out of step with the code.
+
+| Wrapper | Tool it calls |
+|---|---|
+| `fetch(url)` / `fetch(url, {method:"POST",…})` | [`http_read`](/nocturn/reference/tools/http_read/) / [`http_write`](/nocturn/reference/tools/http_write/) |
+| `nocturn.resolve(host, type?)` | [`dns_resolve`](/nocturn/reference/tools/dns_resolve/) |
+| `nocturn.ping(host)` | [`ping`](/nocturn/reference/tools/ping/) |
+| `nocturn.fs.readFile` / `list` / `stat` / `search` | [`file_read`](/nocturn/reference/tools/file_read/) / [`file_list`](/nocturn/reference/tools/file_list/) / [`file_stat`](/nocturn/reference/tools/file_stat/) / [`file_search`](/nocturn/reference/tools/file_search/) |
+| `nocturn.fs.writeFile` / `remove` / `move` | [`file_write`](/nocturn/reference/tools/file_write/) / [`file_remove`](/nocturn/reference/tools/file_remove/) / [`file_move`](/nocturn/reference/tools/file_move/) |
+| `nocturn.notify(message, title?)` | [`notify`](/nocturn/reference/tools/notify/) |
+| `nocturn.remind(when, message, title?)` | [`remind`](/nocturn/reference/tools/remind/) |
+| `nocturn.wake(seconds, note)` | [`wake`](/nocturn/reference/tools/wake/) |
+| `nocturn.now()` | [`time_now`](/nocturn/reference/tools/time_now/) |
+| `nocturn.skillFile(skill, path)` | [`skill_read`](/nocturn/reference/tools/skill_read/) |
+
+**The source is [`internal/script/prelude.js`](https://github.com/efuturetoday/nocturn/blob/main/internal/script/prelude.js)**
+— every wrapper above is a few lines of JavaScript around a single `nocturn.call`, and reading it is
+the fastest way to see that the sugar hides nothing. It is the whole guest-side surface, in one
+file.
 
 ```js
 const r = await fetch("https://api.example.com/items");
 const items = await r.json();
 
 const fs = require("fs");
-const text = fs.readFileSync("notes/todo.md");     // file_read — ungated
-fs.writeFileSync("notes/done.md", text);           // file_write — asks
-fs.renameSync("notes/done.md", "done/todo.md");    // file_move — asks on the destination
+const text = fs.readFileSync("notes/todo.md");     // file_read
+fs.writeFileSync("notes/done.md", text);           // file_write
+fs.renameSync("notes/done.md", "done/todo.md");    // file_move, on the destination path
 
-const mds = await nocturn.fs.search("*.md");       // file_search — ungated
-const today = nocturn.now().iso;                   // time_now — no authority
+const mds = await nocturn.fs.search("*.md");       // file_search
+const today = nocturn.now().iso;                   // time_now
 ```
 
 `fetch` forwards no request headers other than `Content-Type` — the host owns the credential channel
