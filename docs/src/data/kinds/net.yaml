@@ -17,22 +17,22 @@ glance:
 
 tools:
   - name: http_read
-    href: /reference/tools/http_read/
+    href: /nocturn/reference/tools/http_read/
     axis: read
     gated: true
     desc: read a URL (GET/HEAD)
   - name: http_write
-    href: /reference/tools/http_write/
+    href: /nocturn/reference/tools/http_write/
     axis: write
     gated: true
     desc: send data (POST/PUT/PATCH/DELETE)
   - name: dns_resolve
-    href: /reference/tools/dns_resolve/
+    href: /nocturn/reference/tools/dns_resolve/
     axis: read
     gated: true
     desc: resolve a hostname's DNS records
   - name: ping
-    href: /reference/tools/ping/
+    href: /nocturn/reference/tools/ping/
     axis: read
     gated: true
     desc: one ICMP echo to a host

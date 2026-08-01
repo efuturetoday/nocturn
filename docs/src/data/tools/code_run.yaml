@@ -10,7 +10,7 @@ intro: >-
   authority** — the interpreter is a WASM guest with no filesystem, no network and no clock. Any
   call a script makes goes back out through an ordinary tool, and is gated there. So a script's
   reach is exactly its cage, never more. Details on the
-  [JavaScript runtime](/reference/javascript-runtime/) page.
+  [JavaScript runtime](/nocturn/reference/javascript-runtime/) page.
 
 input:
   - field: source

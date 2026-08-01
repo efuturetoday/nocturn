@@ -53,7 +53,7 @@ When a tool needs your decision, the prompt appears inline and the turn waits:
 
 Note the default: anything you did not explicitly approve is a no, including just pressing Enter.
 What is being approved is the `{kind → target}` pair, never "this tool" in general — see
-[cage and gate](/reference/gate/).
+[cage and gate](/nocturn/reference/gate/).
 
 ## Commands
 
@@ -83,7 +83,7 @@ its run id, while you keep typing:
 ```
 
 A background run never releases your prompt — the two do not fight over the input line. What an
-agent may do on its own is its `autonomy` setting; see [Agents](/guides/agents/).
+agent may do on its own is its `autonomy` setting; see [Agents](/nocturn/guides/agents/).
 
 ## Other subcommands
 
@@ -91,7 +91,7 @@ The chat is what you get with no arguments. The binary does a few other things:
 
 | Command | What it does |
 |---|---|
-| `nocturn serve` | Run the daemon the [companion app](/guides/remote-access/) talks to |
+| `nocturn serve` | Run the daemon the [companion app](/nocturn/guides/remote-access/) talks to |
 | `nocturn ls` | List workspaces |
 | `nocturn secret set <target>` · `nocturn secret ls` | Manage vault credentials |
 | `nocturn auth <provider>` | Run an OAuth flow and store the token |

@@ -60,7 +60,7 @@ resulting token in the vault. From then on the host refreshes it. The guest neve
 OAuth token is a credential like any other, injected at the boundary.
 
 A plugin can declare its own provider, so connecting a new service is part of installing its plugin.
-See [Plugins](/guides/writing-plugins/).
+See [Plugins](/nocturn/guides/writing-plugins/).
 
 ## The leak scanner
 

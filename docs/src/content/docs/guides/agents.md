@@ -65,7 +65,7 @@ capability; skipping it never silently grants any.
 :::caution[Why there is no free-running mode]
 An agent reads untrusted content, and untrusted content tries to hijack it. That is not a
 hypothetical — it is the main threat this whole design exists for. `guarded` keeps you in the loop
-for exactly the moments that matter. See [the threat model](/architecture/threat-model/).
+for exactly the moments that matter. See [the threat model](/nocturn/architecture/threat-model/).
 :::
 
 ## Run it

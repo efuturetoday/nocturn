@@ -4,7 +4,7 @@ description: What stops for your yes, what does not, how to answer, and why the 
 ---
 
 Nocturn asks before it does things that reach off the machine or change your files. This page is
-about what that feels like in practice; [cage and gate](/reference/gate/) is the precise version.
+about what that feels like in practice; [cage and gate](/nocturn/reference/gate/) is the precise version.
 
 ## What asks, and what does not
 
@@ -66,7 +66,7 @@ prompt asking you to approve that post sits inside the same trust domain as the 
 Moving the answer to your phone breaks that. The injected content can make the assistant *ask*; it
 cannot reach the device where the yes happens, and it cannot see what you were shown. That
 separation is the whole reason the companion app exists — see
-[Remote access](/guides/remote-access/) for pairing and the push.
+[Remote access](/nocturn/guides/remote-access/) for pairing and the push.
 
 The push itself carries **no decision and no secret**. It is a wake signal; the yes travels back
 over the app's authenticated connection. Intercepting a notification approves nothing.
@@ -81,7 +81,7 @@ the default is the strict one:
 - **`guarded`**: the ask goes to your phone and the run waits — a slow answer never fails the run
   for being slow, it just has two minutes to arrive.
 
-With no paired device, `guarded` behaves as `strict`. See [Agents](/guides/agents/).
+With no paired device, `guarded` behaves as `strict`. See [Agents](/nocturn/guides/agents/).
 
 :::note[On your network vs away]
 The daemon listens on your LAN. On the same network, answering is instant. Answering from outside

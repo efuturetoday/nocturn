@@ -30,7 +30,7 @@ js:
 notes: >-
   The `memory/` folder is a **sibling** of the file tools' mount, not inside it — so `file_read` and
   `file_write` cannot reach it at all, and the only writer is
-  [`memory_write`](/reference/tools/memory_write/). That separation is what stops a prompt injection
+  [`memory_write`](/nocturn/reference/tools/memory_write/). That separation is what stops a prompt injection
   from rewriting the assistant's memory through a generic file tool. Confinement here is enforced by
   `os.Root`, so a path can never escape the folder — not via `..`, not via an absolute path, not via
   a symlink pointing out (`openat2` / `RESOLVE_BENEATH`, kernel-enforced, not string arithmetic).

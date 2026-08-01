@@ -196,7 +196,7 @@ cp .env.example .env          # OPENAI_BASE_URL / _MODEL / _API_KEY — any Open
 
 Nocturn ships no model; point it at one you control. Everything it knows lives in a `nocturn-data/`
 folder next to wherever you ran it. Full setup, including the encrypted vault and pairing a phone,
-is in [Getting started](https://nocturn.dev/guides/getting-started/).
+is in [Getting started](https://efuturetoday.github.io/nocturn/guides/getting-started/).
 
 ```bash
 go test -race ./...           # 809 tests
@@ -228,7 +228,7 @@ general coding agent erodes the one thing this design is for.
 
 ## Reading further
 
-- **[Documentation](https://nocturn.dev)** — guides, the gate reference, the threat model
+- **[Documentation](https://efuturetoday.github.io/nocturn)** — guides, the gate reference, the threat model
 - **[ADRS.md](ADRS.md)** — eleven decision records, and the reasoning behind each
 - **[agentkit/DOCS.md](agentkit/DOCS.md)** — the engine's design, ports, and composition model
 - **[CLAUDE.md](CLAUDE.md)** — how to work in this repository, and the pitfalls already paid for

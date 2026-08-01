@@ -3,7 +3,7 @@ description: Remove a file, or an empty directory, from the workspace.
 
 kind:
   name: file
-  href: /reference/gate/file/
+  href: /nocturn/reference/gate/file/
   target: the workspace-relative path being removed
 gated: true
 axis: write
@@ -11,7 +11,7 @@ axis: write
 intro: >-
   Delete something. Gated on the path, like every file write — and the one where saying no matters
   most, because there is no undo. Only empty directories are removed; a recursive wipe is not a tool.
-  See the [`file` kind](/reference/gate/file/).
+  See the [`file` kind](/nocturn/reference/gate/file/).
 
 input:
   - field: path

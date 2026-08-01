@@ -17,37 +17,37 @@ glance:
 
 tools:
   - name: file_read
-    href: /reference/tools/file_read/
+    href: /nocturn/reference/tools/file_read/
     axis: read
     gated: false
     desc: read a text file
   - name: file_list
-    href: /reference/tools/file_list/
+    href: /nocturn/reference/tools/file_list/
     axis: read
     gated: false
     desc: list a directory
   - name: file_stat
-    href: /reference/tools/file_stat/
+    href: /nocturn/reference/tools/file_stat/
     axis: read
     gated: false
     desc: stat a path
   - name: file_search
-    href: /reference/tools/file_search/
+    href: /nocturn/reference/tools/file_search/
     axis: read
     gated: false
     desc: find files by glob
   - name: file_write
-    href: /reference/tools/file_write/
+    href: /nocturn/reference/tools/file_write/
     axis: write
     gated: true
     desc: write a text file
   - name: file_remove
-    href: /reference/tools/file_remove/
+    href: /nocturn/reference/tools/file_remove/
     axis: write
     gated: true
     desc: remove a file or empty directory
   - name: file_move
-    href: /reference/tools/file_move/
+    href: /nocturn/reference/tools/file_move/
     axis: write
     gated: true
     desc: move or rename a file

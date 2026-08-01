@@ -101,7 +101,7 @@ printf %s "$TOKEN" | nocturn secret set plugin:my-api/my-api
 
 Your code never sees the token — it is stamped in host-side, for that host only. For "sign in
 with…" services, declare an `oauth` provider instead and run `nocturn auth <name>` once. See
-[Secrets and accounts](/guides/connecting-accounts/).
+[Secrets and accounts](/nocturn/guides/connecting-accounts/).
 
 ## Installing
 
@@ -122,5 +122,5 @@ Use a plugin when you would otherwise wish the assistant had a CLI for some serv
 same reach, but the token stays with the host, the plugin can only call the base tools it named, and
 every actual call still asks you.
 
-Prefer not to write code? A hosted [MCP server](/guides/remote-mcp/) gives you tools with no plugin
+Prefer not to write code? A hosted [MCP server](/nocturn/guides/remote-mcp/) gives you tools with no plugin
 at all.

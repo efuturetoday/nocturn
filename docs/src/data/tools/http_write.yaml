@@ -3,7 +3,7 @@ description: Send data to a URL with a mutating method (POST/PUT/PATCH/DELETE).
 
 kind:
   name: net
-  href: /reference/gate/net/
+  href: /nocturn/reference/gate/net/
   target: the host of the URL, e.g. `api.github.com`
 gated: true
 axis: write
@@ -12,7 +12,7 @@ intro: >-
   Send data somewhere. The split from `http_read` is not about the HTTP verb being trustworthy — it
   is so the **tool the model picks already states the intent**, and so a grant for reading a host
   never silently becomes permission to post to it. Reach, credentials and leak scanning live on the
-  [`net` kind](/reference/gate/net/).
+  [`net` kind](/nocturn/reference/gate/net/).
 
 input:
   - field: url

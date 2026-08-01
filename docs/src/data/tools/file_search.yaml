@@ -3,14 +3,14 @@ description: Find files in the workspace by glob pattern, walking subdirectories
 
 kind:
   name: file
-  href: /reference/gate/file/
+  href: /nocturn/reference/gate/file/
 gated: false
 axis: read
 
 intro: >-
   Find files by name or path pattern. A pattern without `/` matches file **names** anywhere below the
   search root (`*.md`); a pattern with a `/` matches the path relative to that root. Ungated, like
-  the other file reads — see the [`file` kind](/reference/gate/file/).
+  the other file reads — see the [`file` kind](/nocturn/reference/gate/file/).
 
 input:
   - field: pattern

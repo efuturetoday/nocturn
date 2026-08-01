@@ -3,7 +3,7 @@ description: Resolve a hostname's DNS records.
 
 kind:
   name: net
-  href: /reference/gate/net/
+  href: /nocturn/reference/gate/net/
   target: the hostname being resolved
 gated: true
 axis: read
@@ -12,7 +12,7 @@ intro: >-
   Look up DNS records for a host. It sends no payload and reads nothing back into the world, and it
   is still gated — because the *question* is the channel: resolving
   `secret-value.attacker.example` leaks that value whether or not an answer ever comes back. It
-  shares the [`net` kind](/reference/gate/net/) with HTTP, so one host decision covers both.
+  shares the [`net` kind](/nocturn/reference/gate/net/) with HTTP, so one host decision covers both.
 
 input:
   - field: host

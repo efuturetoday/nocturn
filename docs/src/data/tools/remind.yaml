@@ -3,7 +3,7 @@ description: Schedule a reminder that notifies the user at a future time.
 
 kind:
   name: remind
-  href: /reference/gate/remind/
+  href: /nocturn/reference/gate/remind/
   target: the constant `user`
 gated: true
 axis: write
@@ -11,13 +11,13 @@ axis: write
 intro: >-
   Schedule a notification for later. At that time you get `message` as written — there is no model
   run at delivery, the text is fixed when the reminder is created. Checks the
-  [`remind` kind](/reference/gate/remind/), which the root policy allows, so it runs without a prompt.
+  [`remind` kind](/nocturn/reference/gate/remind/), which the root policy allows, so it runs without a prompt.
 
 input:
   - field: when
     type: string
     required: true
-    notes: "Either `\"in <duration>\"` (`\"in 30m\"`, `\"in 2h\"`) or an absolute **RFC3339** timestamp. For a wall-clock time, get the current time from [`time_now`](/reference/tools/time_now/) and pass the RFC3339 result."
+    notes: "Either `\"in <duration>\"` (`\"in 30m\"`, `\"in 2h\"`) or an absolute **RFC3339** timestamp. For a wall-clock time, get the current time from [`time_now`](/nocturn/reference/tools/time_now/) and pass the RFC3339 result."
   - field: message
     type: string
     required: true
@@ -32,7 +32,7 @@ output:
   code: |
     { "id": "rem-…", "fireAt": "2026-07-18T09:00:00+02:00" }
   lang: json
-  after: "Keep the `id` if you want to cancel it later with [`remind_cancel`](/reference/tools/remind_cancel/)."
+  after: "Keep the `id` if you want to cancel it later with [`remind_cancel`](/nocturn/reference/tools/remind_cancel/)."
 
 js:
   wrapper: |

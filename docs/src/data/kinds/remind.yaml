@@ -17,17 +17,17 @@ glance:
 
 tools:
   - name: remind
-    href: /reference/tools/remind/
+    href: /nocturn/reference/tools/remind/
     axis: write
     gated: true
     desc: schedule a notification for later
   - name: remind_list
-    href: /reference/tools/remind_list/
+    href: /nocturn/reference/tools/remind_list/
     axis: read
     gated: false
     desc: list the pending reminders
   - name: remind_cancel
-    href: /reference/tools/remind_cancel/
+    href: /nocturn/reference/tools/remind_cancel/
     axis: write
     gated: false
     desc: cancel a pending reminder by id

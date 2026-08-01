@@ -77,7 +77,7 @@ binds it to an allowlist of tools that only read or address the user — `file_r
 effect, or runs code is bound at all. An absent tool is not denied; it cannot be named, which is
 the stronger property.
 
-That is also why the voice policy differs from the [workspace policy](/reference/gate/): it
+That is also why the voice policy differs from the [workspace policy](/nocturn/reference/gate/): it
 **allows** the `net` and `file` kinds where a typed session asks. This reads like a loosening and
 is the opposite. The typed policy asks on those kinds because a typed session can reach writing
 tools through them; a spoken session cannot, because the cage never bound them. Asking a second
@@ -103,7 +103,7 @@ filesystem, no network, and no clock. Every ability is a window the host opens o
 ability that was not handed over is unforgeable by absence — there is no ambient power to escalate
 from.
 
-The [gate](/reference/gate/) then decides per action, on a `{kind, target}` pair rather than on the
+The [gate](/nocturn/reference/gate/) then decides per action, on a `{kind, target}` pair rather than on the
 sentence that led there. Worth being precise about what it is not: the workspace policy is **not**
 deny-by-default. Network and file writes ask; other kinds run. What bounds the rest is the cage —
 which tools exist for a caller at all — and the fact that the tools which do not ask cannot reach
@@ -145,5 +145,5 @@ request it was tricked into building cannot carry a secret past the border.
 ## Where it maps
 
 Each of these is a concrete layer, built from the sandbox outward. The
-[layered design](/architecture/the-onion/) walks through them, and the
-[request flow](/architecture/request-flow/) traces a single call through every gate.
+[layered design](/nocturn/architecture/the-onion/) walks through them, and the
+[request flow](/nocturn/architecture/request-flow/) traces a single call through every gate.

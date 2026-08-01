@@ -3,7 +3,7 @@ description: Read a URL over HTTP(S) with a safe method (GET/HEAD).
 
 kind:
   name: net
-  href: /reference/gate/net/
+  href: /nocturn/reference/gate/net/
   target: the host of the URL, e.g. `api.github.com`
 gated: true
 axis: read
@@ -12,7 +12,7 @@ intro: >-
   Read a URL with a safe method. Every call asks — a read over the network is still a reach off the
   machine, so `http_read` is gated exactly like `http_write`. What you approve is the **host**, and
   the answer covers the other net tools for that host too. Reach, credentials and leak scanning all
-  live on the [`net` kind](/reference/gate/net/).
+  live on the [`net` kind](/nocturn/reference/gate/net/).
 
 input:
   - field: url

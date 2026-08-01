@@ -3,13 +3,13 @@ description: Send one ICMP echo to a host and report whether it answered.
 
 kind:
   name: net
-  href: /reference/gate/net/
+  href: /nocturn/reference/gate/net/
   target: the hostname or IP being pinged
 gated: true
 axis: read
 
 intro: >-
-  One ICMP echo, one answer. Gated on the [`net` kind](/reference/gate/net/) like everything else
+  One ICMP echo, one answer. Gated on the [`net` kind](/nocturn/reference/gate/net/) like everything else
   that leaves the machine: a ping sweep is a perfectly good way to map a network you were never
   meant to see, so reachability is a decision, not a freebie.
 

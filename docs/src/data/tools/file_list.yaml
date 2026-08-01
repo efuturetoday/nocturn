@@ -3,13 +3,13 @@ description: List the entries of a workspace directory.
 
 kind:
   name: file
-  href: /reference/gate/file/
+  href: /nocturn/reference/gate/file/
 gated: false
 axis: read
 
 intro: >-
   List what a workspace directory contains. Ungated, like the other file reads — see the
-  [`file` kind](/reference/gate/file/) for why, and for what confinement guarantees instead.
+  [`file` kind](/nocturn/reference/gate/file/) for why, and for what confinement guarantees instead.
 
 input:
   - field: path

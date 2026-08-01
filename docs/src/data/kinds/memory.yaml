@@ -16,7 +16,7 @@ intro: >-
   question earns its keep.
 
   Reading is a different matter and carries no kind at all —
-  [`memory_read`](/reference/tools/memory_read/) is ungated, because reading back pre-installed text
+  [`memory_read`](/nocturn/reference/tools/memory_read/) is ungated, because reading back pre-installed text
   is context, never reach.
 
 glance:
@@ -26,12 +26,12 @@ glance:
 
 tools:
   - name: memory_write
-    href: /reference/tools/memory_write/
+    href: /nocturn/reference/tools/memory_write/
     axis: write
     gated: true
     desc: store a Markdown note the assistant should still know next time
   - name: memory_read
-    href: /reference/tools/memory_read/
+    href: /nocturn/reference/tools/memory_read/
     axis: read
     gated: false
     desc: read a detail note back — context, not reach, so it never asks

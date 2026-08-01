@@ -3,9 +3,15 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
 
+// The site lives under a path, because GitHub Pages serves a project repository at
+// /<repo>. Everything below that has to know it exists.
+const base = '/nocturn';
+
+
 // https://astro.build/config
 export default defineConfig({
-	site: 'https://nocturn.dev',
+	site: 'https://efuturetoday.github.io',
+	base,
 	integrations: [
 		// Must come BEFORE starlight. Renders ```mermaid blocks client-side,
 		// following Starlight's light/dark theme.
@@ -90,11 +96,11 @@ export default defineConfig({
 					label: 'The Gate',
 					items: [
 						{ label: 'Cage and Gate', slug: 'reference/gate' },
-						{ label: 'net', link: '/reference/gate/net/' },
-						{ label: 'file', link: '/reference/gate/file/' },
-						{ label: 'notify', link: '/reference/gate/notify/' },
-						{ label: 'remind', link: '/reference/gate/remind/' },
-						{ label: 'memory', link: '/reference/gate/memory/' },
+						{ label: 'net', link: '/nocturn/reference/gate/net/' },
+						{ label: 'file', link: '/nocturn/reference/gate/file/' },
+						{ label: 'notify', link: '/nocturn/reference/gate/notify/' },
+						{ label: 'remind', link: '/nocturn/reference/gate/remind/' },
+						{ label: 'memory', link: '/nocturn/reference/gate/memory/' },
 					],
 				},
 				{
@@ -103,31 +109,31 @@ export default defineConfig({
 						{
 							label: 'Network',
 							items: [
-								{ label: 'http_read', link: '/reference/tools/http_read/' },
-								{ label: 'http_write', link: '/reference/tools/http_write/' },
-								{ label: 'dns_resolve', link: '/reference/tools/dns_resolve/' },
-								{ label: 'ping', link: '/reference/tools/ping/' },
+								{ label: 'http_read', link: '/nocturn/reference/tools/http_read/' },
+								{ label: 'http_write', link: '/nocturn/reference/tools/http_write/' },
+								{ label: 'dns_resolve', link: '/nocturn/reference/tools/dns_resolve/' },
+								{ label: 'ping', link: '/nocturn/reference/tools/ping/' },
 							],
 						},
 						{
 							label: 'Files',
 							items: [
-								{ label: 'file_read', link: '/reference/tools/file_read/' },
-								{ label: 'file_list', link: '/reference/tools/file_list/' },
-								{ label: 'file_stat', link: '/reference/tools/file_stat/' },
-								{ label: 'file_search', link: '/reference/tools/file_search/' },
-								{ label: 'file_write', link: '/reference/tools/file_write/' },
-								{ label: 'file_remove', link: '/reference/tools/file_remove/' },
-								{ label: 'file_move', link: '/reference/tools/file_move/' },
+								{ label: 'file_read', link: '/nocturn/reference/tools/file_read/' },
+								{ label: 'file_list', link: '/nocturn/reference/tools/file_list/' },
+								{ label: 'file_stat', link: '/nocturn/reference/tools/file_stat/' },
+								{ label: 'file_search', link: '/nocturn/reference/tools/file_search/' },
+								{ label: 'file_write', link: '/nocturn/reference/tools/file_write/' },
+								{ label: 'file_remove', link: '/nocturn/reference/tools/file_remove/' },
+								{ label: 'file_move', link: '/nocturn/reference/tools/file_move/' },
 							],
 						},
 						{
 							label: 'Reaching You',
 							items: [
-								{ label: 'notify', link: '/reference/tools/notify/' },
-								{ label: 'remind', link: '/reference/tools/remind/' },
-								{ label: 'remind_list', link: '/reference/tools/remind_list/' },
-								{ label: 'remind_cancel', link: '/reference/tools/remind_cancel/' },
+								{ label: 'notify', link: '/nocturn/reference/tools/notify/' },
+								{ label: 'remind', link: '/nocturn/reference/tools/remind/' },
+								{ label: 'remind_list', link: '/nocturn/reference/tools/remind_list/' },
+								{ label: 'remind_cancel', link: '/nocturn/reference/tools/remind_cancel/' },
 							],
 						},
 						{
@@ -136,18 +142,18 @@ export default defineConfig({
 							// authority at all — the same argument that leaves skill_read ungated.
 							label: 'Memory',
 							items: [
-								{ label: 'memory_read', link: '/reference/tools/memory_read/' },
-								{ label: 'memory_write', link: '/reference/tools/memory_write/' },
+								{ label: 'memory_read', link: '/nocturn/reference/tools/memory_read/' },
+								{ label: 'memory_write', link: '/nocturn/reference/tools/memory_write/' },
 							],
 						},
 						{
 							label: 'Zero Authority',
 							items: [
-								{ label: 'time_now', link: '/reference/tools/time_now/' },
-								{ label: 'whoami', link: '/reference/tools/whoami/' },
-								{ label: 'wake', link: '/reference/tools/wake/' },
-								{ label: 'code_run', link: '/reference/tools/code_run/' },
-								{ label: 'skill_read', link: '/reference/tools/skill_read/' },
+								{ label: 'time_now', link: '/nocturn/reference/tools/time_now/' },
+								{ label: 'whoami', link: '/nocturn/reference/tools/whoami/' },
+								{ label: 'wake', link: '/nocturn/reference/tools/wake/' },
+								{ label: 'code_run', link: '/nocturn/reference/tools/code_run/' },
+								{ label: 'skill_read', link: '/nocturn/reference/tools/skill_read/' },
 							],
 						},
 					],

@@ -26,10 +26,10 @@ An action is a `{Kind, Target}` pair. The kind says *what sort of reach* this is
 
 | Kind | Target | Tools that check it | Root policy |
 |---|---|---|---|
-| [`net`](/reference/gate/net/) | the **host** | `http_read`, `http_write`, `dns_resolve`, `ping` | **asks**, remembered for the session |
-| [`file`](/reference/gate/file/) | the **path** | `file_write`, `file_remove`, `file_move` | **asks**, remembered for the session |
-| [`notify`](/reference/gate/notify/) | the constant `user` | `notify` | allowed |
-| [`remind`](/reference/gate/remind/) | the constant `user` | `remind` | allowed |
+| [`net`](/nocturn/reference/gate/net/) | the **host** | `http_read`, `http_write`, `dns_resolve`, `ping` | **asks**, remembered for the session |
+| [`file`](/nocturn/reference/gate/file/) | the **path** | `file_write`, `file_remove`, `file_move` | **asks**, remembered for the session |
+| [`notify`](/nocturn/reference/gate/notify/) | the constant `user` | `notify` | allowed |
+| [`remind`](/nocturn/reference/gate/remind/) | the constant `user` | `remind` | allowed |
 
 That table is the whole policy. In code it is nine lines:
 
@@ -110,7 +110,7 @@ autonomy setting, and the zero value is the strict one:
 
 - **`Strict`** — no approver is wired at all. A fresh ask is **denied**, and the agent reports why.
 - **`Guarded`** — the ask is routed out of band: your phone, over the [companion
-  app](/guides/remote-access/).
+  app](/nocturn/guides/remote-access/).
 
 With no device paired, `Guarded` collapses back to `Strict`. A missing setting, a typo'd setting, a
 device you never set up: all of them fail toward *less* authority, never more.
@@ -120,4 +120,4 @@ device you never set up: all of them fail toward *less* authority, never more.
 The gate is a **wrapper**, not a feature of the engine. `agentkit` — the turn loop that drives the
 model — knows nothing about permissions; `gate.Wrap` puts the check between the model's decision and
 the tool running. That separation is deliberate and load-bearing: the part that talks to the model
-cannot decide to skip the part that asks you. See [the two halves](/architecture/agentkit/).
+cannot decide to skip the part that asks you. See [the two halves](/nocturn/architecture/agentkit/).
