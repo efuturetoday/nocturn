@@ -14,6 +14,7 @@ package embed
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -58,35 +59,24 @@ type Client struct {
 	scanner *secret.Scanner
 }
 
-// Option configures a Client.
-type Option func(*Client)
-
-// WithModel sets the embedding model. Empty keeps DefaultModel.
-func WithModel(m string) Option {
-	return func(c *Client) {
-		if m != "" {
-			c.model = m
-		}
-	}
-}
-
-// WithDims sets the requested vector length. Zero or negative keeps DefaultDims.
+// Config is where to embed and how. It is resolved by the process that owns configuration —
+// cmd/nocturn, from the environment — rather than read here: a library that reaches for os.Getenv
+// cannot be handed a second endpoint, and cannot be tested without a shell.
 //
-// The endpoint decides whether it honours the request. Embed verifies what came back rather than
-// trusting it, because a provider that silently ignores the parameter would otherwise poison an
-// index with vectors of a length the rest of the system does not expect.
-func WithDims(d int) Option {
-	return func(c *Client) {
-		if d > 0 {
-			c.dims = d
-		}
-	}
+// The zero Model and Dims mean the defaults above, so a caller that has nothing to say says nothing.
+type Config struct {
+	BaseURL string
+	APIKey  string
+	Model   string
+	Dims    int
 }
 
-// WithScanner installs the egress leak scanner. Without one, nothing checks what leaves.
-func WithScanner(s *secret.Scanner) Option {
-	return func(c *Client) { c.scanner = s }
-}
+// Configured reports whether there is an endpoint to talk to at all. Unconfigured is a supported
+// state — the knowledge tool then simply does not exist.
+func (c Config) Configured() bool { return c.BaseURL != "" || c.APIKey != "" }
+
+// Option configures a Client. Only the HTTP client is one, for tests; everything else is Config.
+type Option func(*Client)
 
 // WithHTTPClient replaces the HTTP client, for tests.
 func WithHTTPClient(h *http.Client) Option {
@@ -97,16 +87,25 @@ func WithHTTPClient(h *http.Client) Option {
 	}
 }
 
-// New builds a client against an OpenAI-compatible base URL. A trailing slash is tolerated.
-func New(baseURL, apiKey string, opts ...Option) *Client {
+// New builds a client. A trailing slash on the base URL is tolerated.
+//
+// The scanner is a parameter rather than an option because it is not optional in spirit: this is
+// the boundary documents cross on their way off the machine, and it belongs to the workspace whose
+// vault the secrets are in — which is why the client is built per workspace and not once per
+// process.
+func New(cfg Config, scanner *secret.Scanner, opts ...Option) *Client {
 	c := &Client{
 		// Generous: a batch of long chunks against a busy gateway is slow, and indexing is not
 		// interactive. The caller's context is what actually bounds a run.
 		http:    &http.Client{Timeout: 2 * time.Minute},
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		model:   DefaultModel,
+		baseURL: strings.TrimRight(cfg.BaseURL, "/"),
+		apiKey:  cfg.APIKey,
+		model:   cmp.Or(cfg.Model, DefaultModel),
 		dims:    DefaultDims,
+		scanner: scanner,
+	}
+	if cfg.Dims > 0 {
+		c.dims = cfg.Dims
 	}
 	for _, o := range opts {
 		o(c)
