@@ -127,6 +127,14 @@ type Report struct {
 
 // Index brings the index in line with the folder.
 //
+// It holds the store's lock for the whole run, including the provider calls, so a Search during one
+// waits. That is deliberate rather than overlooked: a reconcile that found nothing to do holds it
+// for a directory walk, which is the case that happens every minute, and the case that holds it for
+// minutes is the FIRST index of a corpus — when there is nothing to search yet anyway. Building a
+// replacement index outside the lock and swapping it in would remove the wait and add a second copy
+// of the corpus in memory plus the reasoning about which one a concurrent write belongs to; not
+// worth it until somebody actually waits.
+//
 // Incremental by content hash: a file whose bytes are unchanged keeps the chunks and vectors it
 // already has, because re-embedding it would spend the operator's money to arrive at what is
 // already on disk. A file that is gone is dropped; a file no reader handles is SKIPPED AND NAMED —
@@ -171,8 +179,26 @@ func (s *Store) Index(ctx context.Context) (Report, error) {
 
 	_, held := ix.Stats()
 	for _, p := range slices.Sorted(maps.Keys(found)) {
-		doc := found[p]
-		if prev, ok := ix.Files[p]; ok && prev.SHA256 == doc.sum {
+		cand := found[p]
+		prev, known := ix.Files[p]
+
+		// Cheapest first: same size and same timestamp means the file is not opened at all. This is
+		// what lets a reconcile run on a ticker without re-reading the corpus every time.
+		if known && prev.Size == cand.size && prev.ModTime == cand.modTime {
+			rep.Unchanged++
+			continue
+		}
+
+		doc, err := s.read(p, cand)
+		if err != nil {
+			s.log.Warn("knowledge: skipping a file it could not read", "path", p, "err", err)
+			continue
+		}
+		// Touched but not changed: record the new timestamp so the next tick takes the cheap path
+		// again, and do not pay the provider for a file that says the same thing.
+		if known && prev.SHA256 == doc.sum {
+			prev.Size, prev.ModTime = doc.size, cand.modTime
+			s.dirty = true
 			rep.Unchanged++
 			continue
 		}
@@ -197,12 +223,15 @@ func (s *Store) Index(ctx context.Context) (Report, error) {
 		}
 		s.dirty = true
 		held += len(stored) - replacing
-		ix.Files[p] = &FileEntry{SHA256: doc.sum, Size: doc.size, Chunks: stored}
+		ix.Files[p] = &FileEntry{SHA256: doc.sum, Size: doc.size, ModTime: cand.modTime, Chunks: stored}
 		rep.Indexed++
 		s.log.Debug("knowledge: indexed", "path", p, "chunks", len(stored))
 	}
 
 	_, rep.Chunks = ix.Stats()
+	if !s.dirty {
+		return rep, nil // nothing moved; rewriting a megabyte index to say so would be the only cost
+	}
 	if err := ix.save(s.indexAt); err != nil {
 		return rep, err
 	}
@@ -210,7 +239,14 @@ func (s *Store) Index(ctx context.Context) (Report, error) {
 	return rep, nil
 }
 
-// document is a file the walk accepted.
+// candidate is a file the walk accepted, before anything has been read.
+type candidate struct {
+	size    int
+	modTime int64
+	ext     string
+}
+
+// document is a candidate that was actually read.
 type document struct {
 	data []byte
 	sum  string
@@ -218,9 +254,13 @@ type document struct {
 	ext  string
 }
 
-// walk collects every readable document under the corpus folder.
-func (s *Store) walk() (map[string]document, Report, error) {
-	out := map[string]document{}
+// walk lists every readable document under the corpus folder WITHOUT opening any of them.
+//
+// Metadata only, so a periodic reconcile over an unchanged corpus costs a directory walk rather
+// than a hash of every byte in it. Reading is decided per file by Index, against what the index
+// already knows.
+func (s *Store) walk() (map[string]candidate, Report, error) {
+	out := map[string]candidate{}
 	var rep Report
 
 	root, err := os.OpenRoot(s.dir)
@@ -255,13 +295,7 @@ func (s *Store) walk() (map[string]document, Report, error) {
 			return nil
 		}
 
-		data, err := fs.ReadFile(root.FS(), rel)
-		if err != nil {
-			s.log.Warn("knowledge: could not read", "path", rel, "err", err)
-			return nil
-		}
-		sum := sha256.Sum256(data)
-		out[rel] = document{data: data, sum: hex.EncodeToString(sum[:]), size: len(data), ext: ext}
+		out[rel] = candidate{size: int(info.Size()), modTime: info.ModTime().UnixNano(), ext: ext}
 		return nil
 	})
 	if err != nil {
@@ -279,6 +313,22 @@ func (s *Store) readerFor(ext string) Reader {
 		}
 	}
 	return nil
+}
+
+// read opens one candidate and hashes it.
+func (s *Store) read(rel string, c candidate) (document, error) {
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return document{}, fmt.Errorf("knowledge: opening %s: %w", s.dir, err)
+	}
+	defer root.Close()
+
+	data, err := fs.ReadFile(root.FS(), rel)
+	if err != nil {
+		return document{}, fmt.Errorf("knowledge: reading %s: %w", rel, err)
+	}
+	sum := sha256.Sum256(data)
+	return document{data: data, sum: hex.EncodeToString(sum[:]), size: len(data), ext: c.ext}, nil
 }
 
 // previousChunks is what this path contributed to the index before this run, for the running total.

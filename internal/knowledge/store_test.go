@@ -7,26 +7,49 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // fakeEmbedder is deterministic and counts what it was asked to do, which is what the incremental
 // tests are really asserting on: not "is the index right" but "was the provider paid twice".
 type fakeEmbedder struct {
-	model  string
-	dims   int
+	model string
+	dims  int
+
+	// Guarded: the watch tests read and write these from the test goroutine while Watch runs its own.
+	mu     sync.Mutex
 	texts  int    // texts embedded in total, which is what the incremental tests watch
 	failOn string // a text containing this makes the whole batch fail
+}
+
+// embedded is how many texts the provider has been asked for so far.
+func (f *fakeEmbedder) embedded() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.texts
+}
+
+// setFailOn makes any batch containing sub fail; empty makes the provider healthy again.
+func (f *fakeEmbedder) setFailOn(sub string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failOn = sub
 }
 
 func (f *fakeEmbedder) Model() string { return f.model }
 func (f *fakeEmbedder) Dims() int     { return f.dims }
 
 func (f *fakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	f.mu.Lock()
+	failOn := f.failOn
 	f.texts += len(texts)
+	f.mu.Unlock()
+
 	out := make([][]float32, len(texts))
 	for i, t := range texts {
-		if f.failOn != "" && strings.Contains(t, f.failOn) {
+		if failOn != "" && strings.Contains(t, failOn) {
 			return nil, os.ErrPermission
 		}
 		// A vector that depends on the text, so two different passages are two different vectors and
@@ -103,7 +126,7 @@ func TestStore_UnchangedFilesAreNotReEmbedded(t *testing.T) {
 	if _, err := s.Index(t.Context()); err != nil {
 		t.Fatalf("first Index: %v", err)
 	}
-	afterFirst := emb.texts
+	afterFirst := emb.embedded()
 
 	// A fresh store, so nothing is cached in memory and the index on disk is what is consulted.
 	s2, err := New(Options{Dir: s.Dir(), IndexPath: s.IndexPath(), Embedder: emb})
@@ -117,8 +140,8 @@ func TestStore_UnchangedFilesAreNotReEmbedded(t *testing.T) {
 	if rep.Unchanged != 2 || rep.Indexed != 0 {
 		t.Errorf("report = %+v, want 2 unchanged and nothing indexed", rep)
 	}
-	if emb.texts != afterFirst {
-		t.Errorf("%d texts embedded on the second run, want 0 more than %d", emb.texts-afterFirst, afterFirst)
+	if emb.embedded() != afterFirst {
+		t.Errorf("%d texts embedded on the second run, want 0 more than %d", emb.embedded()-afterFirst, afterFirst)
 	}
 
 	// Changing one file re-embeds that one and only that one.
@@ -294,12 +317,82 @@ func TestStore_EmbeddingFailureLeavesNoPartialIndex(t *testing.T) {
 	}
 
 	// With the provider healthy again, the whole corpus is indexed — nothing was silently marked done.
-	emb.failOn = ""
+	emb.setFailOn("")
 	rep, err := s.Index(t.Context())
 	if err != nil {
 		t.Fatalf("Index after recovery: %v", err)
 	}
 	if rep.Indexed != 2 {
 		t.Errorf("report = %+v, want both files indexed after the earlier failure", rep)
+	}
+}
+
+// The point of the timestamp hint: a reconcile over an unchanged corpus opens nothing and writes
+// nothing. Without this a ticker would hash every byte of the corpus every interval, and rewrite a
+// possibly large index file to report that nothing happened.
+func TestStore_UnchangedReconcileReadsAndWritesNothing(t *testing.T) {
+	emb := &fakeEmbedder{model: "m", dims: 8}
+	s, corpus := storeFixture(t, emb)
+	write(t, corpus, "a.md", "# A\n\nsome text\n")
+	if _, err := s.Index(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := os.Stat(s.IndexPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedsBefore := emb.embedded()
+
+	// A second store, so the decision is made against the index on disk rather than a warm cache.
+	s2, err := New(Options{Dir: s.Dir(), IndexPath: s.IndexPath(), Embedder: emb})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s2.Index(t.Context())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if rep.Unchanged != 1 || rep.Indexed != 0 {
+		t.Errorf("report = %+v, want one unchanged file", rep)
+	}
+	if emb.embedded() != embedsBefore {
+		t.Errorf("the provider was called again on an unchanged corpus")
+	}
+
+	after, err := os.Stat(s.IndexPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Error("the index file was rewritten although nothing changed")
+	}
+}
+
+// A file whose timestamp moved but whose bytes did not costs a read, never a provider call — and
+// the new timestamp is recorded so the next reconcile takes the cheap path again.
+func TestStore_TouchedButUnchangedFileIsNotReEmbedded(t *testing.T) {
+	emb := &fakeEmbedder{model: "m", dims: 8}
+	s, corpus := storeFixture(t, emb)
+	write(t, corpus, "a.md", "# A\n\nunchanged text\n")
+	if _, err := s.Index(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	embedsBefore := emb.embedded()
+
+	// Same bytes, new timestamp.
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(filepath.Join(corpus, "a.md"), future, future); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.Index(t.Context())
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if rep.Indexed != 0 || rep.Unchanged != 1 {
+		t.Errorf("report = %+v, want the touched file recognised as unchanged", rep)
+	}
+	if emb.embedded() != embedsBefore {
+		t.Error("a touched but unchanged file was re-embedded")
 	}
 }

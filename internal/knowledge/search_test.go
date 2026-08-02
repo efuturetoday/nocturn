@@ -212,7 +212,7 @@ func TestSearch_ProviderFailureIsNotSilentDegradation(t *testing.T) {
 	emb := &fakeEmbedder{model: "m", dims: 8}
 	s := searchFixture(t, emb, map[string]string{"a.md": "# A\n\nsomething findable\n"})
 
-	emb.failOn = "findable-query"
+	emb.setFailOn("findable-query")
 	if _, err := s.Search(t.Context(), "findable-query", 5); err == nil {
 		t.Error("a failing embedder still returned results")
 	}
