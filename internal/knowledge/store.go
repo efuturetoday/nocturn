@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
 const (
@@ -32,6 +34,7 @@ type Store struct {
 	dir      string // the corpus, inside the mount
 	indexAt  string // the index, outside it
 	embedder Embedder
+	scanner  *secret.Scanner
 	readers  []Reader
 	log      *slog.Logger
 
@@ -40,22 +43,40 @@ type Store struct {
 	dirty bool // the cached index has changes the disk does not — see Index
 }
 
-// New opens the store. It does not read the folder or the index — Load does, and Index does the work.
+// Options is what a Store needs. A struct rather than five parameters, and it is the seam where the
+// two paths differ: Dir is inside the mount because documents are data, IndexPath is outside it
+// because the index is host state.
+type Options struct {
+	// Dir is the corpus folder, mnt/knowledge in a workspace.
+	Dir string
+	// IndexPath is where the index is written, outside the mount.
+	IndexPath string
+	// Embedder is required — see New.
+	Embedder Embedder
+	// Scanner redacts vault values out of search results. Nil when no vault is unlocked.
+	Scanner *secret.Scanner
+	// Log is optional.
+	Log *slog.Logger
+}
+
+// New opens the store. It reads neither the folder nor the index — Index and Search do.
 //
-// A nil embedder is not allowed: without one there is nothing this type can do, and a Store that
-// silently answers nothing is worse than a missing one. The caller decides whether the feature
-// exists at all, which is the same shape as the whoami tool and a speaker model.
-func New(dir, indexAt string, embedder Embedder, log *slog.Logger) (*Store, error) {
-	if embedder == nil {
+// A nil embedder is refused: without one there is nothing this type can do, and a Store that
+// silently answers nothing is worse than a missing one. Whether the feature exists at all is the
+// caller's decision, the same shape as the whoami tool and a speaker model.
+func New(o Options) (*Store, error) {
+	if o.Embedder == nil {
 		return nil, fmt.Errorf("knowledge: no embedder configured")
 	}
+	log := o.Log
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Store{
-		dir:      dir,
-		indexAt:  indexAt,
-		embedder: embedder,
+		dir:      o.Dir,
+		indexAt:  o.IndexPath,
+		embedder: o.Embedder,
+		scanner:  o.Scanner,
 		readers:  []Reader{MarkdownReader{}},
 		log:      log,
 	}, nil

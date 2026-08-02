@@ -49,7 +49,7 @@ func storeFixture(t *testing.T, emb Embedder) (*Store, string) {
 	if err := os.MkdirAll(corpus, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(corpus, filepath.Join(root, "knowledge.idx.json"), emb, slog.New(slog.DiscardHandler))
+	s, err := New(Options{Dir: corpus, IndexPath: filepath.Join(root, "knowledge.idx.json"), Embedder: emb, Log: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestStore_UnchangedFilesAreNotReEmbedded(t *testing.T) {
 	afterFirst := emb.texts
 
 	// A fresh store, so nothing is cached in memory and the index on disk is what is consulted.
-	s2, err := New(s.Dir(), s.IndexPath(), emb, nil)
+	s2, err := New(Options{Dir: s.Dir(), IndexPath: s.IndexPath(), Embedder: emb})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestStore_RefusesAnIndexFromAnotherEmbedder(t *testing.T) {
 	}
 
 	t.Run("a different model at the same length", func(t *testing.T) {
-		other, err := New(s.Dir(), s.IndexPath(), &fakeEmbedder{model: "second-model", dims: 8}, nil)
+		other, err := New(Options{Dir: s.Dir(), IndexPath: s.IndexPath(), Embedder: &fakeEmbedder{model: "second-model", dims: 8}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,7 +207,7 @@ func TestStore_RefusesAnIndexFromAnotherEmbedder(t *testing.T) {
 	})
 
 	t.Run("the same model at a different length", func(t *testing.T) {
-		other, err := New(s.Dir(), s.IndexPath(), &fakeEmbedder{model: "first-model", dims: 16}, nil)
+		other, err := New(Options{Dir: s.Dir(), IndexPath: s.IndexPath(), Embedder: &fakeEmbedder{model: "first-model", dims: 16}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -232,8 +232,11 @@ func TestStore_CorruptIndexIsAnError(t *testing.T) {
 // A workspace nobody has indexed yet is the normal starting state.
 func TestStore_MissingFolderAndIndexAreEmpty(t *testing.T) {
 	root := t.TempDir()
-	s, err := New(filepath.Join(root, "mnt", "knowledge"), filepath.Join(root, "knowledge.idx.json"),
-		&fakeEmbedder{model: "m", dims: 8}, nil)
+	s, err := New(Options{
+		Dir:       filepath.Join(root, "mnt", "knowledge"),
+		IndexPath: filepath.Join(root, "knowledge.idx.json"),
+		Embedder:  &fakeEmbedder{model: "m", dims: 8},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +250,7 @@ func TestStore_MissingFolderAndIndexAreEmpty(t *testing.T) {
 }
 
 func TestStore_NoEmbedderIsRefused(t *testing.T) {
-	if _, err := New("a", "b", nil, nil); err == nil {
+	if _, err := New(Options{Dir: "a", IndexPath: "b"}); err == nil {
 		t.Fatal("a store was built without an embedder")
 	}
 }
