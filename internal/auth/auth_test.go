@@ -368,6 +368,29 @@ func TestMint_EnrolsWithoutACode(t *testing.T) {
 	}
 }
 
+// A device that could not be persisted was never enrolled. Keeping it in memory would leave a record
+// whose bearer nobody holds — unusable for authenticating, yet still enough to look like a populated
+// household and retire the bootstrap code.
+func TestAddDevice_RollsBackWhenPersistenceFails(t *testing.T) {
+	dir := t.TempDir()
+	s, err := auth.New(filepath.Join(dir, "devices.json"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Take the write away after the store is open, so the failure lands in save, not in New.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+
+	if _, err := s.Mint("cli", auth.ClassTool); err == nil {
+		t.Fatal("Mint into an unwritable directory succeeded, want an error")
+	}
+	if code := s.Bootstrap(time.Minute); len(code) != 6 {
+		t.Errorf("Bootstrap after a failed enrolment = %q, want a 6-digit code — the failed device still counts", code)
+	}
+}
+
 // A record written before Class existed must not read back as ClassUnknown: it would silently lose
 // the right to answer an approval, and the phone would simply never ring again.
 func TestLoad_StampsPreClassRecordsAsApps(t *testing.T) {

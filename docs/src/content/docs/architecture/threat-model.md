@@ -42,6 +42,25 @@ the second isolates what it can do.
 | Its goal | run on your machine | exfiltrate through your tools |
 | Defense | the sandbox (isolate the code) | starve the secret, gate the call |
 
+```mermaid
+flowchart LR
+    subgraph T1["Threat 1 · Malicious code"]
+        direction TB
+        C[Hostile plugin] --> CS[The sandbox:<br/>zero authority]
+        CS --> CO([It cannot name<br/>what it never got])
+    end
+    subgraph T2["Threat 2 · Prompt injection"]
+        direction TB
+        I[Content carries<br/>an instruction] --> IS[Starve: the model<br/>holds no secret]
+        IS --> IG[Gate: the yes is<br/>on a second device]
+        IG --> IO([Authorized call,<br/>stopped anyway])
+    end
+    C ~~~ I
+```
+
+Read them as two columns that never meet, because that is the argument: threat 2 walks straight
+past the wall built for threat 1. The sandbox never fires on it — the call it makes is authorized.
+
 ## Why the defenses cannot be merged
 
 There is no single wall that stops both threats — and even injection needs more than one

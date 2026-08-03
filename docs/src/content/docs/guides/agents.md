@@ -80,6 +80,11 @@ for exactly the moments that matter. See [the threat model](/nocturn/architectur
 The run happens in the background and streams into your terminal marked with its run id, while you
 keep typing.
 
+**From the app:** the Agents tab lists the workspace's agents with their autonomy on the row, and the
+play button fires one. Past runs sit underneath it.
+
+![The Agents tab: one agent named `briefing`, manual, tagged `strict`, with a play button, above a list of its previous runs.](../../../assets/screenshots/app-agents-runs.jpg)
+
 **On a schedule:** with a `when: cron(...)` line the agent fires by itself. Scheduling lives in the
 process, so Nocturn has to be running — either your terminal session or
 `nocturn serve`. Nothing fires while the program is closed; a missed window is missed, not queued.
@@ -94,6 +99,11 @@ Two independent limits, and it is worth keeping them apart:
   with `http_read` in its cage still needs the host to be approved or granted.
 
 An agent's settings can only tighten what you already allowed; nothing in `agent.md` widens it.
+
+A run whose cage holds no network tool is the cage being visible from the outside: the model has no
+way to fetch anything, so it answers from what it already knows and says as much.
+
+![An agent run opened in the app: asked to run its scheduled task, the answer explains it cannot reach external URLs.](../../../assets/screenshots/app-agent-run-transcript.jpg)
 
 ## Good to know
 

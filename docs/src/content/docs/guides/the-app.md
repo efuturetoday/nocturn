@@ -25,11 +25,15 @@ steps.
 The daemon has to be running: `nocturn serve`. The app finds it on your network over Bonjour, so
 you do not type an IP.
 
+![The app's connect screen: a daemon found on the network by name, its WebSocket address underneath, and a link to enter a server by hand.](../../../assets/screenshots/app-connect-discovery.jpg)
+
 - **The first device** redeems a bootstrap code the daemon prints at startup. That is the only time
   a code comes from the machine itself.
 - **Every device after that** asks an already-paired one. The new device requests a join, the
   request appears live on your existing devices, and the code is shown *there* — you read it on the
   trusted device and enter it on the new one.
+
+![The pairing sheet: six empty code boxes, the daemon's address above them, and a link for a device that already has a paired sibling to join instead.](../../../assets/screenshots/app-pair-device.jpg)
 
 A device merely on your network cannot join. It needs a human at a device you already trust.
 
@@ -47,15 +51,33 @@ The full flow, including devices with no screen to show a code, is in
 | **Pairing and joins** | approving the next device |
 | **Discovery** | finding daemons on the network |
 
+![The Home tab: a pending reminder with the time it fires, and the workspace's recent conversations underneath.](../../../assets/screenshots/app-home-reminders-recent-chats.jpg)
+
+![The Chat tab: every conversation in the workspace, newest last, each with the assistant's last line.](../../../assets/screenshots/app-chat-list.jpg)
+
 Conversations are **not per device**. Start something in the terminal, pick it up on the phone,
 finish it in the terminal again. And when two devices are shown the same approval, **the first
 answer wins** — the other is told it was resolved rather than asked twice.
+
+## Seeing what a turn actually did
+
+Every assistant turn that used tools carries one chip above the answer, naming them. Nothing runs
+invisibly here either — the chip is there whether or not the answer mentions it.
+
+![A chat turn: the chip above the answer reads `remind`, and the reply confirms the reminder was set for five minutes from now.](../../../assets/screenshots/app-chat-remind.jpg)
+
+Tapping the chip opens the turn's tools, each expanding to the arguments it was called with and the
+result it returned:
+
+![The tools window for that turn: `remind` succeeded in 10 ms, with the input arguments and the returned reminder id and fire time.](../../../assets/screenshots/app-tool-detail-remind.jpg)
 
 ## Approvals when you are nowhere near it
 
 This is the case the daemon exists for. An agent runs on a schedule, hits something that needs your
 yes, and there is no terminal in front of it. A push wakes your phone, you decide, the run continues
 or stops.
+
+![An approval sheet over the chat: the kind and target read `net → google.com`, with Once, Session, Always and Deny.](../../../assets/screenshots/app-approval-net-google.jpg)
 
 **The push carries no authority.** It is a wake signal and nothing else — the decision travels back
 over the authenticated WebSocket, never inside the notification. A notification that arrives twice,

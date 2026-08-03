@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -86,7 +87,16 @@ type Store struct {
 }
 
 // New opens (or creates) a device store at path.
+//
+// The directory is created here rather than left to the first write: the first write is the one that
+// enrols a device, and a failure there leaves the daemon running with a registry it cannot persist —
+// the least useful moment to discover a missing folder.
 func New(path string) (*Store, error) {
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+	}
 	s := &Store{path: path, joins: map[string]*join{}}
 	if err := s.load(); err != nil {
 		return nil, err
@@ -160,6 +170,10 @@ func (s *Store) addDevice(name, platform string, class Class) (string, error) {
 		Added:      time.Now(),
 	})
 	if err := s.save(); err != nil {
+		// Undo the append. A record whose bearer was never handed out authenticates nobody, yet it
+		// still counts as a device — enough to convince Bootstrap that the household is populated and
+		// suppress the only code that could pair the first phone.
+		s.devices = s.devices[:len(s.devices)-1]
 		return "", err
 	}
 	return bearer, nil

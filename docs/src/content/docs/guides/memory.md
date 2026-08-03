@@ -75,6 +75,9 @@ remember something should be taken.
 
 - **In a chat**, a write is **allowed** and shown in the transcript as it happens. Asking would buy
   you "before" instead of "after" and nothing else — you are already looking.
+
+  ![A chat where the assistant does not recognise the speaker, asks for a name, and on being told it writes the fact away — the `memory_write` call visible in the turn.](../../../assets/screenshots/app-chat-whoami-memory-write.jpg)
+
 - **In an unattended agent run**, it **asks**, out of band, on your phone. A cron agent firing at
   6am writes into the store folded into *every* future prompt, in every conversation, with nobody
   reading its transcript. With no device paired, the missing approver denies it, fail-closed.

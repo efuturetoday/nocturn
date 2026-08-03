@@ -12,6 +12,19 @@ That's the whole idea:
 
 > Let agents work. Approve only what matters.
 
+```mermaid
+flowchart TD
+    Y([You hand over a job]) --> A[It works on its own,<br/>in the background]
+    A --> Q{Reaching out,<br/>or changing a file?}
+    Q -->|no| A
+    Q -->|yes| P[It asks —<br/>on your phone]
+    P -->|approve| D([It happens])
+    P -->|deny, or silence| S([It does not])
+```
+
+The loop back to the top is the part that runs without you. The one branch that leaves it is the
+only part that needs you — and it is the reason you can leave the rest alone.
+
 A quick word on terms. The **assistant** is Nocturn itself, the thing you talk to. An
 **agent** is a specific job you set up for it to carry out, either on demand or on a
 schedule. You will see both words throughout these guides.
