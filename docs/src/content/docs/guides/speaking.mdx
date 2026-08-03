@@ -22,6 +22,33 @@ A satellite is a speaker in a room you talk to: a microphone, a speaker, and a r
 a wake word, you talk, it answers — and when what you asked for needs your permission, the ask still
 leaves the room for your phone.
 
+## Configuring it
+
+Spoken conversations need a **second, different model**: one that takes and returns a continuous
+audio stream rather than answering a turn at a time. It is not a setting on the chat model — it is a
+separate endpoint, and leaving it unset means a device asking for a spoken session is simply told
+this daemon has none.
+
+```ini
+GEMINI_API_KEY=your-key-here
+GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-latest
+```
+
+| Variable | Meaning |
+|---|---|
+| `GEMINI_API_KEY` | the key for the live API |
+| `GEMINI_LIVE_MODEL` | which live model — **required**, there is no default |
+
+The id above is the one this was measured against, and the reason to name it rather than leave it to
+you: live-capable models differ in what they support, and one **without asynchronous function
+calling** stops the whole conversation whenever the assistant uses a tool — unusable as soon as
+anything needs your approval.
+
+There is still no built-in default. These ids change often, and one baked into the binary would
+either fail at connect time or, worse, connect and behave subtly wrong. Check what your own account
+actually offers rather than assuming: the list a key can reach and the list in anybody's
+documentation are not the same.
+
 ## One connection, one more domain
 
 Voice is a domain on the [same protocol](/nocturn/guides/remote-access/) as everything else, not a
