@@ -38,7 +38,11 @@ var voiceCage = map[string]bool{
 	// is talking to. memory_write stays out: writing is a decision, and the sentence above about
 	// adding a writing tool applies to it exactly.
 	"memory_read": true,
-	"whoami":      true,
+	// The same argument again: searching the user's own documents produces text and reaches nothing.
+	// A spoken question about something they wrote down is exactly the case this is for, and without
+	// it a voice session is the one place the assistant cannot look anything up.
+	"knowledge_search": true,
+	"whoami":           true,
 }
 
 // addressing tells the model what it may assume about who is speaking.

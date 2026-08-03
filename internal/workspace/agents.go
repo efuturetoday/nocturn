@@ -9,6 +9,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/chat"
+	"github.com/efuturetoday/nocturn/internal/knowledge"
 )
 
 // sessionRouter resolves a chat id to the manager that owns it, so a fired wake re-opens a run in the
@@ -57,7 +58,22 @@ func (w *Workspace) ChatManager(kind string) *chat.Manager {
 }
 
 // StartAgents runs the cron scheduler until ctx is cancelled — call it in a goroutine.
-func (w *Workspace) StartAgents(ctx context.Context) { w.sched.Start(ctx) }
+//
+// The document reconcile rides along, because both are the same kind of thing: background work a
+// workspace does while nobody is asking it anything. Starting it here means one call site keeps
+// both, rather than a second one somebody adds to the daemon and forgets in the terminal.
+func (w *Workspace) StartAgents(ctx context.Context) {
+	if w.knowledge != nil {
+		// Its own goroutine: a reconcile that is waiting on an embedding provider must not hold up a
+		// scheduled agent, and vice versa.
+		go w.knowledge.Watch(ctx, knowledge.DefaultInterval)
+	}
+	w.sched.Start(ctx)
+}
+
+// Knowledge is this workspace's document store, or nil when no embedder is configured. The CLI uses
+// it to index and report without opening a session.
+func (w *Workspace) Knowledge() *knowledge.Store { return w.knowledge }
 
 // AgentRuns lists the persisted agent-run transcripts, most recent first.
 func (w *Workspace) AgentRuns() ([]chat.Meta, error) { return w.agentStore.Metas() }
