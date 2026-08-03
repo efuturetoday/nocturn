@@ -73,6 +73,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Workspace', slug: 'guides/the-workspace' },
 						{ label: 'Memory', slug: 'guides/memory' },
+						{ label: 'Knowledge', slug: 'guides/knowledge' },
 						{ label: 'Agents', slug: 'guides/agents' },
 						{ label: 'Approvals', slug: 'guides/approvals' },
 						{ label: 'Secrets', slug: 'guides/connecting-accounts' },
@@ -134,6 +135,12 @@ export default defineConfig({
 							items: [
 								{ label: 'memory_read', link: '/reference/tools/memory_read/' },
 								{ label: 'memory_write', link: '/reference/tools/memory_write/' },
+							],
+						},
+						{
+							label: 'Knowledge',
+							items: [
+								{ label: 'knowledge_search', link: '/reference/tools/knowledge_search/' },
 							],
 						},
 						{

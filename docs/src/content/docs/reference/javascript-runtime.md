@@ -104,6 +104,7 @@ it is stated, and the one place that cannot fall out of step with the code.
 | `nocturn.reminders()` / `nocturn.cancelReminder(id)` | [`remind_list`](/nocturn/reference/tools/remind_list/) / [`remind_cancel`](/nocturn/reference/tools/remind_cancel/) |
 | `nocturn.memory.read` / `nocturn.memory.write` | [`memory_read`](/nocturn/reference/tools/memory_read/) / [`memory_write`](/nocturn/reference/tools/memory_write/) |
 | `nocturn.whoami()` | [`whoami`](/nocturn/reference/tools/whoami/) — only registered when speaker recognition is configured |
+| `nocturn.knowledge.search(query, limit?)` | [`knowledge_search`](/nocturn/reference/tools/knowledge_search/) — only registered when an embedding endpoint is configured |
 
 **The source is [`internal/script/prelude.js`](https://github.com/efuturetoday/nocturn/blob/main/internal/script/prelude.js)**
 — every wrapper above is a few lines of JavaScript around a single `nocturn.call`, and reading it is

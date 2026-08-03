@@ -100,6 +100,10 @@ on disk and folded into every prompt, bodies on demand — control-plane folder,
 `frontmatter` (the shared `---` YAML preamble parser/renderer: skills and memory notes) ·
 `skill` (agentskills.io skills from disk → `agentkit.SkillSet`) ·
 `discovery` (the shared name/skip rules for agents, skills, plugins, MCP — one rule, four kinds) ·
+`knowledge` (+`/embed`) (retrieval over `mnt/knowledge`: Markdown-aware chunking behind a `Reader`
+port, an `Embedder` port with a remote OpenAI-compatible adapter, hybrid cosine+BM25 fused by
+reciprocal rank, an index OUTSIDE the mount that records its model and refuses to mix embedders, and
+a one-minute reconcile that costs a directory walk when nothing changed) ·
 `chat` (file-backed transcript store + Manager) · `agent` (declaration + cron only; execution is
 injected by the workspace) · `workspace` (the composition root) · `serve` (WebSocket surface,
 tagged JSON, one file per domain) ·
@@ -122,7 +126,8 @@ CGO — the package doc says why not onnxruntime, wasm or a tensor framework, wi
 | `memory_write` (`internal/memory`) | `memory.Kind`, target = note path, **outside `mnt`**; allowed in chat, asked in agent runs |
 | `memory_read` (`internal/memory`) | **ungated** — context, never authority (same argument as `skill_read`) |
 | `time_now` `wake` | **ungated** — zero authority (no wall-clock in the guest), `wake` bounded |
-| `whoami` (`internal/speaker`) | **ungated** — reports the recognised speaker; unknown outside a spoken session |
+| `whoami` (`internal/speaker`) | **ungated** — only registered when `NOCTURN_SPEAKER_MODEL` is set |
+| `knowledge_search` (`internal/knowledge`) | **ungated** — context, never authority; only registered when an embedding endpoint is configured |
 | `code_run` (`internal/script`) | woven per cage by `tools.Compose`, so a script's reach is its cage |
 | `skill_read` (`internal/skill`), `skill_load` (agentkit) | context, never authority |
 

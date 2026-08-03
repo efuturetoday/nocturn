@@ -145,6 +145,39 @@ Three constraints keep the split honest:
 *Realized in `agentkit` + `agentkit/{gate,runtime,openai,tools}`; extraction into its own
 repository is still open (CLAUDE.md §9).*
 
+## ADR-12 — Retrieval: documents in the mount, the index outside it, embeddings remote
+The corpus lives at `mnt/knowledge/` — INSIDE the file tools' mount — and that is the mirror image
+of ADR-10's treatment of memory. Memory is control plane: its catalog reaches every future prompt,
+so it sits outside the mount where no generic file tool can rewrite it. Documents are **data**: they
+enter the prompt only when a tool goes looking, and putting one there grants nobody anything — the
+same argument ADR-10 makes about a self-written skill. The **index** does not follow them in. It is
+host state (hashes, offsets, vectors), and a model that could edit it could point a search result at
+text that is not in the file, so it sits beside `grants.json`.
+
+**`knowledge_search` is ungated**, on the argument that already leaves `memory_read` and `skill_read`
+ungated: context, never authority, reaching nothing `file_read` could not already reach. The one
+thing worth stating rather than glossing is that answering EMBEDS the query, which sends it to the
+configured provider — host configuration with the same standing as the endpoint already reading
+every message, not a target the model chose. The decision is made once, by configuring an embedder.
+
+**What comes back never claims an author.** Because the corpus is in the mount, `file_write` — and
+therefore a prompt injection — can put a document there. Introducing that to the model as "the
+user's own note" would launder exactly the attack ADR-4 and the out-of-band gate exist to stop, so
+results are framed as quoted file content, explicitly not as instructions and explicitly not as
+something the user wrote.
+
+**The embedder is a port with a REMOTE adapter, and that is a concession.** Indexing sends every
+document to a third party. A local model would remove the trade; `internal/onnx` runs a
+convolutional speaker network in pure Go, and a sentence-transformer needs a transformer's operator
+set plus a tokenizer, which is a project rather than a slice. The honest position is the port, a
+remote adapter behind it, the leak scanner in front of it, and documentation that says so. The
+**document reader is a port for the same reason** — PDF, Office and image extraction each need a
+dependency that has no business inside a package the whole workspace links.
+
+**Hybrid search, fused by rank.** Vectors miss exact identifiers; keywords miss paraphrase. Scores
+from the two share no scale, so reciprocal rank fusion uses only the order each produced. *Realized
+in `knowledge` (+ `knowledge/embed`).*
+
 ---
 
 ## Trust boundary — Variant A: loop in the host, plugins/skills in WASM
