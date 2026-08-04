@@ -133,19 +133,7 @@ at the scope you picked.
 
 ---
 
-## 🧠 How this was built
-
-The process is **in the repository**, not described by it. `.claude/settings.json` is committed, and
-it holds two hooks that anyone working here runs into:
-
-| Hook | What it does |
-|---|---|
-| **before a commit** | staged `.go` files are hashed; unless that exact diff has been through the Go review skills — Effective Go and the Google Style Guide, cited by rule and `file:line` — **the commit is denied.** Not warned about. |
-| **after a commit** | one touching only `internal/` or `cmd/` **blocks** until the affected documentation is updated, or the omission is justified in writing. |
-
-Every commit in this history went through both. That is the difference between *"I reviewed
-carefully"* and review being a precondition for a commit existing at all — and it is checkable, not
-claimed: read the hooks, read the log.
+## How this was built
 
 Two more artifacts do the same job. [`docs/AGENTS.md`](docs/AGENTS.md) carries one rule — *this site
 documents the code in this repository, not a design of it* — and [`CLAUDE.md`](CLAUDE.md) §6 is a
