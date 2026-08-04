@@ -18,33 +18,40 @@ One Go binary. No cloud, no database, no runtime to install.
 
 **[📖 Read the documentation →](https://efuturetoday.github.io/nocturn)**
 
+<img src="assets/screenshots/app-connect-discovery.jpg" alt="The app's connect screen: a daemon found on the local network by name, its WebSocket address below it." width="240">
+
+*Your phone finding your daemon on your own network. No account, nothing in between.*
+
 </div>
 
 ---
 
 ## Why this exists
 
-I wanted agents doing real work on my own life — my mail, my calendar, my files. Running an agent on
-your own machine is not the hard part; several tools do that. The hard part starts the moment it
-becomes useful, which is the moment it holds real credentials and is allowed to act on them.
+I wanted an assistant that actually does things in my life — mail, calendar, files, the services I
+use — and I did not want to hand an agent the run of my machine to get it.
 
-Two things follow, and they are the whole design.
+That is the part most of them get wrong, and it is not carelessness so much as inheritance. An agent
+running on Node has the filesystem, the network and the shell because its runtime does; every
+capability is present by default and the only thing standing between a tool call and your disk is
+whether the agent decided to make it. Isolation and human approval exist in that world, but as
+features bolted on beside the runtime rather than as the thing the runtime is built around.
 
-**The model never holds the credential.** Tokens live in an encrypted vault the host owns, and are
-injected at the network boundary. The model learns that a secret *exists*; it never sees the value.
-There is nothing in the conversation to steal, so an injection that talks the model into
-exfiltrating has nothing to carry.
+So I built the one I wanted:
 
-**No host capability without the gate.** Not for a plugin, not for a skill, not for a script the
-model just wrote. Foreign code runs in WebAssembly at zero authority — no filesystem, no sockets, no
-clock — and every capability is an explicitly handed host function rather than something the sandbox
-is trusted not to reach for. Each of those calls is then checked per action, and anything
-irreversible waits for a yes that has to come from a second device.
+| | |
+|---|---|
+| **One binary** | No Node, no Python, no container, no database. Download a file, run it. |
+| **No ambient authority** | Foreign code runs in WebAssembly with nothing — no filesystem, no sockets, no clock. Every capability is an explicitly handed host function, so a capability nobody granted is not denied, it is *absent*. |
+| **The model is never told about credentials** | Not the value, not the name, not that one exists. It asks for a URL; the host attaches the token as the request crosses the boundary. There is nothing about a secret in the conversation for an injection to talk it out of. |
+| **Approval is the design, not a setting** | The unit of decision is **reach**, not risk: leaving the machine asks about the host, changing a file asks about the path, and your answer is remembered at the scope you pick. The yes comes from a **second device**, because a prompt shown inside a hijacked session can be answered by whatever hijacked it. |
+| **A phone and a voice, first class** | A mobile app that answers approvals, and a speaker in the room you can talk to. Not integrations somebody else maintains — the same protocol, the same repository. |
 
-What this does *not* claim: the model endpoint you point it at sees your conversation. That is true
-of every assistant including this one, and [SECURITY.md](SECURITY.md) says so plainly instead of
-implying otherwise. What it does claim is narrower and checkable — that between the model deciding
-to do something and it happening, there is a boundary the model cannot argue its way through.
+The security design behind that has a real threat model, and it is
+[written up properly](https://efuturetoday.github.io/nocturn/architecture/threat-model/) rather than
+summarised here. The short version is that an assistant faces two independent threats — hostile code
+you installed, and prompt injection riding on tools you granted on purpose — and they need two
+different defenses, which is why both the sandbox and the gate exist.
 
 Which is where the name comes from. The agents work at night, unattended, on a schedule. The point
 is sleeping through it without wondering whether the mailbox is still there in the morning.
@@ -72,39 +79,14 @@ read further.
 
 ---
 
-## The two threats, and why one wall can't stop both
-
-For a security product the threat model *is* the product. Nocturn's design falls out of one
-observation: an assistant faces two independent threats that need two different defenses.
-
-**1. Malicious code.** A skill or plugin you install is hostile, or a good one is compromised
-upstream. Running with your privileges, it reads your disk and opens sockets directly.
-→ **The sandbox.** Untrusted code runs in WebAssembly at *zero* authority. Capability it was not
-handed is capability it cannot name.
-
-**2. Prompt injection.** The model reads a web page, an email, a message, and that content carries
-an instruction. No malicious code is involved at all — the injection rides on tools you granted on
-purpose, and its goal is almost always to **exfiltrate**.
-→ **Starve it, then gate it.** The model never holds your secrets, so there is nothing to hand over.
-Everything it *can* still call goes through a gate, and anything outbound or irreversible waits for
-an out-of-band approval.
-
-The tempting shortcut — "just sandbox everything" — does not work. The sandbox cannot stop
-injection, because the injection uses the very tools the sandboxed code is *allowed* to call: the
-call is authorized, the intent is not. And in-band approval cannot stop it either. **A prompt that
-appears in the session the injection already captured can be answered by the injection.** Consent
-has to come from somewhere it cannot reach. That is why the second device is mandatory rather than a
-convenience.
-
-→ [The full threat model](https://efuturetoday.github.io/nocturn/architecture/threat-model/)
-
 <div align="center">
 
-<img src="assets/screenshots/app-approval-net-google.jpg" alt="The companion app showing an approval: the pair net → google.com, with Once, Session, Always and Deny." width="270">
-<img src="assets/screenshots/app-home-reminders-recent-chats.jpg" alt="The companion app's home screen: a pending reminder and the workspace's recent conversations." width="270">
+<img src="assets/screenshots/app-chat-list.jpg" alt="The app's chat list: every conversation in the workspace with the assistant's last line under each." width="260">
+<img src="assets/screenshots/app-chat-ping-allowed-then-denied.jpg" alt="One conversation in the app: the assistant is told a name and writes it to memory, reaches google.com once, and on the second attempt reports that the action was declined." width="260">
 
-*What an approval looks like where the injection cannot reach it — and the workspace on the same
-device.*
+*Left: conversations are not per device — this is the same workspace the terminal is talking to.
+Right: the same host, allowed once and refused the next time. `Once` really does mean once, and a
+refusal stops the tool call rather than the conversation.*
 
 </div>
 
@@ -209,6 +191,8 @@ one part of this design that hands your data to somebody else on purpose.
 ## Reading further
 
 - **[Documentation](https://efuturetoday.github.io/nocturn)** — guides, reference, architecture
+- **[examples/](examples/)** — a workspace with one of everything: an agent, a skill, a plugin, an
+  MCP server, memory, documents to search
 - **[ADRS.md](ADRS.md)** · **[agentkit/DOCS.md](agentkit/DOCS.md)** · **[CLAUDE.md](CLAUDE.md)**
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** · **[SECURITY.md](SECURITY.md)**
 

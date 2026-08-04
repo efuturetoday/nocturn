@@ -136,8 +136,11 @@ into misusing what it has, so Nocturn never gives the model a secret to misuse i
 place.
 
 - **The model is never told.** Keys and tokens are never in the prompt, the context, or the
-  model's reach. It only ever learns that a secret *exists*, never its value. What the model
-  does not know, an injection cannot talk it into revealing.
+  model's reach — and neither are their names. Nothing tells it a credential exists at all: it
+  asks for a URL, and the host attaches what belongs to that destination. What the model does
+  not know, an injection cannot talk it into revealing. (A *plugin* is different: its manifest
+  declares which credentials it needs, so its author knows the name. The guest still never sees
+  the value.)
 - **Injection happens host-side, outside the sandbox.** The real credential is attached by
   the host at the last moment, as the request crosses the boundary to the one destination it
   belongs to. The sandbox and the model hand off an *intent*; the host fills in the secret on

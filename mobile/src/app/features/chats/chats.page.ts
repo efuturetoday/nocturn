@@ -54,7 +54,7 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
     </ion-content>
 
     <ion-footer #footer kbFollow>
-      <app-composer placeholder="Frag Nocturn…" [disabled]="!connection.connected()" (send)="startChat($event)" />
+      <app-composer placeholder="Ask Nocturn…" [disabled]="!connection.connected()" (send)="startChat($event)" />
     </ion-footer>
   `,
   styles: `
