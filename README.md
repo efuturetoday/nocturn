@@ -79,27 +79,27 @@ read further.
 <table>
 <tr>
 <td width="50%" align="center">
-<img src="assets/screenshots/app-tools-code-run-nested-writes.jpg" width="280" alt="The tools view of one turn: a code_run that failed, a second that succeeded with its JavaScript expanded, and the ten file_write calls it produced listed underneath with their durations.">
-</td>
-<td width="50%" align="center">
 <img src="assets/screenshots/app-chat-ping-allowed-then-denied.jpg" width="280" alt="One conversation: the assistant is told a name and writes it to memory, reaches google.com once, and on the second attempt reports that the action was declined.">
-</td>
-</tr>
-<tr>
-<td valign="top"><b>The model wrote a loop.</b> Every write it made surfaces as its own tool call — timed, attributable, and gated where that tool is gated. A script's reach is exactly its caller's cage. The red entry is a first attempt that failed.</td>
-<td valign="top"><b>The gate said no.</b> Same host, allowed once and refused the next time: <code>Once</code> really does mean once. A refusal stops the tool call, not the conversation — the assistant is told, and carries on.</td>
-</tr>
-<tr>
-<td width="50%" align="center">
-<img src="assets/screenshots/app-connect-discovery.jpg" width="280" alt="The app's connect screen: a daemon found on the local network by name, its WebSocket address below it.">
 </td>
 <td width="50%" align="center">
 <img src="assets/screenshots/app-chat-list.jpg" width="280" alt="The app's chat list: every conversation in the workspace with the assistant's last line under each.">
 </td>
 </tr>
 <tr>
-<td valign="top"><b>Your phone finds your daemon</b> on your own network, by name. No account, no relay, nothing in between.</td>
+<td valign="top"><b>The gate said no.</b> Same host, allowed once and refused the next time: <code>Once</code> really does mean once. A refusal stops the tool call, not the conversation — the assistant is told, and carries on.</td>
 <td valign="top"><b>One workspace, many devices.</b> Conversations are not per device — this is the same workspace the terminal is talking to.</td>
+</tr>
+<tr>
+<td width="50%" align="center">
+<img src="assets/screenshots/app-tools-code-run-nested-writes.jpg" width="280" alt="The tools view of one turn: a code_run that failed, a second that succeeded with its JavaScript expanded, and the ten file_write calls it produced listed underneath with their durations.">
+</td>
+<td width="50%" align="center">
+<img src="assets/screenshots/app-connect-discovery.jpg" width="280" alt="The app's connect screen: a daemon found on the local network by name, its WebSocket address below it.">
+</td>
+</tr>
+<tr>
+<td valign="top"><b>The model wrote a loop.</b> Every write it made surfaces as its own tool call — timed, attributable, and gated where that tool is gated. A script's reach is exactly its caller's cage. The red entry is a first attempt that failed.</td>
+<td valign="top"><b>Your phone finds your daemon</b> on your own network, by name. No account, no relay, nothing in between.</td>
 </tr>
 </table>
 
