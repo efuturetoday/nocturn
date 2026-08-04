@@ -33,6 +33,12 @@ that tool is gated.
 4. A runaway script (infinite loop, memory blow-up) is **trapped** by the sandbox's memory cap and
    wall-clock deadline — it cannot hang the host.
 
+![The app's tools view for one turn: a code_run that failed, a second that succeeded with its JavaScript expanded, and the ten file_write calls that script produced listed underneath with their durations.](../../../assets/screenshots/app-tools-code-run-nested-writes.jpg)
+
+Above: one turn, one script, and every effect it had accounted for separately. That is the shape to
+keep in mind — the loop is the model's, the ten writes are ordinary `file_write` calls, and each one
+met the gate on its own.
+
 ```js
 // Pure compute — nothing gated, nothing asked.
 const rows = [3, 1, 2].sort((a, b) => a - b);
