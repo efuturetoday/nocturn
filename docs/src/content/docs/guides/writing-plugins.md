@@ -181,9 +181,15 @@ running anything. The code cannot widen it.
 **A restart is required.** Plugins are discovered when a workspace opens, and there is no watcher on
 `plugins/`. A daemon that was already running does not see the new folder.
 
-There is **no interactive review step today**. The safety of installing a plugin rests on the two
-structural walls — its cage, and the gate on every call it makes — not on a prompt at install time.
-That is why the manifest is short: it is meant to be read.
+:::danger[Installing is the decision — there is no review step]
+Dropping the folder in **is** the authorization. Nothing prompts you afterwards, and nothing asks
+whether you meant it.
+
+What protects you is structural rather than procedural: the plugin's cage, and the gate on every call
+it makes. Both hold whether or not you read the manifest — but they hold it to what the manifest
+*says*, and only you can decide whether that is more than you meant to grant. It is short for exactly
+that reason. Read it before the folder goes in.
+:::
 
 Its tool then appears to the model as `weather_forecast`, and its first request asks about the host
 it wants, exactly as if the model had called `http_read` itself.
