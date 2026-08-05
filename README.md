@@ -9,11 +9,14 @@ before it does anything you can't take back.**
 
 One Go binary. No cloud, no database, no runtime to install.
 
+[![Documentation](https://img.shields.io/badge/docs-nocturn-6E56CF)](https://efuturetoday.github.io/nocturn)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/efuturetoday/nocturn/actions/workflows/ci.yml/badge.svg)](https://github.com/efuturetoday/nocturn/actions/workflows/ci.yml)
 [![CGO](https://img.shields.io/badge/CGO-free-success)](#)
 [![Engine dependencies](https://img.shields.io/badge/engine%20dependencies-0-success)](agentkit/go.mod)
+
+**[📖 Read the documentation →](https://efuturetoday.github.io/nocturn)**
 
 </div>
 
@@ -21,17 +24,41 @@ One Go binary. No cloud, no database, no runtime to install.
 
 ## Why this exists
 
-I wanted agents doing real work on my own life — mail, calendars, files, services I actually pay
-for. Every way to do that today asks for the same thing first: hand a cloud assistant your
-credentials and your data, and trust the sandbox.
+I wanted agents doing real work on my own life — my mail, my calendar, my files. Every way to do
+that today starts the same way: hand your credentials and your data to somebody else's machine and
+hope their isolation holds. Once it has left your home it is exposed to a breach you will never hear
+about, a policy change you never agreed to, and a model you cannot inspect.
 
-That trade is the wrong shape. The value of a personal assistant is that it reaches your real
-accounts; the risk is exactly the same fact. So Nocturn is built so the model never holds the
-credential, and never takes an irreversible step without a human saying yes — on a device the
-attacker isn't standing in.
+That trade is the wrong shape. What makes a personal assistant useful is that it reaches your real
+accounts — and that is exactly what makes it dangerous. So Nocturn keeps both halves at home: the
+model never holds a credential, and nothing irreversible happens until a human approves it, on a
+second device an attacker is not holding.
 
-Which is where the name comes from. The agents run at night, unattended, on a schedule. The point
-is being able to sleep through it.
+Which is where the name comes from. The agents work at night, unattended, on a schedule. The point
+is sleeping through it without wondering whether the mailbox is still there in the morning.
+
+## Quickstart
+
+```bash
+go build ./cmd/nocturn        # one binary, no runtime, nothing else to install
+cp .env.example .env          # OPENAI_BASE_URL / _MODEL / _API_KEY — any OpenAI-compatible endpoint
+
+./nocturn                     # terminal chat
+./nocturn serve               # the daemon your phone and your satellites talk to
+```
+
+Nocturn ships no model; point it at one you control. Everything it knows lives in a `nocturn-data/`
+folder next to wherever you ran it — no database, nothing scattered through your home directory.
+
+📱 **The companion app** is what answers an approval when you are nowhere near the machine.
+A TestFlight link lands here with the public beta.
+
+📖 **[The documentation](https://efuturetoday.github.io/nocturn)** covers the rest: full setup, the
+permission model, writing plugins, connecting accounts, agents on a schedule, the wire protocol.
+This page stays short on purpose — what is below is only the part you would want before deciding to
+read further.
+
+---
 
 ## The two threats, and why one wall can't stop both
 
@@ -41,62 +68,46 @@ observation: an assistant faces two independent threats that need two different 
 **1. Malicious code.** A skill or plugin you install is hostile, or a good one is compromised
 upstream. Running with your privileges, it reads your disk and opens sockets directly.
 → **The sandbox.** Untrusted code runs in WebAssembly at *zero* authority. Capability it was not
-handed is capability it cannot name. This isolates the code.
+handed is capability it cannot name.
 
 **2. Prompt injection.** The model reads a web page, an email, a message, and that content carries
 an instruction. No malicious code is involved at all — the injection rides on tools you granted on
 purpose, and its goal is almost always to **exfiltrate**.
-→ **Starve it, then gate it.** The model never holds your secrets, so there is nothing to hand
-over. Everything it *can* still call goes through a gate, and anything outbound or irreversible
-waits for an out-of-band yes.
+→ **Starve it, then gate it.** The model never holds your secrets, so there is nothing to hand over.
+Everything it *can* still call goes through a gate, and anything outbound or irreversible waits for
+an out-of-band approval.
 
 The tempting shortcut — "just sandbox everything" — does not work. The sandbox cannot stop
 injection, because the injection uses the very tools the sandboxed code is *allowed* to call: the
 call is authorized, the intent is not. And in-band approval cannot stop it either. **A prompt that
 appears in the session the injection already captured can be answered by the injection.** Consent
-has to come from somewhere it cannot reach. That is why the second device is mandatory rather than
-a convenience.
+has to come from somewhere it cannot reach. That is why the second device is mandatory rather than a
+convenience.
+
+→ [The full threat model](https://efuturetoday.github.io/nocturn/architecture/threat-model/)
 
 ## Architecture
 
-```
-   user turn (terminal REPL · mobile app over WebSocket · spoken, through a satellite)
-        │
-   cmd/nocturn ──> workspace.Open assembles the per-workspace stack
-        │           (tools = the cage · gate = policy+grants+approver · persona · chat store)
-   internal/chat ──> Manager starts/resumes an agentkit Session over the file-backed Store
-        │
-   agentkit.Session ──> turn loop: ask model → tool call | answer → tool → back
-        │                tokens/reasoning stream on the ctx event sink
-        ├─ agentkit/openai ── streaming SSE, native tool_calls
-        │
-   gate.Check(Action{Kind, Target}) ──> Policy → allow | ask | deny
-        │    an "ask" consults remembered Grants first, then a human
-        ├─ internal/hitl ── first answer wins across attached app connections,
-        │                   or internal/push (APNs) wakes a paired device
-        │
-   secret.Injector ── credential injected host-side at the boundary (the guest never sees it)
-        ▼
-   the effect (HTTP/DNS/file/…) → egress scan / ingress redact → result back into the loop
-```
+Two halves that are deliberately not allowed to blur.
 
-The repository is two halves that are deliberately not allowed to blur:
+**`agentkit/` — the engine.** Its own Go module whose `go.mod` has **no `require` block at all**. An
+LLM-agnostic turn loop, immutable tool and skill sets, sub-agents, event streaming, per-turn and
+per-tree guards. Everything external is a port — `LLM`, `Tool`, `Logger`, `Store`. The core is
+**policy-blind**: it knows nothing about permissions, because gating belongs in a wrapper on top,
+never inside the component the model's output flows through.
 
-**`agentkit/` — the engine.** Its own Go module whose `go.mod` has **no `require` block at all**.
-An LLM-agnostic turn loop, immutable tool and skill sets, sub-agents (a sub-agent is just a tool),
-one-way event streaming, per-turn and per-tree guards. Everything external is a port — `LLM`,
-`Tool`, `Logger`, `Store`. The core is **policy-blind**: it knows nothing about permissions, because
-gating belongs in a wrapper on top, never inside the component the model's output flows through.
-Provider adapters (`openai`, `gemini`), the permission layer (`gate`), ready tools and the
-composition root are sibling modules.
+**`internal/` — Nocturn.** The security boundary the engine has no opinion about: the wazero sandbox,
+the encrypted vault and its boundary injector, the gated tools, out-of-band approval, and
+composition per workspace.
 
-**`internal/` — Nocturn.** The security boundary the engine deliberately has no opinion about: the
-wazero sandbox, the encrypted vault and its boundary injector, the gated tools, out-of-band
-approval, transcript persistence, and composition per workspace.
+Two axes of control stay apart on purpose: **which** tools an agent has at all is a `ToolSet`, bound
+once and statically. **What** a tool may *do* is the gate — per action, asked when risky, remembered
+at the scope you picked.
 
-Two axes of control are kept apart on purpose: **which** tools an agent has at all is a `ToolSet`,
-bound once and statically. **What** a tool may *do* is the gate — evaluated per action, asked when
-risky, remembered at the scope the human picked.
+→ [Request flow](https://efuturetoday.github.io/nocturn/architecture/request-flow/) ·
+[The two halves](https://efuturetoday.github.io/nocturn/architecture/agentkit/) ·
+[Cage and gate](https://efuturetoday.github.io/nocturn/reference/gate/) ·
+[ADRS.md](ADRS.md) — eleven decision records
 
 ---
 
@@ -129,8 +140,7 @@ for once.
 
 **The division of labour.** Architecture, security boundaries, the threat model, the ADRs, and
 review were mine. Implementation, tests, documentation and the mechanical work happened inside those
-constraints. The constraints came first and are in the repository as artifacts — `ADRS.md` is eleven
-decision records, most written before the code they govern.
+constraints. The constraints came first and are in the repository as artifacts.
 
 **What that produced**, all of it checkable from a clone:
 
@@ -151,87 +161,28 @@ input that made the work converge.
 
 ---
 
-## What runs today
-
-| Tool | Gate |
-|---|---|
-| `http_read` `http_write` `dns_resolve` `ping` | `net`, target = host |
-| `file_read` `file_list` `file_stat` `file_search` `file_write` `file_remove` `file_move` | `file`, target = path, workspace-confined |
-| `notify` | `notify` |
-| `remind` `remind_list` `remind_cancel` | `remind` |
-| `memory_write` | `memory` — allowed in chat, asked in unattended agent runs |
-| `memory_read` `skill_read` `time_now` `wake` `whoami` | **ungated** — context, never authority |
-| `code_run` (JavaScript on QuickJS-in-WASM) | woven per cage, so a script's reach *is* its cage |
-
-Plus **remote MCP** servers (HTTPS only — a local stdio server would be a foreign process with your
-rights), **sandboxed plugins** whose manifest is reviewed without running the artifact, and
-**agentskills.io skills** read from disk.
-
-A workspace is the portable unit — no database, the folder *is* the state:
-
-```
-nocturn-data/workspaces/main/
-  mnt/           ← the ONLY thing the model sees: file-tool root + sandbox /work
-  PERSONA.md     ← the assistant's system prompt          ┐
-  agents/        ← child-agent declarations               │ control plane:
-  skills/        ← procedural knowledge                   │ outside the mount,
-  memory/        ← durable notes, catalog folded per turn │ so the model can
-  grants.json    ← remembered permissions                 │ neither read nor
-  vault.enc      ← credentials, this workspace's own key  ┘ write them
-  chats/ agent-runs/
-```
-
-The control-plane split is **structural, not a deny rule**: those paths are simply not in the mount.
-Self-modification is solved by construction rather than by a check that could be wrong.
-
-## Quickstart
-
-```bash
-go build ./cmd/nocturn        # or grab a release binary
-cp .env.example .env          # OPENAI_BASE_URL / _MODEL / _API_KEY — any OpenAI-compatible endpoint
-
-./nocturn                     # terminal chat
-./nocturn serve               # the WebSocket daemon the mobile app and satellites talk to
-```
-
-Nocturn ships no model; point it at one you control. Everything it knows lives in a `nocturn-data/`
-folder next to wherever you ran it. Full setup, including the encrypted vault and pairing a phone,
-is in [Getting started](https://efuturetoday.github.io/nocturn/guides/getting-started/).
-
-```bash
-go test -race ./...           # 809 tests
-cd docs && npx astro build    # the docs site, schema-validated
-```
-
 ## Status
 
 **Built and tested:** the engine and its gate, the WASM sandbox, the secret vault with boundary
-injection and bidirectional leak scanning, out-of-band approvals over WebSocket and APNs, remote
-MCP, plugins, skills, memory, scheduled agents, the iOS companion app.
+injection and bidirectional leak scanning, out-of-band approvals over WebSocket and APNs, remote MCP,
+plugins, skills, memory, scheduled agents, the iOS companion app.
 
-**Experimental — expect it to move:** spoken sessions (`internal/voice`, a live-audio model) and
-speaker recognition (`internal/speaker` + `internal/onnx`, a pure-Go ONNX subset with no CGO,
-running a WeSpeaker ResNet34). Recognition is 100 % top-1 among 2–6 enrolled voices in the measured
-household set, and it chooses **context and address, never permission** — speech is a channel like
-the chat, where nobody authenticates the typist either. The browser client is still labelled a PoC
-harness in its own help text.
+**Experimental — expect it to move:** spoken sessions and speaker recognition, the latter a pure-Go
+ONNX subset with no CGO running a WeSpeaker ResNet34. Recognition chooses **context and address,
+never permission** — speech is a channel like the chat, where nobody authenticates the typist either.
 
-**Next:** retrieval over a workspace's documents (an `Embedder` port with a remote adapter, hybrid
-semantic + lexical search, exposed as one tool); **a hosted push relay**, so waking a phone stops
+**Next:** retrieval over a workspace's documents; a hosted push relay, so waking a phone stops
 requiring your own Apple Developer account — safe to hand off precisely because a push carries no
-authority and no content; **an Android app**, which the Angular-under-Capacitor choice makes a build
-target rather than a rewrite; extracting `agentkit` into its own repository; Ed25519 signing for
-skills and plugins; a keychain backend for the vault.
+authority and no content; an Android app; extracting `agentkit` into its own repository; Ed25519
+signing for skills and plugins.
 
 **Deliberately not built:** an ambient `exec` tool. See [ADR-6](ADRS.md) — every step toward a
 general coding agent erodes the one thing this design is for.
 
 ## Reading further
 
-- **[Documentation](https://efuturetoday.github.io/nocturn)** — guides, the gate reference, the threat model
-- **[ADRS.md](ADRS.md)** — eleven decision records, and the reasoning behind each
-- **[agentkit/DOCS.md](agentkit/DOCS.md)** — the engine's design, ports, and composition model
-- **[CLAUDE.md](CLAUDE.md)** — how to work in this repository, and the pitfalls already paid for
+- **[Documentation](https://efuturetoday.github.io/nocturn)** — guides, reference, architecture
+- **[ADRS.md](ADRS.md)** · **[agentkit/DOCS.md](agentkit/DOCS.md)** · **[CLAUDE.md](CLAUDE.md)**
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** · **[SECURITY.md](SECURITY.md)**
 
 ## License
