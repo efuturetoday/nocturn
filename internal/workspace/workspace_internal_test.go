@@ -12,6 +12,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/internal/agent"
+	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
 	"github.com/efuturetoday/nocturn/internal/memory"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -381,5 +382,58 @@ func TestOpen_WhoAmIOnlyWithASpeakerModel(t *testing.T) {
 	// A non-nil embedder is the whole signal; Open never calls it.
 	if !has(t, Host{LLM: llmStub{}, Speaker: &speaker.Embedder{}, Log: quiet}) {
 		t.Error("whoami is missing although a speaker model is loaded")
+	}
+}
+
+// knowledge_search exists only where an embedder does, the same rule as whoami and for the same
+// reason: a tool that fails on every call is worse than a missing one.
+func TestOpen_KnowledgeSearchOnlyWithAnEmbedder(t *testing.T) {
+	has := func(t *testing.T, h Host) bool {
+		t.Helper()
+		w, err := Open(h, "test", t.TempDir())
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		t.Cleanup(w.Close)
+		_, ok := w.tools["knowledge_search"]
+		return ok
+	}
+
+	quiet := slog.New(slog.DiscardHandler)
+	if has(t, Host{LLM: llmStub{}, Log: quiet}) {
+		t.Error("knowledge_search is registered with no embedding endpoint configured")
+	}
+	if !has(t, Host{LLM: llmStub{}, Embed: embed.Config{BaseURL: "https://gateway.example"}, Log: quiet}) {
+		t.Error("knowledge_search is missing although an endpoint is configured")
+	}
+}
+
+// The corpus is INSIDE the mount because documents are data; the index is outside it because it is
+// host state the model must not be able to rewrite.
+func TestOpen_KnowledgeCorpusIsInTheMountAndTheIndexIsNot(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Open(Host{
+		LLM:   llmStub{},
+		Embed: embed.Config{BaseURL: "https://gateway.example"},
+		Log:   slog.New(slog.DiscardHandler),
+	}, "test", dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(w.Close)
+
+	k := w.Knowledge()
+	if k == nil {
+		t.Fatal("no knowledge store")
+	}
+	if want := filepath.Join(dir, "mnt", "knowledge"); k.Dir() != want {
+		t.Errorf("corpus at %s, want %s — inside the mount", k.Dir(), want)
+	}
+	if want := filepath.Join(dir, "knowledge.idx.json"); k.IndexPath() != want {
+		t.Errorf("index at %s, want %s — outside the mount", k.IndexPath(), want)
+	}
+	// Stated as a property rather than as two paths: no file tool may reach the index.
+	if strings.HasPrefix(k.IndexPath(), filepath.Join(dir, "mnt")+string(filepath.Separator)) {
+		t.Error("the index is inside the mount, where a file tool could rewrite it")
 	}
 }

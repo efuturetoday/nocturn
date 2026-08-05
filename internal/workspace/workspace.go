@@ -18,6 +18,8 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/chat"
+	"github.com/efuturetoday/nocturn/internal/knowledge"
+	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
 	"github.com/efuturetoday/nocturn/internal/mcp"
 	"github.com/efuturetoday/nocturn/internal/memory"
 	"github.com/efuturetoday/nocturn/internal/plugin"
@@ -46,7 +48,10 @@ type Host struct {
 	// which is the normal case (the terminal chat has no microphone at all). It decides whether the
 	// whoami tool exists — see Open.
 	Speaker *speaker.Embedder
-	Log     *slog.Logger
+	// Embed says where to turn text into vectors. Unconfigured = this process cannot search
+	// documents, and knowledge_search then does not exist rather than existing and failing.
+	Embed embed.Config
+	Log   *slog.Logger
 }
 
 // Workspace is one isolated stack: its own tools, grants, persona, and chats over the Host.
@@ -69,6 +74,7 @@ type Workspace struct {
 	notify        *notifier         // the seam every proactive message leaves through
 	waker         *tools.Waker      // self-continuation timers, bound to the chat manager
 	mem           *memory.Store     // the assistant's durable notes; its index is folded into every prompt
+	knowledge     *knowledge.Store  // the user's own documents; nil when no embedder is configured
 	voice         *voice.Manager    // live spoken sessions, one per device; nil when Host.Live is unset
 	voices        *speaker.Profiles // enrolled voices, for telling this household apart
 	vault         *secret.Vault     // this workspace's own encrypted credential vault; nil when locked
@@ -168,6 +174,39 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	}
 	baseTools = append(baseTools, memTools...)
 
+	// Knowledge: the user's OWN documents, and the mirror image of memory. It lives INSIDE mnt,
+	// because documents are data the human puts there and the model may read and write like any other
+	// file — the same argument ADR-10 makes about a self-written skill granting no authority. The
+	// index does not: it is host state, and sits beside grants.json where no file tool reaches it.
+	//
+	// Absent when no embedder is configured. The tool then does not exist, rather than existing and
+	// failing on every call.
+	var knowledgeStore *knowledge.Store
+	if h.Embed.Configured() {
+		kdir := filepath.Join(mnt, "knowledge")
+		if err := os.MkdirAll(kdir, 0o700); err != nil {
+			return nil, fmt.Errorf("workspace %q: knowledge dir: %w", name, err)
+		}
+		klog := wslog.With("component", "knowledge")
+		knowledgeStore, err = knowledge.New(knowledge.Options{
+			Dir:       kdir,
+			IndexPath: filepath.Join(dir, "knowledge.idx.json"),
+			// One client per workspace rather than per process, because the egress scanner it sends
+			// through belongs to THIS workspace's vault.
+			Embedder: embed.New(h.Embed, scanner),
+			Scanner:  scanner,
+			Log:      klog,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q: knowledge: %w", name, err)
+		}
+		ktools, err := knowledgeStore.Tools()
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q: knowledge tools: %w", name, err)
+		}
+		baseTools = append(baseTools, ktools...)
+	}
+
 	// Ungated, and reaching nothing: it reports what the microphone already established, which the
 	// model could equally have asked the person.
 	//
@@ -241,13 +280,14 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	}
 
 	w := &Workspace{
-		voices:   voices,
-		name:     name,
-		dir:      dir,
-		llm:      h.LLM,
-		tools:    toolset,
-		grants:   gs,
-		approver: h.Approver,
+		voices:    voices,
+		knowledge: knowledgeStore,
+		name:      name,
+		dir:       dir,
+		llm:       h.LLM,
+		tools:     toolset,
+		grants:    gs,
+		approver:  h.Approver,
 		// User chats all spin under the one workspace root runtime — the resolver is a constant.
 		chats:      chat.NewManager(func(string) *runtime.Runtime { return rt }, userStore, wslog),
 		userStore:  userStore,

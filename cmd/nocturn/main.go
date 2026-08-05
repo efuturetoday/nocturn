@@ -8,6 +8,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/auth"
 	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
 	"github.com/efuturetoday/nocturn/internal/push"
 	"github.com/efuturetoday/nocturn/internal/serve"
 	"github.com/efuturetoday/nocturn/internal/speaker"
@@ -131,11 +133,21 @@ func runApp(serveAddr string) int {
 	if broker != nil {
 		active = broker.AnyActive
 	}
-	// Speech is opt-in per process: without a live model configured, a device asking for a spoken
-	// session is told so rather than left waiting for audio that cannot come. See liveModel.
+	embedCfg, err := embedConfig()
+	if err != nil {
+		logger.Error("embedding config", "err", err)
+		return 1
+	}
+	if embedCfg.Configured() {
+		logger.Info("document search enabled", "model", embedCfg.Model, "dims", embedCfg.Dims)
+	}
+
+	// Speech and document search are both opt-in per process. Without a live model, a device asking
+	// for a spoken session is told so rather than left waiting for audio that cannot come; without an
+	// embedding endpoint, knowledge_search does not exist rather than failing on every call.
 	host := workspace.Host{
 		LLM: llm, Live: liveModel(logger), Approver: approver, Master: master,
-		Notifier: notifier, Active: active, Speaker: embedder, Log: logger,
+		Notifier: notifier, Active: active, Speaker: embedder, Embed: embedCfg, Log: logger,
 	}
 
 	spaces, err := workspace.OpenAll(host, wsRoot)
@@ -175,6 +187,36 @@ func liveModel(log *slog.Logger) agentkit.LiveLLM {
 	}
 	log.Info("voice enabled", "model", model)
 	return gemini.New(dialGemini, key, model, gemini.WithLogger(agentkit.SlogLogger(log)))
+}
+
+// embedConfig resolves where to embed documents, from the environment.
+//
+//	NOCTURN_EMBED_BASE_URL   endpoint          falls back to OPENAI_BASE_URL
+//	NOCTURN_EMBED_API_KEY    key for it        falls back to OPENAI_API_KEY
+//	NOCTURN_EMBED_MODEL      embedding model   defaults to "auto" — NEVER OPENAI_MODEL
+//	NOCTURN_EMBED_DIMS       vector length     defaults to the adapter's own default
+//
+// The endpoint and key fall back because one gateway usually serves both, and making somebody repeat
+// two values to use a feature is how a feature goes unused. The MODEL deliberately does not:
+// OPENAI_MODEL names a CHAT model, and a chat model id handed to /v1/embeddings gets "unknown
+// embedding model" at best and something that answers meaninglessly at worst.
+func embedConfig() (embed.Config, error) {
+	cfg := embed.Config{
+		BaseURL: cmp.Or(os.Getenv("NOCTURN_EMBED_BASE_URL"), os.Getenv("OPENAI_BASE_URL")),
+		APIKey:  cmp.Or(os.Getenv("NOCTURN_EMBED_API_KEY"), os.Getenv("OPENAI_API_KEY")),
+		Model:   cmp.Or(os.Getenv("NOCTURN_EMBED_MODEL"), embed.DefaultModel),
+		Dims:    embed.DefaultDims,
+	}
+	if raw := os.Getenv("NOCTURN_EMBED_DIMS"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			// Refused rather than defaulted: a typo would build the index at a length nobody chose, and
+			// the only symptom is search that quietly works less well.
+			return embed.Config{}, fmt.Errorf("NOCTURN_EMBED_DIMS=%q is not a positive number", raw)
+		}
+		cfg.Dims = n
+	}
+	return cfg, nil
 }
 
 // apnsSender builds the APNs sender from NOCTURN_APNS_*; nil when unconfigured or on error, so both

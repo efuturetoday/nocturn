@@ -361,6 +361,16 @@
   g.nocturn.wake = function (seconds, note) {
     return JSON.parse(g.nocturn.call("wake", { seconds: Number(seconds), note: String(note) }));
   };
+  // knowledge.search(query[, limit]) — the passages in the user's own documents that answer a
+  // question. Returns the rendered text, file and section headers included, so a script can quote a
+  // source. Only present when this daemon has an embedding endpoint configured.
+  g.nocturn.knowledge = {
+    search: function (query, limit) {
+      var args = { query: String(query) };
+      if (limit != null) args.limit = Number(limit);
+      return g.nocturn.call("knowledge_search", args);
+    },
+  };
   // whoami() — {name, confidence} for whoever is speaking. An EMPTY name means unrecognised, and
   // outside a spoken session that is always the answer, since nothing is listening. It chooses how
   // to address somebody, never what they may do.
