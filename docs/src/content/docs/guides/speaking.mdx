@@ -39,14 +39,22 @@ GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-latest
 | `GEMINI_API_KEY` | the key for the live API |
 | `GEMINI_LIVE_MODEL` | which live model — **required**, there is no default |
 
-The id above is the one this was measured against, and the reason to name it rather than leave it to
-you: live-capable models differ in what they support, and one **without asynchronous function
-calling** stops the whole conversation whenever the assistant uses a tool — unusable as soon as
-anything needs your approval.
+:::caution[Use that id, not a newer one]
+As of **August 2026** `gemini-2.5-flash-native-audio-latest` is the only live model this works
+with — and, counter-intuitively, the newer ones are the problem. They do not support
+**asynchronous function calling**, and without it the whole conversation stalls the moment the
+assistant uses a tool: the model waits for the call to return before it will say anything.
 
-There is still no built-in default. These ids change often, and one baked into the binary would
-either fail at connect time or, worse, connect and behave subtly wrong. Check what your own account
-actually offers rather than assuming: the list a key can reach and the list in anybody's
+That is unusable here rather than merely slow, because a tool call is exactly where an approval
+happens. "Let me check" would be followed by silence for as long as your phone takes to answer.
+
+Reaching for the newest id is the natural instinct and the wrong one. If a later model gains
+asynchronous function calling, it becomes a candidate; until then this is not a version to bump.
+:::
+
+There is no built-in default, deliberately. These ids change often, and one baked into the binary
+would either fail at connect time or — worse — connect and behave subtly wrong. Check what your own
+account actually offers rather than assuming: the list a key can reach and the list in anybody's
 documentation are not the same.
 
 ## One connection, one more domain
