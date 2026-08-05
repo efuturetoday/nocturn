@@ -48,6 +48,13 @@ type Sink interface {
 	Play(pcm []byte) error
 	// Interrupt tells the device to drop whatever it has buffered but not yet played.
 	Interrupt() error
+	// Waiting reports that the conversation is blocked on a human decision somewhere else — or that
+	// it no longer is.
+	//
+	// The device cannot work this out: an approval is happening on a phone it knows nothing about,
+	// and from here the conversation merely goes quiet. Everything else a satellite shows it derives
+	// from what it observed itself; this is the one state only the daemon can see.
+	Waiting(on bool) error
 }
 
 // errSessionOver ends a session's Recv without implying the device went away. The driver treats a

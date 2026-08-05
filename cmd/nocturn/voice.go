@@ -233,6 +233,10 @@ func (d *browserDevice) Play(pcm []byte) error {
 	return d.conn.Write(d.ctx, websocket.MessageBinary, pcm)
 }
 
+// Waiting has nothing to show: the harness is a browser tab with no ring and no second device to
+// approve on, so a pending approval is simply a pause.
+func (d *browserDevice) Waiting(bool) error { return nil }
+
 // Interrupt tells the page to drop everything it has queued but not yet played.
 func (d *browserDevice) Interrupt() error {
 	return d.conn.Write(d.ctx, websocket.MessageText, []byte(`{"type":"interrupt"}`))

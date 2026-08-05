@@ -66,9 +66,9 @@ var hangUpSpec = agentkit.ToolSpec{
 		"listening until they say the wake word again.",
 }
 
-// Device is the satellite end of a session: a microphone, a speaker, and the one control signal a
-// duplex conversation needs. A browser tab and an ESP32 implement the same three methods, which is
-// why the PoC client is not throwaway work.
+// Device is the satellite end of a session: a microphone, a speaker, and the control signals a
+// duplex conversation needs. A browser tab and an ESP32 implement the same handful of methods, which
+// is why the PoC client is not throwaway work.
 type Device interface {
 	// Recv blocks for the next chunk of microphone PCM. It returns an error when the device
 	// disconnects, which ends the session.
@@ -85,6 +85,13 @@ type Device interface {
 	// microphone signal about 200 ms after a person starts. The model's transcript arrives later and
 	// only for speech it made sense of, which is the wrong test for "is anyone still in the room".
 	Heard() <-chan struct{}
+	// Waiting reports that the conversation is blocked on a human decision somewhere else — or that
+	// it no longer is.
+	//
+	// Everything else a device shows it derives from what it observed itself, because a round trip is
+	// slower than a person's sense of immediacy. This is the exception: an approval is happening on a
+	// phone the device knows nothing about, and from where it stands the conversation merely stopped.
+	Waiting(on bool) error
 }
 
 // Observer watches a session without steering it — for logging, for showing the phone what the
@@ -217,7 +224,7 @@ func (d *Driver) Run(ctx context.Context, dev Device, conv []agentkit.Message, w
 	// The speaker rides here so a tool can act on the right person's behalf without the model having
 	// to name them — and without being able to name the wrong one.
 	toolCtx := speaker.NewContext(
-		gate.WithLogger(gate.With(ctx, d.policy, d.grants, d.announcing(sess)), agentkit.SlogLogger(d.log)),
+		gate.WithLogger(gate.With(ctx, d.policy, d.grants, d.announcing(sess, dev)), agentkit.SlogLogger(d.log)),
 		who)
 
 	// The microphone pump is its own goroutine: it blocks on the device, and the event loop below
@@ -481,11 +488,11 @@ func withCall(ctx context.Context, call agentkit.LiveToolCall) context.Context {
 // announcing wraps the approver so that every ask first tells the model what is pending.
 // It returns nil unchanged when there is no approver — the unattended posture has nothing to
 // announce, because nobody is being waited for.
-func (d *Driver) announcing(sess agentkit.LiveSession) gate.Approver {
+func (d *Driver) announcing(sess agentkit.LiveSession, dev Device) gate.Approver {
 	if d.approver == nil {
 		return nil
 	}
-	return &announcingApprover{inner: d.approver, sess: sess, log: d.log}
+	return &announcingApprover{inner: d.approver, sess: sess, dev: dev, log: d.log}
 }
 
 // announcingApprover states the reason for a wait before blocking on it.
@@ -502,6 +509,7 @@ func (d *Driver) announcing(sess agentkit.LiveSession) gate.Approver {
 type announcingApprover struct {
 	inner gate.Approver
 	sess  agentkit.LiveSession
+	dev   Device
 	log   *slog.Logger
 }
 
@@ -525,6 +533,18 @@ func (a *announcingApprover) Ask(ctx context.Context, act gate.Action, suggest [
 	if err := a.sess.SendResult(ctx, interim); err != nil {
 		a.log.Warn("voice: could not announce a pending approval", "err", err)
 	}
+
+	// And show it. The narration above reaches whoever is listening; this reaches whoever walks past
+	// the device and wonders why it went quiet. Failing to show it must not stop the approval either.
+	if err := a.dev.Waiting(true); err != nil {
+		a.log.Warn("voice: could not show a pending approval", "err", err)
+	}
+	defer func() {
+		if err := a.dev.Waiting(false); err != nil {
+			a.log.Warn("voice: could not clear a pending approval", "err", err)
+		}
+	}()
+
 	return a.inner.Ask(ctx, act, suggest)
 }
 

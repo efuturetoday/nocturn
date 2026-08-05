@@ -146,7 +146,7 @@ func (c *conn) voiceWake(ctx context.Context, m VoiceWake) {
 	// Recognition starts with the session and runs beside it. Nothing waits for it: by the time
 	// anything asks who is talking, seconds of speech have gone past.
 	c.listen = newListener(c.embedder, ws.Voices(), c.log)
-	sink := newDeviceSink(hub, device, c.log)
+	sink := newDeviceSink(hub, device, m.Ws, c.log)
 	sinksMu.Lock()
 	sinks[device] = sink
 	sinksMu.Unlock()
@@ -271,7 +271,10 @@ const downFrameBytes = 16000 * 2 * 20 / 1000
 type deviceSink struct {
 	hub    *hub
 	device string
-	log    *slog.Logger
+	// ws names the workspace this session belongs to, so a state the sink reports carries the same
+	// addressing every other voice message does.
+	ws  string
+	log *slog.Logger
 
 	mu      sync.Mutex
 	backlog []byte
@@ -292,8 +295,8 @@ var _ voice.Sink = (*deviceSink)(nil)
 // backlog that is only growing.
 var errDeviceGone = errors.New("the device stopped taking speech")
 
-func newDeviceSink(h *hub, device string, log *slog.Logger) *deviceSink {
-	s := &deviceSink{hub: h, device: device, log: log,
+func newDeviceSink(h *hub, device, ws string, log *slog.Logger) *deviceSink {
+	s := &deviceSink{hub: h, device: device, ws: ws, log: log,
 		wake: make(chan struct{}, 1), done: make(chan struct{})}
 	go s.run()
 	return s
@@ -386,6 +389,22 @@ func (s *deviceSink) run() {
 
 // close stops the writer. Safe to call once, from the session's teardown.
 func (s *deviceSink) close() { close(s.done) }
+
+// Waiting tells the device that the conversation is blocked on a human decision on another device.
+//
+// It travels on the control queue, which overtakes audio — the point is to show the wait while it is
+// happening, and a message queued behind a sentence would land after it was over. Clearing it says
+// "listening" rather than restoring what came before: the device leaves the state on its own as soon
+// as speech starts playing, so this only has to cover the case where the answer was refused and
+// nothing follows.
+func (s *deviceSink) Waiting(on bool) error {
+	state := "listening"
+	if on {
+		state = "approval"
+	}
+	s.hub.control(s.device, VoiceState{Type: "voice.state", Ws: s.ws, State: state})
+	return nil
+}
 
 // Interrupt discards everything not yet heard that can still be reached.
 //

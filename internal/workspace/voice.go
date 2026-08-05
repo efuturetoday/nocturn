@@ -185,11 +185,21 @@ func (w *Workspace) Voice(live agentkit.LiveLLM, opts ...VoiceOption) *voice.Dri
 // startVoice builds this workspace's voice session manager. Nil host LLM means the process was not
 // configured for speech, and then there is nothing to manage — a satellite connecting to it gets
 // told so rather than opening a session that cannot talk.
-func (w *Workspace) startVoice(live agentkit.LiveLLM) {
+func (w *Workspace) startVoice(live agentkit.LiveLLM, approver gate.Approver) {
 	if live == nil {
 		return
 	}
-	w.voice = voice.NewManager(w.Voice(live), w.log)
+	// A spoken session asks on NetKind and routes the ask to the same devices everything else does.
+	//
+	// This is the measurement VoiceAsk was written for, not a settled posture: it is the only way to
+	// find out what an approval costs in the middle of a sentence — how long the silence is, what the
+	// model says while it waits, whether people talk over it. The comment on voicePolicy warns that
+	// asking constantly teaches reflexive approval, and that warning stands. What is being tested is
+	// whether ONE asking kind is worth what it costs; if the answer is no, this is one line to remove.
+	w.voice = voice.NewManager(
+		w.Voice(live, VoiceApprover(approver), VoiceAsk(tools.NetKind)),
+		w.log,
+	)
 }
 
 // VoiceSessions returns the manager for spoken sessions, or nil when this process has no live model
