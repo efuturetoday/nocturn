@@ -1,0 +1,68 @@
+title: knowledge_search
+description: Search the documents filed in this workspace and get back the passages that answer a question.
+
+kind: null
+gated: false
+axis: read
+
+intro: >-
+  Retrieval over the workspace's own `mnt/knowledge/` folder. Ask a question in plain language and
+  get back the passages that answer it, each labelled with the file and section it came from.
+
+
+  Ungated, on the argument that already leaves `memory_read` and `skill_read` ungated: it is context,
+  never authority. It reads files that are already inside the mount and produces text — it changes
+  nothing, and reaches nothing `file_read` could not already reach.
+
+
+  It exists only when this daemon has an embedding endpoint configured. Without one the tool is not
+  registered at all, rather than registered and failing on every call.
+
+input:
+  - field: query
+    type: string
+    required: true
+    notes: What to look for. Natural language works; so do exact terms and identifiers.
+  - field: limit
+    type: integer
+    required: false
+    notes: How many passages to return. Defaults to **5**, capped at **20**.
+
+output: >-
+  The matching passages as text, each preceded by its file and heading breadcrumb, capped at
+  **24 KiB**. An empty result says so explicitly, so that "nothing was found" cannot be mistaken for
+  "nothing was asked".
+
+js:
+  wrapper: |
+    const hits = nocturn.knowledge.search("what did we agree about the deposit?", 3);
+    console.log(hits);
+  call: |
+    const hits = nocturn.call("knowledge_search", { query: "the deposit", limit: 3 });
+
+notes: >-
+  **Two rankers, because they fail in opposite directions.** Vectors find a passage that says the
+  same thing in other words and miss an exact identifier the model never saw — a serial number, a
+  flag, an internal codename. Keyword scoring finds precisely that string and misses every
+  paraphrase. Both run, and their results are fused by rank rather than by score, because a cosine of
+  0.82 and a BM25 of 11.4 share no scale and normalising them would invent one. What survives is
+  agreement.
+
+
+  **The result is untrusted content, and says so.** The text handed to the model states that these
+  are quoted file contents rather than instructions, and explicitly does not claim the user wrote
+  them — because the corpus is inside the mount, `file_write` can put a file there, and therefore so
+  can a [prompt injection](/nocturn/architecture/threat-model/). Presenting that back as "your user's
+  own note" would launder exactly the attack the rest of the design exists to stop.
+
+
+  **Your documents leave the machine when they are indexed.** Embedding is a remote call, so every
+  document in the folder is sent to the configured provider once, and each query is sent when it is
+  asked. The vault leak scanner runs before the request: a passage carrying a stored secret is
+  refused rather than embedded. See [knowledge](/nocturn/guides/knowledge/) for what that means and
+  how to choose a provider.
+
+
+  **Results are redacted on the way in**, the same treatment `memory_read` gives its own notes — a
+  document can hold a credential because somebody pasted it there, and a search result is how it
+  would otherwise reach the conversation.
