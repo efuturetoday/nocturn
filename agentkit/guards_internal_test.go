@@ -244,3 +244,55 @@ func TestActiveSince_NeverNegative(t *testing.T) {
 		t.Fatalf("activeSince = %v, want 0 (never negative)", got)
 	}
 }
+
+// A span parked in Pause must be subtracted from a call's active duration, so a tool that waited on
+// an out-of-band approval reports its execution time, not the human's decision time.
+func TestActiveSince_ExcludesPausedSpan(t *testing.T) {
+	// In the bubble the clock is exact, so this asserts the arithmetic rather than a tolerance: the
+	// old version slept for real and allowed 30ms of slack around a 10ms answer.
+	synctest.Test(t, func(t *testing.T) {
+		ctx := withPausedClock(context.Background())
+
+		start := time.Now()
+		pausedStart := pausedNanos(ctx)
+
+		// A real call: a little work, then a parked approval wait, then a little more work.
+		time.Sleep(5 * time.Millisecond)
+		resume := Pause(ctx)
+		time.Sleep(40 * time.Millisecond) // human deciding — must not count
+		resume()
+		time.Sleep(5 * time.Millisecond)
+
+		if got, want := activeSince(ctx, start, pausedStart), 10*time.Millisecond; got != want {
+			t.Fatalf("active = %v, want exactly %v (the 40ms decision must not count)", got, want)
+		}
+		if got, want := time.Since(start), 50*time.Millisecond; got != want {
+			t.Fatalf("wall = %v, want %v", got, want)
+		}
+	})
+}
+
+// A nested pause is banked on the SAME shared clock, so a parent call's window also excludes it.
+func TestPausedClock_SharedAcrossNesting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := withPausedClock(context.Background())
+		if got := pausedNanos(ctx); got != 0 {
+			t.Fatalf("fresh clock = %d, want 0", got)
+		}
+		resume := Pause(ctx)
+		time.Sleep(20 * time.Millisecond)
+		resume()
+		if got, want := time.Duration(pausedNanos(ctx)), 20*time.Millisecond; got != want {
+			t.Fatalf("banked %v, want exactly %v", got, want)
+		}
+	})
+}
+
+// Pause with no clock and no deadlines installed is a safe no-op.
+func TestPause_NoClock_NoOp(t *testing.T) {
+	resume := Pause(context.Background())
+	resume() // must not panic
+	if got := pausedNanos(context.Background()); got != 0 {
+		t.Fatalf("no clock installed = %d, want 0", got)
+	}
+}
