@@ -8,6 +8,10 @@
 /nocturnd
 *.test
 
+# model checkpoints — 25-40 MB each, fetched by the operator, never committed. The tests that
+# need one skip unless NOCTURN_SPEAKER_MODEL points at it (internal/speaker/testdata/README.md).
+*.onnx
+
 # interpreter build cache (wasi-sdk + quickjs-ng checkout; see internal/script/qjs/build.sh)
 internal/script/qjs/.buildcache/
 
