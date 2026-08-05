@@ -1,9 +1,12 @@
 package speaker
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 )
 
@@ -109,32 +112,60 @@ func (p *Profiles) Forget(name string) error {
 	return p.save()
 }
 
-// Identify returns whose voice an embedding is closest to, or the zero Identity when nothing reaches
-// the threshold.
+// Match is how well one enrolled person fits an embedding, and through which of their devices.
+type Match struct {
+	Name       string
+	Confidence float32
+	Device     string // the take that matched, which says which channel it recognised them through
+}
+
+// Rank scores every enrolled voice against an embedding, best first, ignoring the threshold.
 //
-// The score is the best single take, not an average over a person's takes. Averaging would punish
+// A person's score is their best single take, not an average over them. Averaging would punish
 // somebody for having enrolled on a device other than the one they are speaking through, which is
 // the whole reason the takes are kept apart.
-func (p *Profiles) Identify(embedding []float32, threshold float32) Identity {
+//
+// The full ranking exists for looking at: a runner-up half a point behind the winner is the
+// difference between recognition that works and recognition that is about to confuse two people,
+// and a single answer cannot show it.
+func (p *Profiles) Rank(embedding []float32) []Match {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	best := Identity{}
+	out := make([]Match, 0, len(p.people))
 	for name, takes := range p.people {
+		best := Match{Name: name}
+		found := false // a person whose every take is incomparable is left out, not scored zero
 		for _, take := range takes {
 			score, err := Similarity(embedding, take.Vector)
 			if err != nil {
 				continue // a take from a different model cannot be compared, and is not a failure here
 			}
-			if score > best.Confidence {
-				best = Identity{Name: name, Confidence: score}
+			if !found || score > best.Confidence {
+				best.Confidence, best.Device = score, take.Device
+				found = true
 			}
 		}
+		if found {
+			out = append(out, best)
+		}
 	}
-	if best.Confidence < threshold {
+	// Best first; equal scores fall back to the name, so a log line does not flap between two
+	// people who are genuinely tied.
+	slices.SortFunc(out, func(a, b Match) int {
+		return cmp.Or(cmp.Compare(b.Confidence, a.Confidence), strings.Compare(a.Name, b.Name))
+	})
+	return out
+}
+
+// Identify returns whose voice an embedding is closest to, or the zero Identity when nothing reaches
+// the threshold.
+func (p *Profiles) Identify(embedding []float32, threshold float32) Identity {
+	ranked := p.Rank(embedding)
+	if len(ranked) == 0 || ranked[0].Confidence < threshold {
 		return Identity{} // below the line is nobody, never the nearest guess
 	}
-	return best
+	return Identity{Name: ranked[0].Name, Confidence: ranked[0].Confidence}
 }
 
 // save writes the set. The caller holds the lock.

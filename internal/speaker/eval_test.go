@@ -157,7 +157,7 @@ func TestEvaluateCorpus(t *testing.T) {
 	skipped := 0
 	kept := utterances[:0]
 	for _, u := range utterances {
-		pcm, err := readWAV(u.path)
+		pcm, err := ReadWAV(u.path)
 		if err != nil {
 			t.Fatalf("%v", err) // a malformed file is a setup error, not a result
 		}

@@ -6,16 +6,15 @@ import (
 	"os"
 )
 
-// readWAV decodes a 16-bit PCM mono WAV file at SampleRate.
+// ReadWAV decodes a 16-bit PCM mono WAV file at SampleRate.
 //
 // Deliberately strict: it refuses anything it would otherwise have to resample or downmix, because
 // silently accepting 44.1 kHz stereo would produce features that are wrong in a way no assertion
 // here would catch. Conversion is the caller's job, and `sox in.wav -r 16000 -c 1 -b 16 out.wav`
 // does it.
 //
-// This lives in the test files because nothing in the package proper reads files — the daemon hands
-// over PCM it already holds.
-func readWAV(path string) ([]int16, error) {
+// Enrolment reads files; the daemon does not, since it hands over PCM it already holds.
+func ReadWAV(path string) ([]int16, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

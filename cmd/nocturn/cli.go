@@ -64,6 +64,8 @@ func dispatch(args []string) int {
 			return code
 		}
 		return cmdEnroll(*addr, *device, *seconds)
+	case "voices":
+		return cmdVoices(args[1:])
 	case "auth":
 		return cmdAuth(args[1:])
 	case "secret":
@@ -93,6 +95,7 @@ Usage:
   nocturn serve [--addr :8080] Run the out-of-band WebSocket daemon
   nocturn voice [--port 8788]  Run the browser voice PoC harness (loopback only, no pairing)
   nocturn enroll --device <n>  Ask a satellite to record its microphone, for voice enrolment
+  nocturn voices ls|add|rm     Manage the voices a workspace can recognise
   nocturn auth <provider>      Connect an OAuth account (opens a browser)
   nocturn secret set <target>  Seed a static credential (value read from stdin)
   nocturn secret ls            List the credential names a workspace holds (never values)
