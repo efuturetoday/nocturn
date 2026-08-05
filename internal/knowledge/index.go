@@ -40,9 +40,15 @@ type FileEntry struct {
 	// SHA256 of the file's bytes. The whole basis of incremental indexing: an unchanged hash means
 	// the chunks and vectors below are still exactly what this file produces, so re-embedding it
 	// would spend the operator's money to arrive at what is already on disk.
-	SHA256 string        `json:"sha256"`
-	Size   int           `json:"size"`
-	Chunks []StoredChunk `json:"chunks"`
+	SHA256 string `json:"sha256"`
+	Size   int    `json:"size"`
+	// ModTime is the file's timestamp when it was last read, in Unix nanoseconds. Only ever a HINT:
+	// size and timestamp both matching means the file is not read at all, which is what makes a
+	// periodic reconcile cost a directory walk instead of hashing the whole corpus. The hash stays
+	// the truth, and a file whose timestamp moved is re-read and re-hashed before anything is
+	// re-embedded — so a touched-but-unchanged file costs a read, never a provider call.
+	ModTime int64         `json:"modTime"`
+	Chunks  []StoredChunk `json:"chunks"`
 }
 
 // StoredChunk is a passage and its vector.
