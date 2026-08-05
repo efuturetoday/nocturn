@@ -64,6 +64,7 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'guides/introduction' },
 						{ label: 'Install', slug: 'guides/getting-started' },
 						{ label: 'The Chat', slug: 'guides/the-chat' },
+						{ label: 'Speaking to It', slug: 'guides/speaking' },
 					],
 				},
 				{
@@ -80,7 +81,6 @@ export default defineConfig({
 					items: [
 						{ label: 'Triggers', slug: 'guides/triggers' },
 						{ label: 'Remote Access', slug: 'guides/remote-access' },
-						{ label: 'Speaking to It', slug: 'guides/speaking' },
 					],
 				},
 				{
