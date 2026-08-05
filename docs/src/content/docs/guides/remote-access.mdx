@@ -146,6 +146,28 @@ detector (`BARGE_IN_LOCAL`, parked behind the same measurement).
 A daemon with no live model configured refuses `voice.wake` and says so, rather than opening a
 session that can never answer.
 
+### Approvals in the middle of a sentence
+
+A spoken session asks before it reaches the network, and the ask goes where every other ask goes:
+out of band, to a paired device. The room cannot approve what the room requested — answering "yes"
+by voice would be answered by the same room the instruction came from.
+
+The wait is shown twice, because the two audiences are different. **The model says it** — the
+session is handed an interim result naming what is pending, so whoever is listening hears why the
+conversation stopped instead of hearing nothing. **The device shows it** — `voice.state` gains an
+`approval` state, so somebody who walks past a silent speaker can tell a pending decision from a
+broken session. Neither is allowed to fail the approval: showing a wait is worth less than the
+decision being waited for.
+
+The state travels on the control queue, which overtakes audio, or it would arrive after the wait it
+describes was over. Clearing it says `listening`, because the device leaves that state by itself the
+moment speech starts playing — the clear only has to cover a refusal, where nothing follows.
+
+Which actions ask is deliberately narrow: network reach, today, and nothing else. That is a
+measurement rather than a settled posture. Asking constantly is how people learn to approve
+reflexively, which costs more than it protects, and what is being tested is whether one asking kind
+earns the pause it puts in a conversation.
+
 ### Knowing who is speaking
 
 With `NOCTURN_SPEAKER_MODEL` pointing at a speaker-embedding checkpoint, the daemon recognises which
