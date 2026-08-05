@@ -101,6 +101,9 @@ it is stated, and the one place that cannot fall out of step with the code.
 | `nocturn.wake(seconds, note)` | [`wake`](/nocturn/reference/tools/wake/) |
 | `nocturn.now()` | [`time_now`](/nocturn/reference/tools/time_now/) |
 | `nocturn.skillFile(skill, path)` | [`skill_read`](/nocturn/reference/tools/skill_read/) |
+| `nocturn.reminders()` / `nocturn.cancelReminder(id)` | [`remind_list`](/nocturn/reference/tools/remind_list/) / [`remind_cancel`](/nocturn/reference/tools/remind_cancel/) |
+| `nocturn.memory.read` / `nocturn.memory.write` | [`memory_read`](/nocturn/reference/tools/memory_read/) / [`memory_write`](/nocturn/reference/tools/memory_write/) |
+| `nocturn.whoami()` | [`whoami`](/nocturn/reference/tools/whoami/) — only registered when speaker recognition is configured |
 
 **The source is [`internal/script/prelude.js`](https://github.com/efuturetoday/nocturn/blob/main/internal/script/prelude.js)**
 — every wrapper above is a few lines of JavaScript around a single `nocturn.call`, and reading it is
@@ -125,10 +128,11 @@ and injects auth at the boundary. Unsupported Node operations (streams, recursiv
 throw a clear error rather than failing quietly.
 
 :::note[The wrappers are a convenience, not the list]
-A script calls tools **by name**, so any tool registered on the host is callable the moment it
-exists — the interpreter never changes to add one. `remind_list` and `remind_cancel`, for instance,
-have no wrapper and are called with `nocturn.call` directly. The
-[gate reference](/nocturn/reference/gate/) is the authoritative list.
+Every tool the host registers now has one, but that is a courtesy rather than the mechanism. A
+script calls tools **by name**, so a tool added tomorrow — by a plugin, by an MCP server — is
+callable through `nocturn.call` the moment it exists, and the interpreter never changes to admit it.
+A wrapper that is missing therefore costs you nothing but the sugar. The
+[gate reference](/nocturn/reference/gate/) is the authoritative list of what exists.
 :::
 
 ## Running a skill's script

@@ -30,8 +30,10 @@ internal/script/qjs/.buildcache/
 # Anchored so it does not swallow internal/workspace/.
 /workspaces/
 
-# greenfield app runtime data (chats)
-/nocturn-data/
+# App runtime data: chats, the device registry, bearer tokens, per-workspace vaults, voiceprints.
+# The glob is deliberate. The anchored /nocturn-data/ missed a second tree somebody had made beside
+# it while testing, and what sits in one of these is precisely what must never reach a remote.
+/nocturn-data*/
 
 # the reference environment for internal/speaker (torch/torchaudio, dev-only)
 /internal/speaker/reference/.venv/

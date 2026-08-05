@@ -42,7 +42,11 @@ type Host struct {
 	Master   *secret.Master // root of the per-workspace vault keys (one passphrase); nil = vaults locked
 	Notifier tools.Notifier // out-of-band user notification for the notify tool; nil = no notify
 	Active   func() bool    // any device in the foreground, for routing proactive messages; nil = none
-	Log      *slog.Logger
+	// Speaker is the voice-embedding model this process loaded; nil = it cannot recognise anybody,
+	// which is the normal case (the terminal chat has no microphone at all). It decides whether the
+	// whoami tool exists — see Open.
+	Speaker *speaker.Embedder
+	Log     *slog.Logger
 }
 
 // Workspace is one isolated stack: its own tools, grants, persona, and chats over the Host.
@@ -165,13 +169,20 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	baseTools = append(baseTools, memTools...)
 
 	// Ungated, and reaching nothing: it reports what the microphone already established, which the
-	// model could equally have asked the person. Outside a spoken session it answers "unknown", since
-	// nothing there installs a speaker.
-	whoami, err := speaker.WhoAmI()
-	if err != nil {
-		return nil, fmt.Errorf("workspace %q: whoami: %w", name, err)
+	// model could equally have asked the person.
+	//
+	// It exists only where recognition does. Without a model loaded, whoami cannot answer anything
+	// but "unknown" for the life of the process — and a tool that is structurally incapable of a
+	// result is worse than a missing one: it costs a slot in every prompt, and it invites the model
+	// to ask a question whose answer is always no. So the terminal chat, which has no microphone at
+	// all, simply does not have it.
+	if h.Speaker != nil {
+		whoami, err := speaker.WhoAmI()
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q: whoami: %w", name, err)
+		}
+		baseTools = append(baseTools, whoami)
 	}
-	baseTools = append(baseTools, whoami)
 
 	base, err := agentkit.NewToolSet(baseTools...)
 	if err != nil {

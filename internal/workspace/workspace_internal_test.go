@@ -15,6 +15,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/memory"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/tools"
 )
 
@@ -355,5 +356,30 @@ func TestComposePrompt_ReadOnlyCageStillSeesTheIndex(t *testing.T) {
 	mem := memoryWith(t, "coding.md", "Go, no comments")
 	if got := composePrompt("A", mem, hasAll("memory_read")); !strings.Contains(got, "coding.md — Go, no comments") {
 		t.Fatalf("read-only cage got no memory block: %q", got)
+	}
+}
+
+// whoami exists only where recognition does. Without a model loaded it could answer nothing but
+// "unknown" for the life of the process, and a tool that is structurally incapable of a result
+// costs a slot in every prompt while inviting a question whose answer is always no.
+func TestOpen_WhoAmIOnlyWithASpeakerModel(t *testing.T) {
+	has := func(t *testing.T, h Host) bool {
+		t.Helper()
+		w, err := Open(h, "test", t.TempDir())
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		t.Cleanup(w.Close)
+		_, ok := w.tools["whoami"]
+		return ok
+	}
+
+	quiet := slog.New(slog.DiscardHandler)
+	if has(t, Host{LLM: llmStub{}, Log: quiet}) {
+		t.Error("whoami is registered with no speaker model — the terminal chat has no microphone at all")
+	}
+	// A non-nil embedder is the whole signal; Open never calls it.
+	if !has(t, Host{LLM: llmStub{}, Speaker: &speaker.Embedder{}, Log: quiet}) {
+		t.Error("whoami is missing although a speaker model is loaded")
 	}
 }

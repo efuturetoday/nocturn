@@ -351,10 +351,20 @@
     if (title != null) args.title = String(title);
     return JSON.parse(g.nocturn.call("remind", args));
   };
+  // reminders(): the pending ones, soonest first — [{id, fireAt, message, title}].
+  g.nocturn.reminders = function () { return JSON.parse(g.nocturn.call("remind_list", {})); };
+  // cancelReminder(id) — cancel one by the id remind() or reminders() returned.
+  g.nocturn.cancelReminder = function (id) {
+    return JSON.parse(g.nocturn.call("remind_cancel", { id: String(id) }));
+  };
   // wake(seconds, note) — resume this session after a delay with `note` as the prompt.
   g.nocturn.wake = function (seconds, note) {
     return JSON.parse(g.nocturn.call("wake", { seconds: Number(seconds), note: String(note) }));
   };
+  // whoami() — {name, confidence} for whoever is speaking. An EMPTY name means unrecognised, and
+  // outside a spoken session that is always the answer, since nothing is listening. It chooses how
+  // to address somebody, never what they may do.
+  g.nocturn.whoami = function () { return JSON.parse(g.nocturn.call("whoami", {})); };
   // resolve(host[, type]) — type ∈ A|AAAA|IP|MX|TXT|CNAME|NS|PTR|SRV (default A).
   g.nocturn.resolve = function (host, type) {
     var args = { host: String(host) };
@@ -367,6 +377,19 @@
   // path throws.
   g.nocturn.skillFile = function (skill, path) {
     return g.nocturn.call("skill_read", { name: String(skill), path: String(path) });
+  };
+  // memory.read(path) — one of the assistant's own notes, as text. Ungated: reading back stored
+  // text is context, the same argument skillFile rests on.
+  // memory.write(path, summary, content) — replace a note WHOLE. summary is the one line that then
+  // appears in the memory catalog every turn, so keep it short and put the detail in content.
+  // The memory folder is not the file tools' mount and no fs.* call can reach it.
+  g.nocturn.memory = {
+    read: function (path) { return g.nocturn.call("memory_read", { path: String(path) }); },
+    write: function (path, summary, content) {
+      return g.nocturn.call("memory_write", {
+        path: String(path), summary: String(summary), content: String(content),
+      });
+    },
   };
 
   var fs = {
