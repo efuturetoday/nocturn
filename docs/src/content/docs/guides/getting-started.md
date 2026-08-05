@@ -53,7 +53,7 @@ anything. The `OPENAI_` prefix is just the name Nocturn reads — any compatible
 
 Two things need a second endpoint, and neither is needed to start:
 
-- **[Speaking to it](/nocturn/guides/speaking/)** needs a live-audio model — a different kind of
+- **[The voice satellite](/nocturn/guides/speaking/)** needs a live-audio model — a different kind of
   model, not a setting on this one. Work in progress, and configured on its own page.
 - **[Knowledge](/nocturn/guides/knowledge/)** needs an embeddings endpoint to search documents you
   file in the workspace. Often the same gateway you just configured, in which case there is nothing
@@ -153,4 +153,5 @@ environment, which means the passphrase is as protected as the environment it si
 - [Knowledge](/nocturn/guides/knowledge/) — file documents, ask about them.
 - [Remote access](/nocturn/guides/remote-access/) — the protocol, pairing, device classes.
 - [Plugins](/nocturn/guides/writing-plugins/) — connect it to your own services.
-- [The chat](/nocturn/guides/the-chat/) — commands and the approval prompt, in the terminal.
+- [The TUI](/nocturn/guides/the-chat/) — commands and the approval prompt, in the terminal.
+- [The command line](/nocturn/reference/cli/) — every subcommand, and which need a running daemon.

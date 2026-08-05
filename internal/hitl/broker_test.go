@@ -38,15 +38,6 @@ func runAsk(b *hitl.Broker, ctx context.Context, a gate.Action, suggest []gate.G
 	return ch
 }
 
-// sinkApproval is one recorded Approval presentation.
-type sinkApproval struct {
-	id      string
-	frame   uint64
-	chatID  string
-	intent  string
-	options []string
-}
-
 // sinkResolved is one recorded Resolved call, keeping the ctx error so a test can prove conclude ran
 // on a non-cancelled context (WithoutCancel).
 type sinkResolved struct {
@@ -58,22 +49,23 @@ type sinkResolved struct {
 // buffered channel so a test can await them without sleeping.
 type fakeSink struct {
 	mu          sync.Mutex
-	approvals   []sinkApproval
+	approvals   []hitl.Approval
 	resolutions []sinkResolved
 
-	gotApproval chan sinkApproval
+	gotApproval chan hitl.Approval
 	gotResolved chan sinkResolved
 }
 
 func newFakeSink() *fakeSink {
 	return &fakeSink{
-		gotApproval: make(chan sinkApproval, 16),
+		gotApproval: make(chan hitl.Approval, 16),
 		gotResolved: make(chan sinkResolved, 16),
 	}
 }
 
-func (s *fakeSink) Approval(_ context.Context, id string, frame uint64, chatID, intent string, options []string) {
-	call := sinkApproval{id: id, frame: frame, chatID: chatID, intent: intent, options: slices.Clone(options)}
+func (s *fakeSink) Approval(_ context.Context, a hitl.Approval) {
+	call := a
+	call.Options = slices.Clone(a.Options) // the broker shares the slice with every sink
 	s.mu.Lock()
 	s.approvals = append(s.approvals, call)
 	s.mu.Unlock()
@@ -198,7 +190,7 @@ func TestAsk_NoActiveDevice_PushesThenAwaits(t *testing.T) {
 	b.Attach(context.Background(), sink)
 	call := <-sink.gotApproval
 
-	b.Resolve(call.id, 0) // approve once (RecallNever)
+	b.Resolve(call.ID, "once") // approve once (RecallNever)
 	got := <-res
 
 	if pusher.count() != 1 {
@@ -212,15 +204,19 @@ func TestAsk_NoActiveDevice_PushesThenAwaits(t *testing.T) {
 	}
 }
 
-// TestAsk_HumanDeny_NilError: a deliberate human "no" (index -1) or an out-of-range index denies with
-// a NIL error, so the gate surfaces the refusal to the model (distinct from a timeout).
+// TestAsk_HumanDeny_NilError: an option id the approval never offered denies with a NIL error, so the
+// gate surfaces the refusal to the model (distinct from a timeout). The empty string is the case a
+// truncated or malformed message produces and is the reason the answer is an id and not an index:
+// there is no zero value that approves.
 func TestAsk_HumanDeny_NilError(t *testing.T) {
 	tests := []struct {
 		name   string
-		choice int
+		option string
 	}{
-		{name: "explicit deny (-1)", choice: -1},
-		{name: "out of range (99)", choice: 99},
+		{name: "explicit deny", option: hitl.DenyOption},
+		{name: "omitted option is not an approval", option: ""},
+		{name: "unknown option", option: "bogus"},
+		{name: "widening that was never offered", option: "widen0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -230,7 +226,7 @@ func TestAsk_HumanDeny_NilError(t *testing.T) {
 
 			res := runAsk(b, context.Background(), gate.Action{Kind: "net", Target: "api.example.com"}, nil)
 			call := <-sink.gotApproval
-			b.Resolve(call.id, tt.choice)
+			b.Resolve(call.ID, tt.option)
 			got := <-res
 
 			if got.approved {
@@ -249,24 +245,25 @@ func TestAsk_HumanDeny_NilError(t *testing.T) {
 	}
 }
 
-// TestAsk_ApproveIndexMapping: index 0 = once (RecallNever), 1 = session, 2 = always, 3.. = a suggested
-// widening (always).
-func TestAsk_ApproveIndexMapping(t *testing.T) {
+// TestAsk_OptionMapping: choosing an option id yields exactly the grant and recall that option was
+// presented with — "once" remembers nothing, "session" and "always" hold the EXACT target, and a
+// "widen" option hands back the broader grant the tool suggested.
+func TestAsk_OptionMapping(t *testing.T) {
 	action := gate.Action{Kind: "net", Target: "api.github.com"}
 	suggestion := gate.Grant{Kind: "net", Target: "*.github.com"}
 	exact := gate.Grant{Kind: action.Kind, Target: action.Target}
 
 	tests := []struct {
 		name       string
-		choice     int
+		option     string
 		suggest    []gate.Grant
 		wantGrant  gate.Grant
 		wantRecall gate.Recall
 	}{
-		{name: "approve once maps to no-recall grant", choice: 0, wantGrant: exact, wantRecall: gate.RecallNever},
-		{name: "approve session", choice: 1, wantGrant: exact, wantRecall: gate.RecallSession},
-		{name: "approve always", choice: 2, wantGrant: exact, wantRecall: gate.RecallAlways},
-		{name: "approve suggestion returns widened grant", choice: 3, suggest: []gate.Grant{suggestion}, wantGrant: suggestion, wantRecall: gate.RecallAlways},
+		{name: "approve once maps to no-recall grant", option: "once", wantGrant: exact, wantRecall: gate.RecallNever},
+		{name: "approve session", option: "session", wantGrant: exact, wantRecall: gate.RecallSession},
+		{name: "approve always", option: "always", wantGrant: exact, wantRecall: gate.RecallAlways},
+		{name: "approve widening returns the broader grant", option: "widen0", suggest: []gate.Grant{suggestion}, wantGrant: suggestion, wantRecall: gate.RecallAlways},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -276,7 +273,7 @@ func TestAsk_ApproveIndexMapping(t *testing.T) {
 
 			res := runAsk(b, context.Background(), action, tt.suggest)
 			call := <-sink.gotApproval
-			b.Resolve(call.id, tt.choice)
+			b.Resolve(call.ID, tt.option)
 			got := <-res
 
 			if !got.approved {
@@ -293,6 +290,38 @@ func TestAsk_ApproveIndexMapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAsk_PresentsStructuredOptions: what a sink is handed is the action verbatim plus one option per
+// answer, each carrying its own grant and recall — and only a suggested widening is marked as one, so
+// no downstream layer has to compare targets to tell a widening from the exact grant.
+func TestAsk_PresentsStructuredOptions(t *testing.T) {
+	action := gate.Action{Kind: "net", Target: "api.github.com"}
+	suggestion := gate.Grant{Kind: "net", Target: "*.github.com"}
+	exact := gate.Grant{Kind: action.Kind, Target: action.Target}
+
+	b := hitl.NewBroker(nil, discard())
+	sink := newFakeSink()
+	b.Attach(context.Background(), sink)
+
+	res := runAsk(b, context.Background(), action, []gate.Grant{suggestion})
+	call := <-sink.gotApproval
+
+	if call.Action != action {
+		t.Errorf("presented action = %+v, want %+v", call.Action, action)
+	}
+	want := []hitl.Option{
+		{ID: "once", Recall: gate.RecallNever, Grant: exact},
+		{ID: "session", Recall: gate.RecallSession, Grant: exact},
+		{ID: "always", Recall: gate.RecallAlways, Grant: exact},
+		{ID: "widen0", Recall: gate.RecallAlways, Grant: suggestion, Widens: true},
+	}
+	if !slices.Equal(call.Options, want) {
+		t.Errorf("presented options = %+v, want %+v", call.Options, want)
+	}
+
+	b.Resolve(call.ID, "once")
+	<-res
 }
 
 // TestAsk_CtxCanceled_ReturnsCtxErr: a torn-down turn returns ctx.Err(), distinct from a timeout or a
@@ -337,8 +366,8 @@ func TestAsk_FirstAnswerWins(t *testing.T) {
 			synctest.Wait() // Ask has presented and is durably blocked in its select
 			call := <-sink.gotApproval
 
-			b.Resolve(call.id, 0) // first answer: allow once (RecallNever) — lands in the buffered channel
-			b.Resolve(call.id, 1) // later answer: channel full, dropped by select-default
+			b.Resolve(call.ID, "once") // first answer: allow once (RecallNever) — lands in the buffered channel
+			b.Resolve(call.ID, "session") // later answer: channel full, dropped by select-default
 
 			got := <-res
 			if !got.approved {
@@ -363,7 +392,7 @@ func TestAsk_FirstAnswerWins(t *testing.T) {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				b.Resolve(call.id, i%2) // indices 0 and 1 both approve
+				b.Resolve(call.ID, []string{"once", "session"}[i%2]) // both options approve
 			}(i)
 		}
 		got := <-res
@@ -383,7 +412,7 @@ func TestAsk_FirstAnswerWins(t *testing.T) {
 func TestResolve_ForgesDenyCannotBecomeApprove(t *testing.T) {
 	t.Run("unknown id is a no-op", func(t *testing.T) {
 		b := hitl.NewBroker(nil, discard())
-		b.Resolve("deadbeef0000", 0) // must not panic and must have no effect
+		b.Resolve("deadbeef0000", "once") // must not panic and must have no effect
 	})
 
 	t.Run("late resolve after timeout stays denied", func(t *testing.T) {
@@ -401,7 +430,7 @@ func TestResolve_ForgesDenyCannotBecomeApprove(t *testing.T) {
 			}
 
 			// A forged approve arriving after the deny concluded is a no-op; the result already stood.
-			b.Resolve(call.id, 0)
+			b.Resolve(call.ID, "once")
 			if got.approved {
 				t.Errorf("approved = true, want false — a late resolve must not flip a concluded deny")
 			}
@@ -412,7 +441,8 @@ func TestResolve_ForgesDenyCannotBecomeApprove(t *testing.T) {
 // --- Edge ---------------------------------------------------------------------------------------
 
 // TestAttach_RepresentsOpenApprovals_WithFrame: a device attaching mid-flight gets every open approval
-// re-presented carrying the same id, frame, intent, and options.
+// re-presented carrying the same id, frame, action, and — so both devices answer the identical
+// question — the identical option set.
 func TestAttach_RepresentsOpenApprovals_WithFrame(t *testing.T) {
 	b := hitl.NewBroker(nil, discard())
 	first := newFakeSink()
@@ -426,20 +456,20 @@ func TestAttach_RepresentsOpenApprovals_WithFrame(t *testing.T) {
 	b.Attach(context.Background(), second)
 	repr := <-second.gotApproval
 
-	if repr.id != orig.id {
-		t.Errorf("re-presented id = %q, want %q", repr.id, orig.id)
+	if repr.ID != orig.ID {
+		t.Errorf("re-presented id = %q, want %q", repr.ID, orig.ID)
 	}
-	if repr.frame != orig.frame {
-		t.Errorf("re-presented frame = %d, want %d", repr.frame, orig.frame)
+	if repr.Frame != orig.Frame {
+		t.Errorf("re-presented frame = %d, want %d", repr.Frame, orig.Frame)
 	}
-	if repr.intent != orig.intent {
-		t.Errorf("re-presented intent = %q, want %q", repr.intent, orig.intent)
+	if repr.Action != orig.Action {
+		t.Errorf("re-presented action = %+v, want %+v", repr.Action, orig.Action)
 	}
-	if !slices.Equal(repr.options, orig.options) {
-		t.Errorf("re-presented options = %v, want %v", repr.options, orig.options)
+	if !slices.Equal(repr.Options, orig.Options) {
+		t.Errorf("re-presented options = %+v, want %+v", repr.Options, orig.Options)
 	}
 
-	b.Resolve(orig.id, 0)
+	b.Resolve(orig.ID, "once")
 	<-res
 }
 
@@ -467,7 +497,7 @@ func TestSetActive(t *testing.T) {
 				t.Errorf("presentations after foreground = %d, want 1", sink.approvalCount())
 			}
 
-			b.Resolve(call.id, 0)
+			b.Resolve(call.ID, "once")
 			<-res
 		})
 	})
@@ -508,16 +538,16 @@ func TestConclude(t *testing.T) {
 		res := runAsk(b, context.Background(), action, nil)
 		call := <-active.gotApproval
 
-		b.Resolve(call.id, 0)
+		b.Resolve(call.ID, "once")
 		<-res
 
 		gotActive := <-active.gotResolved
 		gotBackground := <-background.gotResolved // background sink is still told to clear
-		if gotActive.id != call.id {
-			t.Errorf("active Resolved id = %q, want %q", gotActive.id, call.id)
+		if gotActive.id != call.ID {
+			t.Errorf("active Resolved id = %q, want %q", gotActive.id, call.ID)
 		}
-		if gotBackground.id != call.id {
-			t.Errorf("background Resolved id = %q, want %q", gotBackground.id, call.id)
+		if gotBackground.id != call.ID {
+			t.Errorf("background Resolved id = %q, want %q", gotBackground.id, call.ID)
 		}
 		if background.approvalCount() != 0 {
 			t.Errorf("background presentations = %d, want 0 (never routed, only cleared)", background.approvalCount())
@@ -541,8 +571,8 @@ func TestConclude(t *testing.T) {
 
 		// conclude still clears the prompt, and on a non-cancelled context (WithoutCancel).
 		gotResolved := <-sink.gotResolved
-		if gotResolved.id != call.id {
-			t.Errorf("Resolved id = %q, want %q", gotResolved.id, call.id)
+		if gotResolved.id != call.ID {
+			t.Errorf("Resolved id = %q, want %q", gotResolved.id, call.ID)
 		}
 		if gotResolved.ctxErr != nil {
 			t.Errorf("Resolved ctx err = %v, want nil (conclude runs WithoutCancel)", gotResolved.ctxErr)
@@ -562,11 +592,11 @@ func TestAsk_FrameFromCtx_PropagatedToSink(t *testing.T) {
 	res := runAsk(b, ctx, gate.Action{Kind: "net", Target: "api.example.com"}, nil)
 	call := <-sink.gotApproval
 
-	if want := agentkit.FrameFrom(ctx); call.frame != want {
-		t.Errorf("presented frame = %d, want %d (= FrameFrom(ctx))", call.frame, want)
+	if want := agentkit.FrameFrom(ctx); call.Frame != want {
+		t.Errorf("presented frame = %d, want %d (= FrameFrom(ctx))", call.Frame, want)
 	}
 
-	b.Resolve(call.id, 0)
+	b.Resolve(call.ID, "once")
 	<-res
 }
 
@@ -581,24 +611,23 @@ func TestAsk_ChatIDFromCtx_PropagatedToSink(t *testing.T) {
 	res := runAsk(b, ctx, gate.Action{Kind: "net", Target: "api.example.com"}, nil)
 	call := <-sink.gotApproval
 
-	if call.chatID != "chat42" {
-		t.Errorf("presented chatID = %q, want %q", call.chatID, "chat42")
+	if call.ChatID != "chat42" {
+		t.Errorf("presented chatID = %q, want %q", call.ChatID, "chat42")
 	}
 
-	b.Resolve(call.id, 0)
+	b.Resolve(call.ID, "once")
 	<-res
 }
 
-// TestIntentOf_TargetlessVsTargeted checks the presented intent string through the public surface: a
-// targeted action reads "Kind → Target", a targetless one is just the Kind.
-func TestIntentOf_TargetlessVsTargeted(t *testing.T) {
+// TestAsk_PresentsActionVerbatim: a sink is handed the action as it was asked, targeted or not. The
+// broker composes no sentence for a device — kind and target stay separate fields it renders itself.
+func TestAsk_PresentsActionVerbatim(t *testing.T) {
 	tests := []struct {
-		name       string
-		action     gate.Action
-		wantIntent string
+		name   string
+		action gate.Action
 	}{
-		{name: "targeted", action: gate.Action{Kind: "net", Target: "api.example.com"}, wantIntent: "net → api.example.com"},
-		{name: "targetless", action: gate.Action{Kind: "time.now"}, wantIntent: "time.now"},
+		{name: "targeted", action: gate.Action{Kind: "net", Target: "api.example.com"}},
+		{name: "targetless", action: gate.Action{Kind: "time.now"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -608,13 +637,30 @@ func TestIntentOf_TargetlessVsTargeted(t *testing.T) {
 
 			res := runAsk(b, context.Background(), tt.action, nil)
 			call := <-sink.gotApproval
-			if call.intent != tt.wantIntent {
-				t.Errorf("intent = %q, want %q", call.intent, tt.wantIntent)
+			if call.Action != tt.action {
+				t.Errorf("presented action = %+v, want %+v", call.Action, tt.action)
 			}
-			b.Resolve(call.id, 0)
+			b.Resolve(call.ID, "once")
 			<-res
 		})
 	}
+}
+
+// TestPush_TargetlessSummary: the ONE line the broker still renders is the push body, because iOS
+// renders that string and cannot be handed structure. A targeted action reads "kind → target"
+// (covered by TestAsk_NoActiveDevice_PushesThenAwaits); a targetless one is just the kind.
+func TestPush_TargetlessSummary(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pusher := newFakePusher()
+		b := hitl.NewBroker(pusher, discard())
+
+		res := runAsk(b, context.Background(), gate.Action{Kind: "time.now"}, nil)
+
+		if got, want := <-pusher.pushed, "time.now"; got != want {
+			t.Errorf("push body = %q, want %q", got, want)
+		}
+		<-res // never answered → denies on the timeout, draining the bubble
+	})
 }
 
 // TestNewID_UniqueHex12 checks the prompt id observed at the sink: 12 lowercase hex chars, and distinct
@@ -627,22 +673,22 @@ func TestNewID_UniqueHex12(t *testing.T) {
 
 	res1 := runAsk(b, context.Background(), action, nil)
 	call1 := <-sink.gotApproval
-	b.Resolve(call1.id, 0)
+	b.Resolve(call1.ID, "once")
 	<-res1
 
 	res2 := runAsk(b, context.Background(), action, nil)
 	call2 := <-sink.gotApproval
-	b.Resolve(call2.id, 0)
+	b.Resolve(call2.ID, "once")
 	<-res2
 
-	if !isHex12(call1.id) {
-		t.Errorf("id %q is not 12 lowercase hex chars", call1.id)
+	if !isHex12(call1.ID) {
+		t.Errorf("id %q is not 12 lowercase hex chars", call1.ID)
 	}
-	if !isHex12(call2.id) {
-		t.Errorf("id %q is not 12 lowercase hex chars", call2.id)
+	if !isHex12(call2.ID) {
+		t.Errorf("id %q is not 12 lowercase hex chars", call2.ID)
 	}
-	if call1.id == call2.id {
-		t.Errorf("ids collide: both %q", call1.id)
+	if call1.ID == call2.ID {
+		t.Errorf("ids collide: both %q", call1.ID)
 	}
 }
 

@@ -76,8 +76,8 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'guides/introduction' },
 						{ label: 'Install', slug: 'guides/getting-started' },
 						{ label: 'The Companion App', slug: 'guides/the-app' },
-						{ label: 'The Chat', slug: 'guides/the-chat' },
-						{ label: 'Speaking to It', slug: 'guides/speaking' },
+						{ label: 'The TUI', slug: 'guides/the-chat' },
+						{ label: 'The Voice Satellite', slug: 'guides/speaking' },
 					],
 				},
 				{
@@ -179,6 +179,10 @@ export default defineConfig({
 						{ label: 'remind', link: '/reference/gate/remind/' },
 						{ label: 'memory', link: '/reference/gate/memory/' },
 					],
+				},
+				{
+					label: 'Command Line',
+					items: [{ label: 'nocturn', slug: 'reference/cli' }],
 				},
 				{
 					label: 'Sandbox',

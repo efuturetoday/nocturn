@@ -139,6 +139,11 @@ The approval prompt offers exactly **one** widening beyond the exact target: the
 host (`api.example.com` → `*.example.com`), the containing directory for a path
 (`notes/todo.md` → `notes/*`). One step, offered explicitly — never a silent widening.
 
+The out-of-band approver transmits this as data: the action, and one entry per answer carrying the
+grant it would write and the recall it would write it with. A device answers by naming an entry the
+daemon minted, so it can never name a grant that was not offered — the one-step rule is enforced by
+what exists on the wire, not by a device behaving.
+
 ## When nobody can be asked
 
 An agent running on a schedule has no human in front of it. That case is handled by the agent's

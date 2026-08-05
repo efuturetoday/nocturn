@@ -1,5 +1,5 @@
 ---
-title: The chat
+title: The TUI
 description: The terminal chat where you try things out, watch the assistant work, and approve what it wants to do.
 ---
 
