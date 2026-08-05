@@ -759,3 +759,21 @@ func hasSpec(specs []agentkit.ToolSpec, name string) bool {
 	}
 	return false
 }
+
+func TestCore_NoHITL_WithoutGate(t *testing.T) {
+	// A deny-worthy action runs FREE when no gate machinery is installed: the agentkit core has no
+	// notion of approval, so a tool simply executes. (Gating is a separate, opt-in layer.)
+	var ran bool
+	tool := newTool(t, "act", func(context.Context, string) (string, error) {
+		ran = true
+		return "did it", nil
+	})
+	set := newSet(t, tool)
+	llm := &stepLLM{steps: []agentkit.Step{callStep("a", "act", "{}"), answerStep("done")}}
+	if _, err := agentkit.Once(context.Background(), llm, "go", agentkit.WithTools(set)); err != nil {
+		t.Fatalf("Once err = %v", err)
+	}
+	if !ran {
+		t.Fatal("tool did not run; core should be HITL-agnostic without a gate")
+	}
+}
