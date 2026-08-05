@@ -1,0 +1,16 @@
+{
+  "name": "weather",
+  "version": "1",
+  "tools": [
+    {
+      "name": "forecast",
+      "description": "Get a short one-line weather forecast for a city.",
+      "parameters": {
+        "type": "object",
+        "properties": { "city": { "type": "string", "description": "City name, e.g. Berlin" } },
+        "required": ["city"]
+      }
+    }
+  ],
+  "uses": ["http_read"]
+}

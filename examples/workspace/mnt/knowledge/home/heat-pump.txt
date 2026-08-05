@@ -1,0 +1,22 @@
+Heat pump Thermia Calibra 8 — quick reference
+
+Modes
+Three modes: Automatic, Hot water only, and Holiday. Holiday holds the flow temperature at 12 C and
+heats water once a week so the pipes do not stagnate.
+
+Heat curve
+Factory setting is 1.2. A well-insulated house usually runs at 0.8. Dropping it by 0.1 saves roughly
+three percent of electricity, but only shows below five degrees outside.
+
+Error codes
+E04 is insufficient flow in the heating circuit. Usually a clogged filter, or too many room
+controllers closed at once.
+E11 is pressure below 0.8 bar. Refill through the red valve in the plant room, target 1.5 bar cold.
+E27 is a communication fault to the outdoor unit and almost always clears after a restart.
+
+Service
+Clean the return filter once a year, best in autumn before the heating season. The refrigerant is
+maintenance-free and may only be touched by a certified firm.
+
+Serial number: THC-8-2024-XR7741
+Warranty runs five years from commissioning.

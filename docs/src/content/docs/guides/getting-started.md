@@ -110,6 +110,19 @@ machine itself — every device after that is enrolled by a device you already t
 Conversations are shared, not per device: start something in the terminal, pick it up on your phone,
 finish it in the terminal again.
 
+### Something to start from
+
+The repository carries a workspace with one of everything — an agent, a skill, a plugin, an MCP
+server, a memory note and documents to search:
+
+```bash
+cp -r examples/workspace nocturn-data/workspaces/demo
+```
+
+It is inert until you point it at something: the agent needs a model, the plugin needs the network
+approved, the MCP server needs an account connected. Nothing in it holds a credential. `examples/`
+has a walk-through of each piece and why it sits where it does.
+
 ## 5. Optional: unlock the vault
 
 Credentials for real services live in an encrypted vault, one per workspace, at
