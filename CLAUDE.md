@@ -102,7 +102,8 @@ connection layer).
 on disk and folded into every prompt, bodies on demand — control-plane folder, one writer) ·
 `frontmatter` (the shared `---` YAML preamble parser/renderer: skills and memory notes) ·
 `skill` (agentskills.io skills from disk → `agentkit.SkillSet`) ·
-`discovery` (the shared name/skip rules for agents, skills, plugins, MCP — one rule, four kinds) ·
+`discovery` (the shared name/skip rules for agents, skills, plugins, MCP — skipping for all four,
+name resolution for three: a skill names itself in SKILL.md) ·
 `knowledge` (+`/embed`) (retrieval over `mnt/knowledge`: Markdown-aware chunking behind a `Reader`
 port, an `Embedder` port with a remote OpenAI-compatible adapter, hybrid cosine+BM25 fused by
 reciprocal rank, an index OUTSIDE the mount that records its model and refuses to mix embedders, and

@@ -27,14 +27,21 @@ One folder per server under `mcp/` in the workspace, each with an `mcp.json`:
 }
 ```
 
-The name comes from the folder (`mcp/github/` → `github`), so a plain `https` URL is enough. Its
-tools appear to the model as `github_*`. Delete the folder to remove the server — that also takes
-its credential shard with it.
+| Field | Meaning |
+|---|---|
+| `url` | **Required, and must be `https`.** A Bearer must never ride to a cleartext endpoint, so an `http` URL is rejected rather than warned about. |
+| `name` | Optional — the folder name is the identity (`mcp/github/` → `github`). It namespaces the tools the model sees (`github_*`) and the credential owner (`mcp:github`), and must match `^[a-z0-9][a-z0-9_-]{0,31}$`: no dots, and short enough that `<server>_<tool>` fits the 64 characters a tool name is allowed. A `name` that disagrees with its folder is warned about, because that is usually a slip. |
+| `auth` | How the Bearer is obtained: `"token"` (you seed it into the vault yourself), `"oauth"` (the daemon discovers the flow, see below), or omit it for a public server. Any other value is an error. |
+| `oauth` | Optional, and only for a server whose endpoints you must supply by hand. Mutually exclusive with `auth` — one credential, one source. |
 
-A `"name"` field may override the folder, following the same discovery rule as agents, skills and
-plugins; a name that disagrees with its folder is warned about, because that is usually a slip. The
-name must match `^[a-z0-9][a-z0-9_-]{0,31}$` — no dots, and short enough that `<server>_<tool>` fits
-in the 64 characters a tool name is allowed.
+An `oauth` block takes `auth_url`, `token_url`, `client_id`, `client_secret` and `scopes`. Both URLs
+must be `https`, and a `client_id` with at least one scope is required — a block that cannot complete
+a flow is refused at load rather than at the first request.
+
+Like a plugin manifest, `mcp.json` is parsed **strictly**: an unknown field is an error, not a
+warning, so a typo'd `auth` never silently becomes "no credential".
+
+Delete the folder to remove the server — that also takes its credential shard with it.
 
 Declaring a server is an authority-relevant act: it hands the model that server's tools and wires
 your token to its host. That is why `mcp/` lives in the control plane, outside `mnt/` — the model

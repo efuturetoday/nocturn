@@ -22,10 +22,29 @@ Fetch the page the user gives you. Write a summary of at most five sentences.
 Lead with the single most important point. Skip navigation and ads.
 ```
 
-Drop the folder in `skills/` and it is available at the next start. As with agents and plugins, the
-folder name is the identity; a `name` in the frontmatter that disagrees is warned about. A skill
-folder without a `SKILL.md` is simply not a skill, and an unparseable one is skipped with a
-diagnostic rather than breaking the others.
+| Field | Meaning |
+|---|---|
+| `name` | Optional. **The frontmatter wins here**, and the folder is only the fallback — the one place in Nocturn where it works that way. See below. |
+| `description` | What the assistant sees from the start, for every skill, on every turn. This is the whole reason it will ever load the body, so write it as the answer to "when would I need this?" |
+| the body | Everything after the frontmatter: the instructions themselves, in prose. Read only when the skill is loaded, and capped at 256 KiB. |
+
+Unknown frontmatter fields are **ignored**, not rejected — the opposite of a
+[plugin manifest](/nocturn/guides/writing-plugins/), where a stray field is an error. The difference
+is authority: a mistyped field in a manifest could silently drop a permission, while a skill has no
+permissions to get wrong.
+
+The same reasoning makes the name work backwards from every other kind. An agent, a plugin and an
+MCP server take their identity from their folder, because the folder is what you reviewed when you
+put it there. A skill carries **zero authority** — no credential owner, no vault shard, no tools —
+so nothing hangs off its identity, and it follows the agentskills.io convention of naming itself in
+`SKILL.md` instead.
+
+Drop the folder in `skills/` and it is available at the next start. A folder without a `SKILL.md` is
+simply not a skill; an unparseable one is skipped with a diagnostic rather than breaking the others.
+
+If the folder holds other files besides `SKILL.md`, a listing of them (up to 40) is appended to the
+body, so a loaded skill tells the assistant what it can go on to
+[`skill_read`](/nocturn/reference/tools/skill_read/).
 
 ## How a skill gets used
 
