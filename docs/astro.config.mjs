@@ -63,6 +63,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Overview', slug: 'guides/introduction' },
 						{ label: 'Install', slug: 'guides/getting-started' },
+						{ label: 'The Companion App', slug: 'guides/the-app' },
 						{ label: 'The Chat', slug: 'guides/the-chat' },
 						{ label: 'Speaking to It', slug: 'guides/speaking' },
 					],
@@ -71,6 +72,7 @@ export default defineConfig({
 					label: 'Concepts',
 					items: [
 						{ label: 'Workspace', slug: 'guides/the-workspace' },
+						{ label: 'Memory', slug: 'guides/memory' },
 						{ label: 'Agents', slug: 'guides/agents' },
 						{ label: 'Approvals', slug: 'guides/approvals' },
 						{ label: 'Secrets', slug: 'guides/connecting-accounts' },
