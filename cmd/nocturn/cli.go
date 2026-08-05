@@ -99,7 +99,7 @@ Usage:
   nocturn enroll --device <n>  Ask a satellite to record its microphone, for voice enrolment
   nocturn voices ls|add|rm     Manage the voices a workspace can recognise
   nocturn knowledge index      Index the documents in a workspace's knowledge folder
-  nocturn auth <provider>      Connect an OAuth account (opens a browser)
+  nocturn auth <provider>      Connect an OAuth account (prints a URL to open)
   nocturn secret set <target>  Seed a static credential (value read from stdin)
   nocturn secret ls            List the credential names a workspace holds (never values)
   nocturn ls                   List workspaces, or one workspace's plugins/mcp/agents/skills
@@ -163,7 +163,7 @@ func cmdAuth(args []string) int {
 	fs := flag.NewFlagSet("auth", flag.ContinueOnError)
 	ws := workspaceFlag(fs)
 	scope := fs.String("scope", "", "space- or comma-separated OAuth scopes to request (discover mode)")
-	fs.Usage = usage(fs, "auth <provider> [-w workspace] [-scope \"a b\"]", "Connect an OAuth account (opens a browser). <provider> is a plugin or MCP server name.")
+	fs.Usage = usage(fs, "auth <provider> [-w workspace] [-scope \"a b\"]", "Connect an OAuth account. Prints a URL for you to open; <provider> is a plugin or MCP server name.")
 	pos, code, done := parseArgs(fs, args)
 	if done {
 		return code
