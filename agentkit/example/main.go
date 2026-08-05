@@ -3,7 +3,7 @@
 // agentkit-runtime. It streams the answer, keeps history, and prompts for approval before a guarded
 // tool (notify_user) runs.
 //
-// Run it from the repo root (reads FREELLM_BASE_URL / FREELLM_API_KEY / FREELLM_MODEL, loads .env):
+// Run it from the repo root (reads OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL, loads .env):
 //
 //	go run ./agentkit-example
 package main
@@ -29,14 +29,14 @@ import (
 func main() {
 	loadDotEnv(".env")
 
-	baseURL := os.Getenv("FREELLM_BASE_URL")
-	apiKey := os.Getenv("FREELLM_API_KEY")
-	model := os.Getenv("FREELLM_MODEL")
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	model := os.Getenv("OPENAI_MODEL")
 	if model == "" {
 		model = "auto"
 	}
 	if baseURL == "" && apiKey == "" {
-		fmt.Fprintln(os.Stderr, "set FREELLM_BASE_URL / FREELLM_API_KEY / FREELLM_MODEL (or a .env)")
+		fmt.Fprintln(os.Stderr, "set OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL (or a .env)")
 		os.Exit(1)
 	}
 
@@ -48,7 +48,7 @@ func main() {
 	stdin := bufio.NewReader(os.Stdin)
 
 	llm := openai.New(baseURL, apiKey, model,
-		openai.WithEffort(agentkit.Effort(os.Getenv("FREELLM_REASONING_EFFORT"))),
+		openai.WithEffort(agentkit.Effort(os.Getenv("OPENAI_REASONING_EFFORT"))),
 	)
 
 	toolset, err := buildTools(llm)

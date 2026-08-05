@@ -38,3 +38,6 @@ internal/script/qjs/.buildcache/
 
 # build artefact of the nested reference module
 /internal/onnx/reference/nocturn-onnx-reference
+
+# the agentkit example, built in place by `go build ./...` inside its module
+/agentkit/example/example

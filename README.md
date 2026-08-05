@@ -188,7 +188,7 @@ Self-modification is solved by construction rather than by a check that could be
 
 ```bash
 go build ./cmd/nocturn        # or grab a release binary
-cp .env.example .env          # FREELLM_BASE_URL / _MODEL / _API_KEY — any OpenAI-compatible endpoint
+cp .env.example .env          # OPENAI_BASE_URL / _MODEL / _API_KEY — any OpenAI-compatible endpoint
 
 ./nocturn                     # terminal chat
 ./nocturn serve               # the WebSocket daemon the mobile app and satellites talk to
@@ -217,8 +217,11 @@ the chat, where nobody authenticates the typist either. The browser client is st
 harness in its own help text.
 
 **Next:** retrieval over a workspace's documents (an `Embedder` port with a remote adapter, hybrid
-semantic + lexical search, exposed as one tool); extracting `agentkit` into its own repository;
-Ed25519 signing for skills and plugins; a keychain backend for the vault.
+semantic + lexical search, exposed as one tool); **a hosted push relay**, so waking a phone stops
+requiring your own Apple Developer account — safe to hand off precisely because a push carries no
+authority and no content; **an Android app**, which the Angular-under-Capacitor choice makes a build
+target rather than a rewrite; extracting `agentkit` into its own repository; Ed25519 signing for
+skills and plugins; a keychain backend for the vault.
 
 **Deliberately not built:** an ambient `exec` tool. See [ADR-6](ADRS.md) — every step toward a
 general coding agent erodes the one thing this design is for.

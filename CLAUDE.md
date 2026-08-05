@@ -254,7 +254,7 @@ internal/speaker/reference/corpus.sh /tmp/corpus   # 40 LibriSpeech speakers, ne
 NOCTURN_SPEAKER_CORPUS=/tmp/corpus go test ./internal/speaker/ -run Evaluate -v -timeout 30m
 internal/speaker/reference/setup.sh   # torch venv, ONLY to regenerate the filterbank reference
 
-cp .env.example .env                  # FREELLM_BASE_URL / _MODEL / _API_KEY
+cp .env.example .env                  # OPENAI_BASE_URL / _MODEL / _API_KEY
 go run ./cmd/nocturn                  # interactive terminal chat
 go run ./cmd/nocturn serve            # the WebSocket daemon the mobile app talks to
 #   in chat: /chats /new /open <id> /agents /fire <name> /quit

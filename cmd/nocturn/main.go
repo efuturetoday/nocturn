@@ -2,7 +2,7 @@
 // agentkit/gate with human approval on the terminal, and conversations persisted and
 // multiplexed by internal/chat — all composed per workspace by internal/workspace.
 //
-// Reads FREELLM_BASE_URL / FREELLM_API_KEY / FREELLM_MODEL (loads .env).
+// Reads OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL (loads .env).
 // Run: go run ./cmd/nocturn
 package main
 
@@ -45,14 +45,14 @@ func main() {
 // or the out-of-band WebSocket daemon (serveAddr set). It returns a Unix exit code. Only this path
 // needs the LLM endpoint — the light commands (auth, secret, ls) do not.
 func runApp(serveAddr string) int {
-	baseURL := os.Getenv("FREELLM_BASE_URL")
-	apiKey := os.Getenv("FREELLM_API_KEY")
-	model := os.Getenv("FREELLM_MODEL")
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	model := os.Getenv("OPENAI_MODEL")
 	if model == "" {
 		model = "auto"
 	}
 	if baseURL == "" && apiKey == "" {
-		fmt.Fprintln(os.Stderr, "set FREELLM_BASE_URL / FREELLM_API_KEY / FREELLM_MODEL (or a .env)")
+		fmt.Fprintln(os.Stderr, "set OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL (or a .env)")
 		return 1
 	}
 
@@ -69,7 +69,7 @@ func runApp(serveAddr string) int {
 	logger := newLogger(os.Stderr)
 
 	llm := openai.New(baseURL, apiKey, model,
-		openai.WithEffort(agentkit.Effort(os.Getenv("FREELLM_REASONING_EFFORT"))),
+		openai.WithEffort(agentkit.Effort(os.Getenv("OPENAI_REASONING_EFFORT"))),
 		openai.WithLogger(agentkit.SlogLogger(logger)),
 	)
 
