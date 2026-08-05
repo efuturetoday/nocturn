@@ -19,7 +19,7 @@ workspace/
   agents/morning-briefing/        one cron agent
   skills/summarize-url/           one skill
   plugins/weather/                one sandboxed plugin
-  mcp/github/                     one remote MCP server
+  mcp/cloudflare/                 one remote MCP server
   memory/people/lina.md           one memory note
   mnt/                            ← the ONLY part the model can read and write as files
     knowledge/                    documents to search
@@ -70,14 +70,16 @@ That is the plugin's cage, and you can review it **without running the artifact*
 has no filesystem, no sockets and no clock; the only thing it can do is call the tools it declared,
 and each of those is gated exactly as it would be for the model.
 
-### `mcp/github/`
+### `mcp/cloudflare/`
 
 A [remote MCP server](https://efuturetoday.github.io/nocturn/guides/remote-mcp/). HTTPS only — a
 local stdio server would be a foreign process running with your rights, which is the supply-chain
 problem the sandbox exists to avoid.
 
 `"auth": "oauth"` means the daemon discovers the flow and stores the token host-side. Run
-`nocturn auth github` once; the model never sees it.
+`nocturn auth cloudflare` once; the model never sees it. This one is here because it actually
+completes that discovery chain — not every remote MCP server does, and a server that does not needs
+its endpoints written out by hand instead.
 
 ### `memory/people/lina.md`
 
