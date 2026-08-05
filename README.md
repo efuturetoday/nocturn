@@ -45,6 +45,7 @@ So I built the one I wanted:
 | **No ambient authority** | Foreign code runs in WebAssembly with nothing — no filesystem, no sockets, no clock. Every capability is an explicitly handed host function, so a capability nobody granted is not denied, it is *absent*. |
 | **The model is never told about credentials** | Not the value, not the name, not that one exists. It asks for a URL; the host attaches the token as the request crosses the boundary. There is nothing about a secret in the conversation for an injection to talk it out of. |
 | **Approval is the design, not a setting** | The unit of decision is **reach**, not risk: leaving the machine asks about the host, changing a file asks about the path, and your answer is remembered at the scope you pick. The yes comes from a **second device**, because a prompt shown inside a hijacked session can be answered by whatever hijacked it. |
+| **The model writes code that calls tools** | `code_run` hands it JavaScript inside the same sandbox, and the calls that script makes are the same gated calls the model would have made itself — so ten files is one loop and one round trip instead of ten. Pure computation needs no permission at all; a script's reach is exactly its caller's cage, never more. |
 | **A phone and a voice, first class** | A mobile app that answers approvals, and a speaker in the room you can talk to. Not integrations somebody else maintains — the same protocol, the same repository. |
 
 The security design behind that has a real threat model, and it is
@@ -79,16 +80,10 @@ read further.
 
 ---
 
-<div align="center">
-
-<img src="assets/screenshots/app-chat-list.jpg" alt="The app's chat list: every conversation in the workspace with the assistant's last line under each." width="260">
-<img src="assets/screenshots/app-chat-ping-allowed-then-denied.jpg" alt="One conversation in the app: the assistant is told a name and writes it to memory, reaches google.com once, and on the second attempt reports that the action was declined." width="260">
-
-*Left: conversations are not per device — this is the same workspace the terminal is talking to.
-Right: the same host, allowed once and refused the next time. `Once` really does mean once, and a
-refusal stops the tool call rather than the conversation.*
-
-</div>
+| | | |
+|:--:|:--:|:--:|
+| <img src="assets/screenshots/app-tools-code-run-nested-writes.jpg" alt="The tools view of one turn: a code_run that failed, a second that succeeded with its JavaScript expanded, and the ten file_write calls it produced listed underneath with their durations." width="250"> | <img src="assets/screenshots/app-chat-ping-allowed-then-denied.jpg" alt="One conversation: the assistant is told a name and writes it to memory, reaches google.com once, and on the second attempt reports that the action was declined." width="250"> | <img src="assets/screenshots/app-chat-list.jpg" alt="The app's chat list: every conversation in the workspace with the assistant's last line under each." width="250"> |
+| **The model wrote a loop.** Every write it made surfaces as its own tool call — timed, attributable, and gated where that tool is gated. A script's reach is exactly its caller's cage. The red one is a first attempt that failed. | **The gate said no.** Same host, allowed once and refused the next time: `Once` really does mean once. A refusal stops the tool call, not the conversation — the assistant is told and carries on. | **One workspace, many devices.** Conversations are not per device; this is the same workspace the terminal is talking to, picked up on a phone. |
 
 ## Architecture
 
