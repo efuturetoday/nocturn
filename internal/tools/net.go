@@ -62,6 +62,9 @@ func (n *Net) checkRedirect(req *http.Request, via []*http.Request) error {
 		return errors.New("stopped after 10 redirects")
 	}
 	ctx := req.Context()
+	if req.URL.User != nil {
+		return errors.New("redirect to a url carrying credentials")
+	}
 	if err := gate.Check(ctx, gate.Action{Kind: NetKind, Target: req.URL.Host}, HostMatch, NetSuggestions(req.URL.Host)...); err != nil {
 		return err
 	}
@@ -158,6 +161,9 @@ func (n *Net) do(ctx context.Context, method, rawURL, body, contentType string) 
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return "", fmt.Errorf("invalid url: %q", rawURL)
+	}
+	if u.User != nil {
+		return "", errors.New("invalid url: credentials in the url are not accepted")
 	}
 
 	// Gate the host on the net kind; the tool supplies both the matcher and the widenings a human may
