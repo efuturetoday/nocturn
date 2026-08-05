@@ -89,6 +89,35 @@ Code files are deliberately out. Splitting Go or JSON at headings is meaningless
 produces thousands of poor passages and a real bill, and `file_search` plus `file_read` already find
 code without embeddings.
 
+## Indexing it yourself
+
+A running daemon does this on its own, so these exist for the two moments a schedule is the wrong
+shape: the first index of a folder, where you want to watch it happen and see what it cost, and
+after changing the embedding model, where the answer is "delete the index and build it again" and
+you should be the one deciding to spend that.
+
+```bash
+nocturn knowledge index      # bring the index in line with the folder
+nocturn knowledge status     # how much is indexed, and where
+nocturn knowledge ls         # the documents currently in the index
+```
+
+```
+$ nocturn knowledge index
+indexing nocturn-data/workspaces/main/mnt/knowledge
+  4 indexed, 0 unchanged, 0 removed — 13 passages in 1.449s
+  skipped wohnung/uebergabeprotokoll.pdf — no reader handles this format
+
+$ nocturn knowledge index
+  0 indexed, 4 unchanged, 0 removed — 13 passages in 4ms
+```
+
+The second run is the point: nothing was sent anywhere, because nothing had changed. Skipped files
+are **named**, not counted — knowing that one file was skipped is not knowing which document is
+silently not searchable.
+
+Add `-w <workspace>` for anything other than `main`.
+
 ## It keeps itself in step
 
 A running daemon reconciles the folder with the index **every minute**. Add a document and it becomes
