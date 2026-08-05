@@ -1,59 +1,57 @@
-# Mobile
+# The companion app
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.0.6.
+This is the second device — the reason Nocturn's approvals mean anything.
 
-## Development server
+An assistant that asks for permission *in the conversation* asks in the same place a prompt
+injection already sits. The injection can answer. So the decision is moved somewhere it cannot
+reach: a paired phone, over an authenticated connection, out of band. That is what this app is for,
+and everything else it does is secondary to it.
 
-To start a local development server, run:
+Angular 22 + Capacitor, targeting iOS. It speaks the same WebSocket protocol as the terminal — one
+connection per device carrying chat, agents, approvals and reminders as tagged JSON — so it needs no
+endpoint of its own and no second token.
 
-```bash
-ng serve
-```
+## What it does
 
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
+| Feature | |
+|---|---|
+| `approvals` | the point: an ask, what it would reach, approve or deny. First answer wins across devices |
+| `pair` · `joins` | pairing by code, and approving another device's join request |
+| `chat` · `chats` | conversations, streamed token by token, shared across every device |
+| `agents` | the scheduled agents in a workspace, and firing one by hand |
+| `discover` | finding a daemon on the LAN over mDNS |
+| `home` · `tabs` · `settings` | navigation, workspace selection, connection |
 
-## Code scaffolding
+A push notification carries **no authority**. It is a wake signal and nothing else — the decision
+travels back over the authenticated WebSocket, never in the notification, so a push that arrives
+twice or is replayed cannot approve anything.
 
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
-
-```bash
-ng generate component component-name
-```
-
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
-
-```bash
-ng generate --help
-```
-
-## Building
-
-To build the project run:
+## Running it
 
 ```bash
-ng build
+npm install
+npm start                       # http://localhost:4200, against a daemon on the LAN
+npm run build                   # production bundle into dist/
+npx cap sync ios                # copy the build into the Xcode project
+npx cap open ios                # then build and run from Xcode
 ```
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
+Point it at a daemon started with `nocturn serve`. On a first run the app asks the daemon to pair,
+and the daemon prints the code to confirm.
 
-## Running unit tests
+Push requires an Apple Developer account and the four `NOCTURN_APNS_*` variables on the daemon side
+(see `.env.example`). Without them everything still works over the LAN — you just do not get woken
+for an approval while the app is closed.
 
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
+## Where things live
 
-```bash
-ng test
+```
+src/app/core/protocol   the wire types, mirrored from internal/serve
+src/app/core/services   the connection, and the state hanging off it
+src/app/core/guards     routes that need a paired, connected daemon
+src/app/features/…      one folder per feature above
+src/theme/variables.css the palette — mirrored in docs/src/styles/brand.css, keep the two in sync
 ```
 
-## Running end-to-end tests
-
-For end-to-end (e2e) testing, run:
-
-```bash
-ng e2e
-```
-
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+The protocol is the contract. When a message changes in `internal/serve`, it changes here too, and
+`internal/serve/*_wire_test.go` is what pins the shape on the Go side.
