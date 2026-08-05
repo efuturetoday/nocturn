@@ -167,8 +167,14 @@ func openWorkspace(name string, log *slog.Logger) (*workspace.Workspace, error) 
 		}
 		llm = openai.New(base, key, model)
 	}
+	// The embedding config travels too, or a command that opens a workspace this way would find no
+	// document store and report the feature as unconfigured when it is not.
+	embedCfg, err := embedConfig()
+	if err != nil {
+		return nil, err
+	}
 	return workspace.Open(
-		workspace.Host{LLM: llm, Log: log},
+		workspace.Host{LLM: llm, Embed: embedCfg, Log: log},
 		name,
 		filepath.Join(wsRoot, name),
 	)
