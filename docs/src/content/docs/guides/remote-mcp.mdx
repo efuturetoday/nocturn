@@ -68,7 +68,8 @@ review step; dropping the folder in is the decision.
   ```
 
   It lands encrypted in the server's own shard. Nothing secret ever touches `mcp.json` or the
-  environment.
+  environment — see [the vault](/nocturn/guides/vault/) for how that shard is keyed and why the
+  model never sees the value.
 
 - **OAuth with discovery** — `"auth": "oauth"` and
   nothing else. `nocturn auth <name>` then discovers the server's authorization endpoints,
@@ -106,7 +107,7 @@ review step; dropping the folder in is the decision.
 
 Malformed declarations are rejected fail-closed — a non-HTTPS URL, an unknown auth mode, `token`
 alongside an OAuth block. Either way the token stays host-side, bound to that server, and the model
-never sees it.
+never sees it — [the vault](/nocturn/guides/vault/) is where all of that is explained once.
 
 ### From the app, without a terminal
 
