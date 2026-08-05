@@ -11,6 +11,7 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"strconv"
 	"sync"
 	"time"
 
@@ -27,15 +28,41 @@ const approvalTimeout = 2 * time.Minute
 // from a deliberate human "no" (which returns a nil error so the gate surfaces it to the model).
 var ErrApprovalTimeout = errors.New("hitl: approval timed out")
 
+// DenyOption is the reserved option id that explicitly refuses. It is never minted as a real option,
+// so it cannot collide with one; and because any unrecognised id refuses too, a client that cannot
+// say the word still falls closed.
+const DenyOption = "deny"
+
+// Approval is one pending approval as presented to a Sink: the action, where it came from, and the
+// answers on offer. It is structure, not prose — the only text in it (the Action's kind and target, a
+// widening's target) comes from the gate and from the asking tool, never from the model. The device
+// does the wording.
+type Approval struct {
+	ID      string      // this approval's id; a Sink answers with it
+	Frame   uint64      // the tool call this approval belongs to (opaque correlation; 0 = not tool-scoped)
+	ChatID  string      // the chat/agent run whose turn raised it, for provenance ("" = not chat-scoped)
+	Action  gate.Action // what is being asked, verbatim
+	Options []Option    // the answers on offer, in presentation order; never empty
+}
+
+// Option is one answer on offer. ID is what a client sends back to choose it — minted here, so a
+// client can only pick a grant this broker offered, never one it named itself. Grant is exactly what
+// choosing it remembers and Recall for how long (RecallNever remembers nothing; the grant is still
+// stated so every option has one shape). Widens says the Grant is BROADER than the Action — a tool's
+// suggested widening — so no layer downstream has to re-derive that by comparing strings.
+type Option struct {
+	ID     string
+	Recall gate.Recall
+	Grant  gate.Grant
+	Widens bool
+}
+
 // Sink is a connection the broker can present an approval to and later tell to clear it. serve's
 // connections implement it; the broker never imports serve.
 type Sink interface {
-	// Approval presents a pending approval: an intent to render and choice labels (index 0.. are
-	// approvals, a client answers with the chosen index or -1 to deny). frame is the id of the tool
-	// call this approval belongs to (opaque correlation — the connection forwards it so the UI can tie
-	// the prompt to the exact call; 0 = not tool-scoped). chatID is the chat/agent run whose turn
-	// raised it, for provenance ("" = not chat-scoped).
-	Approval(ctx context.Context, id string, frame uint64, chatID, intent string, options []string)
+	// Approval presents a pending approval. The Options slice is shared with the broker and with
+	// every other Sink — read it, never mutate it.
+	Approval(ctx context.Context, a Approval)
 	// Resolved tells the connection an approval is concluded (answered anywhere, timed out, or no
 	// longer needed) so it clears the prompt.
 	Resolved(ctx context.Context, id string)
@@ -51,15 +78,13 @@ type Broker struct {
 	pending map[string]*pendingApproval // open approvals, by id
 }
 
-// pendingApproval is an approval awaiting a decision: what to present, and the channel a resolve is
-// delivered on. Keeping intent/options lets the broker re-present it to a device that attaches while
-// it is open (the reconnect / woken-by-push case).
+// pendingApproval is an approval awaiting a decision: exactly what any Sink is (re)presented, and
+// the channel the chosen option id is delivered on. Keeping the whole presentation lets the broker
+// re-present it to a device that attaches while it is open (the reconnect / woken-by-push case), and
+// because each Option carries its own grant and recall, it is also what resolves the answer.
 type pendingApproval struct {
-	intent  string
-	options []string
-	frame   uint64 // the tool call this approval is for (for re-present on attach)
-	chatID  string // the chat/agent run whose turn raised it (for provenance on re-present)
-	ch      chan int
+	present Approval
+	ch      chan string
 }
 
 // NewBroker builds a Broker. pusher may be nil (no out-of-band wake when no device is attached).
@@ -108,20 +133,21 @@ func (b *Broker) presentPending(ctx context.Context, s Sink) {
 	open := make(map[string]*pendingApproval, len(b.pending))
 	maps.Copy(open, b.pending)
 	b.mu.Unlock()
-	for id, p := range open {
-		s.Approval(ctx, id, p.frame, p.chatID, p.intent, p.options)
+	for _, p := range open {
+		s.Approval(ctx, p.present)
 	}
 }
 
-// Resolve delivers a connection's decision for approval id (a choice index, or -1 to deny). First
-// answer wins; later ones are dropped.
-func (b *Broker) Resolve(id string, choice int) {
+// Resolve delivers a connection's decision for approval id: the id of the chosen option, or
+// DenyOption. First answer wins; later ones are dropped. An id this approval never offered refuses,
+// so a stale or forged answer cannot approve.
+func (b *Broker) Resolve(id, option string) {
 	b.mu.Lock()
 	p := b.pending[id]
 	b.mu.Unlock()
 	if p != nil {
 		select {
-		case p.ch <- choice:
+		case p.ch <- option:
 		default:
 		}
 	}
@@ -135,15 +161,18 @@ func (b *Broker) Resolve(id string, choice int) {
 // declined" from "nobody answered" from "the turn was torn down". gate.Check pauses the turn clock
 // around this call.
 func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
-	labels, resolve := decision(a, suggest)
-	id := newID()
-	intent := intentOf(a)
-	frame := agentkit.FrameFrom(ctx) // the tool call asking — for the UI to tie the prompt to it
-	chatID := tools.ChatID(ctx)      // the chat/agent run whose turn raised it — for provenance
-	ch := make(chan int, 1)
+	opts := options(a, suggest)
+	present := Approval{
+		ID:      newID(),
+		Frame:   agentkit.FrameFrom(ctx), // the tool call asking — for the UI to tie the prompt to it
+		ChatID:  tools.ChatID(ctx),       // the chat/agent run whose turn raised it — for provenance
+		Action:  a,
+		Options: opts,
+	}
+	ch := make(chan string, 1)
 
 	b.mu.Lock()
-	b.pending[id] = &pendingApproval{intent: intent, options: labels, frame: frame, chatID: chatID, ch: ch}
+	b.pending[present.ID] = &pendingApproval{present: present, ch: ch}
 	b.mu.Unlock()
 
 	active := b.activeSinks()
@@ -152,24 +181,24 @@ func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (
 		// to the foreground, gets the pending approval re-presented and resolves; the placeholder
 		// just logs and this Ask times out to deny.
 		if b.pusher != nil {
-			if err := b.pusher.Push(ctx, intent); err != nil {
+			if err := b.pusher.Push(ctx, summary(a)); err != nil {
 				b.log.Warn("hitl push failed", "err", err)
 			}
 		} else {
-			b.log.Warn("hitl approval with no active device — denying", "intent", intent)
+			b.log.Warn("hitl approval with no active device — denying", "kind", a.Kind, "target", a.Target)
 		}
 	} else {
 		for _, s := range active {
-			s.Approval(ctx, id, frame, chatID, intent, labels)
+			s.Approval(ctx, present)
 		}
 	}
 
-	defer b.conclude(ctx, id)
+	defer b.conclude(ctx, present.ID)
 	select {
-	case choice := <-ch:
-		return resolve(choice)
+	case option := <-ch:
+		return pick(opts, option)
 	case <-time.After(approvalTimeout):
-		b.log.Warn("hitl approval timed out — denying", "intent", intent)
+		b.log.Warn("hitl approval timed out — denying", "kind", a.Kind, "target", a.Target)
 		return false, gate.Grant{}, gate.RecallNever, ErrApprovalTimeout
 	case <-ctx.Done():
 		return false, gate.Grant{}, gate.RecallNever, ctx.Err()
@@ -221,30 +250,46 @@ func (b *Broker) activeSinks() []Sink {
 	return out
 }
 
-// decision builds the human choice labels for an action and the mapper from a chosen index back to
-// (approved, grant, recall). Index 0 = allow once (RecallNever — nothing remembered, asks again next
-// time), 1 = allow this session, 2 = allow always, 3.. = a suggested widening (always); anything else
-// (e.g. -1) denies.
-func decision(a gate.Action, suggest []gate.Grant) (labels []string, resolve func(choice int) (bool, gate.Grant, gate.Recall, error)) {
+// options builds the answers on offer for an action: allow once (RecallNever — nothing remembered,
+// asks again next time), for this session, always — each on the action's EXACT target — then the
+// tool's suggested widenings, each always-remembered. The order is the presentation order. The ids
+// are opaque to a client, which chooses by echoing one back; a client keying off them instead of off
+// Recall and Widens is a client bug, because this mapping is the authoritative one either way.
+func options(a gate.Action, suggest []gate.Grant) []Option {
 	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
-	grants := []gate.Grant{exact, exact, exact}
-	recalls := []gate.Recall{gate.RecallNever, gate.RecallSession, gate.RecallAlways}
-	labels = []string{"Once", "Session", "Always"}
-	for _, s := range suggest {
-		labels = append(labels, "Always: "+s.Target)
-		grants = append(grants, s)
-		recalls = append(recalls, gate.RecallAlways)
+	opts := []Option{
+		{ID: "once", Recall: gate.RecallNever, Grant: exact},
+		{ID: "session", Recall: gate.RecallSession, Grant: exact},
+		{ID: "always", Recall: gate.RecallAlways, Grant: exact},
 	}
-	resolve = func(choice int) (bool, gate.Grant, gate.Recall, error) {
-		if choice < 0 || choice >= len(grants) {
-			return false, gate.Grant{}, gate.RecallNever, nil // deny
-		}
-		return true, grants[choice], recalls[choice], nil
+	for i, s := range suggest {
+		opts = append(opts, Option{
+			ID:     "widen" + strconv.Itoa(i),
+			Recall: gate.RecallAlways,
+			Grant:  s,
+			Widens: true,
+		})
 	}
-	return labels, resolve
+	return opts
 }
 
-func intentOf(a gate.Action) string {
+// pick maps a chosen option id back to a decision. An id that was never offered — DenyOption, an
+// unknown one, or the empty string a truncated message leaves behind — is a refusal with a nil
+// error: the same deliberate "no" the gate surfaces to the model. There is no value that approves by
+// default.
+func pick(opts []Option, id string) (bool, gate.Grant, gate.Recall, error) {
+	for _, o := range opts {
+		if o.ID == id {
+			return true, o.Grant, o.Recall, nil
+		}
+	}
+	return false, gate.Grant{}, gate.RecallNever, nil
+}
+
+// summary renders the one line a push notification carries: a lock-screen wake, not the ask. It is
+// the only prose this package produces, and it exists because iOS renders that string and we cannot
+// hand it structure. The ask itself is rendered by the device from the Approval.
+func summary(a gate.Action) string {
 	if a.Target != "" {
 		return a.Kind + " → " + a.Target
 	}

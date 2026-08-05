@@ -14,25 +14,28 @@ import (
 // fakeSink captures the id the broker presents so a test can resolve that exact approval.
 type fakeSink struct{ gotID chan string }
 
-func (s *fakeSink) Approval(_ context.Context, id string, _ uint64, _, _ string, _ []string) {
+func (s *fakeSink) Approval(_ context.Context, a hitl.Approval) {
 	select {
-	case s.gotID <- id:
+	case s.gotID <- a.ID:
 	default:
 	}
 }
 func (s *fakeSink) Resolved(context.Context, string) {}
 
-// approval.resolve forwards the chosen index to the broker: choice >= 0 approves the matching grant,
-// -1 denies. Driven end-to-end through a real broker so the wire handler's Resolve call is observed
-// by an Ask returning.
-func TestApprovalResolve_ForwardsChoiceToBroker(t *testing.T) {
+// approval.resolve forwards the chosen option id to the broker: an offered id approves the matching
+// grant, the reserved deny id and anything never offered refuse. The empty string is the case a
+// truncated or older message produces, and it must not approve. Driven end-to-end through a real
+// broker so the wire handler's Resolve call is observed by an Ask returning.
+func TestApprovalResolve_ForwardsOptionToBroker(t *testing.T) {
 	tests := []struct {
 		name       string
-		choice     int
+		option     string
 		wantApprov bool
 	}{
-		{"allow once", 0, true},
-		{"deny with -1", -1, false},
+		{"allow once", "once", true},
+		{"explicit deny", hitl.DenyOption, false},
+		{"omitted option", "", false},
+		{"never offered", "widen0", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -57,7 +60,7 @@ func TestApprovalResolve_ForwardsChoiceToBroker(t *testing.T) {
 				t.Fatal("broker never presented the approval to the sink")
 			}
 
-			data, _ := json.Marshal(ApprovalResolve{Cmd: "approval.resolve", ID: id, Choice: tt.choice})
+			data, _ := json.Marshal(ApprovalResolve{Cmd: "approval.resolve", ID: id, Option: tt.option})
 			c.approval(ctx, "approval.resolve", data)
 
 			select {
