@@ -75,7 +75,15 @@ Two consequences worth knowing:
   it; the other is told it was resolved. This is also why an appliance is never shown one — it would
   outrace the phone it exists to defer to.
 
-## Speaking, on the same connection
+## Speaking, on the same connection <Badge text="Experimental" variant="caution" />
+
+:::caution[This part moves]
+Spoken sessions and speaker recognition work end to end and are covered by tests, but they are the
+newest thing here and the least settled. The wire messages below, which actions a spoken session
+asks about, and the browser client — labelled a PoC harness in its own help text — should all be
+expected to change. Everything else on this page is stable.
+:::
+
 
 Voice is a domain on the protocol above, not a separate channel: `voice.wake` opens a spoken session,
 `voice.credit` says how much speech the device can hold, and the audio itself is binary frames — the

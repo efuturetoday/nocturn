@@ -1,7 +1,17 @@
 ---
 title: Speaking to it
 description: A live voice session is a second LLM port, not a wider version of the first — a duplex audio stream with no turns, reaching the same tools through a narrower door.
+sidebar:
+  badge:
+    text: Experimental
+    variant: caution
 ---
+
+:::caution[This part moves]
+The design below is built and tested, but it is the newest thing in the tree and the least settled.
+Interfaces, the wire messages, and which actions a spoken session asks about should all be expected
+to change.
+:::
 
 Typing and speaking are not the same conversation in a different font. A typed turn has a
 beginning, an end, and a moment where somebody deliberately pressed send. Speech has none of those,
