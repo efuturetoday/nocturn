@@ -43,6 +43,13 @@ func (c *conn) approval(ctx context.Context, cmd string, data []byte) {
 			c.badRequest(ctx, "bad approval.resolve")
 			return
 		}
+		if c.broker == nil {
+			// A class that may not approve is handed no broker at all (see serve.go), so this is a
+			// device answering a question it is never shown. Refuse rather than dereference: the
+			// least-trusted class must not be able to end its own connection's handler.
+			c.badRequest(ctx, "this device may not answer approvals")
+			return
+		}
 		c.broker.Resolve(m.ID, m.Choice)
 	default:
 		c.badRequest(ctx, "unknown action: "+cmd)
