@@ -59,8 +59,8 @@ For "sign in with…" services, the host runs the flow once:
 nocturn auth <provider>
 ```
 
-It opens the provider's consent page, catches the redirect on a loopback listener, and puts the
-resulting token in the vault. From then on the host refreshes it. The guest never touches it — an
+It prints the provider's consent URL for you to open, catches the redirect on a loopback listener,
+and puts the resulting token in the vault. From then on the host refreshes it. The guest never touches it — an
 OAuth token is a credential like any other, injected at the boundary.
 
 A plugin can declare its own provider, so connecting a new service is part of installing its plugin.

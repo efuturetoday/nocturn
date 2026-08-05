@@ -124,12 +124,13 @@ Because the folder is the entire state, a workspace behaves like any other proje
 - **Version it** with git to see how it changed and roll back mistakes.
 - **Back it up** by copying one directory.
 
-:::note[One secret stays out of the copy]
-`vault.enc` is encrypted under your master passphrase. Copying the folder copies the locked vault;
-the credentials inside stay unreadable without you. See
-[Secrets and accounts](/nocturn/guides/connecting-accounts/).
-:::
+:::caution[Two files live outside the workspace — take them along]
+`vault.enc` is encrypted under your master passphrase, so copying the folder copies a locked vault
+and the credentials inside stay unreadable without you. But the passphrase alone is not enough to
+open it again: the key is `scrypt(passphrase, salt)`, and that salt is in **`nocturn-data/master.salt`**,
+one level above every workspace. Copy a workspace without it and the vault is unreadable even with
+the right passphrase — the derived key is simply a different one.
 
-The one thing outside every workspace is `.env`, which holds your model connection. It sits next to
-the binary, not in any workspace — remember it separately when you move a workspace to another
-machine.
+`.env`, which holds your model connection, sits next to the binary for the same reason and is the
+other thing to remember. See [Secrets and accounts](/nocturn/guides/connecting-accounts/).
+:::

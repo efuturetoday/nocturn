@@ -35,8 +35,8 @@ output: >-
 
 
   ```
-  --- wohnung/mietvertrag.md > Kaution  [similarity 0.76, keyword match] ---
-  Die Kaution beträgt drei Nettokaltmieten, also 3.720 Euro. …
+  --- home/lease.md > Deposit  [similarity 0.76, keyword match] ---
+  The deposit is three months' base rent, so 3,720 euros. …
   ```
 
 js:

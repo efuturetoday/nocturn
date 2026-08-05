@@ -92,7 +92,9 @@ laptop lid on the terminal you started it from.
 Three things only exist here:
 
 - **Agents on a schedule.** A cron agent firing at 6am is the whole idea — work that happens while
-  you are asleep. The terminal chat can fire one by hand; nothing fires on its own without a daemon.
+  you are asleep. Scheduling lives in the process, not in the daemon: a terminal session runs the
+  same schedulers. What the daemon adds is outliving the terminal you would otherwise have to leave
+  open.
 - **Approvals when you are not there.** An unattended run that reaches the network or a file routes
   the ask to your phone. With no daemon there is no route, and a `guarded` agent falls back to
   refusing — which is safe and useless.

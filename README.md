@@ -124,7 +124,7 @@ at the scope you picked.
 → [Request flow](https://efuturetoday.github.io/nocturn/architecture/request-flow/) ·
 [The two halves](https://efuturetoday.github.io/nocturn/architecture/agentkit/) ·
 [Cage and gate](https://efuturetoday.github.io/nocturn/reference/gate/) ·
-[ADRS.md](ADRS.md) — eleven decision records
+[ADRS.md](ADRS.md) — twelve decision records
 
 ---
 
@@ -142,13 +142,13 @@ The constraints came first and live in the repository as artifacts rather than a
 
 | | | |
 |---|---|---|
-| **409** commits in 23 days, **402** with a `Co-Authored-By: Claude` trailer | | `git log` |
-| **24,066** lines of Go — against **25,268** lines of test | | `wc -l` |
-| **864** test functions, green under `-race` | | `go test -race ./...` |
+| **431** commits in 23 days, **408** with a `Co-Authored-By: Claude` trailer | | `git log` |
+| **24,051** lines of Go — against **25,640** lines of test | | `wc -l` |
+| **873** test functions, green under `-race` | | `go test -race ./...` |
 | **`agentkit/gate` 100 %** statement coverage | the permission layer itself | `go test -cover` |
 | auth 94.2 % · agentkit 92.9 % · hitl 91.4 % · sandbox 90.9 % · secret 90.4 % | the parts that hold the boundary | `go test -cover` |
 | **zero** third-party dependencies in the engine | no `require` block at all | [`agentkit/go.mod`](agentkit/go.mod) |
-| CGO-free, ~18 MB, six targets | built on every push | [CI](.github/workflows/ci.yml) |
+| CGO-free, ~19 MB, six targets | built on every push | [CI](.github/workflows/ci.yml) |
 | 4,014 lines of C · 4,834 lines of Angular | firmware and app, one protocol | — |
 
 Said plainly, because the number makes it obvious: at twenty-four thousand lines the review is

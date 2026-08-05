@@ -24,12 +24,15 @@ output:
   code: |
     { "host": "example.com", "ip": "93.184.216.34", "ok": true, "rtt_ms": 12 }
   lang: json
-  after: "`ok: false` means no answer within the timeout, not that the host does not exist."
+  after: >-
+    `ok` is always `true` in a result — a host that does not answer within the timeout produces an
+    **error**, not a result saying so. Which is a distinction worth keeping: no answer means no
+    answer, and never that the host does not exist.
 
 js:
   wrapper: |
     const r = nocturn.ping("example.com");
-    if (!r.ok) console.log("no answer");
+    console.log(r.rtt_ms + " ms"); // a host that did not answer would have thrown
   call: |
     const r = JSON.parse(nocturn.call("ping", { host: "example.com" }));
 
