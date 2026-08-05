@@ -153,11 +153,15 @@ func TestResolvePersona_ReadError_WarnsAndDefaults(t *testing.T) {
 	}
 }
 
-// TestPolicy_NetAndFileAsk_ElseAllowed: the workspace policy asks (session recall) on the net and
-// file kinds and allows everything else freely.
+// TestPolicy_NetAndFileAsk_ElseAllowed: the workspace policy asks on the net and file kinds and
+// allows everything else freely.
+//
+// The recall is a CEILING, not a decision — gate.Check takes min(ceiling, the human's choice). It is
+// RecallAlways because both approvers offer an "always" button, and a lower ceiling would resolve
+// that button to a session grant without saying so.
 func TestPolicy_NetAndFileAsk_ElseAllowed(t *testing.T) {
 	p := policy()
-	ask := gate.AskWith(gate.RecallSession)
+	ask := gate.AskWith(gate.RecallAlways)
 	allow := gate.Allowed()
 
 	tests := []struct {
@@ -189,7 +193,7 @@ func TestPolicy_NetAndFileAsk_ElseAllowed(t *testing.T) {
 func TestAgentPolicy_AsksOnMemory(t *testing.T) {
 	agentP, rootP := agentPolicy(), policy()
 
-	if got, want := agentP.Decide(gate.Action{Kind: memory.Kind}), gate.AskWith(gate.RecallSession); got != want {
+	if got, want := agentP.Decide(gate.Action{Kind: memory.Kind}), gate.AskWith(gate.RecallAlways); got != want {
 		t.Errorf("agent policy on memory = %+v, want ask", got)
 	}
 	for _, kind := range []string{tools.NetKind, tools.FileKind, tools.NotifyKind, tools.RemindKind, "time_now", "whatever"} {
@@ -435,6 +439,71 @@ func TestOpen_KnowledgeCorpusIsInTheMountAndTheIndexIsNot(t *testing.T) {
 	// Stated as a property rather than as two paths: no file tool may reach the index.
 	if strings.HasPrefix(k.IndexPath(), filepath.Join(dir, "mnt")+string(filepath.Separator)) {
 		t.Error("the index is inside the mount, where a file tool could rewrite it")
+	}
+}
+
+// The button has to mean what it says. A human answering "always" must produce a grant that survives
+// a restart — which means the policy's ceiling has to allow it, the store has to write it, and a
+// fresh workspace has to read it back and stop asking.
+//
+// This is end-to-end on purpose: the ceiling was RecallSession for a long time, and every layer
+// below it worked, so nothing failed. The button simply resolved to a session grant and the person
+// was asked again the next day.
+func TestPolicy_AlwaysSurvivesARestart(t *testing.T) {
+	dir := t.TempDir()
+	act := gate.Action{Kind: tools.NetKind, Target: "api.example.com"}
+
+	// First run: a human answers "always".
+	approver := &alwaysApprover{}
+	grants, err := newGrantStore(filepath.Join(dir, "grants.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := gate.With(context.Background(), policy(), grants, approver)
+	if err := gate.Check(ctx, act, tools.HostMatch); err != nil {
+		t.Fatalf("first check: %v", err)
+	}
+	if approver.asked != 1 {
+		t.Fatalf("asked %d times on the first call, want 1", approver.asked)
+	}
+
+	// It reached the disk, not just memory.
+	raw, err := os.ReadFile(filepath.Join(dir, "grants.json"))
+	if err != nil {
+		t.Fatalf("grants.json was never written: %v", err)
+	}
+	if !strings.Contains(string(raw), "api.example.com") {
+		t.Errorf("grants.json does not hold the grant: %s", raw)
+	}
+
+	// A fresh store over the same file — a restart — must not ask again.
+	reopened, err := newGrantStore(filepath.Join(dir, "grants.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approver.asked = 0
+	ctx2 := gate.With(context.Background(), policy(), reopened, approver)
+	if err := gate.Check(ctx2, act, tools.HostMatch); err != nil {
+		t.Fatalf("after restart: %v", err)
+	}
+	if approver.asked != 0 {
+		t.Error("the human was asked again after answering always — the grant did not survive")
+	}
+}
+
+// alwaysApprover is a human who says yes and picks "always", and counts how often it was asked.
+type alwaysApprover struct{ asked int }
+
+func (a *alwaysApprover) Ask(_ context.Context, act gate.Action, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+	a.asked++
+	return true, gate.Grant{Kind: act.Kind, Target: act.Target}, gate.RecallAlways, nil
+}
+
+// A room may not grant anything durable: whoever is audible can speak, so a spoken "always" would be
+// a standing permission granted by an unauthenticated channel.
+func TestVoicePolicy_NeverRemembers(t *testing.T) {
+	if got := voicePolicy(map[string]bool{tools.NetKind: true}).Decide(gate.Action{Kind: tools.NetKind}); got != gate.AskWith(gate.RecallNever) {
+		t.Errorf("voice policy on net = %+v, want ask with no recall", got)
 	}
 }
 
