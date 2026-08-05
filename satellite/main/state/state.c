@@ -56,6 +56,15 @@ static sat_state_t state = SAT_BOOT;
 
 // Guards, not states: conditions a transition tests.
 static bool has_address;
+
+// hang_up_after_speaking holds an "idle" that arrived while the speaker was still running.
+//
+// turnComplete means the model stopped GENERATING. What it generated is still in the daemon's
+// backlog, in the socket, in this board's playout ring and in its DMA — seconds of it. Acting on the
+// daemon's idle then would flush all of that, and the last thing a person hears is their assistant
+// being cut off mid-goodbye. Only this board knows when the audio is actually out, so only this
+// board may end the conversation.
+static bool hang_up_after_speaking;
 static bool has_link;
 
 static int64_t entered_at; // for WAKE_ACK_US — this task's alone
@@ -144,7 +153,8 @@ static void enter(sat_state_t s, sat_state_t from)
         uplink_open();
     }
     if (in_conversation(s) && !in_conversation(from)) {
-        acked = false;  // nothing the daemon said before belongs to this conversation
+        acked = false;                   // nothing the daemon said before belongs to this conversation
+        hang_up_after_speaking = false;  // nor does a hang-up meant for the last one
         mic_arm(false); // saying it mid-sentence must not restart a conversation
         uplink_open();
         audio_out_flush();
@@ -246,6 +256,12 @@ static void remote(const char *name)
         if (!acked) {
             return; // the previous conversation's ending, arriving after this one began
         }
+        if (state == SAT_SPEAKING) {
+            // Held, not obeyed: there are seconds of speech still to come out, and leaving this
+            // state flushes them. PLAYBACK_END finishes the job.
+            hang_up_after_speaking = true;
+            return;
+        }
         go(SAT_IDLE);
     } else if (strcmp(name, "listening") == 0) {
         acked = true; // the daemon has the session this board asked for
@@ -274,6 +290,13 @@ static void transition(sat_event_id_t ev, const void *data)
     case SAT_EV_VOICE:
         on_voice();
         return;
+    case SAT_EV_VOICE_END:
+        // The person stopped. Nothing has come back yet, and saying so is the whole reason this
+        // state exists — the daemon could not tell us any sooner than a round trip later.
+        if (state == SAT_LISTENING) {
+            go(SAT_THINKING);
+        }
+        return;
     case SAT_EV_PLAYBACK_START:
         if (in_conversation(state)) {
             go(SAT_SPEAKING);
@@ -281,6 +304,11 @@ static void transition(sat_event_id_t ev, const void *data)
         return;
     case SAT_EV_PLAYBACK_END:
         if (state == SAT_SPEAKING) {
+            if (hang_up_after_speaking) {
+                hang_up_after_speaking = false;
+                go(SAT_IDLE); // the daemon asked while this was still talking; now it is finished
+                return;
+            }
             go(SAT_LISTENING);
         }
         return;
@@ -305,6 +333,12 @@ static void transition(sat_event_id_t ev, const void *data)
         if (state == SAT_LISTENING && !acked && esp_timer_get_time() - entered_at > WAKE_ACK_US) {
             ESP_LOGW(TAG, "no answer to the wake word — giving up on it");
             go(SAT_IDLE);
+        }
+        // Nor a reply that never came: without this the ring would go on saying "working on it"
+        // for the rest of the conversation.
+        if (state == SAT_THINKING && esp_timer_get_time() - entered_at > WAKE_ACK_US) {
+            ESP_LOGW(TAG, "no answer — back to listening");
+            go(SAT_LISTENING);
         }
         // Nor a stop that was never sent.
         if (state == SAT_CAPTURE && esp_timer_get_time() - entered_at > CAPTURE_MAX_US) {
@@ -430,6 +464,7 @@ static const char *ev_name(sat_event_id_t ev)
     case SAT_EV_NET_DOWN:          return "net-down";
     case SAT_EV_WAKE:              return "wake";
     case SAT_EV_VOICE:             return "voice";
+    case SAT_EV_VOICE_END:         return "voice-end";
     case SAT_EV_PLAYBACK_START:    return "playback-start";
     case SAT_EV_PLAYBACK_END:      return "playback-end";
     case SAT_EV_MIC_DEAD:          return "mic-dead";
