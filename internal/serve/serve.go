@@ -170,7 +170,7 @@ func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Worksp
 func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, embedder *speaker.Embedder, log *slog.Logger, beat heartbeat, ready func(string)) error {
 	log = log.With("component", "serve")
 	if code := devices.Bootstrap(bootstrapTTL); code != "" {
-		log.Info("no devices paired — pair one with POST /pair", "code", code, "validFor", bootstrapTTL)
+		log.Info("no app paired — enter this code in the companion app", "code", code, "validFor", bootstrapTTL)
 	}
 
 	// Every device is a sink of the whole daemon: chat activity (list changes) AND live chat events

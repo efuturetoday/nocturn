@@ -16,6 +16,11 @@ about what that feels like in practice; [cage and gate](/nocturn/reference/gate/
 | Notifying you, scheduling a reminder | No |
 | Computing something, checking the time, scheduling its own continuation | No |
 
+The last row is the one that surprises people. The assistant scheduling its own continuation reaches
+nothing, so it never asks — the tool call is visible in the transcript and that is all:
+
+![A chat turn where the assistant used the `wake` tool to check again in five seconds, with no approval sheet in between.](../../../assets/screenshots/app-chat-wake.jpg)
+
 The single most useful thing to know: **it is not "reads are free, writes ask."** Reaching the
 network asks even to read, because the reach is the risk. Reading a file does not ask at all,
 because there is nowhere for it to reach — the file tools are rooted at `mnt/` and cannot leave it.
@@ -44,6 +49,12 @@ Say yes and the answer covers that kind and that target — so `http_read`, `htt
 **In the companion app**, the same decision is four buttons: `Once`, `Session`, `Always`, and —
 when a widening is on offer — `Always: *.example.com`.
 
+![The approval sheet in the app: the conversation that triggered it, the pair `net → google.com`, and the buttons Once, Session, Always and Deny.](../../../assets/screenshots/app-approval-net-google.jpg)
+
+Note what the sheet shows and what it does not: the kind and the target, plus which conversation
+asked. Not the sentence that led there — the decision is about the reach, not about the prose
+around it.
+
 | Answer | Remembered |
 |---|---|
 | Once | nothing — the next identical action asks again |
@@ -53,6 +64,12 @@ when a widening is on offer — `Always: *.example.com`.
 
 Anything else is a no, including silence and the Enter key. An unanswered out-of-band approval
 fails closed after **two minutes**.
+
+`Once` really does mean once. The same host asked for a second time asks again, and a no there stops
+the tool call rather than the conversation — the assistant is told the action was declined and says
+so:
+
+![One chat, two pings of the same host: the first answers with a round-trip time, the second reports that the action was declined.](../../../assets/screenshots/app-chat-ping-allowed-then-denied.jpg)
 
 The widening offer is always exactly one step, and always shown: parent domain for a host,
 containing directory for a path. Nothing widens quietly.

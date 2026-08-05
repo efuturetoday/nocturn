@@ -15,7 +15,19 @@ export default defineConfig({
 	integrations: [
 		// Must come BEFORE starlight. Renders ```mermaid blocks client-side,
 		// following Starlight's light/dark theme.
-		mermaid({ autoTheme: true }),
+		// useMaxWidth:false — mermaid's default scales a diagram down to the prose
+		// column, which turns any graph wider than ~500px into unreadable ant text.
+		// A fixed natural size plus the horizontal scroll in brand.css keeps the
+		// labels at their real font size; the font here is the one that decides how
+		// big a diagram actually renders.
+		mermaid({
+			autoTheme: true,
+			mermaidConfig: {
+				flowchart: { useMaxWidth: false },
+				sequence: { useMaxWidth: false },
+				themeVariables: { fontSize: '15px' },
+			},
+		}),
 		starlight({
 			title: 'Nocturn',
 			description: 'A secure personal AI assistant — mandatory out-of-band approval, WASM isolation, a permission gate the engine cannot see around, in a single Go binary.',

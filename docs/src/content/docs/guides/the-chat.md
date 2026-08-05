@@ -36,6 +36,11 @@ count:
 [tokens: 1843]
 ```
 
+The same conversation is readable from the [companion app](/nocturn/guides/the-app/) — conversations
+belong to the workspace, not to the device you started them on:
+
+![The same kind of turn in the app: the question, a chip naming the `time_now` tool, and the answer underneath.](../../../assets/screenshots/app-chat-time-now.jpg)
+
 ## Approving an action
 
 When a tool needs your decision, the prompt appears inline and the turn waits:

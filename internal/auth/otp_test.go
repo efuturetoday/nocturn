@@ -27,6 +27,31 @@ func TestBootstrap_OnlyWhenNoDevicePaired(t *testing.T) {
 	}
 }
 
+// A tool device — the daemon enrols its own command line at startup — cannot relay a join code, so
+// it must not retire the bootstrap. Otherwise the first `nocturn serve` on a fresh machine ends with
+// a registry that holds one device and no way to add a phone to it.
+func TestBootstrap_ArmedWhenOnlyANonAppDeviceExists(t *testing.T) {
+	t.Parallel()
+
+	for _, class := range []auth.Class{auth.ClassTool, auth.ClassAppliance} {
+		t.Run(string(class), func(t *testing.T) {
+			t.Parallel()
+			s, _ := newStore(t)
+			if _, err := s.Mint("local", class); err != nil {
+				t.Fatalf("Mint(%s): %v", class, err)
+			}
+
+			code := s.Bootstrap(bootstrapTTL)
+			if len(code) != 6 {
+				t.Fatalf("Bootstrap with only a %s device = %q, want a 6-digit code", class, code)
+			}
+			if _, err := s.Pair(code, "phone", "ios"); err != nil {
+				t.Fatalf("Pair: %v", err)
+			}
+		})
+	}
+}
+
 func TestOTPCode_FormatAndRange(t *testing.T) {
 	t.Parallel()
 	// Re-arming a fresh store yields a new random code each time; sample many to

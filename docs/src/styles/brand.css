@@ -177,3 +177,39 @@
 	background: rgb(55 50 68 / 0.5); /* gray-5 */
 	border-color: rgb(99 93 120 / 0.4);
 }
+
+/* Screenshots of the companion app. They are phone-shaped (736×1508), so the bound
+   that matters is HEIGHT, not width: a portrait shot lands beside the prose at a
+   readable size, while a wide diagram — being short — is never touched by this rule.
+   The border is the app's own surface step, so the device edge reads as one. */
+.sl-markdown-content img {
+	display: block;
+	margin-inline: auto;
+	max-height: 62vh;
+	width: auto;
+	border-radius: 0.9rem;
+	border: 1px solid var(--sl-color-gray-5);
+}
+
+/* Mermaid renders into <pre class="mermaid">, and the SVG it produces carries its own
+   max-width — a wide graph is scaled down until the labels are ant-sized inside the
+   prose column. Let every diagram use the full column, and give a genuinely wide one a
+   scrollbar instead of a shrink ray: unreadable-but-fitting is worse than scrollable. */
+.sl-markdown-content .mermaid {
+	overflow-x: auto;
+	/* The plugin centres its flex content; centred overflow puts the left edge of a
+	   wide diagram out of reach of the scrollbar. Start at the left instead. */
+	justify-content: flex-start;
+}
+.sl-markdown-content .mermaid svg {
+	display: block;
+	margin-inline: auto;
+	/* Only max-width is overridden, deliberately: an inline <svg> with `width: auto`
+	   resolves to 100% of its container, which would scale a wide graph back down and
+	   undo useMaxWidth:false. With no CSS width at all, the width attribute mermaid
+	   wrote wins, the diagram keeps its real size, and the container above scrolls.
+	   `flex: none` is the other half: the plugin's <pre> is a flex container, and a
+	   flex item shrinks to fit by default — which is the same scaling by another road. */
+	max-width: none;
+	flex: none;
+}

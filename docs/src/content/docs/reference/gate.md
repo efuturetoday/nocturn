@@ -19,6 +19,23 @@ into cooperating.
 
 The gate is the part that can stop and ask you.
 
+```mermaid
+flowchart TB
+    M[The model asks<br/>for a tool] --> CAGE{In this caller's<br/>tool set?}
+    CAGE -->|no: the cage| N([Nothing to call.<br/>No rule ran])
+    CAGE -->|yes| GATE{Policy for<br/>this kind}
+    GATE -->|allow| RUN([The call runs])
+    GATE -->|deny| X([Refused])
+    GATE -->|ask| G{Grant for this<br/>kind and target?}
+    G -->|yes| RUN
+    G -->|no| H{Approver:<br/>terminal or phone}
+    H -->|approve| RUN
+    H -->|deny, or none wired| X
+```
+
+Read the two branches out of the first diamond as the two questions: the left one is the cage and it
+never runs any code, the right one is the gate and it runs on every single call.
+
 ## The five kinds
 
 An action is a `{Kind, Target}` pair. The kind says *what sort of reach* this is; the target says

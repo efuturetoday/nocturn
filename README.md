@@ -24,15 +24,27 @@ One Go binary. No cloud, no database, no runtime to install.
 
 ## Why this exists
 
-I wanted agents doing real work on my own life — my mail, my calendar, my files. Every way to do
-that today starts the same way: hand your credentials and your data to somebody else's machine and
-hope their isolation holds. Once it has left your home it is exposed to a breach you will never hear
-about, a policy change you never agreed to, and a model you cannot inspect.
+I wanted agents doing real work on my own life — my mail, my calendar, my files. Running an agent on
+your own machine is not the hard part; several tools do that. The hard part starts the moment it
+becomes useful, which is the moment it holds real credentials and is allowed to act on them.
 
-That trade is the wrong shape. What makes a personal assistant useful is that it reaches your real
-accounts — and that is exactly what makes it dangerous. So Nocturn keeps both halves at home: the
-model never holds a credential, and nothing irreversible happens until a human approves it, on a
-second device an attacker is not holding.
+Two things follow, and they are the whole design.
+
+**The model never holds the credential.** Tokens live in an encrypted vault the host owns, and are
+injected at the network boundary. The model learns that a secret *exists*; it never sees the value.
+There is nothing in the conversation to steal, so an injection that talks the model into
+exfiltrating has nothing to carry.
+
+**No host capability without the gate.** Not for a plugin, not for a skill, not for a script the
+model just wrote. Foreign code runs in WebAssembly at zero authority — no filesystem, no sockets, no
+clock — and every capability is an explicitly handed host function rather than something the sandbox
+is trusted not to reach for. Each of those calls is then checked per action, and anything
+irreversible waits for a yes that has to come from a second device.
+
+What this does *not* claim: the model endpoint you point it at sees your conversation. That is true
+of every assistant including this one, and [SECURITY.md](SECURITY.md) says so plainly instead of
+implying otherwise. What it does claim is narrower and checkable — that between the model deciding
+to do something and it happening, there is a boundary the model cannot argue its way through.
 
 Which is where the name comes from. The agents work at night, unattended, on a schedule. The point
 is sleeping through it without wondering whether the mailbox is still there in the morning.
@@ -86,6 +98,16 @@ convenience.
 
 → [The full threat model](https://efuturetoday.github.io/nocturn/architecture/threat-model/)
 
+<div align="center">
+
+<img src="assets/screenshots/app-approval-net-google.jpg" alt="The companion app showing an approval: the pair net → google.com, with Once, Session, Always and Deny." width="270">
+<img src="assets/screenshots/app-home-reminders-recent-chats.jpg" alt="The companion app's home screen: a pending reminder and the workspace's recent conversations." width="270">
+
+*What an approval looks like where the injection cannot reach it — and the workspace on the same
+device.*
+
+</div>
+
 ## Architecture
 
 Two halves that are deliberately not allowed to blur.
@@ -111,73 +133,80 @@ at the scope you picked.
 
 ---
 
-## 🧠 Development methodology: an agentic SDLC
+## 🧠 How this was built
 
-This project is also a case study in AI-driven engineering, and the interesting part is not that an
-agent wrote code. It is that **the process was compiled into the repository** rather than promised
-in a README.
+The process is **in the repository**, not described by it. `.claude/settings.json` is committed, and
+it holds two hooks that anyone working here runs into:
 
-`.claude/settings.json` is committed, and it holds two hooks that every contributor — human or
-model — runs into:
-
-```jsonc
-// PreToolUse — a commit with unreviewed Go in the index is DENIED, not warned about.
-"matcher": "Bash", "if": "Bash(git commit*)"
-//   → staged *.go files are hashed; unless that exact diff has been through the Go
-//     review skills (Effective Go + the Google Go Style Guide, cited by rule and file:line),
-//     the commit does not happen. A stamp over the diff hash means the same content
-//     is never blocked twice.
-
-// PostToolUse — a commit touching only internal/ or cmd/ BLOCKS afterwards
-//   → until the affected documentation is updated, or the omission is justified in writing.
-```
-
-That is the difference between *"I reviewed carefully"* and *review being a precondition for a
-commit existing at all*. Every commit in this history passed both gates. The same idea runs through
-`docs/AGENTS.md`, whose one rule is **"this site documents the code in this repository, not a design
-of it"**, and through `CLAUDE.md` §6, a running list of pitfalls actually hit — so a mistake is paid
-for once.
-
-**The division of labour.** Architecture, security boundaries, the threat model, the ADRs, and
-review were mine. Implementation, tests, documentation and the mechanical work happened inside those
-constraints. The constraints came first and are in the repository as artifacts.
-
-**What that produced**, all of it checkable from a clone:
-
-| | |
+| Hook | What it does |
 |---|---|
-| **381 commits** in 23 days, **374** carrying a `Co-Authored-By: Claude` trailer | `git log` |
-| **22,037** lines of Go — against **23,758** lines of test | `git ls-files '*.go' \| xargs wc -l` |
-| **809** test functions, the whole suite green under `-race` | `go test -race ./...` |
-| **`agentkit/gate` at 100 %** statement coverage — the permission layer | `go test -cover` |
-| sandbox 90.9 % · secret 90.4 % · hitl 91.4 % · agentkit 92.9 % · auth 93.2 % | `go test -cover` |
-| **Zero** third-party dependencies in the engine | [`agentkit/go.mod`](agentkit/go.mod) |
-| CGO-free, ~18 MB, six targets from one source tree | [CI](.github/workflows/ci.yml) |
-| 4,014 lines of C (ESP32 firmware) · 4,834 lines of Angular/iOS app | one protocol, three clients |
+| **before a commit** | staged `.go` files are hashed; unless that exact diff has been through the Go review skills — Effective Go and the Google Style Guide, cited by rule and `file:line` — **the commit is denied.** Not warned about. |
+| **after a commit** | one touching only `internal/` or `cmd/` **blocks** until the affected documentation is updated, or the omission is justified in writing. |
 
-The honest caveat: this pace is only available because the constraints were unusually explicit. The
-ADRs, the pitfalls file and the two hooks are not documentation *about* the work — they are the
-input that made the work converge.
+Every commit in this history went through both. That is the difference between *"I reviewed
+carefully"* and review being a precondition for a commit existing at all — and it is checkable, not
+claimed: read the hooks, read the log.
 
----
+Two more artifacts do the same job. [`docs/AGENTS.md`](docs/AGENTS.md) carries one rule — *this site
+documents the code in this repository, not a design of it* — and [`CLAUDE.md`](CLAUDE.md) §6 is a
+running list of pitfalls actually hit, so a mistake gets paid for once. Both are inputs, not
+write-ups.
 
-## Status
+I did the architecture, the security boundaries, the threat model, the ADRs and the review. The
+implementation, the tests and the documentation happened inside those constraints. The constraints
+came first, and [`ADRS.md`](ADRS.md) is where most of them were written down before the code they
+govern.
 
-**Built and tested:** the engine and its gate, the WASM sandbox, the secret vault with boundary
-injection and bidirectional leak scanning, out-of-band approvals over WebSocket and APNs, remote MCP,
-plugins, skills, memory, scheduled agents, the iOS companion app.
+**Where that got to**, all of it verifiable from a clone:
 
-**Experimental — expect it to move:** spoken sessions and speaker recognition, the latter a pure-Go
-ONNX subset with no CGO running a WeSpeaker ResNet34. Recognition chooses **context and address,
-never permission** — speech is a channel like the chat, where nobody authenticates the typist either.
+| | | |
+|---|---|---|
+| **409** commits in 23 days, **402** with a `Co-Authored-By: Claude` trailer | | `git log` |
+| **24,066** lines of Go — against **25,268** lines of test | | `wc -l` |
+| **864** test functions, green under `-race` | | `go test -race ./...` |
+| **`agentkit/gate` 100 %** statement coverage | the permission layer itself | `go test -cover` |
+| auth 94.2 % · agentkit 92.9 % · hitl 91.4 % · sandbox 90.9 % · secret 90.4 % | the parts that hold the boundary | `go test -cover` |
+| **zero** third-party dependencies in the engine | no `require` block at all | [`agentkit/go.mod`](agentkit/go.mod) |
+| CGO-free, ~18 MB, six targets | built on every push | [CI](.github/workflows/ci.yml) |
+| 4,014 lines of C · 4,834 lines of Angular | firmware and app, one protocol | — |
 
-**Next:** retrieval over a workspace's documents; a hosted push relay, so waking a phone stops
-requiring your own Apple Developer account — safe to hand off precisely because a push carries no
-authority and no content; an Android app; extracting `agentkit` into its own repository; Ed25519
-signing for skills and plugins.
+The caveat worth stating: this only works because the constraints were unusually explicit. Take the
+ADRs, the pitfalls file and the two hooks away and you get a fast pile of plausible code. They are
+not documentation *about* the work — they are what made it converge.
 
-**Deliberately not built:** an ambient `exec` tool. See [ADR-6](ADRS.md) — every step toward a
-general coding agent erodes the one thing this design is for.
+## Status and roadmap
+
+| | | |
+|---|---|---|
+| **Engine** — turn loop, ports, immutable tool sets, sub-agents, guards | ✅ | zero deps |
+| **The gate** — per-action policy, durable grants, approver port | ✅ | 100 % covered |
+| **WASM sandbox** — foreign code at zero authority, brokered imports | ✅ | |
+| **Secret vault** — boundary injection, bidirectional leak scanning | ✅ | |
+| **Out-of-band approvals** — WebSocket, APNs wake, first answer wins | ✅ | |
+| **iOS companion app** — the second device | ✅ | TestFlight with the beta |
+| **Remote MCP** — HTTPS servers, host-injected OAuth | ✅ | stdio deliberately not |
+| **Plugins & skills** — sandboxed, manifest reviewed without running it | ✅ | |
+| **Memory** — durable notes, catalog folded into every prompt | ✅ | |
+| **Agents on a schedule** — cron, `strict` by default | ✅ | |
+| **Knowledge** — document search, hybrid, reconciled every minute | 🆕 | newest, least worn in |
+| **Voice & speaker recognition** — live audio, ESP32 satellite | 🚧 | expect it to move |
+| **Hosted push relay** — so a phone can be woken without your own Apple account | 📋 | safe to hand off: a push carries no authority |
+| **Android app** | 📋 | a build target, not a rewrite |
+| **`agentkit` in its own repository** | 📋 | |
+| **Ed25519 signing** for skills and plugins | 📋 | |
+| **Local embeddings** — retrieval without a remote provider | 📋 | needs a transformer in `internal/onnx` |
+| **Keychain vault backend**, interactive unlock | 📋 | replaces a passphrase in the environment |
+| **`exec` tool** | ❌ | see [ADR-6](ADRS.md) — it erodes the one thing this design is for |
+
+Two of those deserve a sentence rather than a row.
+
+**Voice and speaker recognition** work end to end and are covered by tests — they are simply the
+newest thing here, and the wire protocol is still moving. Recognition chooses **context and address,
+never permission**: speech is a channel like the chat, where nobody authenticates the typist either.
+
+**Knowledge** searches documents you file in a workspace, and indexing sends them to an embedding
+provider. That is stated where you would look for it rather than in a footnote, because it is the
+one part of this design that hands your data to somebody else on purpose.
 
 ## Reading further
 
