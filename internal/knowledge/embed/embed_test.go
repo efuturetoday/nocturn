@@ -60,7 +60,7 @@ func server(t *testing.T, dims int) (*httptest.Server, *[]request) {
 
 func TestEmbed_RequestShapeAndOrder(t *testing.T) {
 	srv, seen := server(t, 4)
-	c := embed.New(srv.URL+"/", "k", embed.WithDims(4), embed.WithModel("test-model"))
+	c := embed.New(embed.Config{BaseURL: srv.URL + "/", APIKey: "k", Model: "test-model", Dims: 4}, nil)
 
 	vecs, err := c.Embed(t.Context(), []string{"alpha", "beta", "gamma"})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestEmbed_HonoursTheReportedIndex(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	vecs, err := embed.New(srv.URL, "", embed.WithDims(2)).Embed(t.Context(), []string{"first", "second"})
+	vecs, err := embed.New(embed.Config{BaseURL: srv.URL, Dims: 2}, nil).Embed(t.Context(), []string{"first", "second"})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestEmbed_WrongDimensionsIsAnError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := embed.New(srv.URL, "", embed.WithDims(768)).Embed(t.Context(), []string{"x"})
+	_, err := embed.New(embed.Config{BaseURL: srv.URL, Dims: 768}, nil).Embed(t.Context(), []string{"x"})
 	if err == nil {
 		t.Fatal("a vector of the wrong length was accepted")
 	}
@@ -136,7 +136,7 @@ func TestEmbed_BatchesLongInputLists(t *testing.T) {
 		texts[i] = fmt.Sprintf("chunk %d", i)
 	}
 
-	vecs, err := embed.New(srv.URL, "", embed.WithDims(2)).Embed(t.Context(), texts)
+	vecs, err := embed.New(embed.Config{BaseURL: srv.URL, Dims: 2}, nil).Embed(t.Context(), texts)
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestEmbed_EgressScanBlocksBeforeSending(t *testing.T) {
 
 	store := secret.NewStore()
 	store.Set("api", []byte("SUPERSECRETVALUE123"))
-	c := embed.New(srv.URL, "", embed.WithDims(2), embed.WithScanner(secret.NewScanner(store)))
+	c := embed.New(embed.Config{BaseURL: srv.URL, Dims: 2}, secret.NewScanner(store))
 
 	_, err := c.Embed(t.Context(), []string{"harmless", "a note that pasted SUPERSECRETVALUE123 into it"})
 	if err == nil {
@@ -199,7 +199,7 @@ func TestEmbed_ServerErrorQuotesTheProvider(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := embed.New(srv.URL, "").Embed(t.Context(), []string{"x"})
+	_, err := embed.New(embed.Config{BaseURL: srv.URL}, nil).Embed(t.Context(), []string{"x"})
 	if err == nil {
 		t.Fatal("a 502 was treated as success")
 	}
@@ -210,7 +210,7 @@ func TestEmbed_ServerErrorQuotesTheProvider(t *testing.T) {
 
 func TestEmbed_NoInputsIsNoRequest(t *testing.T) {
 	srv, seen := server(t, 2)
-	vecs, err := embed.New(srv.URL, "").Embed(context.Background(), nil)
+	vecs, err := embed.New(embed.Config{BaseURL: srv.URL}, nil).Embed(context.Background(), nil)
 	if err != nil || vecs != nil {
 		t.Fatalf("Embed(nil) = %v, %v; want nil, nil", vecs, err)
 	}
