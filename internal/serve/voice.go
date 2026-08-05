@@ -156,8 +156,8 @@ func (c *conn) voiceWake(ctx context.Context, m VoiceWake) {
 	sessions.Start(device, sink, nil, c.listen.who, func(_ string, transcript []agentkit.Message, err error) {
 		held, blocked := sink.stats()
 		sink.close()
-		c.log.Info("voice session finished", "messages", len(transcript),
-			"undelivered_ms", held, "blocked_ms", blocked, "err", err)
+		c.log.Info("voice session finished", append([]any{"messages", len(transcript),
+			"undelivered_ms", held, "blocked_ms", blocked, "err", err}, c.listen.summary()...)...)
 		c.capture.flush(time.Now())
 		hub.control(device, VoiceState{Type: "voice.state", Ws: m.Ws, State: "idle"})
 	})
