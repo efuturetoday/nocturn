@@ -437,3 +437,65 @@ func TestOpen_KnowledgeCorpusIsInTheMountAndTheIndexIsNot(t *testing.T) {
 		t.Error("the index is inside the mount, where a file tool could rewrite it")
 	}
 }
+
+// An agent's cage must not leak a code_run that dispatches over the full base set.
+//
+// This was a real escape, and an invisible one. The fired-agent runtime SELECTED the agent's tools
+// by name out of the already-composed workspace toolset, which holds the root code_run — whose
+// dispatch set is the whole base, captured when it was built. An agent declaring
+// [file_read, code_run] listed exactly those two and had a script that could call file_write.
+func TestAgentCage_CodeRunDispatchesOverTheCageOnly(t *testing.T) {
+	base, err := agentkit.NewToolSet(
+		stubTool(t, "file_read"), stubTool(t, "file_write"),
+		stubTool(t, "http_write"), stubTool(t, "memory_write"),
+	)
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	// What the root chat gets: every base tool, plus a code_run over all of them.
+	root, err := tools.Compose(base, true)
+	if err != nil {
+		t.Fatalf("root: %v", err)
+	}
+
+	narrow := agent.Agent{Name: "narrow", Tools: []string{"file_read", "code_run"}}
+	cage, err := agentCage(base, narrow)
+	if err != nil {
+		t.Fatalf("agentCage: %v", err)
+	}
+
+	for _, name := range []string{"file_read", "code_run"} {
+		if _, ok := cage[name]; !ok {
+			t.Errorf("%s was declared and is missing from the cage", name)
+		}
+	}
+	for _, name := range []string{"file_write", "http_write", "memory_write"} {
+		if _, ok := cage[name]; ok {
+			t.Errorf("%s is in the cage of an agent that did not declare it", name)
+		}
+	}
+
+	// The reach that matters is the SCRIPT's, not the model's: both sets list a code_run, and the
+	// escape was that they were the same one. Asked for a tool it may not have, the caged script must
+	// come back empty-handed while the root script gets through.
+	const script = `{"source":"console.log(nocturn.call('file_write', {}))"}`
+	if out, err := root["code_run"].Call(t.Context(), script); err != nil || !strings.Contains(out, "ok") {
+		t.Fatalf("the root script cannot reach file_write, so this proves nothing: %q, %v", out, err)
+	}
+	out, err := cage["code_run"].Call(t.Context(), script)
+	if err == nil && strings.Contains(out, "ok") {
+		t.Errorf("a script in a read-only agent reached file_write: %q", out)
+	}
+}
+
+// stubTool is a base tool that exists to be caged: it has a name and does nothing.
+func stubTool(t *testing.T, name string) agentkit.Tool {
+	t.Helper()
+	tool, err := agentkit.NewTool(name, "stub", func(context.Context, string) (string, error) {
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("stub %s: %v", name, err)
+	}
+	return tool
+}

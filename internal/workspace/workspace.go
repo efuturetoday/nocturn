@@ -312,7 +312,11 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// deleted resolves to readOnly (no tools) so its transcript still opens but it cannot act.
 	w.agentRuntimes = make(map[string]*runtime.Runtime, len(agents))
 	for _, a := range agents.All() {
-		w.agentRuntimes[a.Name] = w.agentRuntime(a)
+		art, err := w.agentRuntime(base, a)
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q: %w", name, err)
+		}
+		w.agentRuntimes[a.Name] = art
 	}
 	w.readOnly = runtime.New(h.LLM, runtime.WithGate(policy(), gs, nil))
 	w.agentChats = chat.NewManager(func(id string) *runtime.Runtime {
@@ -441,9 +445,7 @@ func buildTools(base agentkit.ToolSet, llm agentkit.LLM, agents agent.Set, mem *
 	}
 
 	for _, a := range agents.All() {
-		// The agent's cage is its filtered base subset; code_run is added only if it declares it,
-		// and then dispatches over exactly that subset — no widening.
-		cage, err := tools.Compose(base.Select(a.Matches), a.Matches(tools.CodeRunTool))
+		cage, err := agentCage(base, a)
 		if err != nil {
 			return agentkit.ToolSet{}, err
 		}
@@ -458,6 +460,25 @@ func buildTools(base agentkit.ToolSet, llm agentkit.LLM, agents agent.Set, mem *
 		all = append(all, sub)
 	}
 	return agentkit.NewToolSet(all...)
+}
+
+// agentCage is the toolset one declared agent may act through: its filtered subset of the base
+// tools, plus code_run only when it declares it, dispatching over exactly that subset.
+//
+// It is COMPOSED from base rather than selected out of an already-composed set, and that is the
+// whole authority story. Selecting by name from the workspace toolset would find the root code_run
+// — whose dispatch set is the full base, captured when it was built — so an agent declaring
+// [file_read, code_run] would list two tools and have a script that reaches file_write, http_write
+// and memory_write. Both the sub-agent tool and a fired run go through here, so the cage cannot
+// differ between the two ways of reaching the same agent.
+// The name goes on the error here rather than at either call site, so neither can forget it: a
+// workspace with five agents that fails to compose one of them has to say which.
+func agentCage(base agentkit.ToolSet, a agent.Agent) (agentkit.ToolSet, error) {
+	cage, err := tools.Compose(base.Select(a.Matches), a.Matches(tools.CodeRunTool))
+	if err != nil {
+		return agentkit.ToolSet{}, fmt.Errorf("agent %q: cage: %w", a.Name, err)
+	}
+	return cage, nil
 }
 
 // installPlugins discovers the plugins under <dir>/plugins and folds each one's tools into the

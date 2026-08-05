@@ -78,13 +78,17 @@ func (w *Workspace) Knowledge() *knowledge.Store { return w.knowledge }
 // AgentRuns lists the persisted agent-run transcripts, most recent first.
 func (w *Workspace) AgentRuns() ([]chat.Meta, error) { return w.agentStore.Metas() }
 
-// agentRuntime builds the runtime one declared agent's runs spin under: its tool cage (the workspace
-// toolset filtered to the agent's declared tools), its instructions as the system prompt, its effort
-// and budget, and its autonomy resolved to an approver — Guarded hands runs the workspace's
-// out-of-band approver (an Ask reaches the human), Strict (the default) gets none, so any fresh Ask
-// is denied fail-closed. Autonomy is a declaration property, so this runtime is static per agent and
-// is built once at Open. It bakes no store: the agent manager adds the per-run store on Session.
-func (w *Workspace) agentRuntime(a agent.Agent) *runtime.Runtime {
+// agentRuntime builds the runtime one declared agent's runs spin under: its tool cage, its
+// instructions as the system prompt, its effort and budget, and its autonomy resolved to an approver
+// — Guarded hands runs the workspace's out-of-band approver (an Ask reaches the human), Strict (the
+// default) gets none, so any fresh Ask is denied fail-closed. Autonomy is a declaration property, so
+// this runtime is static per agent and is built once at Open. It bakes no store: the agent manager
+// adds the per-run store on Session.
+//
+// Its cage comes from agentCage over the BASE set, the same one the agent's sub-agent tool gets —
+// see there for why selecting out of the composed workspace set would hand it a code_run that
+// reaches everything.
+func (w *Workspace) agentRuntime(base agentkit.ToolSet, a agent.Agent) (*runtime.Runtime, error) {
 	var appr gate.Approver
 	if a.Autonomy == agent.Guarded {
 		appr = w.approver // itself nil when no device is wired, which collapses guarded to strict
@@ -93,8 +97,12 @@ func (w *Workspace) agentRuntime(a agent.Agent) *runtime.Runtime {
 	if a.Budget > 0 {
 		budget = a.Budget
 	}
+	cage, err := agentCage(base, a)
+	if err != nil {
+		return nil, err // agentCage names the agent
+	}
 	return runtime.New(w.llm,
-		runtime.WithTools(w.tools.Select(a.Matches)),
+		runtime.WithTools(cage),
 		runtime.WithGate(agentPolicy(), w.grants, appr),
 		runtime.WithGateLogger(agentkit.SlogLogger(w.log)),
 		runtime.WithSession(
@@ -105,7 +113,7 @@ func (w *Workspace) agentRuntime(a agent.Agent) *runtime.Runtime {
 			agentkit.WithTimeout(budget),
 			agentkit.WithLogger(agentkit.SlogLogger(w.log)),
 		),
-	)
+	), nil
 }
 
 // FireAgent starts the named agent's run over task and returns the run's id. The run is a first-class
