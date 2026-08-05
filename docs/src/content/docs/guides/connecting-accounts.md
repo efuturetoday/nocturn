@@ -43,8 +43,12 @@ Credentials are attached only for the destination they belong to. A key bound to
 is never added to a request going anywhere else, so tricking the assistant into calling an
 attacker's host does not carry your key along with it.
 
-A request that brings its **own** credential is rejected outright — userinfo in the URL
-(`user:pass@host`), or an `Authorization` / `Cookie` / `Proxy-Authorization` / `X-Api-Key` header.
+A request cannot bring its **own** credential, and the two ways it might are closed differently.
+An `Authorization` or `Cookie` header is not refused — it is **impossible**: the tools accept a URL,
+a method, a body and a content type, and no other header ever reaches the wire. A URL carrying
+`user:pass@host` *is* refused, on the way out and on any redirect, because the approval you are
+shown is rendered from the host — and a host does not say who is authenticating as what.
+
 The credential channel belongs to the host, and there is exactly one of it.
 
 ## Signing in with OAuth

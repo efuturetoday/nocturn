@@ -73,8 +73,9 @@ credentials:
     Credentials are attached **host-side, at the boundary, for the matching host only**. The guest
     never sees the token and never picks it — the destination does.
   - >-
-    A request that carries its **own** credential is rejected: userinfo in the URL
-    (`user:pass@host`), or an `Authorization` / `Cookie` / `Proxy-Authorization` / `X-Api-Key` header.
+    A request cannot carry its **own** credential. Headers are not refused but absent — the tools
+    take a URL, a method, a body and a content type, and nothing else reaches the wire. A URL with
+    `user:pass@host` is refused outright, on the first request and on every redirect hop.
 
 leakScanning:
   intro: "Bidirectional — a secret can neither be smuggled out nor echoed back:"
