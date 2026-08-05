@@ -103,17 +103,36 @@ Your code never sees the token — it is stamped in host-side, for that host onl
 with…" services, declare an `oauth` provider instead and run `nocturn auth <name>` once. See
 [Secrets and accounts](/nocturn/guides/connecting-accounts/).
 
-## Installing
+## Putting one in, end to end
 
-Drop the folder in `plugins/` and restart. That is the whole install — there is **no interactive
-review step today**, so the safety of installing a plugin rests on the two structural walls (its
-cage, and the gate on every call), not on a prompt you get at install time. Read the manifest before
-you drop it in; it is short by design, and it is the complete statement of what the plugin can
-reach.
+The repository ships a runnable one — a `weather` plugin with a single tool, caged to `http_read`:
 
-:::tip[A working example]
-`sdk/_template/` in the repository is a runnable starting point: manifest, JavaScript entry point,
-and a TypeScript source if you prefer to build.
+```sh
+cp -r examples/workspace/plugins/weather \
+      nocturn-data/workspaces/main/plugins/weather
+
+nocturn serve        # start, or restart if it was already running
+```
+
+That is the whole install. Two things follow from it:
+
+**Read `plugin.json` first, and read it instead of `plugin.js`.** The manifest is the complete
+statement of what the plugin can reach — `"uses": ["http_read"]` here — and you can check it without
+running anything. The code cannot widen it.
+
+**A restart is required.** Plugins are discovered when a workspace opens, and there is no watcher on
+`plugins/`. A daemon that was already running does not see the new folder.
+
+There is **no interactive review step today**. The safety of installing a plugin rests on the two
+structural walls — its cage, and the gate on every call it makes — not on a prompt at install time.
+That is why the manifest is short: it is meant to be read.
+
+Its tool then appears to the model as `weather_forecast`, and its first request asks about the host
+it wants, exactly as if the model had called `http_read` itself.
+
+:::tip[Starting from scratch]
+`sdk/_template/` is the skeleton: manifest, JavaScript entry point, and a TypeScript source with a
+`tsconfig.json` if you prefer to build.
 :::
 
 ## When to reach for one
