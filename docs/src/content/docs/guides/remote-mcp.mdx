@@ -43,8 +43,8 @@ review step; dropping the folder in is the decision.
 
 ## Signing in
 
-- **None** <Badge text="Available now" variant="success" /> — omit `auth` for a public server.
-- **Token** <Badge text="Available now" variant="success" /> — `"auth": "token"`, then seed the
+- **None** — omit `auth` for a public server.
+- **Token** — `"auth": "token"`, then seed the
   bearer out of band:
 
   ```sh
@@ -54,7 +54,7 @@ review step; dropping the folder in is the decision.
   It lands encrypted in the server's own shard. Nothing secret ever touches `mcp.json` or the
   environment.
 
-- **OAuth with discovery** <Badge text="Available now" variant="success" /> — `"auth": "oauth"` and
+- **OAuth with discovery** — `"auth": "oauth"` and
   nothing else. `nocturn auth <name>` then discovers the server's authorization endpoints,
   registers a client, opens the browser, and stores the token. No client id, no endpoints to copy.
   This follows the MCP authorization spec: protected-resource metadata → authorization-server

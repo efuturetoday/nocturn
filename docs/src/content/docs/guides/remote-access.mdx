@@ -16,7 +16,7 @@ The daemon is not a cloud service and does not phone home. It listens on your LA
 over Bonjour/DNS-SD as `_nocturn._tcp` so the companion app can find it without you typing an IP,
 and speaks a small tagged-JSON protocol over one WebSocket per device.
 
-## Pairing a device <Badge text="Available now" variant="success" />
+## Pairing a device
 
 Every connection is gated on a bearer token, and the daemon never stores the token itself — only its
 SHA-256 hash, compared in constant time. Getting a device its token happens in one of three ways.
@@ -75,200 +75,14 @@ Two consequences worth knowing:
   it; the other is told it was resolved. This is also why an appliance is never shown one — it would
   outrace the phone it exists to defer to.
 
-## Speaking, on the same connection <Badge text="Experimental" variant="caution" />
+## Speaking, on the same connection <Badge text="WIP" variant="caution" />
 
-:::caution[This part moves]
-Spoken sessions and speaker recognition work end to end and are covered by tests, but they are the
-newest thing here and the least settled. The wire messages below, which actions a spoken session
-asks about, and the browser client — labelled a PoC harness in its own help text — should all be
-expected to change. Everything else on this page is stable.
-:::
+Voice is a domain on this protocol rather than a separate channel — the same connection, the same
+pairing, the same approval routing. It is the newest and least settled part of Nocturn, so it has a
+page of its own: **[Speaking to it](/nocturn/guides/speaking/)**.
 
 
-Voice is a domain on the protocol above, not a separate channel: `voice.wake` opens a spoken session,
-`voice.credit` says how much speech the device can hold, and the audio itself is binary frames — the
-only frames on the socket that are not commands. The daemon answers with `voice.state` on each
-transition and `voice.interrupt` when you talk over it, which tells the device to drop whatever it
-has buffered but not yet played.
-
-One connection carries all of it because a second one would need a second copy of everything that
-already hangs off a device's connection — pairing, the approval routing, presence. It also means a
-device that can already talk to the daemon can already speak, without another endpoint or another
-token.
-
-Three ways this differs from chat, all deliberate:
-
-- **A device has one conversation at a time**, which is why an audio frame carries no addressing of
-  its own. The wake word already said which one.
-- **Audio is addressed, not broadcast.** A conversation is shown on every device; speech is played on
-  exactly one, or your phone would play what the speaker in the hallway is hearing.
-- **A spoken session ends when the device goes away.** A chat turn deliberately survives that,
-  because its answer is still worth reading when you come back. Audio has nobody to play to, and a
-  live model bills for every second of it.
-
-It also ends on its own, three ways, most polite first. **The model hangs up** — it is given a
-`hang_up` it can call when you say goodbye, answered by the driver and never part of the tool cage,
-because it steers the session rather than reaching into the world. **Silence** — about ten seconds
-after a reply with nobody speaking, which is long enough to ask a follow-up without the wake word and
-short enough not to leave an open microphone in the room. **The budget** — fifteen minutes, a cost
-guard rather than a conversation rule.
-
-The silence window pauses while a tool is running or an approval is out on your phone. That is the
-one moment where hanging up would be worst: somebody has already been asked to do something.
-
-Silence is judged by the **device**, not by what the model understood. Its detector fires about
-200 ms after a person starts, on the echo-cancelled signal; a transcript arrives later and only for
-speech that made sense, which is the wrong question when you are asking whether anyone is still
-there.
-
-Speech comes back **credited**, not paced. A live model emits a sentence far faster than it is
-spoken, so something has to decide the rate — and the only real clock in the system is the far
-speaker's own crystal. The device grants its whole playout queue when a session opens and grants more
-as playback consumes it; the daemon sends what it has been granted and holds the rest. Nothing is
-metered by a timer, so there is no rate to get wrong, and overflow is structurally impossible rather
-than merely unlikely.
-
-The window is deliberately much larger than the round trip that reopens it. Sized the other way — a
-buffer about as deep as the delay in refilling it — the queue is empty every time credit arrives, and
-no amount of tuning either number helps.
-
-Between the daemon and one connection sits a short queue, four frames of it. A frame that finds it
-full **waits** rather than being discarded: the queue only fills when the socket behind it has stopped
-draining, which is precisely when nothing more should be sent. Dropping instead would put a gap in
-the middle of a sentence to solve a problem that waiting solves by itself. Speech goes to a device's
-newest connection, since a device holds more than one while an old one times out.
-
-Blocking the write until the device's socket accepts it looks simpler and is not: a device blocks in
-its own receive callback, that callback runs on the task driving the connection's keepalive, and a
-wait longer than the client's read timeout looks to it like a dead socket. Flow control that drops
-the link under load is not flow control.
-
-**Interrupting a reply is currently off — the session is half duplex.** While the speaker runs, the
-device sends silence upstream instead of the microphone, because the model must never hear the
-device's own voice: what echo cancellation leaves of a reply still measures louder than a person,
-and no voice detector on either side can tell the two apart. Until the canceller is measured good
-enough, talking over a reply reaches nobody — let it finish. `voice.interrupt` remains the daemon's
-message to drop buffered, unplayed speech, and `voice.barge` is reserved for the device-side
-detector (`BARGE_IN_LOCAL`, parked behind the same measurement).
-
-A daemon with no live model configured refuses `voice.wake` and says so, rather than opening a
-session that can never answer.
-
-### Approvals in the middle of a sentence
-
-A spoken session asks before it reaches the network, and the ask goes where every other ask goes:
-out of band, to a paired device. The room cannot approve what the room requested — answering "yes"
-by voice would be answered by the same room the instruction came from.
-
-The wait is shown twice, because the two audiences are different. **The model says it** — the
-session is handed an interim result naming what is pending, so whoever is listening hears why the
-conversation stopped instead of hearing nothing. **The device shows it** — `voice.state` gains an
-`approval` state, so somebody who walks past a silent speaker can tell a pending decision from a
-broken session. Neither is allowed to fail the approval: showing a wait is worth less than the
-decision being waited for.
-
-The state travels on the control queue, which overtakes audio, or it would arrive after the wait it
-describes was over. Clearing it says `listening`, because the device leaves that state by itself the
-moment speech starts playing — the clear only has to cover a refusal, where nothing follows.
-
-Which actions ask is deliberately narrow: network reach, today, and nothing else. That is a
-measurement rather than a settled posture. Asking constantly is how people learn to approve
-reflexively, which costs more than it protects, and what is being tested is whether one asking kind
-earns the pause it puts in a conversation.
-
-### Knowing who is speaking
-
-With `NOCTURN_SPEAKER_MODEL` pointing at a speaker-embedding checkpoint, the daemon recognises which
-enrolled voice is talking, continuously, from the audio a session is already sending. Enrolled voices
-live in the workspace's `voices.json`; with none of them, or with no model, nothing below happens and
-the spoken path behaves exactly as it did.
-
-**Nothing waits for it.** A session opens on the wake word as before; recognition runs beside the
-conversation and the answer is simply there by the time anything asks. That is not a shortcut — a
-live session's system instruction travels in its setup frame and cannot be replaced afterwards, so
-identifying first would have meant pausing at the start of every conversation to learn something not
-needed until somebody asks something personal.
-
-The result reaches the model two ways, and the second matters more:
-
-- **`whoami`** returns `{"name", "confidence"}` when asked. An **empty name means unrecognised**, and
-  the model is told not to guess which household member it might be. Outside a spoken session — a
-  typed chat, an agent run — it always answers that, since nothing there is listening.
-- **On the request context**, where a tool acting on somebody's behalf reads it directly. A mail tool
-  asked for "my messages" resolves the mailbox itself; the model never learns whose it was, cannot
-  forget to pass it, and cannot be talked into naming someone else's. The same shape as credential
-  injection, where the guest never sees the value.
-
-Spoken sessions now also carry the memory index, which they did not before: `memory_read` joined the
-voice cage. Reading only — `memory_write` stays out.
-
-A recognised voice chooses context and address, never permission. Speech is a channel like the chat,
-where nobody authenticates the typist either, and a gated action is confirmed out of band on a second
-device in both.
-
-### Recording the uplink
-
-Setting `NOCTURN_VOICE_CAPTURE` to a directory makes the daemon write what a device's microphone
-sends to WAV files there — 16 kHz mono, the rate the link already carries.
-
-It exists for one job: obtaining recordings of a voice through the microphone, room and echo
-canceller that will later have to recognise it, which a laptop microphone cannot stand in for. It is
-**off unless the variable is set**, because it writes what the room said to disk. Arming it logs a
-warning, every file is logged by name, the directory is created `0700` and the files `0600`.
-
-A recording is asked for rather than waited for:
-
-```bash
-nocturn enroll --device kitchen --seconds 60
-```
-
-This opens no conversation. `capture.start` puts the board in a state where the microphone streams
-and nothing else runs — no live model, no billing, no speaker, and no half-duplex gate muting the
-microphone whenever a reply plays. **The ring goes steady red for as long as it records**, which is a
-deliberate departure from the fault colour: that one blinks slowly, this one is steady, and someone
-walking into the room should be able to tell they are being recorded without knowing the palette.
-
-`capture.stop` ends it, and so does the board on its own after two minutes. The second one is what
-matters: a caller that dies between start and stop must not leave a microphone streaming a room, and
-nothing in the house would say so.
-
-Asking is a capability, not something any device may do. A paired app may (`ClassApp`), and the local
-command line may — it enrols itself once as `ClassTool`, which can start a recording and, pointedly,
-cannot approve a gated action. An **appliance may not**: a speaker in the hallway switching on the
-microphone in the bedroom is exactly the shape this refuses.
-
-Recordings are cut by length and by silence rather than by session — a device opens a voice session
-on the wake word and never closes it, so waiting for one to end would mean never writing a file. A
-recording starts at the first sound, ends after four hundred milliseconds of quiet or eight seconds
-of speech, and is contiguous audio throughout: pauses inside it are kept, so what a file contains is
-what the microphone heard.
-
-### Turning recordings into a voice
-
-Those files become a profile through the command line:
-
-```bash
-nocturn voices add --device kitchen lina /path/to/recordings/
-nocturn voices ls
-nocturn voices rm lina
-```
-
-`add` takes files or directories — a directory contributes its `*.wav` — and expects 16 kHz mono
-16-bit WAV, which is what the uplink already writes, so nothing captured needs converting. It reads
-each recording, embeds it, and appends the result to the workspace's `voices.json`. Embedding needs
-`NOCTURN_SPEAKER_MODEL`; without it the command says so and does nothing.
-
-**`--device` is required and never guessed.** A voice enrolled on a phone and the same voice heard
-through a hallway speaker are two channels, not one — different microphone, different room, different
-echo canceller — and the take records which one it came through. Enrolling somebody a second time on
-a second device therefore adds that channel rather than replacing the first: a person's score is
-their best single take, so having enrolled twice can only help them.
-
-The command opens no workspace and talks to no daemon. It edits one file, and a daemon started
-afterwards picks it up. An unreadable recording is skipped with its name on stderr and counted in the
-summary, because a silently thinner profile is one that recognises worse for a reason nobody sees.
-
-## Approvals when nobody is looking <Badge text="Available now" variant="success" />
+## Approvals when nobody is looking
 
 This is the reason the daemon exists. An agent running on a schedule hits something that needs your
 yes, with no terminal in front of it. If a device is paired, the ask is routed out of band: a push
