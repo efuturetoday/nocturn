@@ -190,6 +190,41 @@ type session struct {
 	mu       sync.Mutex // serializes writes: Transport guarantees one concurrent Send only
 	closeOne sync.Once
 	done     chan struct{}
+
+	// sent is the last few frame KINDS this session wrote, newest last, for the one question a
+	// server-side close leaves behind: what did we say to earn it. Kinds and sizes only — no audio,
+	// no transcript, nothing anybody said. A close frame names a rule, never the frame that broke it.
+	sent []string
+}
+
+// remember records a frame's shape. The caller holds the lock.
+func (s *session) remember(kind string, bytes int) {
+	if bytes > 0 {
+		kind = fmt.Sprintf("%s(%dB)", kind, bytes)
+	}
+	s.sent = append(s.sent, kind)
+	if len(s.sent) > 8 {
+		s.sent = s.sent[1:]
+	}
+}
+
+// kindOf names what a frame is, for remember.
+func kindOf(msg clientMessage) (string, int) {
+	switch {
+	case msg.Setup != nil:
+		return "setup", 0
+	case msg.ClientContent != nil:
+		return "clientContent", 0
+	case msg.RealtimeInput != nil:
+		if msg.RealtimeInput.Audio != nil {
+			// The base64 length, not the sample count — the point is the frame's shape on the wire.
+			return "realtimeInput", len(msg.RealtimeInput.Audio.Data)
+		}
+		return "realtimeInput", 0
+	case msg.ToolResponse != nil:
+		return "toolResponse", 0
+	}
+	return "unknown", 0
 }
 
 var _ agentkit.LiveSession = (*session)(nil)
@@ -260,6 +295,8 @@ func (s *session) write(ctx context.Context, msg clientMessage) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	kind, size := kindOf(msg)
+	s.remember(kind, size)
 	return send(ctx, s.tr, msg)
 }
 
@@ -284,6 +321,13 @@ func (s *session) read(ctx context.Context) {
 			case <-s.done: // an expected close, not a failure
 			case <-ctx.Done():
 			default:
+				// A session the far side ended is not debug information: the conversation stopped
+				// mid-sentence and somebody wants to know why. The frames we last sent go with it,
+				// because a close frame names a rule and never the frame that broke it.
+				s.mu.Lock()
+				recent := strings.Join(s.sent, " ")
+				s.mu.Unlock()
+				s.log.Warn("gemini: the server ended the session", "err", err, "last_frames", recent)
 				s.emit(ctx, agentkit.LiveError{Err: err})
 			}
 			return
