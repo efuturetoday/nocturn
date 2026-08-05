@@ -45,7 +45,12 @@ output:
   lang: json
 
 js:
-  wrapper: null
+  wrapper: |
+    nocturn.memory.write(
+      "people/lina.md",
+      "daughter, 7 years old",
+      "Likes dinosaurs. Starts school in August.",
+    );
   call: |
     nocturn.call("memory_write", {
       path: "people/lina.md",

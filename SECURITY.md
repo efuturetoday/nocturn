@@ -25,8 +25,8 @@ long version is [the threat model](https://efuturetoday.github.io/nocturn/archit
 - **Foreign code you installed** — a plugin, a skill, a compiled artifact. It runs in a WASM sandbox
   at zero authority, and every capability is an explicitly handed host window.
 - **Prompt injection through content the model reads** — a web page, an email, a tool result. The
-  model holds no credential to leak, every effect goes through the gate, and anything irreversible
-  or outbound waits for an approval that is answered **on a different device**.
+  model holds no credential to leak, every effect goes through the gate, and everything that reaches
+  the network or the filesystem waits for an approval answered **on a different device**.
 
 Reports about these are exactly on target. So are:
 

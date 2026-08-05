@@ -7,9 +7,11 @@ The app is not a remote control for the terminal. It is the **second device**, a
 Nocturn's approvals mean anything at all.
 
 An assistant that asks permission *inside the conversation* asks in the same place a
-[prompt injection](/nocturn/architecture/threat-model/) already sits. The injection can answer it.
-Move the question to a device it never reached, and it cannot. Everything else the app does —
-reading chats, firing agents, checking reminders — is convenience layered on that one job.
+[prompt injection](/nocturn/architecture/threat-model/) already sits — and worse, it asks at a
+terminal that, for the runs this is built for, nobody is sitting at. Moving the question to a device
+of its own gives it an audience and a screen the conversation does not write. Everything else the
+app does — reading chats, firing agents, checking reminders — is convenience layered on that one
+job.
 
 ## Getting it
 

@@ -26,9 +26,19 @@ output:
   after: "`cancelled: false` means nothing was pending under that id — an unknown id is not an error."
 
 js:
-  wrapper: null
+  wrapper: |
+    nocturn.cancelReminder("rem-…");
   call: |
     nocturn.call("remind_cancel", { id: "rem-…" });
 
 notes: >-
-  No prelude wrapper — use the generic form.
+  **A write that is still ungated**, which is the exception worth stating rather than hiding. The
+  argument is reach, as everywhere else: the only thing it can remove is something this assistant
+  scheduled through [`remind`](/nocturn/reference/tools/remind/), so the worst an injection achieves
+  is a nudge that never arrives. Gating it would put an approval in front of routine housekeeping —
+  the assistant tidying up after itself — and a person asked that often stops reading.
+
+
+  An unknown id answers `cancelled: false` rather than failing, so a script can cancel
+  optimistically without first checking
+  [`remind_list`](/nocturn/reference/tools/remind_list/).

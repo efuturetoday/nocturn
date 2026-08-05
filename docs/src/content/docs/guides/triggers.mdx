@@ -22,12 +22,12 @@ the quickest way to test an agent before letting it run on its own.
 
 ## On a schedule
 
-Add a `when: cron("…")` line and the agent fires itself:
+Add a `when:` line and the agent fires itself:
 
 ```markdown
 ---
 name: morning-briefing
-when: cron("0 7 * * *")   # every day at 07:00
+when: "0 7 * * *"   # every day at 07:00
 ---
 ```
 

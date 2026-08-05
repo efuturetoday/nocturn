@@ -38,8 +38,10 @@ decision is genuinely yours to make.
 An agent working on its own reads things you do not control: web pages, emails, incoming
 messages. Any of those can hide instructions that try to hijack it into misusing the access
 you gave it. Nocturn assumes this will happen, so it puts a gate in front of every real
-action. A hijacked agent still cannot do anything irreversible without your explicit yes.
-And because that yes lives on a second device, whatever hijacked it cannot answer for you.
+action. A hijacked agent still cannot reach the network or your files without your explicit
+yes — the gate asks by *reach*, not by how dangerous a call looks, so there is no clever
+framing that makes a request exempt. And because that yes lives on a second device, it is
+still asked when nobody is watching the conversation.
 
 ## Two ideas to understand first
 

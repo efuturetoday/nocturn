@@ -31,8 +31,8 @@ attacker.
 **Defense: starve it, then gate it.** Nocturn answers injection in two structural moves.
 First it removes the prize: the model never holds your secrets, so there is nothing to hand
 over — [what it does not know, it cannot leak](#nothing-to-steal). Then it gates what is
-left: every tool the model can still call goes through the gate, and anything
-irreversible or outbound waits for your out-of-band yes. The first move starves the attack;
+left: every tool the model can still call goes through the gate, and everything that
+reaches the network or the filesystem waits for your out-of-band yes. The first move starves the attack;
 the second isolates what it can do.
 
 | | Malicious code | Prompt injection |
@@ -92,16 +92,22 @@ one device further out.
 So a spoken session is bounded by its **cage** rather than by its gate. `internal/workspace`
 binds it to an allowlist of tools that only read or address the user — `file_read`, `file_list`,
 `file_search`, `file_stat`, `http_read`, `dns_resolve`, `ping`, `remind`, `remind_list`,
-`skill_read`, `time_now`, `notify`. Nothing that writes a file, sends a request with a side
-effect, or runs code is bound at all. An absent tool is not denied; it cannot be named, which is
-the stronger property.
+`skill_read`, `time_now`, `notify`, `memory_read`, `knowledge_search`, `whoami`. Nothing that
+writes a file, sends a request with a side effect, or runs code is bound at all. An absent tool is
+not denied; it cannot be named, which is the stronger property.
 
 That is also why the voice policy differs from the [workspace policy](/nocturn/reference/gate/): it
-**allows** the `net` and `file` kinds where a typed session asks. This reads like a loosening and
-is the opposite. The typed policy asks on those kinds because a typed session can reach writing
-tools through them; a spoken session cannot, because the cage never bound them. Asking a second
-time would only interrupt every sentence — and a user interrupted every sentence learns to approve
-without reading, which is worse than not asking.
+**allows** the `file` kind where a typed session asks. This reads like a loosening and is the
+opposite. The typed policy asks on `file` because a typed session can reach writing tools through
+it; a spoken session cannot, because the cage never bound them. Asking a second time would only
+interrupt every sentence — and a user interrupted every sentence learns to approve without reading,
+which is worse than not asking.
+
+The `net` kind is the exception, and deliberately the only one: leaving the house is asked about
+even here, out of band on a phone. That is a measurement rather than a settled posture — what is
+being tested is whether a single asking kind earns the pause it puts in a conversation. Nothing it
+remembers carries over, either: a spoken ask is `RecallNever`, so it is felt every time instead of
+being answered once and hidden.
 
 Three consequences follow, and all of them are deliberate:
 
@@ -118,9 +124,16 @@ Three consequences follow, and all of them are deliberate:
 ## Zero ambient authority
 
 Underneath both defenses is one rule: nothing is granted implicitly. The guest starts with no
-filesystem, no network, and no clock. Every ability is a window the host opens on purpose, so an
-ability that was not handed over is unforgeable by absence — there is no ambient power to escalate
+filesystem, no network, and no environment. Every ability is a window the host opens on purpose, so
+an ability that was not handed over is unforgeable by absence — there is no ambient power to escalate
 from.
+
+The clock and the random source are the two exceptions, and they are not really exceptions: reading
+the time reaches nothing and asking for entropy reaches nothing. Withholding them was tried and was
+worse. A guest with a frozen clock formats a wrong date and says nothing, and — measured — an
+interpreter that seeds its random numbers from that clock returns the *same* "random" value on every
+run of every script forever. Predictable randomness inside a guest that builds HTTP request bodies
+is a real hole; a working clock is not.
 
 The [gate](/nocturn/reference/gate/) then decides per action, on a `{kind, target}` pair rather than on the
 sentence that led there. Worth being precise about what it is not: the workspace policy is **not**

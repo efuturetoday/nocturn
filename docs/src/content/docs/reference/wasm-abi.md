@@ -14,7 +14,9 @@ The host mounts a single import module, `nocturn`. Its members are exactly the g
 functions and nothing else — a capability the guest was not granted is **structurally absent**,
 so it cannot even be named, let alone called ("unforgeable by absence").
 
-The JavaScript interpreter, for example, declares exactly one import: `nocturn.call`.
+The JavaScript interpreter, for example, declares exactly one import of its own: `nocturn.call`.
+Its other imports are WASI's — stdio, the clock, `random_get` — which the sandbox answers itself and
+which reach nothing outside the instance.
 
 ## The `(ptr, len)` ABI
 

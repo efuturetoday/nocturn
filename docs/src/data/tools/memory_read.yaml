@@ -23,7 +23,8 @@ output: >-
   surprise.
 
 js:
-  wrapper: null
+  wrapper: |
+    const note = nocturn.memory.read("people/lina.md");
   call: |
     const note = nocturn.call("memory_read", { path: "people/lina.md" });
 
