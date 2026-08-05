@@ -3,6 +3,13 @@
 A speaker in a room that you talk to. ESP32 firmware, ESP-IDF, about 4,000 lines of C over
 41 tracked source files.
 
+**One board:** the [Waveshare ESP32-S3-AUDIO-Board](https://docs.waveshare.com/ESP32-S3-AUDIO-Board).
+That is the only one this is written against and the only one it has been measured on. The narrow
+claim is about echo cancellation rather than pin counts: what the canceller leaves of the speaker's
+own voice decides whether the board can hear a person while it is talking, and that depends on this
+microphone in this enclosure at this distance from this driver. Same chip, different acoustics, is a
+different measurement.
+
 It is not a client in the usual sense. It holds no key you type, has no screen to show a pairing
 code, and cannot approve anything — a hallway speaker that could authorise an action would defeat
 the reason approvals leave the room in the first place. What it does is carry a microphone, a
