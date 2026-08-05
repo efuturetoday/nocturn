@@ -110,7 +110,7 @@ Your code never sees the token — it is stamped in host-side, for that host onl
 kept, how the plugin's shard is keyed, and what happens if it tries to leave is on
 [the vault](/nocturn/guides/vault/).
 
-### Sign in with… instead of a stored token
+### OAuth
 
 For a service you log into rather than paste a key from, declare an `oauth` provider. The host runs
 the flow, holds the token, refreshes it, and injects it through the credential of the same name:
