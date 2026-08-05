@@ -29,9 +29,15 @@ input:
     notes: How many passages to return. Defaults to **5**, capped at **20**.
 
 output: >-
-  The matching passages as text, each preceded by its file and heading breadcrumb, capped at
-  **24 KiB**. An empty result says so explicitly, so that "nothing was found" cannot be mistaken for
-  "nothing was asked".
+  The matching passages as text, best first, each preceded by its file, its heading breadcrumb, and a
+  **similarity** — the cosine between the question and that passage. Capped at **24 KiB**. An empty
+  result says so explicitly, so that "nothing was found" cannot be mistaken for "nothing was asked".
+
+
+  ```
+  --- wohnung/mietvertrag.md > Kaution  [similarity 0.76, keyword match] ---
+  Die Kaution beträgt drei Nettokaltmieten, also 3.720 Euro. …
+  ```
 
 js:
   wrapper: |
@@ -41,6 +47,20 @@ js:
     const hits = nocturn.call("knowledge_search", { query: "the deposit", limit: 3 });
 
 notes: >-
+  **The similarity is there for the model to judge with.** Retrieval always returns its best
+  guesses: ask for three passages and you get three, however weak. A hard cutoff was the obvious fix
+  and the wrong one — where the line between an answer and noise falls depends on the question, and
+  the question is not in the retrieval code. So the number goes to the model with the caveats that
+  make it usable: it is not a probability, its scale depends on the embedding model, and it should be
+  read against the other results rather than against a constant. A flat set with no leader means the
+  answer is not filed here. On a real corpus, "how much was the deposit" gives 0.76 against 0.57 and
+  0.60; a question about something not in the folder gives 0.48, 0.56, 0.53 — no leader at all.
+
+
+  A passage marked `keyword match` was found by its exact words. A low similarity there is the
+  hybrid working rather than failing: it is how a serial number or an error code is found at all.
+
+
   **Two rankers, because they fail in opposite directions.** Vectors find a passage that says the
   same thing in other words and miss an exact identifier the model never saw — a serial number, a
   flag, an internal codename. Keyword scoring finds precisely that string and misses every
