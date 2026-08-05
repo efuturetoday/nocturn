@@ -12,7 +12,7 @@ intro: >-
 
 glance:
   target: "the **host** — `api.github.com`, `example.com`, an IP for `ping`"
-  policy: "**every** net action asks, read and write alike, remembered for the session"
+  policy: "**every** net action asks, read and write alike; you choose how long the yes lasts"
   matcher: "`tools.HostMatch` — exact host, `*.domain` for a domain and its subdomains, or `*` for any"
 
 tools:
