@@ -244,8 +244,19 @@
   FormData.prototype.delete = function (name) { this._f = this._f.filter(function (e) { return e[0] !== name; }); };
   FormData.prototype.forEach = function (fn, self) { this._f.forEach(function (e) { fn.call(self, e[1], e[0], this); }, this); };
 
+  // A multipart boundary must be unguessable, not merely unlikely: it is the only thing separating
+  // the parts, and a field value that contains it closes its part early and forges everything after
+  // it. Math.random() is a PRNG seeded from the clock — two calls a millisecond apart are related —
+  // so this takes 16 bytes from crypto.getRandomValues, which the interpreter fills from the host's
+  // crypto/rand through WASI. 128 bits is what browsers use here, for the same reason.
+  function randomBoundary() {
+    var b = crypto.getRandomValues(new Uint8Array(16)), hex = "";
+    for (var i = 0; i < b.length; i++) hex += (b[i] + 0x100).toString(16).slice(1);
+    return "----NocturnFormBoundary" + hex;
+  }
+
   function encodeMultipart(fd) {
-    var boundary = "----NocturnFormBoundary" + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    var boundary = randomBoundary();
     var body = "";
     fd._f.forEach(function (e) {
       var name = e[0], value = e[1], filename = e[2];

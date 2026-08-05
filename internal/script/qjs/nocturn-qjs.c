@@ -7,6 +7,7 @@
  *   - stdout : whatever the script prints (console.log / print).
  *   - stderr : an uncaught exception's message + stack; exit code 1.
  *   - imports: exactly ONE host function, nocturn.call — the generic tool gate.
+ *              (WASI itself is the other import module; see crypto below.)
  *   - exports: malloc/free so the host can allocate the gate's response inside
  *              guest memory (the standard packed-ptr ABI in sandbox.go).
  *
@@ -99,6 +100,52 @@ static JSValue js_nocturn_call(JSContext *ctx, JSValueConst this_val, int argc, 
     return out;
 }
 
+/* crypto.getRandomValues(view) — fill an integer TypedArray with entropy from
+ * the host, and return it, per the Web Crypto shape scripts already expect.
+ *
+ * quickjs-ng ships no WebCrypto, and its Math.random is a PRNG seeded from the
+ * wall clock — under a sandbox whose clock is worth little as a seed, and never
+ * suitable for anything a third party may guess at. Multipart boundaries in the
+ * prelude are the concrete case: a predictable boundary lets a crafted field
+ * value close the part early and forge the rest of the body.
+ *
+ * getentropy() is wasi-libc's thin wrapper over the WASI random_get import, so
+ * this reaches the host's crypto/rand and adds no host function of our own —
+ * the "exactly one import" contract above is intact.
+ *
+ * The 65536-byte cap and the QuotaExceededError are the Web Crypto spec's, kept
+ * so a script written against a browser behaves the same here. getentropy()
+ * itself refuses more than 256 bytes at a time, hence the loop. */
+static JSValue js_get_random_values(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "crypto.getRandomValues(view): a typed array is required");
+
+    size_t off = 0, len = 0, bpe = 0;
+    JSValue buf = JS_GetTypedArrayBuffer(ctx, argv[0], &off, &len, &bpe);
+    if (JS_IsException(buf))
+        return JS_ThrowTypeError(ctx, "crypto.getRandomValues(view): a typed array is required");
+
+    size_t total = 0;
+    uint8_t *mem = JS_GetArrayBuffer(ctx, &total, buf);
+    JS_FreeValue(ctx, buf);
+    if (!mem)
+        return JS_ThrowTypeError(ctx, "crypto.getRandomValues(view): the buffer is detached");
+    if (len > 65536)
+        return JS_ThrowRangeError(ctx, "crypto.getRandomValues(view): at most 65536 bytes");
+
+    uint8_t *p = mem + off;
+    for (size_t done = 0; done < len;) {
+        size_t n = len - done;
+        if (n > 256)
+            n = 256;
+        if (getentropy(p + done, n) != 0)
+            return JS_ThrowInternalError(ctx, "crypto.getRandomValues: the host refused entropy");
+        done += n;
+    }
+    return JS_DupValue(ctx, argv[0]);
+}
+
 /* Read all of a fd into a NUL-terminated heap buffer; *out_len excludes the NUL. */
 static char *slurp(int fd, size_t *out_len) {
     size_t cap = 1 << 16, n = 0;
@@ -174,7 +221,8 @@ int main(void) {
         return 1;
     }
 
-    /* Globals: nocturn.call (the gate), console.log/console.error, print. */
+    /* Globals: nocturn.call (the gate), console.log/console.error, print,
+     * crypto.getRandomValues. */
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue nocturn = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, nocturn, "call", JS_NewCFunction(ctx, js_nocturn_call, "call", 2));
@@ -184,6 +232,10 @@ int main(void) {
     JS_SetPropertyStr(ctx, console, "error", JS_NewCFunction(ctx, js_print, "error", 1));
     JS_SetPropertyStr(ctx, global, "console", console);
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_print, "print", 1));
+    JSValue crypto = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, crypto, "getRandomValues",
+                      JS_NewCFunction(ctx, js_get_random_values, "getRandomValues", 1));
+    JS_SetPropertyStr(ctx, global, "crypto", crypto);
     JS_FreeValue(ctx, global);
 
     int status = 0;

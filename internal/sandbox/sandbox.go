@@ -2,10 +2,12 @@
 // QuickJS or MicroPython, or a compiled skill) under strict isolation on wazero.
 //
 // A guest starts from zero authority; the sandbox adds exactly what a real guest
-// needs and nothing more: WASI stdio for input/output, an optional
-// workspace directory confined by construction, brokered host-function imports,
-// and hardening (a memory cap and a wall-clock deadline that traps runaway
-// guests). The sandbox performs NO action itself — every action is a HostFunc
+// needs and nothing more: WASI stdio for input/output, the clock and entropy an
+// interpreter cannot work correctly without, an optional workspace directory
+// confined by construction, brokered host-function imports, and hardening (a
+// memory cap and a wall-clock deadline that traps runaway guests). Reading the
+// time is not authority; see moduleConfig for why the deterministic defaults
+// are the more dangerous choice. The sandbox performs NO action itself — every action is a HostFunc
 // supplied by the caller, which is where the broker/gateway sits.
 //
 // Guests are compiled once into an Engine (compilation dominates per-call cost)
@@ -16,6 +18,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
 	"time"
@@ -76,11 +79,32 @@ func Run(ctx context.Context, guest []byte, cfg Config) (Result, error) {
 	return eng.Run(ctx, cfg)
 }
 
+// moduleConfig assembles what a guest may see of the outside world: its stdio, an optional confined
+// directory, and — deliberately — the real clock and real entropy.
+//
+// wazero's defaults for those last two are deterministic stand-ins: a clock frozen at 2022-01-01 and
+// a fixed pseudo-random stream. That reads like hardening and is not. It costs correctness outright,
+// since a guest formatting a date silently produces a wrong one; and it costs security, because a
+// frozen clock is what an interpreter seeds its PRNG from. Measured: with the default clock,
+// QuickJS's Math.random() returns the identical value on every run of every script, forever — which
+// the prelude was using to pick multipart boundaries, so a crafted field value could close a part
+// early and forge the rest of the body.
+//
+// A real clock does not widen what a guest can DO. It has no sockets, no threads, and no second
+// party to time against; a timing side channel needs a target, and inside this instance there is
+// none. Authority still comes only from the brokered host functions.
+//
+// Entropy comes from crypto/rand and reaches the guest as WASI random_get. Nothing here relies on
+// the interpreter's own PRNG for anything that must be unguessable — the QuickJS shim exposes
+// crypto.getRandomValues over this same source for that.
 func moduleConfig(cfg Config, stdout, stderr *bytes.Buffer) wazero.ModuleConfig {
 	mc := wazero.NewModuleConfig().
 		WithStdin(bytes.NewReader(cfg.Stdin)).
 		WithStdout(stdout).
-		WithStderr(stderr)
+		WithStderr(stderr).
+		WithRandSource(cryptorand.Reader).
+		WithSysWalltime().
+		WithSysNanotime()
 	if cfg.Workspace != "" {
 		mc = mc.WithFSConfig(wazero.NewFSConfig().WithDirMount(cfg.Workspace, "/work"))
 	}
