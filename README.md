@@ -135,10 +135,13 @@ at the scope you picked.
 
 ## How this was built
 
-I did the architecture, the security boundaries, the threat model, the ADRs and the review. The
-implementation, the tests and the documentation happened inside those constraints. The constraints
-came first, and [`ADRS.md`](ADRS.md) is where most of them were written down before the code they
-govern.
+**Agentic first.** Almost all of the code here was written by an AI agent. What did not come from
+the agent is the part that decides what the code becomes: the **architecture**, the **security
+boundaries**, the **threat model**, the **ADRs**, the **code style**, and the **review**. Agentic
+pair programming, with the human on the side that gets to say no.
+
+The constraints came first and live in the repository as artifacts rather than as habits —
+[`ADRS.md`](ADRS.md) is where most decisions were written down before the code they govern.
 
 **Where that got to**, all of it verifiable from a clone:
 
@@ -153,9 +156,21 @@ govern.
 | CGO-free, ~18 MB, six targets | built on every push | [CI](.github/workflows/ci.yml) |
 | 4,014 lines of C · 4,834 lines of Angular | firmware and app, one protocol | — |
 
-The caveat worth stating: this only works because the constraints were unusually explicit. Take the
-ADRs, the pitfalls file and the two hooks away and you get a fast pile of plausible code. They are
-not documentation *about* the work — they are what made it converge.
+Said plainly, because the number makes it obvious: at twenty-four thousand lines the review is
+**best effort**. Everything load-bearing — the gate, the sandbox, the vault, the approval path — was
+read closely and is where the coverage went. Every line of every test was not.
+
+### Agentic contributions are welcome
+
+Send them. This project would be a strange place to object.
+
+One condition, and it is the one I hold myself to: **a human reviewed it before it was submitted.**
+Not "an agent produced it and the tests pass" — somebody read the diff, understood what it does to
+the boundaries above, and is willing to answer questions about it. An issue is the same: checked
+against the code before it is filed, not a model's guess about what the code might do.
+
+An unreviewed agent PR is not a contribution, it is a review request addressed to somebody who did
+not ask for it. [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 
 ## Status and roadmap
 

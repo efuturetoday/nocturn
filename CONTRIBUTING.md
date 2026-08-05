@@ -1,5 +1,21 @@
 # Contributing
 
+## Agentic contributions
+
+Use an agent. This project was built with one and would be a strange place to object.
+
+One condition: **a human reviewed it before it was submitted.** Somebody read the diff, understood
+what it does to the sandbox, the gate, the vault or the approval path, and can answer questions
+about it. "An agent wrote it and the tests pass" is not that — the tests were probably written by
+the same agent, from the same misunderstanding.
+
+The same goes for an issue: check it against the code before filing it. A model's guess about what
+this project does is not a bug report, and the fastest way to find out is `go doc` and the source,
+both of which the agent can read.
+
+An unreviewed agent PR is not a contribution. It is a review request addressed to somebody who did
+not ask for one.
+
 ## The loop
 
 ```bash
