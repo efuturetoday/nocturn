@@ -41,6 +41,14 @@ type Result struct {
 	// liked it and the words did not" rather than guessed at.
 	Semantic int
 	Lexical  int
+	// Similarity is the cosine between the query and this passage, always computed. UNLIKE Score it
+	// means something on its own, which is why it is the number handed to the model: retrieval can
+	// only rank what it has, so the judgement of whether the best match is actually an answer needs
+	// the context of the question — and that is not in this package.
+	//
+	// It is not a probability. Its range is model-dependent: for many embedders unrelated text sits
+	// well above zero, so the useful reading is comparative, not absolute.
+	Similarity float32
 }
 
 // Search finds the passages that best answer a query.
@@ -85,13 +93,14 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Result, 
 	}
 	qv := normalize(vecs[0])
 
-	semantic, err := rankSemantic(chunks, qv)
+	sims, err := similarities(chunks, qv)
 	if err != nil {
 		return nil, err
 	}
+	semantic := top(slices.Clone(sims), candidates)
 	lexical := rankLexical(chunks, query)
 
-	fused := fuse(chunks, semantic, lexical)
+	fused := fuse(chunks, semantic, lexical, sims)
 	if len(fused) > limit {
 		fused = fused[:limit]
 	}
@@ -112,17 +121,22 @@ type scored struct {
 	score float64
 }
 
-// rankSemantic orders chunks by cosine similarity to the query.
-func rankSemantic(chunks []StoredChunk, qv []float32) ([]scored, error) {
-	out := make([]scored, 0, len(chunks))
+// similarities is the cosine between the query and every passage, in index order.
+//
+// Computed for all of them rather than only the shortlist, because the number is reported per
+// result and a passage that reached the answer through the LEXICAL ranker still has to be able to
+// say how close it is semantically — often the most informative pair of numbers in the set: an
+// exact identifier match with a low cosine is precisely what the hybrid exists to find.
+func similarities(chunks []StoredChunk, qv []float32) ([]scored, error) {
+	out := make([]scored, len(chunks))
 	for i, c := range chunks {
 		v, err := decodeVector(c.Vector)
 		if err != nil {
 			return nil, fmt.Errorf("knowledge: %s: %w", c.Path, err)
 		}
-		out = append(out, scored{idx: i, score: float64(dot(qv, v))})
+		out[i] = scored{idx: i, score: float64(dot(qv, v))}
 	}
-	return top(out, candidates), nil
+	return out, nil
 }
 
 // rankLexical orders chunks by BM25 over the query's terms.
@@ -192,7 +206,7 @@ func top(s []scored, n int) []scored {
 // Only positions are used. A passage at rank 1 contributes 1/(60+1) whichever ranker put it there,
 // so neither half can dominate by having larger numbers, and a passage both rankers placed well
 // outranks one that a single ranker placed first.
-func fuse(chunks []StoredChunk, semantic, lexical []scored) []Result {
+func fuse(chunks []StoredChunk, semantic, lexical, sims []scored) []Result {
 	type acc struct {
 		score            float64
 		semRank, lexRank int
@@ -221,10 +235,11 @@ func fuse(chunks []StoredChunk, semantic, lexical []scored) []Result {
 	out := make([]Result, 0, len(byIdx))
 	for idx, a := range byIdx {
 		out = append(out, Result{
-			Chunk:    chunks[idx].Chunk,
-			Score:    a.score,
-			Semantic: a.semRank,
-			Lexical:  a.lexRank,
+			Chunk:      chunks[idx].Chunk,
+			Score:      a.score,
+			Semantic:   a.semRank,
+			Lexical:    a.lexRank,
+			Similarity: float32(sims[idx].score),
 		})
 	}
 	slices.SortFunc(out, func(x, y Result) int {
