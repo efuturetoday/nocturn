@@ -34,9 +34,18 @@ One folder per server under `mcp/` in the workspace, each with an `mcp.json`:
 | `auth` | How the Bearer is obtained: `"token"` (you seed it into the vault yourself), `"oauth"` (the daemon discovers the flow, see below), or omit it for a public server. Any other value is an error. |
 | `oauth` | Optional, and only for a server whose endpoints you must supply by hand. Mutually exclusive with `auth` — one credential, one source. |
 
-An `oauth` block takes `auth_url`, `token_url`, `client_id`, `client_secret` and `scopes`. Both URLs
-must be `https`, and a `client_id` with at least one scope is required — a block that cannot complete
-a flow is refused at load rather than at the first request.
+An `oauth` block holds the endpoints the daemon would otherwise have discovered:
+
+| Field | Meaning |
+|---|---|
+| `auth_url` | **Required, `https`.** Where you are sent to consent. |
+| `token_url` | **Required, `https`.** Where the code is exchanged for a token, and where refreshes go. |
+| `client_id` | **Required.** The client you registered with that provider. |
+| `client_secret` | Optional — leave it empty for a public client. It is the one field here that is not checked, because "no secret" is a legitimate answer. |
+| `scopes` | **At least one.** An empty list is refused rather than sent as a request for nothing. |
+
+A block that could not complete a flow is refused when the workspace opens, not at the first
+request — the point being that you find out while looking at the file you just wrote.
 
 Like a plugin manifest, `mcp.json` is parsed **strictly**: an unknown field is an error, not a
 warning, so a typo'd `auth` never silently becomes "no credential".
