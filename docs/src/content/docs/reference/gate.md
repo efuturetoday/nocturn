@@ -1,6 +1,6 @@
 ---
-title: Cage and gate
-description: The two separate questions behind every action — which tools exist at all, and what a tool may do — plus the four gate kinds, grants, and what actually asks today.
+title: Cage and Gate
+description: The two separate questions behind every action — which tools exist at all, and what a tool may do — plus the five gate kinds, grants, and what actually asks today.
 ---
 
 Every permission question in Nocturn is really one of **two** questions, and they are answered by
@@ -19,10 +19,10 @@ into cooperating.
 
 The gate is the part that can stop and ask you.
 
-## The four kinds
+## The five kinds
 
 An action is a `{Kind, Target}` pair. The kind says *what sort of reach* this is; the target says
-*where*. There are exactly four kinds in the code, and no others:
+*where*. There are exactly five kinds in the code, and no others:
 
 | Kind | Target | Tools that check it | Root policy |
 |---|---|---|---|
@@ -30,8 +30,13 @@ An action is a `{Kind, Target}` pair. The kind says *what sort of reach* this is
 | [`file`](/nocturn/reference/gate/file/) | the **path** | `file_write`, `file_remove`, `file_move` | **asks**, remembered for the session |
 | [`notify`](/nocturn/reference/gate/notify/) | the constant `user` | `notify` | allowed |
 | [`remind`](/nocturn/reference/gate/remind/) | the constant `user` | `remind` | allowed |
+| [`memory`](/nocturn/reference/gate/memory/) | the **note path** | `memory_write` | allowed in a chat, **asks** in an agent run |
 
-That table is the whole policy. In code it is nine lines:
+`memory` is the one kind staggered by who is watching. A chat shows the write in its transcript as
+it happens, so asking would only buy "before" instead of "after"; an unattended run has nobody
+reading, so it asks out of band — and with no device paired, denies.
+
+That table is the whole policy. In code it is two short functions:
 
 ```go
 // internal/workspace/workspace.go — the workspace root policy
@@ -41,6 +46,12 @@ case tools.NetKind, tools.FileKind:
 default:
     return gate.Allowed()
 }
+
+// ...and the same thing for an unattended agent run, plus one kind
+if a.Kind == memory.Kind {
+    return gate.AskWith(gate.RecallSession)
+}
+return base.Decide(a)
 ```
 
 Note what it is *not*: it is not deny-by-default. A kind nobody wrote a rule for runs. That is a
