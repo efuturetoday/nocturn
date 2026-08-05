@@ -49,48 +49,68 @@ OPENAI_MODEL=your-model
 Real environment variables win over the `.env` file, so you can override one without editing
 anything. The `OPENAI_` prefix is just the name Nocturn reads — any compatible provider works.
 
-### Speaking to it (optional)
+### Beyond the chat (optional)
 
-Spoken conversations need a second, different model: one that takes and returns a continuous audio
-stream rather than answering a turn at a time. Leave these unset and everything else works as
-described; a device asking for a spoken session is simply told the daemon has none.
+Two things need a second endpoint, and neither is needed to start:
 
-```ini
-GEMINI_API_KEY=your-key-here
-GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-latest
-```
+- **[Speaking to it](/nocturn/guides/speaking/)** needs a live-audio model — a different kind of
+  model, not a setting on this one. Work in progress, and configured on its own page.
+- **[Knowledge](/nocturn/guides/knowledge/)** needs an embeddings endpoint to search documents you
+  file in the workspace. Often the same gateway you just configured, in which case there is nothing
+  more to set.
 
-| Variable | Meaning |
-|---|---|
-| `GEMINI_API_KEY` | the key for the live API |
-| `GEMINI_LIVE_MODEL` | which live model — **required**, there is no default |
+Leave both unset and everything on this page works as described.
 
-The id above is the one this was measured against, and the reason to name it rather than leave it to
-you: live-capable models differ in what they support, and one **without asynchronous function
-calling** stops the whole conversation whenever the assistant uses a tool — unusable as soon as
-anything needs your approval.
-
-There is still no built-in default. These ids change often, and a default baked into the binary
-would either fail at connect time or, worse, connect and behave subtly wrong. Check what your own
-account actually offers rather than assuming: the list a key can reach and the list in anybody's
-documentation are not the same.
-
-## 3. First run
+## 3. Check that it works
 
 ```bash
 ./nocturn
 ```
 
-The chat opens. Type a message and press Enter:
+The terminal chat opens. Type a message and press Enter:
 
 > summarize what's in my notes
 
 The answer streams back. When the assistant wants to *do* something that reaches off the machine or
 changes a file, it stops and asks — right there in the terminal. That pause is the point. See
-[the chat](/nocturn/guides/the-chat/) for what the prompt looks like and
 [cage and gate](/nocturn/reference/gate/) for what is being asked.
 
-## 4. Optional: unlock the vault
+**This is the test drive, not the product.** The terminal chat is one process, one window, and it
+only runs while you are sitting in front of it — which is the opposite of what Nocturn is for. Use
+it to confirm your model works and to watch an approval happen once. Then move to the daemon.
+
+## 4. Run it for real
+
+```bash
+./nocturn serve
+```
+
+That is the actual thing. The daemon holds your workspaces open, announces itself on your network so
+[the app](/nocturn/guides/the-app/) can find it without an IP, and keeps running when you close the
+laptop lid on the terminal you started it from.
+
+Three things only exist here:
+
+- **Agents on a schedule.** A cron agent firing at 6am is the whole idea — work that happens while
+  you are asleep. The terminal chat can fire one by hand; nothing fires on its own without a daemon.
+- **Approvals when you are not there.** An unattended run that hits something irreversible routes
+  the ask to your phone. With no daemon there is no route, and a `guarded` agent falls back to
+  refusing — which is safe and useless.
+- **Everything that is not a keyboard.** The companion app, a voice satellite, anything that speaks
+  the protocol. They all connect here.
+
+The daemon prints a pairing code on its first start. That code is the one time a code comes from the
+machine itself — every device after that is enrolled by a device you already trust. See
+[the companion app](/nocturn/guides/the-app/) for the rest of that flow.
+
+```bash
+./nocturn serve --addr :8080     # the default; $NOCTURN_ADDR also works
+```
+
+Conversations are shared, not per device: start something in the terminal, pick it up on your phone,
+finish it in the terminal again.
+
+## 5. Optional: unlock the vault
 
 Credentials for real services live in an encrypted vault, one per workspace, at
 `nocturn-data/workspaces/<name>/vault.enc`. It is unlocked by a master passphrase read from the
@@ -112,7 +132,10 @@ environment, which means the passphrase is as protected as the environment it si
 
 ## What's next
 
-- [The chat](/nocturn/guides/the-chat/) — commands, streaming, and the approval prompt.
+- [The companion app](/nocturn/guides/the-app/) — pair a phone, so an approval can reach you.
+- [Agents](/nocturn/guides/agents/) — the work that runs while you are not watching.
 - [The workspace](/nocturn/guides/the-workspace/) — the folder that *is* your assistant.
-- [Remote access](/nocturn/guides/remote-access/) — the daemon and approving from your phone.
+- [Knowledge](/nocturn/guides/knowledge/) — file documents, ask about them.
+- [Remote access](/nocturn/guides/remote-access/) — the protocol, pairing, device classes.
 - [Plugins](/nocturn/guides/writing-plugins/) — connect it to your own services.
+- [The chat](/nocturn/guides/the-chat/) — commands and the approval prompt, in the terminal.
