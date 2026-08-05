@@ -135,11 +135,6 @@ at the scope you picked.
 
 ## How this was built
 
-Two more artifacts do the same job. [`docs/AGENTS.md`](docs/AGENTS.md) carries one rule — *this site
-documents the code in this repository, not a design of it* — and [`CLAUDE.md`](CLAUDE.md) §6 is a
-running list of pitfalls actually hit, so a mistake gets paid for once. Both are inputs, not
-write-ups.
-
 I did the architecture, the security boundaries, the threat model, the ADRs and the review. The
 implementation, the tests and the documentation happened inside those constraints. The constraints
 came first, and [`ADRS.md`](ADRS.md) is where most of them were written down before the code they
