@@ -1,0 +1,100 @@
+name: CI
+
+# Every claim the README makes about this repository is checked here: that it builds, that the tests
+# pass under the race detector, and that one CGO-free binary really does come out for six targets.
+#
+# The tests that need a speaker-embedding checkpoint (~26 MB, not committed) skip themselves when
+# NOCTURN_SPEAKER_MODEL is unset, so this stays green without downloading a model.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go — build, vet, race tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # gofmt is a gate, not a suggestion: a diff that only reformats hides the change under it.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal agentkit)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      # The agentkit modules are siblings joined by go.work, not subpackages, so ./... at the root
+      # does not reach them. internal/onnx/reference is deliberately left out: it is a nested module
+      # pulling in gomlx, which exists precisely so that dependency never enters nocturn's graph.
+      - name: Test the agentkit modules
+        run: |
+          for mod in agentkit/gate agentkit/openai agentkit/tools agentkit/runtime agentkit/gemini; do
+            echo "== $mod"
+            (cd "$mod" && go build ./... && go vet ./... && go test -race ./...)
+          done
+
+  crosscompile:
+    name: One binary, six targets
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      # CGO_ENABLED=0 is the whole point: no C toolchain on the target, nothing to install
+      # alongside the binary. A build that needed cgo would break the claim, not just the build.
+      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -o /dev/null ./cmd/nocturn
+
+  docs:
+    name: Docs — schema-validated build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - run: npm ci
+        working-directory: docs
+      # astro build validates every tool and gate-kind YAML entry against the Zod schema in
+      # src/content.config.ts, so a reference page that describes a tool wrongly fails here.
+      - run: npx astro build
+        working-directory: docs
