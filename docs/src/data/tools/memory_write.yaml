@@ -3,7 +3,7 @@ description: Store something the assistant should still know in a future convers
 
 kind:
   name: memory
-  href: /reference/gate/memory/
+  href: /nocturn/reference/gate/memory/
   target: the path relative to the memory folder
 gated: true
 axis: write
@@ -16,7 +16,7 @@ intro: >-
 
   Whether the call stops for a human depends on who is running it. In a chat you are watching it
   writes and the call shows up in the transcript; an unattended agent run asks out of band. See the
-  [`memory` kind](/reference/gate/memory/).
+  [`memory` kind](/nocturn/reference/gate/memory/).
 
 input:
   - field: path

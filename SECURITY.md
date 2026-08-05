@@ -20,7 +20,7 @@ honest promise is that reports are read, taken seriously, and answered, not that
 ## What is in the threat model
 
 The design assumes both of these are actively hostile, and defends against each differently. The
-long version is [the threat model](https://nocturn.dev/architecture/threat-model/).
+long version is [the threat model](https://efuturetoday.github.io/nocturn/architecture/threat-model/).
 
 - **Foreign code you installed** — a plugin, a skill, a compiled artifact. It runs in a WASM sandbox
   at zero authority, and every capability is an explicitly handed host window.

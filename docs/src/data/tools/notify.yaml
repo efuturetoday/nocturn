@@ -3,15 +3,15 @@ description: Send a notification to the user out of band, fire and forget.
 
 kind:
   name: notify
-  href: /reference/gate/notify/
+  href: /nocturn/reference/gate/notify/
   target: the constant `user`
 gated: true
 axis: write
 
 intro: >-
   Tell you something without waiting for you. It does **not** ask a question and does not block —
-  an action that needs your yes goes through an [approval](/guides/approvals/) instead. The tool
-  checks the [`notify` kind](/reference/gate/notify/), which the workspace root policy allows, so
+  an action that needs your yes goes through an [approval](/nocturn/guides/approvals/) instead. The tool
+  checks the [`notify` kind](/nocturn/reference/gate/notify/), which the workspace root policy allows, so
   today it runs without a prompt.
 
 input:

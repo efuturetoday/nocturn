@@ -40,7 +40,7 @@ What does *not* change is everything below: the same `ToolSet`, the same gate, t
 same persona. A tool set is a map from name to tool, and gating is a decorator that reads its policy
 from the context. Neither ever required a turn loop to drive them, so speech reaches the tools
 through the same door as a typed message — a narrower door, as the
-[threat model](/architecture/threat-model/#a-microphone-has-no-authenticated-input) explains, but
+[threat model](/nocturn/architecture/threat-model/#a-microphone-has-no-authenticated-input) explains, but
 the same one.
 
 ## The flow

@@ -3,7 +3,7 @@ description: Read a UTF-8 text file from the workspace and return its contents.
 
 kind:
   name: file
-  href: /reference/gate/file/
+  href: /nocturn/reference/gate/file/
 gated: false
 axis: read
 
@@ -11,7 +11,7 @@ intro: >-
   Read a text file from the workspace. This tool **never calls the gate** — reading inside a folder
   the workspace owns changes nothing and reaches nothing outside it. Confinement is what protects
   you here, not a prompt: the path is resolved against the workspace root first, and a path that
-  escapes is a hard error. See the [`file` kind](/reference/gate/file/).
+  escapes is a hard error. See the [`file` kind](/nocturn/reference/gate/file/).
 
 input:
   - field: path

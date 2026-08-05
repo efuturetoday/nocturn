@@ -68,7 +68,7 @@ separate module with zero dependencies, built to leave for its own repository.
 
 That ignorance is the design. The gate is a wrapper *around* tools, so the loop cannot skip it, and
 a change to how prompts are handled can never become a change to what is permitted. See
-[the two halves](/architecture/agentkit/).
+[the two halves](/nocturn/architecture/agentkit/).
 
 ## 4 · The model adapter
 
@@ -97,5 +97,5 @@ Something that hijacks the conversation is operating at layer 3 and above; it st
 at 2, the tool's own bounds at 1, and a guest with no authority at 0. A mistake at the top cannot
 become a breach at the bottom.
 
-The [request flow](/architecture/request-flow/) follows one real action down through these layers
+The [request flow](/nocturn/architecture/request-flow/) follows one real action down through these layers
 and back.

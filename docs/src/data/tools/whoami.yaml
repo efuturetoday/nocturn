@@ -47,4 +47,4 @@ notes: >-
   A recognised voice chooses context and address, never permission. Speech is a channel like the
   chat, where nobody authenticates the typist either, and a gated action is confirmed out of band on
   a second device in both. Recognition needs `NOCTURN_SPEAKER_MODEL` and enrolled voices — see
-  [remote access](/guides/remote-access/).
+  [remote access](/nocturn/guides/remote-access/).

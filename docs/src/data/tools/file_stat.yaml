@@ -3,13 +3,13 @@ description: Stat a workspace path — does it exist, is it a directory, how big
 
 kind:
   name: file
-  href: /reference/gate/file/
+  href: /nocturn/reference/gate/file/
 gated: false
 axis: read
 
 intro: >-
   Ask about a path without reading it. Ungated, like the other file reads — see the
-  [`file` kind](/reference/gate/file/).
+  [`file` kind](/nocturn/reference/gate/file/).
 
 input:
   - field: path

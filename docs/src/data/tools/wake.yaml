@@ -8,7 +8,7 @@ axis: none
 intro: >-
   Schedule the running conversation's **own re-invocation**: after `seconds`, this same conversation
   comes back with `note` as the prompt. Use it to wait and then continue — poll something, or
-  re-check after a delay. It is the in-session cousin of a [reminder](/reference/tools/remind/),
+  re-check after a delay. It is the in-session cousin of a [reminder](/nocturn/reference/tools/remind/),
   which fires a detached notification instead.
 
 input:

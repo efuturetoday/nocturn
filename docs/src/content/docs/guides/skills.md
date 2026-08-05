@@ -43,10 +43,10 @@ assistant does *after* reading a skill is gated exactly as before.
 ## Why a skill grants no power
 
 This is the part that makes third-party skills safe to use. A skill can say "email the summary to
-the team" — and the send still asks you, because the ask comes from the [gate](/reference/gate/),
+the team" — and the send still asks you, because the ask comes from the [gate](/nocturn/reference/gate/),
 which never sees the skill. The worst a hostile skill can do is give bad advice. It cannot act.
 
-Compare that with a [plugin](/guides/writing-plugins/), which does add tools and therefore is a
+Compare that with a [plugin](/nocturn/guides/writing-plugins/), which does add tools and therefore is a
 trust decision. Skills are the safe half of extending the assistant; plugins are the half worth
 reading first.
 

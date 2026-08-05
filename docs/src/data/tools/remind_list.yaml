@@ -3,13 +3,13 @@ description: List the pending reminders, soonest first.
 
 kind:
   name: remind
-  href: /reference/gate/remind/
+  href: /nocturn/reference/gate/remind/
 gated: false
 axis: read
 
 intro: >-
   See what is scheduled. Takes no arguments, never calls the gate — it reads back only what the
-  assistant itself scheduled. See the [`remind` kind](/reference/gate/remind/).
+  assistant itself scheduled. See the [`remind` kind](/nocturn/reference/gate/remind/).
 
 input: none
 

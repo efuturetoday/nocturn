@@ -8,7 +8,7 @@ axis: read
 intro: >-
   Read a file that ships beside a skill's `SKILL.md`. A skill can bundle more than instructions:
   reference notes it points you to, a template to fill in, a script to run with
-  [`code_run`](/reference/tools/code_run/). This is how those files are fetched. Ungated, because
+  [`code_run`](/nocturn/reference/tools/code_run/). This is how those files are fetched. Ungated, because
   reading pre-installed text is context, never reach — and confined to that one skill's directory at
   the syscall level.
 

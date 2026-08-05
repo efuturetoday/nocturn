@@ -3,7 +3,7 @@ description: Move or rename a file within the workspace.
 
 kind:
   name: file
-  href: /reference/gate/file/
+  href: /nocturn/reference/gate/file/
   target: the **destination** path
 gated: true
 axis: write
@@ -11,7 +11,7 @@ axis: write
 intro: >-
   Move or rename a file. Both ends stay inside the workspace. Worth knowing which end you are
   approving: the gate checks the **destination**, because that is where the bytes end up. See the
-  [`file` kind](/reference/gate/file/).
+  [`file` kind](/nocturn/reference/gate/file/).
 
 input:
   - field: from

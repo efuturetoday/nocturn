@@ -17,7 +17,7 @@ glance:
 
 tools:
   - name: notify
-    href: /reference/tools/notify/
+    href: /nocturn/reference/tools/notify/
     axis: write
     gated: true
     desc: send a message to the user out of band

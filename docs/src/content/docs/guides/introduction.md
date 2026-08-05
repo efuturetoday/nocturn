@@ -43,7 +43,7 @@ that one always asks.
 The workspace is also your entire setup. There is no hidden database. Copy the folder and
 you have copied everything: the data, the permissions, the connected accounts, the agents,
 and the skills. It is portable and versionable by design. Check it into git, back it up,
-move it to another machine. [Learn the workspace](/guides/the-workspace/).
+move it to another machine. [Learn the workspace](/nocturn/guides/the-workspace/).
 
 ### You stay in control through approval
 
@@ -51,7 +51,7 @@ Agents do not get blanket permission. Reaching a host on the network asks — re
 the reach is the risk — and so does changing a file. Reading inside the workspace does not, because
 there is nowhere for it to reach. You answer once, for the session, or always, and what you answer
 is about a specific target, never a tool in general.
-[Learn about approvals](/guides/approvals/).
+[Learn about approvals](/nocturn/guides/approvals/).
 
 ## It runs on your machine
 
@@ -60,7 +60,7 @@ point it at an AI model, and it is yours.
 
 ## Get going
 
-- [Get started](/guides/getting-started/): run it and send the first message.
-- [The workspace](/guides/the-workspace/): the agent's isolated, portable world.
-- [Agents](/guides/agents/): put one to work in the background.
-- [Approvals](/guides/approvals/): approve from your phone.
+- [Get started](/nocturn/guides/getting-started/): run it and send the first message.
+- [The workspace](/nocturn/guides/the-workspace/): the agent's isolated, portable world.
+- [Agents](/nocturn/guides/agents/): put one to work in the background.
+- [Approvals](/nocturn/guides/approvals/): approve from your phone.

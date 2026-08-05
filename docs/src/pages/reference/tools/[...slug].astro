@@ -14,10 +14,10 @@ export async function getStaticPaths() {
 		props: {
 			entry,
 			prev: entries[i - 1]
-				? { link: `/reference/tools/${entries[i - 1].id}/`, label: entries[i - 1].data.title }
+				? { link: `/nocturn/reference/tools/${entries[i - 1].id}/`, label: entries[i - 1].data.title }
 				: undefined,
 			next: entries[i + 1]
-				? { link: `/reference/tools/${entries[i + 1].id}/`, label: entries[i + 1].data.title }
+				? { link: `/nocturn/reference/tools/${entries[i + 1].id}/`, label: entries[i + 1].data.title }
 				: undefined,
 		},
 	}));

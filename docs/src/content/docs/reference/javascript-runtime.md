@@ -4,7 +4,7 @@ description: The sandboxed QuickJS engine behind code_run — what you can write
 ---
 
 `code_run` runs JavaScript on a **QuickJS** interpreter (quickjs-ng, pinned at `v0.10.1`) compiled
-to `wasm32-wasi` and executed inside the [sandbox](/reference/wasm-abi/). It is how the assistant
+to `wasm32-wasi` and executed inside the [sandbox](/nocturn/reference/wasm-abi/). It is how the assistant
 does multi-step computation and data shaping — and, when it needs to, calls a tool through one host
 function.
 
@@ -17,7 +17,7 @@ that tool is gated.
 | | |
 |---|---|
 | **Engine** | QuickJS (quickjs-ng `v0.10.1`), ES2023, `wasm32-wasi` |
-| **Tool** | [`code_run`](/reference/tools/code_run/) — input `source` (a JS program) |
+| **Tool** | [`code_run`](/nocturn/reference/tools/code_run/) — input `source` (a JS program) |
 | **Input** | your script; a runtime prelude is prepended automatically |
 | **Output** | whatever the script prints (`console.log` / `print`) → stdout |
 | **Tool calls** | only via `nocturn.call(tool, args)` — each gated where that tool is gated |
@@ -87,16 +87,16 @@ the wrapper asks:
 
 | Wrapper | Tool it calls | Gated? |
 |---|---|---|
-| `fetch(url)` / `fetch(url, {method:"POST",…})` | [`http_read`](/reference/tools/http_read/) / [`http_write`](/reference/tools/http_write/) | yes, on the host |
-| `nocturn.resolve(host, type?)` | [`dns_resolve`](/reference/tools/dns_resolve/) | yes, on the host |
-| `nocturn.ping(host)` | [`ping`](/reference/tools/ping/) | yes, on the host |
+| `fetch(url)` / `fetch(url, {method:"POST",…})` | [`http_read`](/nocturn/reference/tools/http_read/) / [`http_write`](/nocturn/reference/tools/http_write/) | yes, on the host |
+| `nocturn.resolve(host, type?)` | [`dns_resolve`](/nocturn/reference/tools/dns_resolve/) | yes, on the host |
+| `nocturn.ping(host)` | [`ping`](/nocturn/reference/tools/ping/) | yes, on the host |
 | `nocturn.fs.readFile` / `list` / `stat` / `search` | `file_read` / `file_list` / `file_stat` / `file_search` | no |
 | `nocturn.fs.writeFile` / `remove` / `move` | `file_write` / `file_remove` / `file_move` | yes, on the path |
-| `nocturn.notify(message, title?)` | [`notify`](/reference/tools/notify/) | checked, allowed today |
-| `nocturn.remind(when, message, title?)` | [`remind`](/reference/tools/remind/) | checked, allowed today |
-| `nocturn.wake(seconds, note)` | [`wake`](/reference/tools/wake/) | no |
-| `nocturn.now()` | [`time_now`](/reference/tools/time_now/) | no |
-| `nocturn.skillFile(skill, path)` | [`skill_read`](/reference/tools/skill_read/) | no |
+| `nocturn.notify(message, title?)` | [`notify`](/nocturn/reference/tools/notify/) | checked, allowed today |
+| `nocturn.remind(when, message, title?)` | [`remind`](/nocturn/reference/tools/remind/) | checked, allowed today |
+| `nocturn.wake(seconds, note)` | [`wake`](/nocturn/reference/tools/wake/) | no |
+| `nocturn.now()` | [`time_now`](/nocturn/reference/tools/time_now/) | no |
+| `nocturn.skillFile(skill, path)` | [`skill_read`](/nocturn/reference/tools/skill_read/) | no |
 
 ```js
 const r = await fetch("https://api.example.com/items");
@@ -119,13 +119,13 @@ throw a clear error rather than failing quietly.
 A script calls tools **by name**, so any tool registered on the host is callable the moment it
 exists — the interpreter never changes to add one. `remind_list` and `remind_cancel`, for instance,
 have no wrapper and are called with `nocturn.call` directly. The
-[gate reference](/reference/gate/) is the authoritative list.
+[gate reference](/nocturn/reference/gate/) is the authoritative list.
 :::
 
 ## Running a skill's script
 
 A skill can bundle a script next to its `SKILL.md`, which makes
-[`skill_read`](/reference/tools/skill_read/) the other half of `code_run`: the skill's instructions
+[`skill_read`](/nocturn/reference/tools/skill_read/) the other half of `code_run`: the skill's instructions
 name a file, the file is fetched as text, and the text is the program.
 
 ```js
@@ -146,7 +146,7 @@ no context to load into.
 - **No package ecosystem.** `require` resolves the four shim modules and nothing else. No npm, no
   module loader.
 - **Bounded.** Memory is capped and a wall-clock deadline traps runaways; a single `file_read` is
-  capped at 1 MiB (see the [`file` kind](/reference/gate/file/)).
+  capped at 1 MiB (see the [`file` kind](/nocturn/reference/gate/file/)).
 
 ## Security note
 

@@ -28,4 +28,4 @@ js:
 
 notes: >-
   Use the `iso` field when you need to hand an absolute timestamp to
-  [`remind`](/reference/tools/remind/) — it is already RFC3339 in the host's local zone.
+  [`remind`](/nocturn/reference/tools/remind/) — it is already RFC3339 in the host's local zone.

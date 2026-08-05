@@ -9,7 +9,7 @@ A trigger is what starts an agent. Two exist today; the rest of this page is hon
 
 ## By hand <Badge text="Available now" variant="success" />
 
-From the [chat](/guides/the-chat/), `/fire` runs an agent now, with an optional one-off task:
+From the [chat](/nocturn/guides/the-chat/), `/fire` runs an agent now, with an optional one-off task:
 
 ```text
 /agents                                   # list them
@@ -51,7 +51,7 @@ running if a schedule matters.
 An unsatisfiable spec (`0 0 30 2 *` — February 30th) terminates the search instead of looping
 forever, and the agent simply never becomes due.
 
-See [Agents](/guides/agents/) for what a scheduled run does when it hits something that needs your
+See [Agents](/nocturn/guides/agents/) for what a scheduled run does when it hits something that needs your
 approval — the short version is that `autonomy` decides, and the default denies rather than
 proceeds.
 

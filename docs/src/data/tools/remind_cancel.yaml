@@ -3,20 +3,20 @@ description: Cancel a pending reminder by id.
 
 kind:
   name: remind
-  href: /reference/gate/remind/
+  href: /nocturn/reference/gate/remind/
 gated: false
 axis: write
 
 intro: >-
   Drop a scheduled reminder. It is a write — it changes state — and it is still ungated, because it
   can only remove something the assistant itself scheduled, and the worst case is a missed nudge.
-  See the [`remind` kind](/reference/gate/remind/).
+  See the [`remind` kind](/nocturn/reference/gate/remind/).
 
 input:
   - field: id
     type: string
     required: true
-    notes: "The reminder id, as returned by [`remind`](/reference/tools/remind/) or [`remind_list`](/reference/tools/remind_list/)."
+    notes: "The reminder id, as returned by [`remind`](/nocturn/reference/tools/remind/) or [`remind_list`](/nocturn/reference/tools/remind_list/)."
 
 output:
   text: "Whether that id was actually pending:"

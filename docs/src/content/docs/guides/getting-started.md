@@ -87,8 +87,8 @@ The chat opens. Type a message and press Enter:
 
 The answer streams back. When the assistant wants to *do* something that reaches off the machine or
 changes a file, it stops and asks — right there in the terminal. That pause is the point. See
-[the chat](/guides/the-chat/) for what the prompt looks like and
-[cage and gate](/reference/gate/) for what is being asked.
+[the chat](/nocturn/guides/the-chat/) for what the prompt looks like and
+[cage and gate](/nocturn/reference/gate/) for what is being asked.
 
 ## 4. Optional: unlock the vault
 
@@ -112,7 +112,7 @@ environment, which means the passphrase is as protected as the environment it si
 
 ## What's next
 
-- [The chat](/guides/the-chat/) — commands, streaming, and the approval prompt.
-- [The workspace](/guides/the-workspace/) — the folder that *is* your assistant.
-- [Remote access](/guides/remote-access/) — the daemon and approving from your phone.
-- [Plugins](/guides/writing-plugins/) — connect it to your own services.
+- [The chat](/nocturn/guides/the-chat/) — commands, streaming, and the approval prompt.
+- [The workspace](/nocturn/guides/the-workspace/) — the folder that *is* your assistant.
+- [Remote access](/nocturn/guides/remote-access/) — the daemon and approving from your phone.
+- [Plugins](/nocturn/guides/writing-plugins/) — connect it to your own services.

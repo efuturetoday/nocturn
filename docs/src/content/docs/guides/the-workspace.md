@@ -93,7 +93,7 @@ every conversation in that workspace; leave it out and a careful built-in defaul
 injected prompt cannot quietly redefine the assistant's own identity.
 
 Agents are different: each carries its own brief and does not inherit the persona — a focused worker
-is defined entirely by its own instructions. See [Agents](/guides/agents/).
+is defined entirely by its own instructions. See [Agents](/nocturn/guides/agents/).
 
 ## The second wall: workspaces cannot see each other
 
@@ -112,7 +112,7 @@ derived from the master for that workspace alone. One secret to remember, walls 
 - The **terminal chat always talks to `main`.** Other workspaces still run their agents; you just do
   not converse with them from the terminal.
 - Subcommands take `-w <name>` — `nocturn ls -w personal`, `nocturn secret ls -w client-x`.
-- The [companion app](/guides/remote-access/) can list and switch workspaces (`workspace.list`), so
+- The [companion app](/nocturn/guides/remote-access/) can list and switch workspaces (`workspace.list`), so
   a second device is the way to talk to more than one.
 
 ## A folder you own and move
@@ -127,7 +127,7 @@ Because the folder is the entire state, a workspace behaves like any other proje
 :::note[One secret stays out of the copy]
 `vault.enc` is encrypted under your master passphrase. Copying the folder copies the locked vault;
 the credentials inside stay unreadable without you. See
-[Secrets and accounts](/guides/connecting-accounts/).
+[Secrets and accounts](/nocturn/guides/connecting-accounts/).
 :::
 
 The one thing outside every workspace is `.env`, which holds your model connection. It sits next to
