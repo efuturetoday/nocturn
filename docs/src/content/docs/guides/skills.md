@@ -46,6 +46,22 @@ If the folder holds other files besides `SKILL.md`, a listing of them (up to 40)
 body, so a loaded skill tells the assistant what it can go on to
 [`skill_read`](/nocturn/reference/tools/skill_read/).
 
+## Putting one in, end to end
+
+```sh
+cp -r examples/workspace/skills/summarize-url \
+      nocturn-data/workspaces/main/skills/summarize-url
+
+nocturn serve        # start, or restart if it was already running
+```
+
+Like plugins and MCP servers, skills are read when a workspace opens — there is no watcher on
+`skills/`, so a running daemon does not notice a new folder.
+
+Unlike them, nothing else happens. No credential to connect, no manifest to review, no restart
+worth being careful about: from that point the assistant simply knows the skill's `description`, and
+reaches for the body when a request matches it.
+
 ## How a skill gets used
 
 The `description` of every skill is visible to the assistant from the start; the body is not. When a

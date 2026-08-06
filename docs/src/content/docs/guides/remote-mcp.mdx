@@ -99,6 +99,58 @@ Malformed declarations are rejected fail-closed — a non-HTTPS URL, an unknown 
 alongside an OAuth block. Either way the token stays host-side, bound to that server, and the model
 never sees it.
 
+### From the app, without a terminal
+
+You do not need the command line for this. **Settings → Accounts** lists every discover-mode server
+in the workspace and whether it already holds a token, and connecting one runs the identical flow —
+the daemon does the whole thing, the app only ferries two values.
+
+The consent page opens in the **system browser**, not inside the app. That is a deliberate choice
+([RFC 8252](https://datatracker.ietf.org/doc/html/rfc8252)): your password manager works there, and
+an embedded web view is a login form rendered by the app asking for the password. The provider
+redirects to `nocturn://oauth/callback`, the OS routes that back into the app, and the app relays the
+authorization code and state to the daemon.
+
+**The token never reaches the app.** The daemon exchanges the code itself, and the PKCE verifier
+never leaves it — so an app that hijacked the URL scheme and captured the code still could not
+exchange it for anything.
+
+## Putting one in: Cloudflare, end to end
+
+```sh
+mkdir -p nocturn-data/workspaces/main/mcp/cloudflare
+cat > nocturn-data/workspaces/main/mcp/cloudflare/mcp.json <<'JSON'
+{ "url": "https://mcp.cloudflare.com/mcp", "auth": "oauth" }
+JSON
+
+export NOCTURN_MASTER_PASSPHRASE=…      # the vault has to be open to store a token
+nocturn auth cloudflare                 # prints a URL; open it, consent, done
+
+nocturn serve                           # start (or restart) — the server is connected here
+```
+
+The order matters, and one step is easy to get wrong:
+
+1. **The folder is the declaration.** Nothing else registers a server.
+2. **`nocturn auth` needs no daemon.** It reads the workspace folder directly and writes the token
+   into that server's own encrypted shard. It also needs the vault open — without
+   `NOCTURN_MASTER_PASSPHRASE` there is nowhere to put the token, and it says so.
+3. **Then start the daemon.** Servers are discovered and connected when a workspace opens, and only
+   then.
+
+:::caution[A new server needs a restart — including after connecting in the app]
+There is no watcher on `mcp/` and no reconnect after a successful sign-in. A daemon that was already
+running when you created the folder does not know the server exists; one that started *before* you
+signed in logged `mcp server needs authorization` and moved on. Connecting from the app stores the
+token and says "connected" — accurately — but the tools appear on the **next** start.
+
+So: create the folder, connect the account, then start the daemon. If you did it in another order,
+restart once and everything is in place.
+:::
+
+Once it is up the server's tools appear as `cloudflare_*`, and the first call asks about
+`mcp.cloudflare.com` on the net axis, like any other request leaving the machine.
+
 ## How MCP calls are gated
 
 Every MCP tool call is an HTTPS POST to the server. It is gated exactly like one:
