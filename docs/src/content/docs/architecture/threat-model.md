@@ -128,12 +128,12 @@ filesystem, no network, and no environment. Every ability is a window the host o
 an ability that was not handed over is unforgeable by absence — there is no ambient power to escalate
 from.
 
-The clock and the random source are the two exceptions, and they are not really exceptions: reading
-the time reaches nothing and asking for entropy reaches nothing. Withholding them was tried and was
-worse. A guest with a frozen clock formats a wrong date and says nothing, and — measured — an
-interpreter that seeds its random numbers from that clock returns the *same* "random" value on every
-run of every script forever. Predictable randomness inside a guest that builds HTTP request bodies
-is a real hole; a working clock is not.
+The clock and the random source only look like exceptions: reading the time reaches nothing, and
+asking for entropy reaches nothing. Withholding them costs instead of buys. A guest whose clock is
+frozen formats a wrong date and says nothing about it, and an interpreter seeding its random numbers
+from that clock returns the same "random" value on every run of every script — predictable
+randomness inside something that builds HTTP request bodies is a real hole, where a working clock is
+not.
 
 The [gate](/nocturn/reference/gate/) then decides per action, on a `{kind, target}` pair rather than on the
 sentence that led there. Worth being precise about what it is not: the workspace policy is **not**

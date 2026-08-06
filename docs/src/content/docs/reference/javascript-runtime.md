@@ -90,16 +90,11 @@ DevEx sugar, not a security boundary (see below).
 
 `crypto.getRandomValues` is not part of the prelude — it comes from the interpreter itself, and it
 is the one to use when a value must be unguessable. `Math.random()` is a PRNG seeded from the clock,
-so two calls a millisecond apart are related; that is fine for jitter and wrong for a token, a
-nonce, or a multipart boundary. The entropy comes from the host's `crypto/rand` through WASI, so
-this adds no host function of its own.
-
-Both the clock and that entropy are deliberate. wazero's defaults are deterministic stand-ins — a
-clock frozen at 2022-01-01, and a fixed random stream — and under them QuickJS returned the
-byte-identical `Math.random()` on every run of every script, because it seeds from that clock.
-Neither reading the time nor asking for entropy reaches anything, so
-[withholding them](/nocturn/architecture/threat-model/#zero-ambient-authority) cost correctness and
-bought nothing.
+so two calls a millisecond apart are related: fine for jitter, wrong for a token, a nonce, or a
+multipart boundary. Its entropy is the host's `crypto/rand`, reached through WASI, so it costs the
+guest no host function of its own — see [zero ambient
+authority](/nocturn/architecture/threat-model/#zero-ambient-authority) for why a guest gets a real
+clock and real entropy at all.
 
 ### Sugar over the tools
 

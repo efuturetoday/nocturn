@@ -122,11 +122,8 @@ the ceiling the policy allows and what the human actually chose — so `AskWith(
 not mean "remember everything forever". It means the person may answer for good, and the approver
 may offer that. Answering "just this once" still stores nothing.
 
-A lower ceiling is therefore not the cautious choice it looks like. Both approvers show an *Always*
-button; under `RecallSession` it silently resolved to a session grant, and somebody who believed
-they had settled a question was asked again the next day. Nothing failed, which is exactly why it
-lasted so long. Voice keeps `RecallNever` on purpose — whoever is audible can speak, so a spoken
-"always" would be a standing permission granted by a channel that authenticates nobody.
+A voice session is the exception: it caps at `RecallNever`, because whoever is audible can speak, and
+a spoken "always" would be a standing permission granted by a channel that authenticates nobody.
 
 ```json
 [
