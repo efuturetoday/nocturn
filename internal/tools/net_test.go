@@ -42,6 +42,64 @@ func hostOf(t *testing.T, raw string) string {
 	return u.Host
 }
 
+// The credential channel belongs to the host, and there must be exactly one of it. A URL carrying
+// its own userinfo is a second one, and it used to work: url.Parse keeps user:pass in u.User, nothing
+// looked at it, and u.String() put it back into the outgoing request — the destination received a
+// Basic Authorization header the host never chose.
+//
+// The approval is what makes it worth refusing rather than stripping. It is rendered from the gate's
+// target, which is u.Host, and u.Host does not contain userinfo — so a human approving "net →
+// example.com" was shown nothing about the credentials going with it. A caller that meant to
+// authenticate should bind a credential host-side; one that did not is doing something the human
+// cannot see.
+func TestNet_RejectsCredentialsInTheURL(t *testing.T) {
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("Authorization")
+		w.Write([]byte("reached"))
+	}))
+	defer srv.Close()
+	ctx := gate.With(context.Background(), gate.PolicyFunc(func(gate.Action) gate.Ruling {
+		return gate.Allowed()
+	}), nil, nil)
+
+	host := hostOf(t, srv.URL)
+	out, err := httpRead(t).Call(ctx, `{"url":`+jsonQuote("http://attacker:hunter2@"+host+"/")+`}`)
+	if err == nil {
+		t.Fatalf("a url carrying credentials was fetched, out=%q", out)
+	}
+	if seen != "" {
+		t.Errorf("the destination received Authorization %q", seen)
+	}
+}
+
+// The same on a redirect hop, which is a fresh request to a host the caller did not name: a 302 to
+// user:pass@host would otherwise reintroduce exactly what the check above refuses.
+func TestNet_RejectsCredentialsInARedirect(t *testing.T) {
+	var seen string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("Authorization")
+		w.Write([]byte("reached"))
+	}))
+	defer target.Close()
+	targetHost := hostOf(t, target.URL)
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://attacker:hunter2@"+targetHost+"/", http.StatusFound)
+	}))
+	defer source.Close()
+	ctx := gate.With(context.Background(), gate.PolicyFunc(func(gate.Action) gate.Ruling {
+		return gate.Allowed()
+	}), nil, nil)
+
+	out, err := httpRead(t).Call(ctx, `{"url":`+jsonQuote(source.URL)+`}`)
+	if err == nil {
+		t.Fatalf("a redirect carrying credentials was followed, out=%q", out)
+	}
+	if seen != "" {
+		t.Errorf("the redirect target received Authorization %q", seen)
+	}
+}
+
 // TestNet_RedirectReGated is the HIGH-2 guarantee: a redirect to a host the policy does NOT allow is
 // blocked at the hop — the redirect is a fresh gated request, not a free pass. Without re-gating, a
 // 302 from an allowed host to an internal/attacker host would bypass the allowlist entirely.
