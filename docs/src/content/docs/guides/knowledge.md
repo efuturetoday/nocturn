@@ -106,7 +106,7 @@ nocturn knowledge ls         # the documents currently in the index
 $ nocturn knowledge index
 indexing nocturn-data/workspaces/main/mnt/knowledge
   4 indexed, 0 unchanged, 0 removed — 13 passages in 1.449s
-  skipped wohnung/uebergabeprotokoll.pdf — no reader handles this format
+  skipped home/handover-report.pdf — no reader handles this format
 
 $ nocturn knowledge index
   0 indexed, 4 unchanged, 0 removed — 13 passages in 4ms
