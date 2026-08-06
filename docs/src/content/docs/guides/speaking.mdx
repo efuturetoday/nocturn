@@ -22,6 +22,56 @@ A satellite is a speaker in a room you talk to: a microphone, a speaker, and a r
 a wake word, you talk, it answers — and when what you asked for needs your permission, the ask still
 leaves the room for your phone.
 
+## The board
+
+One board is supported: the
+**[Waveshare ESP32-S3-AUDIO-Board](https://docs.waveshare.com/ESP32-S3-AUDIO-Board)**. Not "boards
+like this one" — the firmware in `satellite/` is written against its microphone array, its codec and
+its LED ring, and nothing else has been built or measured.
+
+That is a deliberately narrow claim rather than a modest one. Echo cancellation is the reason: what
+it leaves of the speaker's own voice decides whether the board can hear a person while it is
+talking, and that depends on this microphone in this enclosure at this distance from this driver.
+A board with the same chip and a different acoustic layout is a different measurement, not a
+variant.
+
+## The ring
+
+The ring is the whole interface, so it has to answer one question without being learned: **may I
+talk now?** Green means yes, and green is used for nothing else.
+
+| State | Ring | Meaning |
+|---|---|---|
+| `boot` | white, slow breath | Powering up |
+| `no-network` | amber, slow breath | Not associated, or associated without an address |
+| `no-daemon` | amber, spinning | On the network, looking for a daemon |
+| `fault` | red, **slow blink** | Will not recover without a person |
+| `idle` | dim blue, steady | Link up, waiting for the wake word |
+| `listening` | green, breathing | A session is open — talk |
+| `thinking` | blue, spinning | You stopped, nothing has come back yet |
+| `speaking` | cyan, wave | The speaker is running |
+| `approval` | magenta, blinking | Something is waiting for your decision — look at your phone |
+| `capture` | red, **steady** | The microphone is being recorded for enrolment |
+
+Three choices in there are worth knowing, because each is a decision rather than a palette:
+
+**`speaking` is cyan, not green.** While a reply plays the session is half duplex and the microphone
+is muted upstream, so talking over it reaches nobody. A green ring would be an invitation the board
+cannot honour.
+
+**Tempo carries meaning as much as colour.** A slow breath is patience — boot, no network — and a
+normal breath is an invitation. The one flash in the whole design is green on connect, because
+connecting is a moment and not a state.
+
+**`fault` and `capture` are both red, and are told apart by motion.** Fault blinks slowly; a
+recording is steady. Red-means-recording is understood by everyone who walks into a room, which is
+exactly why it is worth spending the colour twice rather than inventing a private one nobody knows.
+
+The board decides all of this from what **it** observed, not from what the daemon believes. A round
+trip is 150–250 ms on a LAN and immediacy ends around 200, so anything a person perceives as slow —
+the ring lighting up when they speak — is local. Where the two disagree, the observation wins: the
+person is in the room and the daemon is not.
+
 ## Configuring it
 
 Spoken conversations need a **second, different model**: one that takes and returns a continuous
