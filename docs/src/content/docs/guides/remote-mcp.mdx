@@ -30,7 +30,7 @@ One folder per server under `mcp/` in the workspace, each with an `mcp.json`:
 | Field | Meaning |
 |---|---|
 | `url` | **Required, and must be `https`.** A Bearer must never ride to a cleartext endpoint, so an `http` URL is rejected rather than warned about. |
-| `name` | Optional — the folder name is the identity (`mcp/github/` → `github`). It namespaces the tools the model sees (`github_*`) and the credential owner (`mcp:github`), and must match `^[a-z0-9][a-z0-9_-]{0,31}$`: no dots, and short enough that `<server>_<tool>` fits the 64 characters a tool name is allowed. A `name` that disagrees with its folder is warned about, because that is usually a slip. |
+| `name` | Optional — the folder name is the identity (`mcp/cloudflare/` → `cloudflare`). It namespaces the tools the model sees (`cloudflare_*`) and the credential owner (`mcp:cloudflare`), and must match `^[a-z0-9][a-z0-9_-]{0,31}$`: no dots, and short enough that `<server>_<tool>` fits the 64 characters a tool name is allowed. A `name` that disagrees with its folder is warned about, because that is usually a slip. |
 | `auth` | How the Bearer is obtained: `"token"` (you seed it into the vault yourself), `"oauth"` (the daemon discovers the flow, see below), or omit it for a public server. Any other value is an error. |
 | `oauth` | Optional, and only for a server whose endpoints you must supply by hand. Mutually exclusive with `auth` — one credential, one source. |
 
@@ -69,13 +69,17 @@ review step; dropping the folder in is the decision.
   metadata → dynamic client registration, PKCE, resource-bound tokens.
 
   ```json
-  { "url": "https://api.githubcopilot.com/mcp/", "auth": "oauth" }
+  { "url": "https://mcp.cloudflare.com/mcp", "auth": "oauth" }
   ```
 
   ```sh
-  nocturn auth github                 # discovers, registers, prints the consent URL
-  nocturn auth github -scope repo     # ask for specific scopes
+  nocturn auth cloudflare             # discovers, registers, prints the consent URL
+  nocturn auth cloudflare -scope account:read
   ```
+
+  Whether a given server actually supports this is worth checking before assuming — not every
+  remote MCP server implements the discovery chain, and one that does not needs the manual block
+  below.
 
 - **OAuth, endpoints by hand** — if the server's authorization server does not do dynamic
   registration, give an `oauth` block with `auth_url`, `token_url`, `client_id` and `scopes`
@@ -89,8 +93,8 @@ never sees it.
 ## How MCP calls are gated
 
 Every MCP tool call is an HTTPS POST to the server. It is gated exactly like one:
-kind `net`, target the **server's host**. So you approve `api.githubcopilot.com` once, and that
-covers the server's tools.
+kind `net`, target the **server's host**. So you approve `mcp.cloudflare.com` once, and that covers
+the server's tools.
 
 Two things follow, and the second is a real limitation worth stating plainly:
 
