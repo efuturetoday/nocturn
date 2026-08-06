@@ -12,16 +12,41 @@ correct when it changes.
 
 ## Where a credential lives
 
-Credentials live in an encrypted vault, one per workspace, at
-`nocturn-data/workspaces/<name>/vault.enc` (AES-256-GCM). It is unlocked by a master passphrase from
-`NOCTURN_MASTER_PASSPHRASE`, stretched with scrypt and then split per workspace: one passphrase
-opens every vault, and no two vaults share a key — each is derived for that workspace alone.
+Not in one file. Every credential sits next to the thing it belongs to, and only the files below
+ever hold one:
 
-Plugins and MCP servers get their own shard, `secrets.enc`, next to their manifest, keyed by the
-folder's path. So a credential belongs to the thing that lives in that folder, and renaming or
-moving the folder makes its old secrets unreadable.
+```
+nocturn-data/
+├─ master.salt                        ← NOT a secret, but the vault is dead without it
+└─ workspaces/
+   └─ main/
+      ├─ vault.enc                    ← this workspace's own credentials
+      ├─ plugins/
+      │  ├─ my-api/
+      │  │  ├─ plugin.json            (the manifest — names the credential, never holds it)
+      │  │  └─ secrets.enc            ← nocturn secret set plugin:my-api/<credential>
+      │  └─ weather/                  (no secrets.enc — this one needs no credential)
+      │     └─ plugin.json
+      └─ mcp/
+         └─ cloudflare/
+            ├─ mcp.json               (the declaration — never holds a token)
+            └─ secrets.enc            ← nocturn secret set mcp:cloudflare, or nocturn auth
+```
 
-Without a passphrase Nocturn runs fine — the vaults stay locked, and no credential can be injected.
+**One passphrase, many keys.** `NOCTURN_MASTER_PASSPHRASE` is stretched with scrypt over
+`master.salt` into a master key, and every file above gets its own key derived from that — per
+workspace for `vault.enc`, per folder path for each `secrets.enc`. So one passphrase opens
+everything, and no two of these files share a key.
+
+**A shard is bound to where it sits.** Its key comes from the folder's path, and the path is also
+the AES-GCM associated data — so `plugins/my-api/secrets.enc` decrypts as `plugins/my-api` and
+nothing else. Copy it into another plugin's folder and it is unreadable there; rename the folder and
+its old secrets are gone. That is not a check that could be skipped, it is the decryption failing.
+
+A shard that will not open is **skipped with a warning**, and the workspace vault is never read as a
+substitute. That item simply has no credentials, and the rest of the workspace starts normally.
+
+Without a passphrase Nocturn runs fine — everything stays locked, and no credential can be injected.
 
 ```sh
 printf %s "$TOKEN" | nocturn secret set plugin:my-api/my-api   # a plugin credential
