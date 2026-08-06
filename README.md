@@ -62,33 +62,6 @@ schedule) while keeping your machine safe:
 
 ---
 
-<table>
-<tr>
-<td width="50%" align="center">
-<img src="assets/screenshots/app-approval-file-hello.jpg" width="280" alt="The approval sheet: File access above the target hello.md, with Deny, Allow once, Allow for this session and Allow always.">
-</td>
-<td width="50%" align="center">
-<img src="assets/screenshots/app-chat-list.jpg" width="280" alt="The app's chat list, one row per conversation with its last line underneath.">
-</td>
-</tr>
-<tr>
-<td valign="top"><b>The ask, on the other device.</b> Drawn from the gate's own record, never from the conversation. Allows are held to confirm.</td>
-<td valign="top"><b>One workspace, many devices.</b> The same conversations the terminal is talking to.</td>
-</tr>
-<tr>
-<td width="50%" align="center">
-<img src="assets/screenshots/app-tools-code-run-nested-writes.jpg" width="280" alt="The tools view of one turn: a failed code_run, a successful one, and the ten file_write calls it produced.">
-</td>
-<td width="50%" align="center">
-<img src="assets/screenshots/app-connect-discovery.jpg" width="280" alt="The connect screen: a daemon found on the local network by name.">
-</td>
-</tr>
-<tr>
-<td valign="top"><b>The model wrote a loop.</b> Every write it made is its own tool call — timed, attributable, gated.</td>
-<td valign="top"><b>Your phone finds your daemon</b> by name, on your own network. No account, no relay.</td>
-</tr>
-</table>
-
 ## 🚀 Quickstart
 
 ```bash
@@ -108,30 +81,49 @@ cp .env.example .env
 *(Nocturn does not ship with a model — point it at any API you control. Everything it knows stays
 strictly local in a `nocturn-data/` folder.)*
 
-## 📱 The Companion App & Architecture
+## 📱 The companion app
+
+The iOS app is what answers an approval when you are nowhere near the machine: it finds your daemon
+by name on your own network — no account, no relay — and shows the ask as the gate recorded it, never
+as the conversation phrased it. It is also a full client: the same chats the terminal is talking to,
+and every tool call the model made, timed and attributable.
+
+Screenshots and the walkthrough are in the
+**[app guide](https://efuturetoday.github.io/nocturn/guides/the-app/)**. iOS first — a TestFlight
+link lands here with the public beta; Android is on the way (the app is Capacitor, so the same
+codebase builds it).
+
+## 🧱 Architecture
 
 Nocturn is built on two strictly separated core components:
 
-* **`agentkit/` (The Engine):** A completely independent, policy-blind logic loop with zero external
+* **`agentkit/` (the engine):** a completely independent, policy-blind turn loop with zero external
   dependencies.
-* **`internal/` (The Boundary):** The security system that decides what the engine is allowed to do
-  — WASM sandbox, encrypted vault, out-of-band approvals.
+* **`internal/` (the boundary):** the security system that decides what the engine is allowed to do —
+  WASM sandbox, encrypted vault, out-of-band approvals.
 
-The iOS app is what answers an approval when you are nowhere near the machine. A TestFlight link
-lands here with the public beta.
-
-For in-depth details on the architecture, threat models, and plugin development, check out the
-**[full documentation](https://efuturetoday.github.io/nocturn)**.
-
-## Reading further
-
+* **[Full documentation](https://efuturetoday.github.io/nocturn)** — architecture, threat model,
+  plugin development
 * **[examples/](examples/)** — a workspace with one of everything: an agent, a skill, a plugin, an
   MCP server, memory, documents to search
 * **[ADRS.md](ADRS.md)** · **[CONTRIBUTING.md](CONTRIBUTING.md)** · **[SECURITY.md](SECURITY.md)**
 
-Almost all of the code here was written by an AI agent; the architecture, the security boundaries and
-the review are human. Agentic contributions are welcome — on the one condition that a human read the
-diff before it was submitted.
+## 🤖 How this was built
+
+The idea, the architecture, the security boundaries and the threat model are human. So are the
+constraints the code is held to: the tech stack, the dependency budget, the code style, and every
+decision recorded in **[ADRS.md](ADRS.md)**. One rule governs all of it:
+
+> One aspect at a time — clarify, build, prove stable. Explicit over implicit. No sprawl, no cruft,
+> no backward-compat ballast in greenfield.
+
+Inside those constraints, Nocturn was built with frontier models as a pair programmer — and almost
+every line here was typed by one. Not a handoff: each piece was talked through before it was written,
+the reasoning went both ways, and no diff landed unread. That is what made this pace possible. A
+system this size stays coherent because someone holds its shape while the implementation moves fast.
+
+Agentic contributions are welcome on exactly those terms — bring what your agent wrote, once you have
+read the diff yourself.
 
 ## License
 
