@@ -21,7 +21,7 @@ tools:
   - http_read
   - file_write
 autonomy: guarded
-when: cron("0 7 * * *")
+when: "0 7 * * *"
 effort: high
 budget: 5m
 ---
@@ -35,7 +35,7 @@ Write a short summary to mnt/briefing.md. Keep it under ten bullet points.
 | `name` | Optional. The folder name is the identity; a differing `name` here warns, and the folder wins. |
 | `description` | One line, shown by `/agents` and `nocturn ls`. |
 | `tools` | The agent's **cage** — the tools it has at all. Anything not listed does not exist for it. |
-| `when` | `cron("0 7 * * *")` to run on a schedule. Leave out to run only when asked. |
+| `when` | A five-field cron expression, `"0 7 * * *"`, to run on a schedule. Leave it out to run only when asked. |
 | `autonomy` | `strict` (default) or `guarded`. See below. |
 | `effort` | Reasoning effort: `low`, `medium`, `high`, `xhigh` — endpoint-dependent. |
 | `budget` | A Go duration (`5m`, `90s`) bounding the run. |
@@ -85,7 +85,7 @@ play button fires one. Past runs sit underneath it.
 
 ![The Agents tab: one agent named `briefing`, manual, tagged `strict`, with a play button, above a list of its previous runs.](../../../assets/screenshots/app-agents-runs.jpg)
 
-**On a schedule:** with a `when: cron(...)` line the agent fires by itself. Scheduling lives in the
+**On a schedule:** with a `when:` line the agent fires by itself. Scheduling lives in the
 process, so Nocturn has to be running — either your terminal session or
 `nocturn serve`. Nothing fires while the program is closed; a missed window is missed, not queued.
 

@@ -38,9 +38,9 @@ So I built the one I wanted:
 | | |
 |---|---|
 | **One binary** | No Node, no Python, no container, no database. Download a file, run it. |
-| **No ambient authority** | Foreign code runs in WebAssembly with nothing — no filesystem, no sockets, no clock. Every capability is an explicitly handed host function, so a capability nobody granted is not denied, it is *absent*. |
+| **No ambient authority** | Foreign code runs in WebAssembly with nothing — no filesystem, no sockets, no environment. Every capability is an explicitly handed host function, so a capability nobody granted is not denied, it is *absent*. |
 | **The model is never told about credentials** | Not the value, not the name, not that one exists. It asks for a URL; the host attaches the token as the request crosses the boundary. There is nothing about a secret in the conversation for an injection to talk it out of. |
-| **Approval is the design, not a setting** | The unit of decision is **reach**, not risk: leaving the machine asks about the host, changing a file asks about the path, and your answer is remembered at the scope you pick. The yes comes from a **second device**, because a prompt shown inside a hijacked session can be answered by whatever hijacked it. |
+| **Approval is the design, not a setting** | The unit of decision is **reach**, not risk: leaving the machine asks about the host, changing a file asks about the path, and your answer is remembered at the scope you pick. The yes comes from a **second device** — not because an injection could tap the button, but because the ask is drawn from the gate's own record of the action rather than from anything the conversation wrote, and it still finds you when nobody is watching the terminal at all. |
 | **The model writes code that calls tools** | `code_run` hands it JavaScript inside the same sandbox, and the calls that script makes are the same gated calls the model would have made itself — so ten files is one loop and one round trip instead of ten. Pure computation needs no permission at all; a script's reach is exactly its caller's cage, never more. |
 | **A phone and a voice, first class** | A mobile app that answers approvals, and a speaker in the room you can talk to. Not integrations somebody else maintains — the same protocol, the same repository. |
 

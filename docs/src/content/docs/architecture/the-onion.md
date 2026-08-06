@@ -28,11 +28,13 @@ flowchart TB
 
 ## 0 · The sandbox
 
-A wazero guest with nothing: no filesystem, no network, no clock, no environment. Not "denied" —
-absent. Every capability it has is a host function someone deliberately handed it, which is why the
-absence of one is unforgeable. Memory is capped and a wall-clock deadline traps runaways.
+A wazero guest with nothing: no filesystem, no network, no environment. Not "denied" — absent. Every
+capability it has is a host function someone deliberately handed it, which is why the absence of one
+is unforgeable. Memory is capped and a wall-clock deadline traps runaways. It does get a real clock
+and a real random source, because neither reaches anything and withholding them
+[broke more than it protected](/nocturn/architecture/threat-model/#zero-ambient-authority).
 
-For the JavaScript runtime there is exactly **one** import: `nocturn.call`. That is the entire
+For the JavaScript runtime there is exactly **one** host import: `nocturn.call`. That is the entire
 surface between untrusted code and the world.
 
 ## 1 · The tools

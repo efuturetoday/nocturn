@@ -8,8 +8,10 @@ gated: false
 axis: read
 
 intro: >-
-  See what is scheduled. Takes no arguments, never calls the gate — it reads back only what the
-  assistant itself scheduled. See the [`remind` kind](/nocturn/reference/gate/remind/).
+  See what is scheduled. Takes no arguments and asks nothing: it reads back only what the assistant
+  itself scheduled, so there is no `remind` check on this path — only
+  [`remind`](/nocturn/reference/tools/remind/) itself makes one. See the
+  [`remind` kind](/nocturn/reference/gate/remind/).
 
 input: none
 
@@ -20,10 +22,16 @@ output:
   lang: json
 
 js:
-  wrapper: null
+  wrapper: |
+    const pending = nocturn.reminders(); // already parsed, soonest first
   call: |
     const pending = JSON.parse(nocturn.call("remind_list", {}));
 
 notes: >-
-  There is no prelude wrapper for this one — the generic form above is the way to call it from
-  JavaScript.
+  The ids in the result are what [`remind_cancel`](/nocturn/reference/tools/remind_cancel/) takes,
+  which is the whole reason this exists: without it the assistant can schedule a reminder and then
+  never find it again, because a run that set one has usually ended by the time anyone wants it
+  gone.
+
+
+  Pending only. A reminder that has already fired is not listed — it is not a log.

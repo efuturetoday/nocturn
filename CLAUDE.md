@@ -21,7 +21,10 @@ out-of-band as an optional extra.
 **Two threat classes → two defenses (the core insight):**
 - Malicious plugin/skill *code* → the **WASM sandbox** (isolates the code).
 - Prompt injection abusing *legitimate* tools → the **gate + out-of-band approval** (isolates the
-  effect). In-band approval sits in the same trust domain as the injection — hence a second device.
+  effect). Out of band for two reasons, and "the injection could click it" is not one of them: the
+  ask is rendered from `gate.Action{Kind, Target}` rather than from anything the model wrote, so the
+  attacker cannot frame the question; and the runs this exists for are unattended, where there is no
+  in-band prompt to answer at all.
 
 ---
 
@@ -90,7 +93,7 @@ never its value — encrypted vault, host-owned injector, bidirectional leak sca
 `push` (APNs; a push is a WAKE, never a decision).
 
 **Tools & extensions:** `tools` (the thin gated tools) · `script` (untrusted JS on QuickJS/wasm,
-exactly ONE host import: `nocturn.call`) · `plugin` (sandboxed plugins; the manifest declares
+exactly ONE host import: `nocturn.call`, plus WASI) · `plugin` (sandboxed plugins; the manifest declares
 tools/`uses` cage/credentials and is reviewed WITHOUT running the artifact) ·
 `mcp` (+`/authflow`) (stdlib-only protocol client over an injected transport + the gated
 connection layer).
@@ -125,7 +128,7 @@ CGO — the package doc says why not onnxruntime, wasm or a tensor framework, wi
 | `remind` `remind_list` `remind_cancel` | `RemindKind` |
 | `memory_write` (`internal/memory`) | `memory.Kind`, target = note path, **outside `mnt`**; allowed in chat, asked in agent runs |
 | `memory_read` (`internal/memory`) | **ungated** — context, never authority (same argument as `skill_read`) |
-| `time_now` `wake` | **ungated** — zero authority (no wall-clock in the guest), `wake` bounded |
+| `time_now` `wake` | **ungated** — zero authority (reading a clock reaches nothing), `wake` bounded |
 | `whoami` (`internal/speaker`) | **ungated** — only registered when `NOCTURN_SPEAKER_MODEL` is set |
 | `knowledge_search` (`internal/knowledge`) | **ungated** — context, never authority; only registered when an embedding endpoint is configured |
 | `code_run` (`internal/script`) | woven per cage by `tools.Compose`, so a script's reach is its cage |
@@ -248,7 +251,7 @@ go test ./...            # race-clean
 go test -race ./...
 
 wat2wasm internal/sandbox/testdata/echo.wat -o internal/sandbox/testdata/echo.wasm
-internal/script/qjs/build.sh          # only when the QuickJS shim changes (needs wasi-sdk)
+internal/script/qjs/build.sh          # CI rebuilds+commits this too; by hand is just faster
 
 # Speaker recognition. The checkpoint (~26 MB) and the evaluation corpus are NOT committed; the
 # tests needing them skip when unset. Everything about regenerating the two golden files, and the

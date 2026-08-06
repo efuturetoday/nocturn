@@ -93,7 +93,7 @@ Three things only exist here:
 
 - **Agents on a schedule.** A cron agent firing at 6am is the whole idea — work that happens while
   you are asleep. The terminal chat can fire one by hand; nothing fires on its own without a daemon.
-- **Approvals when you are not there.** An unattended run that hits something irreversible routes
+- **Approvals when you are not there.** An unattended run that reaches the network or a file routes
   the ask to your phone. With no daemon there is no route, and a `guarded` agent falls back to
   refusing — which is safe and useless.
 - **Everything that is not a keyboard.** The companion app, a voice satellite, anything that speaks
