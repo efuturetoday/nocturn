@@ -366,7 +366,7 @@ func TestAsk_FirstAnswerWins(t *testing.T) {
 			synctest.Wait() // Ask has presented and is durably blocked in its select
 			call := <-sink.gotApproval
 
-			b.Resolve(call.ID, "once") // first answer: allow once (RecallNever) — lands in the buffered channel
+			b.Resolve(call.ID, "once")    // first answer: allow once (RecallNever) — lands in the buffered channel
 			b.Resolve(call.ID, "session") // later answer: channel full, dropped by select-default
 
 			got := <-res
