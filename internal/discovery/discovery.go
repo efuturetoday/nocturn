@@ -1,7 +1,11 @@
 // Package discovery holds the vocabulary every discoverable kind shares (agents,
 // skills, plugins, MCP servers): how a skipped item is recorded, and how an
-// item's name is resolved. One implementation so all four kinds behave
-// identically instead of hand-copying the rule four times and drifting.
+// item's name is resolved. One implementation instead of hand-copying the rule
+// and letting the copies drift.
+//
+// Name resolution covers three of the four: skills resolve theirs in their own
+// loader, field-wins, for the reason given on ResolveName. Skipping is shared by
+// all four.
 package discovery
 
 import (

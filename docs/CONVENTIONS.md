@@ -19,9 +19,10 @@ Two separate questions, and the docs must never blur them:
   `tools`). Not a rule that is evaluated: an absent tool is absent.
 - **Gate** — what a call may do, checked per call as `gate.Check(Action{Kind, Target})`.
 
-**Kinds today** — exactly four, and no page may invent a fifth: `net` (`tools.NetKind`), `file`
-(`tools.FileKind`), `notify` (`tools.NotifyKind`), `remind` (`tools.RemindKind`).
-Verify with `grep -rn 'Kind = "' internal/tools`.
+**Kinds today** — exactly five, and no page may invent a sixth: `net` (`tools.NetKind`), `file`
+(`tools.FileKind`), `notify` (`tools.NotifyKind`), `remind` (`tools.RemindKind`), `memory`
+(`memory.Kind` — it lives in `internal/memory`, which is why it is easy to miss).
+Verify with `grep -rn 'Kind = "' internal/tools internal/memory`.
 
 **Gated is not derivable from the tool's name or its axis.** `http_read` is a read and asks;
 `file_read` is a read and never calls the gate. Every tool entry states `gated` explicitly.
