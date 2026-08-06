@@ -33,6 +33,9 @@ const axisLabel = axis === 'none' ? null : axis;
 // Inline-Markdown for author-friendly prose fields: authors write `code`,
 // [text](href), **bold** in the YAML instead of raw HTML.
 const md = (s: string | undefined) => (s ? (marked.parseInline(s) as string) : '');
+// Block-level, for the fields that hold more than one paragraph. parseInline drops the blank lines
+// between them, which turned any multi-paragraph note into one wall of text.
+const mdBlock = (s: string | undefined) => (s ? (marked.parse(s) as string) : '');
 ---
 
 <p>
@@ -76,7 +79,7 @@ const md = (s: string | undefined) => (s ? (marked.parseInline(s) as string) : '
 	}
 </p>
 
-<p set:html={md(intro)} />
+<div set:html={mdBlock(intro)} />
 
 <h2 id="input">Input</h2>
 {
@@ -111,12 +114,12 @@ const md = (s: string | undefined) => (s ? (marked.parseInline(s) as string) : '
 <h2 id="output">Output</h2>
 {
 	typeof output === 'string' ? (
-		<p set:html={md(output)} />
+		<div set:html={mdBlock(output)} />
 	) : (
 		<Fragment>
-			{output.text && <p set:html={md(output.text)} />}
+			{output.text && <div set:html={mdBlock(output.text)} />}
 			{output.code && <Code code={output.code} lang={output.lang ?? 'json'} />}
-			{output.after && <p set:html={md(output.after)} />}
+			{output.after && <div set:html={mdBlock(output.after)} />}
 		</Fragment>
 	)
 }
@@ -141,7 +144,7 @@ const md = (s: string | undefined) => (s ? (marked.parseInline(s) as string) : '
 	notes && (
 		<Fragment>
 			<h2 id="notes">Notes</h2>
-			<p set:html={md(notes)} />
+			<div set:html={mdBlock(notes)} />
 		</Fragment>
 	)
 }

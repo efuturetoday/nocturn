@@ -130,7 +130,7 @@ const slug = (s: string) => ghSlug(s);
 	leakScanning && (
 		<Fragment>
 			<h2 id="leak-scanning">Leak scanning</h2>
-			{leakScanning.intro && <p set:html={md(leakScanning.intro)} />}
+			{leakScanning.intro && <div set:html={mdBlock(leakScanning.intro)} />}
 			<ul>
 				{leakScanning.points.map((p) => (
 					<li set:html={md(p)} />

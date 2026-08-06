@@ -47,42 +47,38 @@ js:
     const hits = nocturn.call("knowledge_search", { query: "the deposit", limit: 3 });
 
 notes: >-
-  **The similarity is there for the model to judge with.** Retrieval always returns its best
-  guesses: ask for three passages and you get three, however weak. A hard cutoff was the obvious fix
-  and the wrong one — where the line between an answer and noise falls depends on the question, and
-  the question is not in the retrieval code. So the number goes to the model with the caveats that
-  make it usable: it is not a probability, its scale depends on the embedding model, and it should be
-  read against the other results rather than against a constant. A flat set with no leader means the
-  answer is not filed here. On a real corpus, "how much was the deposit" gives 0.76 against 0.57 and
-  0.60; a question about something not in the folder gives 0.48, 0.56, 0.53 — no leader at all.
+  **The similarity is for the model to judge with, not a threshold.** Retrieval always returns its
+  best guesses — ask for three and you get three, however weak. A hard cutoff was the obvious fix and
+  the wrong one: where the line between an answer and noise falls depends on the question, and the
+  question is not in the retrieval code. So the number goes to the model with the caveats that make
+  it usable — it is not a probability, its scale depends on the embedding model, and it should be
+  read against the other results rather than against a constant.
 
 
-  A passage marked `keyword match` was found by its exact words. A low similarity there is the
-  hybrid working rather than failing: it is how a serial number or an error code is found at all.
+  A flat set with no leader means the answer is not filed here. Measured on a real corpus: "how much
+  was the deposit" gives **0.76** against 0.57 and 0.60; a question about something not in the folder
+  gives 0.48, 0.56, 0.53 — no leader at all.
 
 
   **Two rankers, because they fail in opposite directions.** Vectors find a passage that says the
-  same thing in other words and miss an exact identifier the model never saw — a serial number, a
+  same thing in other words, and miss an exact identifier the model never saw — a serial number, a
   flag, an internal codename. Keyword scoring finds precisely that string and misses every
-  paraphrase. Both run, and their results are fused by rank rather than by score, because a cosine of
-  0.82 and a BM25 of 11.4 share no scale and normalising them would invent one. What survives is
-  agreement.
+  paraphrase. Both run, and their results are fused by rank rather than by score: a cosine of 0.82
+  and a BM25 of 11.4 share no scale, and normalising them would invent one. What survives is
+  agreement. A hit marked `keyword match` was found by its exact words, so a low similarity there is
+  the hybrid working rather than failing.
 
 
   **The result is untrusted content, and says so.** The text handed to the model states that these
-  are quoted file contents rather than instructions, and explicitly does not claim the user wrote
-  them — because the corpus is inside the mount, `file_write` can put a file there, and therefore so
-  can a [prompt injection](/nocturn/architecture/threat-model/). Presenting that back as "your user's
-  own note" would launder exactly the attack the rest of the design exists to stop.
+  are quoted file contents rather than instructions, and does not claim the user wrote them — the
+  corpus is inside the mount, `file_write` can put a file there, and so can a
+  [prompt injection](/nocturn/architecture/threat-model/). Presenting that back as "your user's own
+  note" would launder the attack the rest of the design exists to stop. Results are also redacted on
+  the way in, the same treatment `memory_read` gives its notes: a document can hold a credential
+  because somebody pasted it there.
 
 
   **Your documents leave the machine when they are indexed.** Embedding is a remote call, so every
-  document in the folder is sent to the configured provider once, and each query is sent when it is
-  asked. The vault leak scanner runs before the request: a passage carrying a stored secret is
-  refused rather than embedded. See [knowledge](/nocturn/guides/knowledge/) for what that means and
-  how to choose a provider.
-
-
-  **Results are redacted on the way in**, the same treatment `memory_read` gives its own notes — a
-  document can hold a credential because somebody pasted it there, and a search result is how it
-  would otherwise reach the conversation.
+  document is sent to the configured provider once, and each query when it is asked. The vault leak
+  scanner runs first: a passage carrying a stored secret is refused rather than embedded. See
+  [knowledge](/nocturn/guides/knowledge/) for what that means and how to choose a provider.
