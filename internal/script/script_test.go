@@ -3,6 +3,7 @@ package script_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,82 @@ func TestRunner_Run_RunawayTrapped(t *testing.T) {
 
 	if _, err := r.Run(context.Background(), `while (true) {}`); err == nil {
 		t.Fatal("expected the runaway script to be trapped, got nil error")
+	}
+}
+
+// The guest sees the real clock and real entropy, and both matter for a reason that is not comfort.
+//
+// wazero's defaults are deterministic stand-ins — a clock frozen at 2022-01-01 and a fixed random
+// stream — and under them QuickJS returned the byte-identical Math.random() on every run of every
+// script, because it seeds that PRNG from the clock. The prelude picked multipart boundaries from
+// it. Two runs are enough to catch a regression here: with the frozen defaults every field below is
+// identical between them.
+func TestRunner_Run_ClockAndEntropyAreReal(t *testing.T) {
+	requireInterpreter(t)
+	r := script.New(nil)
+
+	const probe = `console.log(JSON.stringify({
+		math: Math.random(),
+		bytes: Array.from(crypto.getRandomValues(new Uint8Array(16))),
+		year: new Date().getUTCFullYear(),
+	}));`
+	type sample struct {
+		Math  float64 `json:"math"`
+		Bytes []int   `json:"bytes"`
+		Year  int     `json:"year"`
+	}
+	var got [2]sample
+	for i := range got {
+		out, err := r.Run(context.Background(), probe)
+		if err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		if err := json.Unmarshal([]byte(out), &got[i]); err != nil {
+			t.Fatalf("run %d: %v (output %q)", i, err, out)
+		}
+	}
+
+	if got[0].Math == got[1].Math {
+		t.Errorf("Math.random() returned %v on both runs — the guest clock is frozen again", got[0].Math)
+	}
+	if slices.Equal(got[0].Bytes, got[1].Bytes) {
+		t.Errorf("crypto.getRandomValues returned the same 16 bytes twice: %v", got[0].Bytes)
+	}
+	// Not "is it exactly now" — that would be a clock-skew test. 2022 is wazero's frozen default and
+	// the only value this needs to rule out; anything past it means a real clock reached the guest.
+	if got[0].Year <= 2022 {
+		t.Errorf("the guest thinks the year is %d, so it is reading wazero's fake clock", got[0].Year)
+	}
+}
+
+// A multipart boundary must be unguessable: it is the only thing separating the parts, so a
+// predictable one lets a crafted field value close its part early and forge the rest of the body.
+func TestPrelude_MultipartBoundaryIsUnpredictable(t *testing.T) {
+	requireInterpreter(t)
+
+	// The boundary is only observable where it is used: in the content_type http_write receives.
+	var args string
+	ts, err := agentkit.NewToolSet(recordingTool(t, "http_write", `{"status":200,"body":""}`, &args))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := script.New(ts)
+
+	const probe = `const fd = new FormData();
+		fd.append("field", "value");
+		await fetch("https://example.invalid", { method: "POST", body: fd });`
+	seen := make(map[string]bool)
+	for range 2 {
+		if _, err := r.Run(context.Background(), probe); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if !strings.Contains(args, "boundary=----NocturnFormBoundary") {
+			t.Fatalf("no multipart boundary in %q", args)
+		}
+		if seen[args] {
+			t.Fatalf("the same boundary twice: %q", args)
+		}
+		seen[args] = true
 	}
 }
 
