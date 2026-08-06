@@ -79,14 +79,14 @@ read further.
 <table>
 <tr>
 <td width="50%" align="center">
-<img src="assets/screenshots/app-chat-ping-allowed-then-denied.jpg" width="280" alt="One conversation: the assistant is told a name and writes it to memory, reaches google.com once, and on the second attempt reports that the action was declined.">
+<img src="assets/screenshots/app-approval-file-hello.jpg" width="280" alt="The approval sheet in the companion app: File access above the target hello.md, the conversation that raised it, and the answers Deny, Allow once, Allow for this session and Allow always.">
 </td>
 <td width="50%" align="center">
 <img src="assets/screenshots/app-chat-list.jpg" width="280" alt="The app's chat list: every conversation in the workspace with the assistant's last line under each.">
 </td>
 </tr>
 <tr>
-<td valign="top"><b>The gate said no.</b> Same host, allowed once and refused the next time: <code>Once</code> really does mean once. A refusal stops the tool call, not the conversation — the assistant is told, and carries on.</td>
+<td valign="top"><b>The ask, on the other device.</b> Nothing on this sheet was written by the model: the kind and the target arrive as separate fields from the gate's own record, and the wording is the app's own. An injection can make the assistant <i>ask</i> — it cannot frame the question. Every allow is held to confirm; the no is a single tap.</td>
 <td valign="top"><b>One workspace, many devices.</b> Conversations are not per device — this is the same workspace the terminal is talking to.</td>
 </tr>
 <tr>

@@ -47,10 +47,14 @@ Say yes and the answer covers that kind and that target — so `http_read`, `htt
 ```
 
 **In the companion app**, the same decision is a sheet: `Deny` and `Allow once` as the two direct
-answers, then the ones that remember — `this session`, `always` — and, when a widening is on offer,
-its own row below a rule.
+answers, then the ones that remember — `Allow for this session`, `Allow always` — and, when a
+widening is on offer, its own row below a rule.
 
-![The approval sheet in the app: the kind Network access above the target google.com, the conversation that raised it, and the answers Deny, Allow once, this session and always.](../../../assets/screenshots/app-approval-net-google.jpg)
+Every allow is **held**, not tapped. Press one and it fills while its caption counts the remaining
+seconds down; let go early and nothing is granted. `Deny` is a single tap: only the yes is what a
+stray touch cannot take back, and the no is where the gate already falls back to on its own.
+
+![The approval sheet in the app: the kind File access above the target hello.md, the conversation that raised it, and the answers Deny, Allow once, Allow for this session and Allow always.](../../../assets/screenshots/app-approval-file-hello.jpg)
 
 The daemon sends the sheet no prose at all. It sends the action — kind and target as separate
 fields — and the shape of each answer: how long it would be remembered, and whether it widens the
@@ -65,9 +69,13 @@ it sits apart rather than beside `always`.
 | Answer | Remembered |
 |---|---|
 | Allow once | nothing — the next identical action asks again |
-| this session | until the process exits |
-| always | written to `grants.json`; survives restarts |
-| always · `*.example.com` | the widened target, written to disk |
+| Allow for this session | until the process exits |
+| Allow always | written to `grants.json`; survives restarts |
+| Allow always · `*.example.com` | the widened target, written to disk |
+
+A no is never remembered, at any scope. `gate.Check` returns the refusal to the model the moment the
+answer comes back, before it can store anything — which is why the durations sit on the allows and
+nowhere near `Deny`.
 
 Anything else is a no, including silence and the Enter key. An unanswered out-of-band approval
 fails closed after **two minutes**.

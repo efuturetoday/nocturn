@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
+import { Component, ChangeDetectionStrategy, OnDestroy, inject, signal } from '@angular/core';
 import { IonButton } from '@ionic/angular/standalone';
 import { ApprovalService } from '../../core/services/approval.service';
 import { ChatListService } from '../../core/services/chat-list.service';
@@ -15,6 +15,14 @@ const KIND_LABELS: Record<string, string> = {
   notify: 'Notification',
   remind: 'Reminder',
 };
+
+/** How long an allow must be held before it commits. A grant is the irreversible half of this
+ * decision, so it costs deliberate contact; a refusal does not. Long enough that no stray touch
+ * reaches it, short enough that answering an expected ask does not feel like a punishment. */
+const HOLD_MS = 1500;
+
+/** How often the countdown redraws while a button is held. */
+const TICK_MS = 50;
 
 /**
  * The app-global out-of-band approval overlay. Mounted once in the app root (like the connection
@@ -33,6 +41,16 @@ const KIND_LABELS: Record<string, string> = {
  * an answer varies on are shown as two — `recall` is how LONG it is remembered, `widen` is how FAR
  * it reaches — so the broadest answer (permanent AND widened) cannot hide as another quiet chip
  * beside the exact one.
+ *
+ * Every answer names its own verb rather than sitting under a shared heading, and the scope is NOT a
+ * selector shared with Deny: a refusal is never remembered (gate.Check returns on `!approved`, before
+ * it can store anything), so a duration offered next to "deny" would promise something the gate does
+ * not keep.
+ *
+ * **Every allow is held for HOLD_MS, Deny is a tap.** Holding fills the button and counts the
+ * remaining seconds down in its own caption; letting go early commits nothing. Only the grant is
+ * guarded, because only the grant is what an accidental touch cannot take back — delaying a refusal
+ * would just slow down the answer the gate already falls back to.
  */
 @Component({
   selector: 'app-approval-overlay',
@@ -66,35 +84,39 @@ const KIND_LABELS: Record<string, string> = {
             <div class="answer">
               <ion-button fill="outline" color="danger" (click)="approval.resolve(a.id, deny)">Deny</ion-button>
               @if (once(a); as o) {
-                <ion-button color="primary" (click)="approval.resolve(a.id, o.id)">Allow once</ion-button>
+                <div class="hold grow" (pointerdown)="start(a, o, $event)" (pointerup)="cancel()" (pointercancel)="cancel()" (pointerleave)="cancel()">
+                  <span class="fill" [style.transform]="fill(a, o)" aria-hidden="true"></span>
+                  <ion-button color="primary">{{ caption(a, o, 'Allow once') }}</ion-button>
+                </div>
               }
             </div>
 
-            @if (keep(a).length) {
-              <p class="label">remember</p>
-              <div class="keep">
-                @for (o of keep(a); track o.id) {
-                  <ion-button size="small" fill="outline" color="medium" (click)="approval.resolve(a.id, o.id)">
-                    {{ o.recall === 'session' ? 'this session' : 'always' }}
-                  </ion-button>
-                }
+            @for (o of keep(a); track o.id) {
+              <div class="hold block" (pointerdown)="start(a, o, $event)" (pointerup)="cancel()" (pointercancel)="cancel()" (pointerleave)="cancel()">
+                <span class="fill" [style.transform]="fill(a, o)" aria-hidden="true"></span>
+                <ion-button expand="block" fill="outline" color="medium">
+                  {{ caption(a, o, o.recall === 'session' ? 'Allow for this session' : 'Allow always') }}
+                </ion-button>
               </div>
             }
 
             @if (widenings(a).length) {
-              <p class="label wide">or widen the grant</p>
+              <p class="rule">or widen the grant</p>
               @for (o of widenings(a); track o.id) {
-                <ion-button
-                  class="widen"
-                  expand="block"
-                  fill="outline"
-                  color="warning"
-                  (click)="approval.resolve(a.id, o.id)"
-                >
-                  always · <span class="pattern">{{ o.widen?.target }}</span>
-                </ion-button>
+                <div class="hold block" (pointerdown)="start(a, o, $event)" (pointerup)="cancel()" (pointercancel)="cancel()" (pointerleave)="cancel()">
+                  <span class="fill warn" [style.transform]="fill(a, o)" aria-hidden="true"></span>
+                  <ion-button expand="block" fill="outline" color="warning">
+                    @if (holding(a, o)) {
+                      {{ caption(a, o, '') }}
+                    } @else {
+                      Allow always ·&nbsp;<span class="pattern">{{ o.widen?.target }}</span>
+                    }
+                  </ion-button>
+                </div>
               }
             }
+
+            <p class="hint">Hold an allow to confirm it.</p>
           </section>
         }
       </div>
@@ -157,32 +179,106 @@ const KIND_LABELS: Record<string, string> = {
     }
 
     .answer { display: flex; gap: 0.625rem; margin-top: 1.25rem; }
-    .answer ion-button { flex: 1 1 0; margin: 0; --border-radius: 0.75rem; height: 2.9rem; }
+    .answer > ion-button { flex: 1 1 0; margin: 0; --border-radius: 0.75rem; height: 2.9rem; }
 
-    .label {
-      margin: 1.25rem 0 0.5rem;
+    /* The hold wrapper owns the pointer events and the progress fill, so no styling has to reach
+       into ion-button's shadow DOM. A long press must not select text or raise the OS callout. */
+    .hold {
+      position: relative; overflow: hidden;
+      border-radius: 0.75rem;
+      touch-action: none; user-select: none; -webkit-touch-callout: none;
+    }
+    .hold.grow { flex: 1 1 0; }
+    .hold.block { margin-top: 0.625rem; }
+    .hold ion-button { margin: 0; --border-radius: 0.75rem; height: 2.9rem; width: 100%; pointer-events: none; }
+    .fill {
+      position: absolute; inset: 0; z-index: 1;
+      transform-origin: left; transform: scaleX(0);
+      background: var(--ion-text-color); opacity: 0.18;
+      pointer-events: none;
+    }
+    .fill.warn { background: var(--ion-color-warning); opacity: 0.26; }
+
+    /* The rule that separates reach from duration: everything above it grants the exact target. */
+    .rule {
+      display: flex; align-items: center; gap: 0.625rem;
+      margin: 1.5rem 0 0.625rem;
       font-size: 0.72rem; letter-spacing: 0.05em; color: var(--ion-color-medium);
     }
-    .label.wide {
-      display: flex; align-items: center; gap: 0.625rem;
-      margin-top: 1.5rem;
-    }
-    .label.wide::before, .label.wide::after {
+    .rule::before, .rule::after {
       content: ''; flex: 1 1 0; height: 1px; background: var(--ion-border-color);
     }
+    .rule + .hold.block { margin-top: 0; }
 
-    .keep { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-    .keep ion-button { flex: 1 1 auto; margin: 0; --border-radius: 999px; }
+    .pattern { font-family: var(--ion-font-family-monospace, monospace); }
 
-    .widen { margin: 0; --border-radius: 0.75rem; height: 2.75rem; }
-    .widen .pattern { font-family: var(--ion-font-family-monospace, monospace); }
+    .hint {
+      margin: 0.875rem 0 0;
+      font-size: 0.72rem; color: var(--ion-color-medium); text-align: center;
+    }
   `,
 })
-export class ApprovalOverlayComponent {
+export class ApprovalOverlayComponent implements OnDestroy {
   protected readonly approval = inject(ApprovalService);
   private readonly chatList = inject(ChatListService);
 
   protected readonly deny = DENY_OPTION;
+
+  /** "<approvalId>:<optionId>" of the answer being held, or null. Only one can be held at a time. */
+  private readonly held = signal<string | null>(null);
+  /** Milliseconds left on that hold, ticked down for the caption and the fill. */
+  private readonly left = signal(HOLD_MS);
+  private timer?: ReturnType<typeof setInterval>;
+
+  ngOnDestroy(): void {
+    this.cancel();
+  }
+
+  /** Begin holding an allow. The deadline is a timestamp rather than a countdown of ticks, so a
+   * throttled or coalesced interval still commits after HOLD_MS of real contact, never sooner. */
+  protected start(a: PendingApproval, o: ApprovalOption, ev: PointerEvent): void {
+    ev.preventDefault();
+    this.cancel();
+    const until = Date.now() + HOLD_MS;
+    this.held.set(key(a, o));
+    this.left.set(HOLD_MS);
+    this.timer = setInterval(() => {
+      const rest = until - Date.now();
+      if (rest > 0) {
+        this.left.set(rest);
+        return;
+      }
+      this.cancel();
+      this.approval.resolve(a.id, o.id);
+    }, TICK_MS);
+  }
+
+  /** Let go: nothing commits, which is why a partial hold can never approve. Lifting early and the
+   * OS stealing the gesture both land here. Dragging off cancels for a mouse only — a touch pointer
+   * is implicitly captured by the element it went down on, so pointerleave never fires for it and
+   * sliding a finger away still counts as contact until it lifts. */
+  protected cancel(): void {
+    clearInterval(this.timer);
+    this.timer = undefined;
+    this.held.set(null);
+    this.left.set(HOLD_MS);
+  }
+
+  protected holding(a: PendingApproval, o: ApprovalOption): boolean {
+    return this.held() === key(a, o);
+  }
+
+  /** The progress fill for one answer: empty unless it is the one being held. */
+  protected fill(a: PendingApproval, o: ApprovalOption): string {
+    if (!this.holding(a, o)) return 'scaleX(0)';
+    return `scaleX(${1 - this.left() / HOLD_MS})`;
+  }
+
+  /** A held button counts down in place of its label, so the seconds are where the thumb already is. */
+  protected caption(a: PendingApproval, o: ApprovalOption, label: string): string {
+    if (!this.holding(a, o)) return label;
+    return `hold ${(this.left() / 1000).toFixed(1)} s`;
+  }
 
   /** The human label for this ask's axis; an unknown kind renders raw rather than disappearing. */
   protected kind(a: PendingApproval): string {
@@ -213,4 +309,9 @@ export class ApprovalOverlayComponent {
     if (c) return { name: c.name || 'Untitled', source: c.source };
     return { name: 'Background run', source: 'agent' };
   }
+}
+
+/** Identifies one answer across every open approval — several may offer the same option id. */
+function key(a: PendingApproval, o: ApprovalOption): string {
+  return `${a.id}:${o.id}`;
 }
