@@ -88,7 +88,7 @@ export default defineConfig({
 						{ label: 'Knowledge', slug: 'guides/knowledge' },
 						{ label: 'Agents', slug: 'guides/agents' },
 						{ label: 'Approvals', slug: 'guides/approvals' },
-						{ label: 'Secrets', slug: 'guides/connecting-accounts' },
+						{ label: 'Vault', slug: 'guides/vault' },
 					],
 				},
 				{

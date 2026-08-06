@@ -1,12 +1,16 @@
 ---
-title: Secrets and accounts
-description: Where credentials live, why the model never sees one, and what happens when a secret tries to leave.
+title: The vault
+description: Where every credential lives, how it is stored, why the model never sees one, and what happens when a secret tries to leave.
 ---
 
 For the assistant to do anything with a real service it needs a key or a sign-in. Nocturn is built
 so it can *use* a credential without ever *seeing* it.
 
-## The vault
+**This page is the whole story on credentials.** Plugins, MCP servers and the workspace layout all
+touch the vault, and each of those pages links here rather than explaining it again — one place to
+correct when it changes.
+
+## Where a credential lives
 
 Credentials live in an encrypted vault, one per workspace, at
 `nocturn-data/workspaces/<name>/vault.enc` (AES-256-GCM). It is unlocked by a master passphrase from

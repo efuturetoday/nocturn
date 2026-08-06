@@ -106,7 +106,9 @@ Then store the value once:
 printf %s "$TOKEN" | nocturn secret set plugin:my-api/my-api
 ```
 
-Your code never sees the token — it is stamped in host-side, for that host only.
+Your code never sees the token — it is stamped in host-side, for that host only. Where that value is
+kept, how the plugin's shard is keyed, and what happens if it tries to leave is on
+[the vault](/nocturn/guides/vault/).
 
 ### Sign in with… instead of a stored token
 
@@ -159,7 +161,7 @@ from then on. Like a plugin itself, it takes effect at the next start.
 
 **This is a command-line step.** The app's **Settings → Accounts** lists MCP servers in discovery
 mode and nothing else, so a plugin's provider does not appear there — connect it from a terminal.
-See [Secrets and accounts](/nocturn/guides/connecting-accounts/).
+See [the vault](/nocturn/guides/vault/) for where the token then lives.
 
 ## Putting one in, end to end
 

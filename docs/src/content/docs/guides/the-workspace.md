@@ -51,23 +51,12 @@ nocturn-data/workspaces/main/
 └─ mcp/            ← one folder per remote MCP server, each with an mcp.json
 ```
 
-Plugins and MCP servers keep their own credentials in an encrypted `secrets.enc` inside their own
-folder — `plugins/<name>/secrets.enc`, `mcp/<name>/secrets.enc`. Each shard is locked with a key
-derived from the folder's path, so it can only be read for the thing that lives there: a plugin
-cannot reach another's credentials by claiming its name, and moving or renaming a folder makes its
-old secrets unreadable.
+`vault.enc` is the workspace's own credentials; plugins and MCP servers additionally keep a
+`secrets.enc` shard inside their own folder, which is why moving or renaming one of those folders
+makes its old secrets unreadable. How that is keyed, how to put a value in, and why the model never
+sees one is all on [the vault](/nocturn/guides/vault/) — that page is the single source of truth for
+credentials, and this one only says where the files sit.
 
-```sh
-# a plugin credential (named in the plugin's manifest):
-printf %s "$TOKEN" | nocturn secret set plugin:<name>/<credential>
-
-# an MCP server's bearer token (one per server):
-printf %s "$TOKEN" | nocturn secret set mcp:<name>
-```
-
-The target is owner-namespaced — the same name `nocturn secret ls` shows — and the value is read
-from stdin, so it never lands in your shell history or in the process list. Add `-w <workspace>` for
-a workspace other than `main`. OAuth accounts are connected with `nocturn auth <name>` instead.
 `nocturn ls` shows a workspace's plugins, servers, agents and skills.
 
 ## The first wall: the file tools see only `mnt/`
@@ -132,5 +121,5 @@ one level above every workspace. Copy a workspace without it and the vault is un
 the right passphrase — the derived key is simply a different one.
 
 `.env`, which holds your model connection, sits next to the binary for the same reason and is the
-other thing to remember. See [Secrets and accounts](/nocturn/guides/connecting-accounts/).
+other thing to remember. See [the vault](/nocturn/guides/vault/).
 :::
