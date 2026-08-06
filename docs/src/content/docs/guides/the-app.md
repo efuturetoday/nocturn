@@ -29,11 +29,9 @@ you do not type an IP.
 
 ![The app's connect screen: a daemon found on the network by name, its WebSocket address underneath, and a link to enter a server by hand.](../../../assets/screenshots/app-connect-discovery.jpg)
 
-- **The first device** redeems a bootstrap code the daemon prints at startup. That is the only time
-  a code comes from the machine itself.
-- **Every device after that** asks an already-paired one. The new device requests a join, the
-  request appears live on your existing devices, and the code is shown *there* — you read it on the
-  trusted device and enter it on the new one.
+- **The first device** redeems a bootstrap code the daemon prints at startup.
+- **Every device after that** asks an already-paired one, and the code appears *there* — you read it
+  on a device you already trust and type it on the new one.
 
 ![The pairing sheet: six empty code boxes, the daemon's address above them, and a link for a device that already has a paired sibling to join instead.](../../../assets/screenshots/app-pair-device.jpg)
 
@@ -81,11 +79,11 @@ or stops.
 
 ![An approval sheet over the chat: the kind and target read `net → google.com`, with Once, Session, Always and Deny.](../../../assets/screenshots/app-approval-net-google.jpg)
 
-**The push carries no authority.** It is a wake signal and nothing else — the decision travels back
-over the authenticated WebSocket, never inside the notification. A notification that arrives twice,
-or is replayed, cannot approve anything. That property is also what will make a
-[hosted relay](/nocturn/guides/remote-access/) safe to run later: a relay learns that some device
-should look at its daemon, and nothing about what was asked or how you answered.
+The push carries **no authority** — it wakes the app, and the decision travels back over the
+authenticated connection, never inside the notification ([why, and what it costs an
+attacker](/nocturn/guides/remote-access/#approvals-when-nobody-is-looking)). That is also what will
+make a hosted relay safe to run later: a relay learns that some device should look at its daemon, and
+nothing about what was asked or how you answered.
 
 Push over the internet currently needs your own Apple Developer account and the four
 `NOCTURN_APNS_*` variables. Without them everything still works on your own network — you simply are
