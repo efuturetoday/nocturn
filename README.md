@@ -112,7 +112,7 @@ Nocturn is built on two strictly separated core components:
 
 The idea, the architecture, the security boundaries and the threat model are human. So are the
 constraints the code is held to: the tech stack, the dependency budget, the code style, and every
-decision recorded in **[ADRS.md](ADRS.md)**. One rule governs all of it:
+decision recorded in **[ADRS.md](ADRS.md)**. And the mantra:
 
 > One aspect at a time — clarify, build, prove stable. Explicit over implicit. No sprawl, no cruft,
 > no backward-compat ballast in greenfield.
