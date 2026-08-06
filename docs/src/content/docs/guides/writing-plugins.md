@@ -93,15 +93,73 @@ Never put a secret in a plugin. Declare it instead, and the host attaches it at 
 ]
 ```
 
+| Field | Meaning |
+|---|---|
+| `name` | **Required.** What you store the value under, and what an `oauth` block links to. |
+| `host` | **Required.** The only host it is ever attached to. A request anywhere else does not carry it. |
+| `header` | **Required.** Which header it is stamped into — usually `Authorization`. |
+| `prefix` | Optional, prepended to the value: `"Bearer "` for a bearer token, empty for a bare key. |
+
 Then store the value once:
 
 ```sh
 printf %s "$TOKEN" | nocturn secret set plugin:my-api/my-api
 ```
 
-Your code never sees the token — it is stamped in host-side, for that host only. For "sign in
-with…" services, declare an `oauth` provider instead and run `nocturn auth <name>` once. See
-[Secrets and accounts](/nocturn/guides/connecting-accounts/).
+Your code never sees the token — it is stamped in host-side, for that host only.
+
+### Sign in with… instead of a stored token
+
+For a service you log into rather than paste a key from, declare an `oauth` provider. The host runs
+the flow, holds the token, refreshes it, and injects it through the credential of the same name:
+
+```json
+"credentials": [
+  { "name": "gcal", "host": "www.googleapis.com", "header": "Authorization", "prefix": "Bearer " }
+],
+"oauth": [
+  {
+    "name": "gcal",
+    "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_url": "https://oauth2.googleapis.com/token",
+    "client_id": "…apps.googleusercontent.com",
+    "client_secret": "",
+    "scopes": ["https://www.googleapis.com/auth/calendar.readonly"]
+  }
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `name` | **Required, and must match a `credentials` entry.** That is what the token is injected through — a block with no matching credential fetches a token nothing would ever use, and is refused at load. |
+| `auth_url` | **Required, `https`.** Where you are sent to consent. |
+| `token_url` | **Required, `https`.** Where the code is exchanged, and where refreshes go. |
+| `client_id` | **Required.** The client you registered with that provider. |
+| `client_secret` | May be `""`. A desktop-app client's secret is not confidential and is shipped in the manifest; a PKCE client has none at all. |
+| `scopes` | **At least one.** |
+
+`oauth` is a **list**, so one plugin can bring several providers — each pairing with its own
+credential by name.
+
+Two differences from an [MCP server](/nocturn/guides/remote-mcp/), both worth knowing before you
+copy one into the other. A plugin always writes its endpoints out by hand: there is no discovery
+mode, so `client_id` and `scopes` live in the manifest rather than arriving as a `-scope` flag at
+sign-in time. And the `name` here does double duty as the link to a credential, which an MCP block
+has no equivalent of — an MCP server *is* the destination, while a plugin declares which of its
+credentials the token becomes.
+
+Then connect it once:
+
+```sh
+nocturn auth gcal
+```
+
+That prints a consent URL, stores the token in the plugin's own encrypted shard, and refreshes it
+from then on. Like a plugin itself, it takes effect at the next start.
+
+**This is a command-line step.** The app's **Settings → Accounts** lists MCP servers in discovery
+mode and nothing else, so a plugin's provider does not appear there — connect it from a terminal.
+See [Secrets and accounts](/nocturn/guides/connecting-accounts/).
 
 ## Putting one in, end to end
 

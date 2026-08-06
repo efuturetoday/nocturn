@@ -86,14 +86,23 @@ review step; dropping the folder in is the decision.
   nocturn auth cloudflare -scope account:read
   ```
 
-  Whether a given server actually supports this is worth checking before assuming — not every
-  remote MCP server implements the discovery chain, and one that does not needs the manual block
-  below.
+  **Scopes are not in `mcp.json` here** — they belong to the sign-in, which is why they are a flag.
+  Discovery registers a fresh OAuth client for you, and the scope list is part of *that*
+  registration; asking for different scopes later means registering again, so `nocturn auth` with a
+  different `-scope` is the operation, not an edit to a file. Leave the flag off and an empty scope
+  is requested, which lets the server apply its own default.
+
+  Whether a given server supports discovery is worth checking before assuming — not every remote
+  MCP server implements the chain, and one that does not needs the manual block below.
 
 - **OAuth, endpoints by hand** — if the server's authorization server does not do dynamic
   registration, give an `oauth` block with `auth_url`, `token_url`, `client_id` and `scopes`
   instead. `"auth": "oauth"` and a manual block are mutually exclusive: one credential, one source,
   no silent tie-breaking.
+
+  **Here the scopes *are* in the file**, and required. The client is one you registered yourself
+  ahead of time, so its scopes describe the provider rather than a single sign-in, and they apply to
+  every refresh that follows. `-scope` is ignored on this path.
 
 Malformed declarations are rejected fail-closed — a non-HTTPS URL, an unknown auth mode, `token`
 alongside an OAuth block. Either way the token stays host-side, bound to that server, and the model
