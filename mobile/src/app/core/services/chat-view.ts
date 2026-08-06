@@ -5,6 +5,8 @@
  * `chat-snapshot` builders all share them.
  */
 
+import type { ApprovalOption } from '../protocol/nocturn-protocol';
+
 /** A rendered tool call — live (streamed, has phase/err) or from a snapshot (finished). */
 export interface ToolView {
   key: string; // stable track id
@@ -30,11 +32,13 @@ export interface ChatMessageView {
   pending: boolean; // assistant turn still streaming
 }
 
-/** An open out-of-band approval the user must answer before the parked tool proceeds. */
+/** An open out-of-band approval the user must answer before the parked tool proceeds. `kind` and
+ * `target` are the gate action verbatim — the sheet does the wording. */
 export interface PendingApproval {
   frame?: number; // the tool call this approval is for — its tool-frame freezes its timer
   id: string;
   chatId?: string; // the chat/agent run whose turn raised this — for provenance (absent = not chat-scoped)
-  intent: string;
-  options: string[];
+  kind: string;
+  target?: string;
+  options: ApprovalOption[];
 }

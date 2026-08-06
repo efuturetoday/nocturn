@@ -207,16 +207,38 @@ export interface JoinList {
 }
 
 /**
- * An out-of-band approval request: render `intent` + the choice `options` (labels), answer with an
- * `approval.resolve` carrying the chosen index, or -1 to deny.
+ * An out-of-band approval request, as STRUCTURE rather than prose: `kind` and `target` are the gate
+ * action verbatim and `options` are the answers the daemon minted for this exact approval. The
+ * wording is ours — a `kind` is a closed set we map to our own label, a `target` is data we render as
+ * data. Answer with an `approval.resolve` echoing an option's `id`.
  */
 export interface ApprovalRequest {
   type: "approval.request";
   id: string;
   frame?: number; // the tool call this approval is for (freeze that tool's timer); absent = not tool-scoped
   chatId?: string; // the chat/agent run whose turn raised this — for provenance; absent = not chat-scoped
-  intent: string;
-  options: string[];
+  kind: string; // the gate axis: "net" | "file" | "memory" | "notify" | "remind" | …
+  target?: string; // the host/path; absent = a kind with no target
+  options: ApprovalOption[];
+}
+
+/**
+ * One answer on offer. `id` is opaque — echo it back, never mint one, so a device can only choose
+ * among grants the daemon offered. `recall` is how long the answer would be remembered. `widen` is
+ * present ONLY for a suggested widening and carries the broader grant that answer would create: its
+ * presence is the whole "is this a widening?" question. Recall is duration, widen is reach — two
+ * axes, and a widened always is the broadest answer on the sheet.
+ */
+export interface ApprovalOption {
+  id: string;
+  recall: "never" | "session" | "always";
+  widen?: ApprovalGrant;
+}
+
+/** A {kind,target} grant pattern — the same pair the daemon writes to `grants.json`. */
+export interface ApprovalGrant {
+  kind: string;
+  target: string;
 }
 
 /** A pending approval concluded (answered here or elsewhere, timed out, or cancelled) — clear the prompt. */
@@ -428,12 +450,19 @@ export interface JoinListCmd {
   cmd: "join.list";
 }
 
-/** Answer a pending approval: the chosen option index, or -1 to deny. */
+/**
+ * Answer a pending approval with the id of the option chosen. Anything the daemon did not offer —
+ * DENY_OPTION, an unknown id, an omitted field — refuses, so there is no value that approves by
+ * accident.
+ */
 export interface ApprovalResolve {
   cmd: "approval.resolve";
   id: string;
-  choice: number;
+  option: string;
 }
+
+/** The reserved option id that refuses. Never one of an ApprovalRequest's own options. */
+export const DENY_OPTION = "deny";
 
 /**
  * Report the app's foreground/background state. While any connection is active the daemon answers

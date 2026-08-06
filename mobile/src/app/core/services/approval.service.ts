@@ -36,10 +36,11 @@ export class ApprovalService {
     this.conn.onEvent((e) => this.reduce(e));
   }
 
-  /** Answer an approval by id: the chosen option index, or -1 to deny. Optimistically drop it locally;
-   * the daemon's approval.resolved broadcast confirms (and covers a resolution from another device). */
-  resolve(id: string, choice: number): void {
-    this.conn.send({ cmd: 'approval.resolve', id, choice });
+  /** Answer an approval by id with the id of the option chosen, or DENY_OPTION to refuse. The daemon
+   * refuses anything it did not offer, so we never mint an option of our own. Optimistically drop it
+   * locally; the daemon's approval.resolved broadcast confirms (and covers another device answering). */
+  resolve(id: string, option: string): void {
+    this.conn.send({ cmd: 'approval.resolve', id, option });
     this._pending.update((ps) => ps.filter((p) => p.id !== id));
   }
 
@@ -50,7 +51,7 @@ export class ApprovalService {
         this._pending.update((ps) =>
           ps.some((p) => p.id === e.id)
             ? ps
-            : [...ps, { id: e.id, frame: e.frame, chatId: e.chatId, intent: e.intent, options: e.options }],
+            : [...ps, { id: e.id, frame: e.frame, chatId: e.chatId, kind: e.kind, target: e.target, options: e.options }],
         );
         break;
 

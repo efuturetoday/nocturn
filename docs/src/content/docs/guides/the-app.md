@@ -77,7 +77,7 @@ This is the case the daemon exists for. An agent runs on a schedule, hits someth
 yes, and there is no terminal in front of it. A push wakes your phone, you decide, the run continues
 or stops.
 
-![An approval sheet over the chat: the kind and target read `net → google.com`, with Once, Session, Always and Deny.](../../../assets/screenshots/app-approval-net-google.jpg)
+![An approval sheet over the chat: Network access above the target google.com, with Deny, Allow once, and the remembering answers this session and always.](../../../assets/screenshots/app-approval-net-google.jpg)
 
 The push carries **no authority** — it wakes the app, and the decision travels back over the
 authenticated connection, never inside the notification ([why, and what it costs an
