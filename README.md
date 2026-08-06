@@ -19,6 +19,13 @@ One single Go binary. No cloud, no database, no runtime required.
 
 ---
 
+> [!WARNING]
+> **This is an alpha.** Expect bugs, and expect change — everything here is still moving: the UI, the
+> UX, the tooling, the wire protocol and the feature set alike. Some of that movement will break what
+> you set up. The security boundaries are the part that gets the scrutiny; everything around them is
+> going to get better fast, which is another way of saying it is not finished. Issues and pull
+> requests are exactly what this phase is for.
+
 ## ⚡ Why is Nocturn different?
 
 Most AI agents have full access to your system by default simply because they run on Node or Python.
