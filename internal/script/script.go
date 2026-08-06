@@ -54,7 +54,7 @@ func (r *Runner) Run(ctx context.Context, source string) (string, error) {
 }
 
 // dispatch is the one gate. The guest calls nocturn.call(reqPtr,reqLen) with a request
-// {"tool":"http_get","args":{...}}; dispatch runs that tool's Call — the same gated path the model
+// {"tool":"http_read","args":{...}}; dispatch runs that tool's Call — the same gated path the model
 // takes. An unknown tool or a Call error is returned as an error, which the sandbox surfaces to the
 // guest as an "error: ..." string (the guest binding turns it into a JS exception), so a denied
 // action never crashes the host.

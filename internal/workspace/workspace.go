@@ -653,7 +653,8 @@ func hasTool(ts agentkit.ToolSet) func(string) bool {
 }
 
 // defaultPersona is the built-in system prompt used when a workspace has no PERSONA.md.
-const defaultPersona = "You are nocturn, a concise, helpful assistant. Use http_get when a URL is useful."
+const defaultPersona = "You are nocturn, a concise, helpful assistant. Reach for a tool when it answers " +
+	"the question better than you can, and say what you did in one line rather than narrating a plan first."
 
 // resolvePersona returns the workspace system prompt: the PERSONA.md override in the workspace root
 // if present and non-empty, else defaultPersona. PERSONA.md lives in the ROOT — control-plane, never
