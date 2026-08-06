@@ -12,7 +12,7 @@ intro: >-
 
 glance:
   target: "a **workspace-relative path** — `notes/todo.md`, `inbox/*`"
-  policy: "writes ask, remembered for the session; reads never reach the gate"
+  policy: "writes ask and you choose how long the yes lasts; reads never reach the gate"
   matcher: "`pathMatch` — `path.Match` globs, where `*` does **not** cross `/`, plus `*` for any path"
 
 tools:

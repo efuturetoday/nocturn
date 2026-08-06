@@ -11,7 +11,7 @@ intro: >-
 
   The ruling depends on **who is running**. A chat you are watching gets **allowed**: the call
   already appears in the transcript as it happens, so a prompt would buy "before" instead of "after"
-  and nothing else. An unattended agent run gets **ask, remembered for the session** — it writes into
+  and nothing else. An unattended agent run gets **ask**, answered out of band — it writes into
   the store folded into every future prompt with nobody reading its transcript, and that is where the
   question earns its keep.
 

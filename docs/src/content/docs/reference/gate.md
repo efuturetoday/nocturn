@@ -43,8 +43,8 @@ An action is a `{Kind, Target}` pair. The kind says *what sort of reach* this is
 
 | Kind | Target | Tools that check it | Root policy |
 |---|---|---|---|
-| [`net`](/nocturn/reference/gate/net/) | the **host** | `http_read`, `http_write`, `dns_resolve`, `ping` | **asks**, remembered for the session |
-| [`file`](/nocturn/reference/gate/file/) | the **path** | `file_write`, `file_remove`, `file_move` | **asks**, remembered for the session |
+| [`net`](/nocturn/reference/gate/net/) | the **host** | `http_read`, `http_write`, `dns_resolve`, `ping` | **asks**; you choose how long the yes lasts |
+| [`file`](/nocturn/reference/gate/file/) | the **path** | `file_write`, `file_remove`, `file_move` | **asks**; you choose how long the yes lasts |
 | [`notify`](/nocturn/reference/gate/notify/) | the constant `user` | `notify` | allowed |
 | [`remind`](/nocturn/reference/gate/remind/) | the constant `user` | `remind` | allowed |
 | [`memory`](/nocturn/reference/gate/memory/) | the **note path** | `memory_write` | allowed in a chat, **asks** in an agent run |
@@ -59,14 +59,14 @@ That table is the whole policy. In code it is two short functions:
 // internal/workspace/workspace.go — the workspace root policy
 switch a.Kind {
 case tools.NetKind, tools.FileKind:
-    return gate.AskWith(gate.RecallSession)
+    return gate.AskWith(gate.RecallAlways)
 default:
     return gate.Allowed()
 }
 
 // ...and the same thing for an unattended agent run, plus one kind
 if a.Kind == memory.Kind {
-    return gate.AskWith(gate.RecallSession)
+    return gate.AskWith(gate.RecallAlways)
 }
 return base.Decide(a)
 ```
@@ -116,6 +116,17 @@ When the gate asks and you say yes, you can have that answer remembered. What ge
 | `RecallNever` | not at all — this call only | no |
 | `RecallSession` | until the process exits | no |
 | `RecallAlways` | forever | yes, `grants.json` in the workspace |
+
+**What a policy names is a ceiling, not a decision.** `gate.Check` takes the smaller of the two —
+the ceiling the policy allows and what the human actually chose — so `AskWith(RecallAlways)` does
+not mean "remember everything forever". It means the person may answer for good, and the approver
+may offer that. Answering "just this once" still stores nothing.
+
+A lower ceiling is therefore not the cautious choice it looks like. Both approvers show an *Always*
+button; under `RecallSession` it silently resolved to a session grant, and somebody who believed
+they had settled a question was asked again the next day. Nothing failed, which is exactly why it
+lasted so long. Voice keeps `RecallNever` on purpose — whoever is audible can speak, so a spoken
+"always" would be a standing permission granted by a channel that authenticates nobody.
 
 ```json
 [
