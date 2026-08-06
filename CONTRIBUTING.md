@@ -30,6 +30,12 @@ CI loops over `agentkit/{gate,openai,tools,runtime,gemini}` and you should too w
 `internal/onnx/reference/` is a nested module holding gomlx and needs `GOWORK=off`; it exists only
 to regenerate a golden file, and is not part of the build.
 
+Touching `internal/script/qjs/` — the C shim or the build script — does not oblige you to rebuild the
+committed `nocturn-qjs.wasm`. CI rebuilds it from source on every run and commits the result when it
+differs, which is also what stops a tampered artefact from surviving: changing what the guest does
+means changing the C, in a diff somebody reads. Running `build.sh` yourself is the faster way to see
+your change take effect, nothing more.
+
 Some tests skip themselves without a speaker-embedding checkpoint. That is deliberate — the file is
 ~26 MB and is never committed. `export NOCTURN_SPEAKER_MODEL=…` to run them.
 

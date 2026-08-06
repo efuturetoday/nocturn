@@ -5,6 +5,9 @@ name: CI
 #
 # The tests that need a speaker-embedding checkpoint (~26 MB, not committed) skip themselves when
 # NOCTURN_SPEAKER_MODEL is unset, so this stays green without downloading a model.
+#
+# The interpreter guest is rebuilt from source first and everything else runs on the result — see the
+# guest job for why that is a rebuild rather than a check.
 
 on:
   push:
@@ -20,11 +23,100 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The one committed binary artefact in this repository, rebuilt from its own sources on every run.
+  #
+  # internal/script/qjs/nocturn-qjs.wasm is go:embed'd, so a plain `go build` needs no wasi-sdk and no
+  # quickjs checkout — that is what "one binary, no foreign runtime" costs, and it is worth paying.
+  # The price is a megabyte of opaque bytes in git that nobody rebuilds, and that price came due: the
+  # build script named a source file its own pinned quickjs release does not have. It had been broken
+  # since a version bump, silently, because recipe and artefact had no way to disagree out loud.
+  #
+  # So this job rebuilds and, when the result differs, COMMITS the rebuild rather than failing. The
+  # side effect is the real hardening: a tampered .wasm is overwritten by one built from reviewable
+  # sources on the next run. Changing what the guest does now requires changing the C, in a diff a
+  # human reads.
+  #
+  # It carries no paths: filter on purpose. A filter would only skip the job when qjs/ was untouched
+  # — which is exactly when a swapped artefact would go unnoticed. With the toolchain cached it costs
+  # well under a minute.
+  guest:
+    name: Interpreter guest — rebuilt from source
+    runs-on: ubuntu-latest
+    permissions:
+      # Only this job may write, and only to push its own rebuild. Every other job stays read-only.
+      contents: write
+    steps:
+      # A pull_request checkout is a detached merge commit, which cannot be pushed back. head_ref
+      # names the actual branch; for a push build it is empty and the default applies.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+
+      # The wasi-sdk tarball is 81 MB and the pins live in build.sh, so they are the cache key: bump
+      # either one and the cache invalidates itself rather than serving a stale toolchain.
+      - name: Resolve the toolchain pins
+        id: pins
+        run: |
+          {
+            echo "key=$(grep -E '^(WASI_SDK_VER|QJS_NG_REF)=' internal/script/qjs/build.sh | md5sum | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: internal/script/qjs/.buildcache
+          key: qjs-toolchain-${{ runner.os }}-${{ steps.pins.outputs.key }}
+
+      - name: Rebuild the guest
+        run: internal/script/qjs/build.sh
+
+      # Three outcomes. Unchanged: nothing to do. Changed and pushable: commit the rebuild, which is
+      # the self-healing this job exists for. Changed on a fork PR: the token cannot write there, so
+      # say what to run and fail.
+      - name: Commit it if it differs
+        env:
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          artefact=internal/script/qjs/nocturn-qjs.wasm
+          if git diff --quiet -- "$artefact"; then
+            echo "The committed guest matches its sources."
+            exit 0
+          fi
+          before=$(git show "HEAD:$artefact" | sha256sum | cut -d' ' -f1)
+          after=$(sha256sum "$artefact" | cut -d' ' -f1)
+          if [ "$IS_FORK" = "true" ]; then
+            echo "::error::The committed guest does not match its sources ($before -> $after)."
+            echo "Run internal/script/qjs/build.sh and commit the result — a fork's token cannot push."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$artefact"
+          git commit -m "chore(qjs): rebuild the interpreter guest from source" -m \
+            "The committed artefact did not match what its sources build. Rebuilt by CI.
+
+          before: $before
+          after:  $after
+          from:   ${{ github.sha }}"
+          git push
+          echo "::notice::Rebuilt and committed the interpreter guest ($before -> $after)."
+
+      # Everything downstream builds against THIS artefact, not against whatever is in the tree. That
+      # removes the race between the push above and the jobs that need its result.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: interpreter-guest
+          path: internal/script/qjs/nocturn-qjs.wasm
+          retention-days: 1
+
   go:
     name: Go — build, vet, race tests
+    needs: guest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: interpreter-guest
+          path: internal/script/qjs
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -61,6 +153,7 @@ jobs:
 
   crosscompile:
     name: One binary, six targets
+    needs: guest
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -69,6 +162,12 @@ jobs:
         goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v5
+      # The guest is embedded into every one of these binaries, so they are built against the
+      # rebuild rather than against the tree.
+      - uses: actions/download-artifact@v4
+        with:
+          name: interpreter-guest
+          path: internal/script/qjs
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -84,6 +183,9 @@ jobs:
 
   docs:
     name: Docs — schema-validated build
+    # Nothing here embeds the guest; the dependency only keeps the run in one order, so a red guest
+    # job is not buried under three green ones.
+    needs: guest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
