@@ -56,7 +56,7 @@ jobs:
 
       # Third-party, so SHA-pinned — as is setup-android above. The actions/* stay on tags: the same
       # company already owns the runner and the token. Dependabot moves digest and comment together.
-      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
       # cap sync needs the CLI and the plugins' native sources — not the app's own build, which
       # arrives as the artefact below.
