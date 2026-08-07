@@ -1,14 +1,13 @@
 name: Docs
 
-# Publishes docs/ to GitHub Pages on every push to main.
+# Builds docs/ on pull requests, publishes to Pages on main. Both halves here — one workflow per
+# thing that builds, so there is no second copy of the build steps.
 #
-# The site is served at its own domain rather than under /nocturn, which is not vanity: Starlight
-# rewrites the links it generates itself, but the 112 hand-written absolute links in the pages and
-# the sidebar would all need a path prefix — and would need it removed again the moment the domain
-# is attached. docs/public/CNAME is what tells Pages the domain; the DNS records live in Cloudflare.
+# The site has its own domain (docs/public/CNAME, DNS in Cloudflare) because 112 hand-written
+# absolute links would otherwise need a /nocturn prefix, and need it removed again later.
 #
-# Pages does not serve private repositories. Until this one is public, the workflow is a no-op that
-# fails at the deploy step; the build job above it still tells you the site compiles.
+# Pages does not serve private repositories: until this one is public, deploy fails and only the
+# build tells you anything.
 
 on:
   push:
@@ -16,46 +15,75 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
-# Pages needs to write its own deployment; nothing else here writes anything.
+# pages/id-token belong to deploy alone — build runs npm ci, and id-token would let an install
+# script mint a token asserting this repository's identity.
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-# One live site, so a second run supersedes a queued one rather than racing it. In-progress runs are
-# left alone: cancelling mid-deploy is how a site ends up half-updated.
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    # Per ref, so pull-request builds never queue behind a deploy.
+    concurrency:
+      group: docs-build-${{ github.ref }}
+      cancel-in-progress: true
+
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: docs/package-lock.json
-      - run: npm ci
+
+      # --ignore-scripts: no dependency executes anything at install time. Verified rather than
+      # assumed — sharp and esbuild both resolve prebuilt platform packages, and the site builds.
+      # package.json's `allowScripts` covers local installs, not this one.
+      - run: npm ci --ignore-scripts
         working-directory: docs
-      # This also validates every tool and gate-kind YAML against the Zod schema, so a reference page
+
+      # Also validates every tool and gate-kind YAML against the Zod schema, so a reference page
       # that describes a tool wrongly fails here rather than being published wrong.
       - run: npx astro build
         working-directory: docs
-      - uses: actions/upload-pages-artifact@v4
+
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/dist
 
+  # Only main publishes; without the guard a pull request would deploy over the live site.
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
+
+    # The site is what must not race, so the group is here and not on the workflow. In-progress
+    # deploys are left alone: cancelling mid-deploy is how a site ends up half-updated.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

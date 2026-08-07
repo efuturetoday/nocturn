@@ -1,12 +1,11 @@
 name: Mobile
 
-# The companion app, checked the way ci.yml checks the daemon: it builds, its tests pass, and the two
-# native projects still say what package.json says.
+# The companion app: it builds, its tests pass, and the native projects still say what package.json
+# says. One workflow per thing that builds — ci.yml is the daemon, docs.yml the site.
 #
-# Unlike ci.yml this filters on paths. ci.yml deliberately runs everything on every push because its
-# jobs guard the shipped binary — a filter there would skip exactly the run that catches a swapped
-# artefact. Nothing here guards anything outside mobile/, so a Go-only pull request should not pay
-# for a Gradle run.
+# Drift is reconciled as in ci.yml: a pull request that let a generated file go stale FAILS, a push
+# to main HEALS. Detection and healing are separate jobs because detection runs npm ci and Gradle,
+# which on a pull request is the author's code. See heal at the bottom.
 
 on:
   push:
@@ -23,50 +22,61 @@ on:
 permissions:
   contents: read
 
+# Superseded pull-request runs are cancelled; main runs are not, because heal writes and the window
+# between its commit and its push is the one place cancellation is not free.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   web:
     name: App — tests, bundle, version drift
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: mobile
+
     steps:
+      # Nothing here pushes — drift goes to heal as a patch — so no credential belongs in .git/config.
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: mobile/package-lock.json
-      - run: npm ci
 
-      # Both Angular builders type-check — the application builder over what main.ts reaches, the
-      # unit-test builder over the specs — so a separate tsc --noEmit would only repeat them.
+      # --ignore-scripts: no dependency executes anything at install time. Verified rather than
+      # assumed — every native package here (esbuild, lmdb, msgpackr-extract, @parcel/watcher)
+      # resolves a prebuilt platform package, and both the tests and the production build pass
+      # without their scripts. package.json's `allowScripts` covers local installs, not this one.
+      - run: npm ci --ignore-scripts
+
+      # Both Angular builders type-check, so a separate tsc --noEmit would only repeat them.
       - name: Test
         run: npm test
 
-      # The production configuration is the default, and it enforces the bundle budgets in
-      # angular.json, so a dependency that doubles the initial chunk fails here.
+      # Production is the default configuration and enforces the bundle budgets in angular.json.
       - name: Build
         run: npm run build
 
-      # trapeze.yaml exists so `version` and `buildNumber` in package.json are the ONLY places those
-      # two numbers are written. This is what makes that true rather than merely intended: re-apply
-      # the config and fail if either native project moves. Same shape as the GSX drift check in
-      # ci.yml, and it is idempotent — a second run on an applied tree produces no diff.
-      - name: Native projects match package.json
-        run: |
-          npm run cap:config
-          if ! git diff --exit-code -- android ios; then
-            echo "::error::android/ or ios/ has drifted from package.json — run: npm run cap:config"
-            exit 1
-          fi
+      # package.json is the only place `version` and `config.buildNumber` are written; re-applying
+      # and diffing is what makes that true rather than merely intended. Trapeze is idempotent.
+      - name: Re-apply the native configuration
+        run: npm run cap:config
 
-      # Handed to the android job rather than rebuilt there: the copied web assets are gitignored on
-      # both platforms (android/.gitignore, ios/.gitignore), so the bundle only exists after a build.
+      - uses: ./.github/actions/drift
+        with:
+          paths: mobile/android mobile/ios
+          name: trapeze
+          hint: npm run cap:config
+
+      # Handed to android rather than rebuilt there: the copied web assets are gitignored on both
+      # platforms, so the bundle only exists after a build — and android must assemble the bundle
+      # that was tested, not a second one from the same sources.
       - uses: actions/upload-artifact@v7
         with:
           name: mobile-bundle
@@ -77,34 +87,73 @@ jobs:
     name: Android — assemble
     needs: web
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: mobile
+
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: mobile/package-lock.json
+
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
-      - uses: gradle/actions/setup-gradle@v5
 
-      # cap sync needs the CLI and the plugins' native sources, so the install is not optional here.
-      - run: npm ci
+      # Which Android platforms the runner image carries is implicit and changes without us;
+      # variables.gradle asks for compileSdk 36. Naming the packages makes a missing one fail
+      # legibly instead of as an ANDROID_HOME error.
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0'
+
+      # The only third-party action here, so the only one pinned to a SHA — the actions/* are
+      # GitHub's own, which already owns the runner and the token. Dependabot moves digest and
+      # comment together.
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+
+      # cap sync needs the CLI and the plugins' native sources.
+      - run: npm ci --ignore-scripts
+
       - uses: actions/download-artifact@v8
         with:
           name: mobile-bundle
           path: mobile/dist
+
       - name: Sync the bundle into the project
         run: npx cap sync android
 
-      # Debug, not release: this compiles the manifest, the resources and the Gradle config without
-      # needing a keystore. It is what catches a dangling @xml/network_security_config, a malformed
-      # intent-filter, or a plugin that rejects the SDK level — none of which a web build can see.
+      # cap sync regenerates two COMMITTED files, for the same reason internal/tui/*_gsx.go is
+      # committed: so a plain Gradle build needs no Node. Same reason, same gate.
+      - uses: ./.github/actions/drift
+        with:
+          paths: mobile/android/app/capacitor.build.gradle mobile/android/capacitor.settings.gradle
+          name: capacitor
+          hint: npx cap sync android
+
+      # Debug, not release: compiles the manifest, resources and Gradle config with no keystore.
+      # Catches a dangling @xml/network_security_config or a plugin that rejects the SDK level.
       - name: Assemble
         working-directory: mobile/android
         run: ./gradlew assembleDebug --no-daemon
+
+  # Granted here and nowhere else in this file: heal is the only job that can write.
+  heal:
+    needs: [web, android]
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    # No timeout-minutes here: it is not a valid key on a job that calls a reusable workflow. The
+    # limit lives on heal.yml's own job.
+    uses: ./.github/workflows/heal.yml
+    with:
+      subject: "chore(mobile): regenerate what drifted from its sources"
+      what: "The native projects did not match what package.json and the installed plugins produce."

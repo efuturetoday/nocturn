@@ -1,0 +1,37 @@
+version: 2
+
+# This file is not optional bookkeeping — it is what makes a SHA-pinned action safe to have. A digest
+# without automation freezes the pin on whatever version was current the day it was written, bug and
+# all, and nobody notices because nothing ever asks. Dependabot rewrites both the digest and the
+# version comment beside it, so the pin stays a pin rather than becoming a fossil.
+#
+# Monthly rather than weekly, on purpose: this is a one-maintainer repository, and a pull request
+# nobody reads is worse than a slightly older dependency. The Go modules are the exception, because
+# the daemon's dependency list is deliberately short and each entry there is load-bearing.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+  # go.work spans the root module and the agentkit siblings; each needs its own entry, since
+  # Dependabot resolves one go.mod per directory.
+  - package-ecosystem: gomod
+    directories:
+      - /
+      - /agentkit
+      - /agentkit/gate
+      - /agentkit/gemini
+      - /agentkit/openai
+      - /agentkit/runtime
+      - /agentkit/tools
+      - /agentkit/example
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directories:
+      - /docs
+      - /mobile
+    schedule:
+      interval: monthly

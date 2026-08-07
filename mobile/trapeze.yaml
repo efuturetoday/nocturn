@@ -1,13 +1,15 @@
-# Native project configuration, applied by `npm run cap:config`.
+# The version and build number live in package.json — `version` and `config.buildNumber` — and are
+# written from here into both platforms, so a release is one edit:
 #
-# The version and the build number live in package.json (`version` and `buildNumber`) and are written
-# from here into both platforms, so a release is one edit rather than the same two numbers typed into
-# build.gradle and the Xcode project by hand.
+#     npm pkg set config.buildNumber=2 && npm run cap:config
 #
-# Declaring the two variables is what makes trapeze substitute them from the environment; without the
-# block it resolves them to empty and writes that — silently, and an empty MARKETING_VERSION leaves
-# the Xcode project unparseable. They carry no default on purpose: the cap:config script supplies
-# both, and a missing one should be visible rather than quietly become a number nobody chose.
+# `config` because npm exports `npm_package_config_*` to scripts while a custom top-level field is
+# not exported at all. That keeps cap:config a line of environment assignments rather than a
+# `node -p` — which colours numbers, and once fed trapeze an ANSI escape that became `versionCode NaN`.
+#
+# The `vars:` block is what makes trapeze substitute from the environment; without it the values
+# resolve to empty and it writes that silently. No defaults on purpose: a missing number should be
+# visible rather than quietly become one nobody chose.
 vars:
   VERSION:
   BUILD:

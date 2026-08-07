@@ -1,66 +1,93 @@
 name: CI
 
-# Every claim the README makes about this repository is checked here: that it builds, that the tests
-# pass under the race detector, and that one CGO-free binary really does come out for six targets.
+# The Go side: it builds, the tests pass under the race detector, and one CGO-free binary comes out
+# for six targets. The docs site and the companion app have their own workflows.
 #
-# The tests that need a speaker-embedding checkpoint (~26 MB, not committed) skip themselves when
+# The speaker tests need a checkpoint that is not committed and skip themselves when
 # NOCTURN_SPEAKER_MODEL is unset, so this stays green without downloading a model.
 #
-# The interpreter guest is rebuilt from source first and everything else runs on the result — see the
-# guest job for why that is a rebuild rather than a check.
-
+# Two things here are generated and committed — the interpreter guest and internal/tui/*_gsx.go.
+# Both are reconciled the same way: a pull request that let one drift FAILS, a push to main HEALS.
+# Detection and healing are separate jobs because detection runs a build script, a third-party
+# generator and the test suite, which on a pull request is the author's code, and that must not
+# happen while holding a token that can push. See heal at the bottom.
+#
+# The Go sources are the repository root, so there is no `paths:` allowlist that stays true as the
+# tree grows — the filter is `'**'` minus the other domains, which also means a new top-level thing
+# runs CI until someone decides otherwise. `paths` with negations rather than `paths-ignore`, since
+# `paths-ignore` does not support `!` and the two cannot be combined. `satellite/` and `sdk/` are
+# deliberately not excluded: a firmware-only change runs the full Go matrix.
+#
+# The two lists are written out twice because Actions does not support YAML anchors.
 on:
   push:
     branches: [main]
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!mobile/**'
+      - '!media/**'
+      - '!.github/workflows/docs.yml'
+      - '!.github/workflows/mobile.yml'
   pull_request:
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!mobile/**'
+      - '!media/**'
+      - '!.github/workflows/docs.yml'
+      - '!.github/workflows/mobile.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Superseded pull-request runs are cancelled; main runs are not, because heal writes and the window
+# between its commit and its push is the one place cancellation is not free.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The one committed binary artefact in this repository, rebuilt from its own sources on every run.
+  # The one committed binary artefact, rebuilt from its own sources on every run.
   #
-  # internal/script/qjs/nocturn-qjs.wasm is go:embed'd, so a plain `go build` needs no wasi-sdk and no
-  # quickjs checkout — that is what "one binary, no foreign runtime" costs, and it is worth paying.
-  # The price is a megabyte of opaque bytes in git that nobody rebuilds, and that price came due: the
-  # build script named a source file its own pinned quickjs release does not have. It had been broken
-  # since a version bump, silently, because recipe and artefact had no way to disagree out loud.
+  # nocturn-qjs.wasm is go:embed'd, so a plain `go build` needs no wasi-sdk and no quickjs checkout —
+  # what "one binary, no foreign runtime" costs. The price is a megabyte of opaque bytes in git that
+  # nobody rebuilds, and it came due: the build script named a source file its own pinned quickjs
+  # release does not have, silently, because recipe and artefact had no way to disagree out loud.
   #
-  # So this job rebuilds and, when the result differs, COMMITS the rebuild rather than failing. The
-  # side effect is the real hardening: a tampered .wasm is overwritten by one built from reviewable
-  # sources on the next run. Changing what the guest does now requires changing the C, in a diff a
-  # human reads.
+  # So on main the rebuild is committed rather than merely reported: a tampered .wasm is overwritten
+  # by one built from reviewable sources. Changing what the guest does means changing the C.
   #
-  # It carries no paths: filter on purpose. A filter would only skip the job when qjs/ was untouched
-  # — which is exactly when a swapped artefact would go unnoticed. With the toolchain cached it costs
-  # well under a minute.
+  # The commit is heal's, not this job's — build.sh downloads a tarball, fetches a remote and
+  # compiles five C files from the checked-out tree, so there must be no credential for it to find.
+  #
+  # The workflow's path filter cannot hide a swapped artefact (it lives under internal/), but it does
+  # cost the other property: a docs-only push no longer re-reconciles recipe and artefact. If that is
+  # wanted back the answer is a weekly `schedule:`, not pretending the filter is free.
   guest:
     name: Interpreter guest — rebuilt from source
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      # Only this job may write, and only to push its own rebuild. Every other job stays read-only.
-      contents: write
+      contents: read
+
     steps:
-      # A pull_request checkout is a detached merge commit, which cannot be pushed back. head_ref
-      # names the actual branch; for a push build it is empty and the default applies.
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.head_ref }}
+          persist-credentials: false
 
-      # The wasi-sdk tarball is 81 MB and the pins live in build.sh, so they are the cache key: bump
-      # either one and the cache invalidates itself rather than serving a stale toolchain.
+      # The pins live in build.sh, so they are the cache key: bump either and the cache invalidates
+      # itself rather than serving a stale toolchain. No restore-keys — a prefix fallback could serve
+      # a cache built from different pins.
       - name: Resolve the toolchain pins
         id: pins
         run: |
           {
             echo "key=$(grep -E '^(WASI_SDK_VER|QJS_NG_REF)=' internal/script/qjs/build.sh | md5sum | cut -d' ' -f1)"
           } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+
+      - uses: actions/cache@v6
         with:
           path: internal/script/qjs/.buildcache
           key: qjs-toolchain-${{ runner.os }}-${{ steps.pins.outputs.key }}
@@ -68,40 +95,15 @@ jobs:
       - name: Rebuild the guest
         run: internal/script/qjs/build.sh
 
-      # Three outcomes. Unchanged: nothing to do. Changed and pushable: commit the rebuild, which is
-      # the self-healing this job exists for. Changed on a fork PR: the token cannot write there, so
-      # say what to run and fail.
-      - name: Commit it if it differs
-        env:
-          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-        run: |
-          artefact=internal/script/qjs/nocturn-qjs.wasm
-          if git diff --quiet -- "$artefact"; then
-            echo "The committed guest matches its sources."
-            exit 0
-          fi
-          before=$(git show "HEAD:$artefact" | sha256sum | cut -d' ' -f1)
-          after=$(sha256sum "$artefact" | cut -d' ' -f1)
-          if [ "$IS_FORK" = "true" ]; then
-            echo "::error::The committed guest does not match its sources ($before -> $after)."
-            echo "Run internal/script/qjs/build.sh and commit the result — a fork's token cannot push."
-            exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$artefact"
-          git commit -m "chore(qjs): rebuild the interpreter guest from source" -m \
-            "The committed artefact did not match what its sources build. Rebuilt by CI.
+      - uses: ./.github/actions/drift
+        with:
+          paths: internal/script/qjs/nocturn-qjs.wasm
+          name: guest
+          hint: internal/script/qjs/build.sh
 
-          before: $before
-          after:  $after
-          from:   ${{ github.sha }}"
-          git push
-          echo "::notice::Rebuilt and committed the interpreter guest ($before -> $after)."
-
-      # Everything downstream builds against THIS artefact, not against whatever is in the tree. That
-      # removes the race between the push above and the jobs that need its result.
-      - uses: actions/upload-artifact@v4
+      # Everything downstream builds against THIS artefact, not whatever is in the tree — which
+      # removes the race between the heal commit and the jobs that need its result.
+      - uses: actions/upload-artifact@v7
         with:
           name: interpreter-guest
           path: internal/script/qjs/nocturn-qjs.wasm
@@ -111,16 +113,43 @@ jobs:
     name: Go — build, vet, race tests
     needs: guest
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+
     steps:
+      # Nothing here pushes — the gsx patch goes to heal — so the token has no business being
+      # readable by `go test` and a third-party generator.
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
         with:
           name: interpreter-guest
           path: internal/script/qjs
+
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+
+      # DISABLED until internal/tui/ is committed — it is not in HEAD today, so the generator would
+      # run against a path the repository does not have. Re-enable in the commit that lands the
+      # terminal UI, not before.
+      #
+      # *_gsx.go are generated from .gsx and committed, so a plain build needs no generator. The
+      # generator itself is fetched at a tag, which is safe for a reason worth naming: `go install
+      # pkg@version` verifies against sum.golang.org, so a repointed tag is caught there.
+      #
+      # - name: Regenerate the GSX
+      #   run: |
+      #     go install github.com/grindlemire/go-tui/cmd/tui@v0.18.2
+      #     "$(go env GOPATH)/bin/tui" generate ./internal/tui/...
+      #
+      # - uses: ./.github/actions/drift
+      #   with:
+      #     paths: internal/tui/*_gsx.go
+      #     name: gsx
+      #     hint: tui generate ./internal/tui/...
 
       # gofmt is a gate, not a suggestion: a diff that only reformats hides the change under it.
       - name: gofmt
@@ -142,8 +171,8 @@ jobs:
         run: go test -race ./...
 
       # The agentkit modules are siblings joined by go.work, not subpackages, so ./... at the root
-      # does not reach them. internal/onnx/reference is deliberately left out: it is a nested module
-      # pulling in gomlx, which exists precisely so that dependency never enters nocturn's graph.
+      # does not reach them. internal/onnx/reference is left out on purpose: a nested module pulling
+      # in gomlx, which exists precisely so that dependency never enters nocturn's graph.
       - name: Test the agentkit modules
         run: |
           for mod in agentkit/gate agentkit/openai agentkit/tools agentkit/runtime agentkit/gemini; do
@@ -155,25 +184,31 @@ jobs:
     name: One binary, six targets
     needs: guest
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
+
     steps:
       - uses: actions/checkout@v5
-      # The guest is embedded into every one of these binaries, so they are built against the
-      # rebuild rather than against the tree.
-      - uses: actions/download-artifact@v4
+        with:
+          persist-credentials: false
+
+      # The guest is embedded into every one of these, so they build against the rebuild.
+      - uses: actions/download-artifact@v8
         with:
           name: interpreter-guest
           path: internal/script/qjs
+
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
-      # CGO_ENABLED=0 is the whole point: no C toolchain on the target, nothing to install
-      # alongside the binary. A build that needed cgo would break the claim, not just the build.
+
+      # CGO_ENABLED=0 is the whole point: nothing to install alongside the binary. A build that
+      # needed cgo would break the claim, not just the build.
       - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
         env:
           CGO_ENABLED: 0
@@ -181,22 +216,16 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: go build -o /dev/null ./cmd/nocturn
 
-  docs:
-    name: Docs — schema-validated build
-    # Nothing here embeds the guest; the dependency only keeps the run in one order, so a red guest
-    # job is not buried under three green ones.
-    needs: guest
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: docs/package-lock.json
-      - run: npm ci
-        working-directory: docs
-      # astro build validates every tool and gate-kind YAML entry against the Zod schema in
-      # src/content.config.ts, so a reference page that describes a tool wrongly fails here.
-      - run: npx astro build
-        working-directory: docs
+  # Granted here and nowhere else in this file: heal is the only job that can write, and it runs no
+  # project code. `needs` covers both detecting jobs, so a red build heals nothing.
+  heal:
+    needs: [guest, go]
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    # No timeout-minutes here: it is not a valid key on a job that calls a reusable workflow. The
+    # limit lives on heal.yml's own job.
+    uses: ./.github/workflows/heal.yml
+    with:
+      subject: "chore(ci): regenerate what drifted from its sources"
+      what: "Committed artefacts did not match what their sources produce."

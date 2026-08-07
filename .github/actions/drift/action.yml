@@ -1,0 +1,69 @@
+name: Drift
+description: Fail on a pull request when a generated file is stale; hand the fix to heal on a push.
+
+# Half of the policy for anything generated and then committed. The caller has already regenerated;
+# this only decides what to do about a difference.
+#
+# The split exists because the jobs that regenerate run build scripts, generators and test suites —
+# on a pull request, the author's code. They must not hold a token that can push while they do. So
+# detection never writes, and healing (.github/workflows/heal.yml) never runs project code.
+inputs:
+  paths:
+    description: Space-separated pathspecs to reconcile, relative to working-directory.
+    required: true
+  name:
+    description: Short name for the patch and its artifact (drift-<name>).
+    required: true
+  hint:
+    description: The command a human should run to fix this themselves.
+    required: true
+  working-directory:
+    description: A composite action does not inherit the caller job's defaults.run.working-directory.
+    required: false
+    default: '.'
+
+runs:
+  using: composite
+  steps:
+    # --intent-to-add first: a generated file that was never committed is untracked, and git diff
+    # does not see untracked files.
+    - name: Reconcile ${{ inputs.name }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        EVENT: ${{ github.event_name }}
+        PATHS: ${{ inputs.paths }}
+        NAME: ${{ inputs.name }}
+        HINT: ${{ inputs.hint }}
+      run: |
+        git add --intent-to-add -- $PATHS
+        if git diff --quiet -- $PATHS; then
+          echo "$NAME matches its sources."
+          exit 0
+        fi
+
+        # Digests, not just names: for a binary artefact the diff says nothing a human can read, and
+        # the pair is what answers "did this machine build what the last one did".
+        git diff --name-only -- $PATHS | while read -r f; do
+          before=$(git show "HEAD:$f" 2>/dev/null | sha256sum | cut -d' ' -f1)
+          after=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
+          echo "$f"
+          echo "  committed ${before:-(new file)}"
+          echo "  built     ${after:-(removed)}"
+        done
+
+        if [ "$EVENT" != "push" ]; then
+          echo "::error::$NAME is stale — run: $HINT"
+          exit 1
+        fi
+        mkdir -p /tmp/drift
+        # --binary: one of these artefacts is a .wasm, and git apply reads the same form back.
+        git diff --binary -- $PATHS > "/tmp/drift/$NAME.patch"
+        echo "::notice::$NAME drifted; handing the fix to the heal job."
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: drift-${{ inputs.name }}
+        path: /tmp/drift/${{ inputs.name }}.patch
+        if-no-files-found: ignore
+        retention-days: 1
