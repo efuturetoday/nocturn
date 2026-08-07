@@ -53,25 +53,38 @@ fetch_wasi_sdk() {
   arch="$(uname -m)"; [ "$arch" = x86_64 ] && arch=x86_64
   asset="${WASI_SDK_VER}.0-${arch}-${os}.tar.gz"
   mkdir -p "$cache"
-  if [ ! -d "$cache/${WASI_SDK_VER}.0-${arch}-${os}" ]; then
-    want="$(wasi_sdk_sha "$asset")"
-    if [ -z "$want" ]; then
-      echo "build.sh: no pinned digest for $asset — add one to wasi_sdk_sha before building here" >&2
-      exit 1
-    fi
-    curl -sL "https://github.com/WebAssembly/wasi-sdk/releases/download/${WASI_SDK_VER}/${asset}" \
-      -o "$cache/wasi-sdk.tar.gz"
-    got="$(sha256_of "$cache/wasi-sdk.tar.gz")"
-    if [ "$got" != "$want" ]; then
-      echo "build.sh: $asset does not match its pinned digest" >&2
-      echo "  want $want" >&2
-      echo "  got  $got" >&2
-      rm -f "$cache/wasi-sdk.tar.gz"
-      exit 1
-    fi
-    tar xzf "$cache/wasi-sdk.tar.gz" -C "$cache"
+  dir="$cache/${WASI_SDK_VER}.0-${arch}-${os}"
+  tarball="$cache/wasi-sdk.tar.gz"
+
+  want="$(wasi_sdk_sha "$asset")"
+  if [ -z "$want" ]; then
+    echo "build.sh: no pinned digest for $asset — add one to wasi_sdk_sha before building here" >&2
+    exit 1
   fi
-  echo "$cache/${WASI_SDK_VER}.0-${arch}-${os}"
+  [ -f "$tarball" ] || curl -sL \
+    "https://github.com/WebAssembly/wasi-sdk/releases/download/${WASI_SDK_VER}/${asset}" -o "$tarball"
+
+  # Verified on EVERY run, not only on the run that downloads — the same shape fetch_qjs uses, where
+  # the rev-parse sits outside its `if`. Both checks used to be guarded by "is it already here?",
+  # which is exactly the question a cache answers with yes: CI restores this directory, so the digest
+  # went unchecked on every run after the first, and the compiler that produces the committed
+  # artefact was the one thing in the chain nobody looked at. A digest that only runs on a cold cache
+  # verifies the case that was never in doubt.
+  got="$(sha256_of "$tarball")"
+  if [ "$got" != "$want" ]; then
+    echo "build.sh: $asset does not match its pinned digest" >&2
+    echo "  want $want" >&2
+    echo "  got  $got" >&2
+    rm -f "$tarball"
+    exit 1
+  fi
+
+  # Extracted from the verified tarball every run rather than trusted from the cache. Keeping the
+  # extracted tree would leave it verifiable only by association: someone who can write the cache
+  # could leave the tarball honest and the toolchain beside it not. Ten seconds buys the link.
+  rm -rf "$dir"
+  tar xzf "$tarball" -C "$cache"
+  echo "$dir"
 }
 
 fetch_qjs() {
