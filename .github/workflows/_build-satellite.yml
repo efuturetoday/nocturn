@@ -38,23 +38,21 @@ jobs:
           . "$IDF_PATH/export.sh"
           idf.py size
 
-      # Four files rather than one: the merged image is what a fresh board wants at offset 0, the
-      # three parts are what an incremental flash of a known board needs.
-      #
-      # idf.py rather than esptool directly — the subcommand name and argument style have moved
-      # between esptool majors, idf.py's has not.
-      - name: Collect the images
+      # merge-bin writes into the build directory, where everything else already is. Four files
+      # rather than one: the merged image is what a fresh board wants at offset 0, the three parts
+      # are what an incremental flash of a known board needs.
+      - name: Merge the image
         working-directory: satellite
         run: |
           . "$IDF_PATH/export.sh"
-          mkdir -p dist
-          cp build/factory_01.bin build/bootloader/bootloader.bin \
-             build/partition_table/partition-table.bin dist/
-          idf.py merge-bin -o dist/merged.bin
-          ls -l dist
+          idf.py merge-bin -o merged.bin
 
       - uses: actions/upload-artifact@v7
         with:
           name: satellite-images
-          path: satellite/dist
+          path: |
+            satellite/build/factory_01.bin
+            satellite/build/merged.bin
+            satellite/build/bootloader/bootloader.bin
+            satellite/build/partition_table/partition-table.bin
           retention-days: 1

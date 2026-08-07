@@ -75,16 +75,19 @@ jobs:
         working-directory: mobile/ios/App
         run: xcodebuild -project App.xcodeproj -resolvePackageDependencies
 
-      # -target, not -scheme: schemes live in xcuserdata, which ios/.gitignore excludes, so there is
-      # none in the repository to name. The CODE_SIGN settings are what let this run credential-free.
+      # -scheme, not -target: Swift Package products hang off the SCHEME, so -target builds without
+      # the package graph and every Capacitor plugin's module goes missing. There is no .xcscheme in
+      # the repository — Xcode synthesises one, which `xcodebuild -list` confirms.
+      #
+      # The CODE_SIGN settings are what let this run with no certificate at all.
       - name: Build unsigned
         working-directory: mobile/ios/App
         run: |
           xcodebuild \
             -project App.xcodeproj \
-            -target App \
+            -scheme App \
             -configuration Release \
-            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \

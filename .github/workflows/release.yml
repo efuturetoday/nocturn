@@ -136,13 +136,17 @@ jobs:
           name: satellite-images
           path: images
 
+      # The artefact keeps the build tree's shape, so bootloader/ and partition_table/ are nested.
+      # Flattened here, where the version is known and the names can say what they are.
       - name: Name them after the release
         run: |
           version="${GITHUB_REF_NAME#satellite-v}"
-          mv images/factory_01.bin "images/nocturn-satellite_${version}.bin"
-          mv images/merged.bin "images/nocturn-satellite_${version}_merged.bin"
-          ls -l images
+          mkdir -p out
+          mv images/factory_01.bin "out/nocturn-satellite_${version}.bin"
+          mv images/merged.bin     "out/nocturn-satellite_${version}_merged.bin"
+          mv images/bootloader/bootloader.bin images/partition_table/partition-table.bin out/
+          ls -l out
 
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          files: images/*
+          files: out/*
