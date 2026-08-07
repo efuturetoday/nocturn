@@ -16,11 +16,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container: espressif/idf:v5.5
+    env:
+      IDF_CCACHE_ENABLE: 1
 
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+
+      # The component manager fetches esp-sr's models on a cold tree, which build.sh's own comment
+      # calls out as dwarfing the compile. Keyed on the manifest, so a changed dependency invalidates
+      # it rather than serving a stale set.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            satellite/managed_components
+            ~/.espressif
+          key: idf-components-${{ hashFiles('satellite/main/idf_component.yml') }}
+
+      # ccache is what build.sh enables locally (IDF_CCACHE_ENABLE=1). restore-keys ARE right here,
+      # unlike for the pinned wasi-sdk: a partially stale compiler cache is content-addressed and
+      # safe, it just hits less often.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: idf-ccache-${{ github.sha }}
+          restore-keys: idf-ccache-
 
       # The image carries the toolchain but the entrypoint that activates it is replaced by the job,
       # so the environment is sourced by hand.
