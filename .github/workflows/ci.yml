@@ -7,8 +7,12 @@ name: CI
 # FAILS, a push to main HEALS, from a separate job that runs no project code.
 #
 # The Go sources are the repository root, so the filter is `'**'` minus the other domains rather than
-# an allowlist — a new top-level thing runs CI until someone decides otherwise. `paths` with `!`
-# because `paths-ignore` supports neither. Written out twice: Actions has no YAML anchors.
+# an allowlist — a new top-level thing runs CI until someone decides otherwise.
+#
+# `.github/**` is excluded and then three paths re-included: this workflow, because a change to the
+# Go pipeline must run it, and the heal workflow and drift action, because the jobs below use them.
+# Last match wins, which is why the negation comes first. `paths-ignore` cannot express this at all,
+# it supports no `!`. Written out twice: Actions has no YAML anchors.
 on:
   push:
     branches: [main]
@@ -18,9 +22,10 @@ on:
       - '!mobile/**'
       - '!media/**'
       - '!satellite/**'
-      - '!.github/workflows/docs.yml'
-      - '!.github/workflows/ci-mobile.yml'
-      - '!.github/workflows/ci-satellite.yml'
+      - '!.github/**'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/_heal.yml'
+      - '.github/actions/drift/**'
   pull_request:
     paths:
       - '**'
@@ -28,9 +33,10 @@ on:
       - '!mobile/**'
       - '!media/**'
       - '!satellite/**'
-      - '!.github/workflows/docs.yml'
-      - '!.github/workflows/ci-mobile.yml'
-      - '!.github/workflows/ci-satellite.yml'
+      - '!.github/**'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/_heal.yml'
+      - '.github/actions/drift/**'
   workflow_dispatch:
 
 permissions:
@@ -134,15 +140,39 @@ jobs:
       #     name: gsx
       #     hint: tui generate ./internal/tui/...
 
-      # gofmt is a gate, not a suggestion: a diff that only reformats hides the change under it.
-      - name: gofmt
+      # gofmt is drift like everything else here: a pull request that left a file unformatted fails,
+      # a push to main is reformatted for you. Nobody has ever wanted to fix gofmt by hand, and the
+      # heal commit is its own commit — so it cannot hide a change under a reformat, which is what a
+      # mixed diff would do.
+      #
+      # Only .go files, and that is not decoration: the tidy gate below reconciles go.mod and go.sum,
+      # and two drift checks over one path would each emit a patch containing the same lines. The
+      # second `git apply` in heal would then fail.
+      - name: Format
+        run: gofmt -w cmd internal agentkit
+
+      - uses: ./.github/actions/drift
+        with:
+          paths: 'cmd/**/*.go internal/**/*.go agentkit/**/*.go'
+          name: gofmt
+          hint: gofmt -w cmd internal agentkit
+
+      # Healing works here only because every import now resolves through a `replace`. Without one,
+      # tidy answers an unresolved import with a network pseudo-version of our own sibling module —
+      # green, and wrong, and exactly the kind of answer a machine must not be allowed to commit.
+      # That was the state until agentkit/gemini was added to the root go.mod.
+      - name: Tidy the modules
         run: |
-          unformatted=$(gofmt -l cmd internal agentkit)
-          if [ -n "$unformatted" ]; then
-            echo "These files are not gofmt-clean:"
-            echo "$unformatted"
-            exit 1
-          fi
+          go mod tidy
+          for mod in agentkit agentkit/gate agentkit/openai agentkit/runtime agentkit/tools agentkit/gemini; do
+            (cd "$mod" && go mod tidy)
+          done
+
+      - uses: ./.github/actions/drift
+        with:
+          paths: 'go.mod go.sum agentkit/go.mod agentkit/go.sum agentkit/*/go.mod agentkit/*/go.sum'
+          name: gomod
+          hint: go mod tidy
 
       - name: Build
         run: go build ./...
