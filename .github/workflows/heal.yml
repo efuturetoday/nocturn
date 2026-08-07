@@ -22,9 +22,11 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: read
-
+# No workflow-level `permissions:` on purpose. There is one job and it declares its own, so a
+# default here would buy nothing — and for a CALLED workflow it is not documented whether the
+# callee's own top-level block is a default or a ceiling. If it were a ceiling it would cap the job
+# at read and every push would 403, in the last job of a push run. The grant that matters is at the
+# call site.
 jobs:
   heal:
     name: Heal what drifted
