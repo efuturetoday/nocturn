@@ -125,20 +125,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # DISABLED until internal/tui/ is committed — it is not in HEAD, so the generator would run
-      # against a path that does not exist. The tag is safe unpinned: `go install pkg@version`
-      # verifies against sum.golang.org.
-      #
-      # - name: Regenerate the GSX
-      #   run: |
-      #     go install github.com/grindlemire/go-tui/cmd/tui@v0.18.2
-      #     "$(go env GOPATH)/bin/tui" generate ./internal/tui/...
-      #
-      # - uses: ./.github/actions/drift
-      #   with:
-      #     paths: internal/tui/*_gsx.go
-      #     name: gsx
-      #     hint: tui generate ./internal/tui/...
+      # *_gsx.go are generated from .gsx and committed, so a plain build needs no generator. The tag
+      # is safe unpinned: `go install pkg@version` verifies against sum.golang.org, so a repointed
+      # tag is caught there rather than by us.
+      - name: Regenerate the GSX
+        run: |
+          go install github.com/grindlemire/go-tui/cmd/tui@v0.18.2
+          "$(go env GOPATH)/bin/tui" generate ./internal/tui/...
+
+      - uses: ./.github/actions/drift
+        with:
+          paths: internal/tui/*_gsx.go
+          name: gsx
+          hint: tui generate ./internal/tui/...
 
       # gofmt is drift like everything else here: a pull request that left a file unformatted fails,
       # a push to main is reformatted for you. Nobody has ever wanted to fix gofmt by hand, and the

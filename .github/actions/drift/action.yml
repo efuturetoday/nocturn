@@ -27,6 +27,10 @@ runs:
   steps:
     # --intent-to-add first: a generated file that was never committed is untracked, and git diff
     # does not see untracked files.
+    #
+    # Tolerated when a pathspec matches nothing, because that is not an error here — agentkit has no
+    # go.sum, having no dependencies at all, and `git add` exits 128 on a pathspec it cannot match
+    # while `git diff` is happy to report nothing. Only the diff decides.
     - name: Reconcile ${{ inputs.name }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
@@ -40,7 +44,7 @@ runs:
         # it — and a pathspec listing only the files that still exist cannot report the one the
         # generator deleted. git must receive the pattern, not its expansion.
         set -f
-        git add --intent-to-add -- $PATHS
+        git add --intent-to-add -- $PATHS 2>/dev/null || true
         if git diff --quiet -- $PATHS; then
           echo "$NAME matches its sources."
           exit 0
