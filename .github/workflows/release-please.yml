@@ -1,0 +1,74 @@
+name: Release Please
+
+# Derives each component's next version from the commits that touched it and keeps one release pull
+# request up to date. Merging that pull request is the release: it tags, and release.yml then builds
+# the artefacts for whichever tag appeared.
+#
+# Assignment is by PATH, not by commit scope — which matters here, because the scopes are semantic
+# (serve, hitl, vault) rather than component-shaped. A fix(serve) bumps nocturn itself because
+# internal/serve/ is in the root package.
+#
+# Tags: `v0.1.1` for nocturn itself, `mobile-v0.1.1`, `satellite-v0.1.0`. Only the first is bare, and
+# not for symmetry's sake — Go resolves a root module's version from a plain vX.Y.Z tag and nothing
+# else.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # release-please bumps mobile/package.json and stops; trapeze is what writes that number into
+      # the two native projects, and ci-mobile.yml fails when they disagree — so the release pull
+      # request would be red on arrival. Doing it here keeps ONE writer for the native projects.
+      #
+      # separate-pull-requests means one pull request per component, and the action's per-path
+      # outputs cover releases only — `pr` is merely the first of them. So the mobile one is found by
+      # its branch name, which release-please builds as
+      # `release-please--branches--<target>--components--<component>`.
+      - name: Apply the mobile version to the native projects
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          PRS: ${{ steps.release.outputs.prs }}
+        run: |
+          branch=$(printf '%s' "$PRS" |
+            jq -r '.[] | select(.headBranchName | endswith("components--mobile")) | .headBranchName')
+          if [ -z "$branch" ]; then
+            echo "No mobile release pull request in this run."
+            exit 0
+          fi
+          git fetch --depth=1 origin "$branch"
+          git checkout "$branch"
+          cd mobile
+          npm ci --ignore-scripts
+          npm run cap:config
+          cd ..
+          if git diff --quiet -- mobile/android mobile/ios; then
+            echo "The native projects already match package.json."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "chore(mobile): apply the release version to the native projects"
+          git push origin "HEAD:$branch"

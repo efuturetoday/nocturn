@@ -1,14 +1,11 @@
-name: Heal
+name: _heal
 
 # The other half of the drift policy (see .github/actions/drift). The only job that can write to the
-# repository, and the only one that runs no project code: it applies patches the detecting jobs
-# produced. Its whole vocabulary is git apply, git commit, git push.
+# repository and the only one that runs no project code — its vocabulary is apply, commit, push.
 #
-# A reusable workflow rather than a composite action: a composite runs inside the caller's job and
-# would inherit its token and its tree, which is the arrangement this split exists to prevent.
-#
-# Callers gate it on `if: github.event_name == 'push'` and list every detecting job in `needs`, so a
-# red build heals nothing.
+# A workflow rather than a composite action: a composite runs inside the caller's job and would
+# inherit its token and its tree, which is what this split exists to prevent. Callers gate it on
+# `push` and list every detecting job in `needs`, so a red build heals nothing.
 
 on:
   workflow_call:
@@ -36,15 +33,10 @@ jobs:
       contents: write
 
     steps:
-      # Credentials stay — this is the job that pushes.
-      #
-      # The SHA, not the branch name: the patches are diffs against the tree the detecting jobs
-      # checked out, and a branch tip is a moving target. Applying to a drifted base fails outright
-      # for the binary artefact (git apply --binary checks the preimage blob id) and, worse, can
-      # SUCCEED against the wrong base for text, because plain git apply matches on context.
-      #
-      # The push below then targets the branch by name. If it moved meanwhile the push is rejected,
-      # which is the right outcome — a rejected heal is a retry, a wrong one is a commit.
+      # Credentials stay — this is the job that pushes. The SHA, not the branch name: the patches are
+      # diffs against the tree the detecting jobs saw, and applying to a moved tip fails for the
+      # binary artefact and can silently SUCCEED against the wrong base for text. The push below
+      # targets the branch by name; if it moved, the push is rejected, which is the right outcome.
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}

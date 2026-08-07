@@ -1,0 +1,91 @@
+name: _build-ios
+
+# Does the iOS app still compile? Nothing else here ever opens the Xcode project, so a plugin that
+# fails to build, a broken Info.plist or an SPM package that stops resolving waits for a human on a
+# Mac otherwise.
+#
+# Signing off is what makes it possible with no certificate and no Apple account — and what limits
+# it: entitlements still pass, and the .app installs nowhere. iOS ships through TestFlight.
+#
+# macOS bills at ten times the Linux rate, hence: bundle from _build-web, sync, compile, nothing else.
+
+on:
+  workflow_call:
+    inputs:
+      check-drift:
+        description: >
+          Reconcile the SPM package cap sync regenerates. True for the gate; false on a tag, where
+          there is no heal job to consume a patch.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: iOS — compiles unsigned
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      # For cap sync only — the bundle arrives as an artefact rather than being rebuilt at ten times
+      # the price.
+      - run: npm ci --ignore-scripts
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: mobile-bundle
+          path: mobile/dist
+
+      - name: Sync the bundle into the project
+        run: npx cap sync ios
+
+      # Derived, not read from the checkout, which on a drifted main carries the wrong number until
+      # heal fixes it — after this job has already packaged it.
+      - name: Derive the version from package.json
+        run: npm run cap:config
+
+      # cap sync writes the plugin list into Package.swift, which is COMMITTED so Xcode resolves
+      # without Node. Same gate as the Gradle one. (SPM, not CocoaPods — there is no Podfile.lock.)
+      - uses: ./.github/actions/drift
+        if: inputs.check-drift
+        with:
+          paths: mobile/ios/App/CapApp-SPM/Package.swift
+          name: spm
+          hint: npx cap sync ios
+
+      # Its own step so a resolution failure reads as one, rather than as a compile error a thousand
+      # lines into the build log.
+      - name: Resolve the Swift packages
+        working-directory: mobile/ios/App
+        run: xcodebuild -project App.xcodeproj -resolvePackageDependencies
+
+      # -target, not -scheme: schemes live in xcuserdata, which ios/.gitignore excludes, so there is
+      # none in the repository to name. The CODE_SIGN settings are what let this run credential-free.
+      - name: Build unsigned
+        working-directory: mobile/ios/App
+        run: |
+          xcodebuild \
+            -project App.xcodeproj \
+            -target App \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build

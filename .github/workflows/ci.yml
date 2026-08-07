@@ -1,24 +1,14 @@
 name: CI
 
 # The Go side: it builds, the tests pass under the race detector, and one CGO-free binary comes out
-# for six targets. The docs site and the companion app have their own workflows.
+# for six targets. The speaker tests skip themselves when NOCTURN_SPEAKER_MODEL is unset.
 #
-# The speaker tests need a checkpoint that is not committed and skip themselves when
-# NOCTURN_SPEAKER_MODEL is unset, so this stays green without downloading a model.
+# Generated-and-committed files are reconciled here as everywhere: a pull request that let one drift
+# FAILS, a push to main HEALS, from a separate job that runs no project code.
 #
-# Two things here are generated and committed — the interpreter guest and internal/tui/*_gsx.go.
-# Both are reconciled the same way: a pull request that let one drift FAILS, a push to main HEALS.
-# Detection and healing are separate jobs because detection runs a build script, a third-party
-# generator and the test suite, which on a pull request is the author's code, and that must not
-# happen while holding a token that can push. See heal at the bottom.
-#
-# The Go sources are the repository root, so there is no `paths:` allowlist that stays true as the
-# tree grows — the filter is `'**'` minus the other domains, which also means a new top-level thing
-# runs CI until someone decides otherwise. `paths` with negations rather than `paths-ignore`, since
-# `paths-ignore` does not support `!` and the two cannot be combined. `satellite/` and `sdk/` are
-# deliberately not excluded: a firmware-only change runs the full Go matrix.
-#
-# The two lists are written out twice because Actions does not support YAML anchors.
+# The Go sources are the repository root, so the filter is `'**'` minus the other domains rather than
+# an allowlist — a new top-level thing runs CI until someone decides otherwise. `paths` with `!`
+# because `paths-ignore` supports neither. Written out twice: Actions has no YAML anchors.
 on:
   push:
     branches: [main]
@@ -27,16 +17,20 @@ on:
       - '!docs/**'
       - '!mobile/**'
       - '!media/**'
+      - '!satellite/**'
       - '!.github/workflows/docs.yml'
-      - '!.github/workflows/mobile.yml'
+      - '!.github/workflows/ci-mobile.yml'
+      - '!.github/workflows/ci-satellite.yml'
   pull_request:
     paths:
       - '**'
       - '!docs/**'
       - '!mobile/**'
       - '!media/**'
+      - '!satellite/**'
       - '!.github/workflows/docs.yml'
-      - '!.github/workflows/mobile.yml'
+      - '!.github/workflows/ci-mobile.yml'
+      - '!.github/workflows/ci-satellite.yml'
   workflow_dispatch:
 
 permissions:
@@ -49,22 +43,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The one committed binary artefact, rebuilt from its own sources on every run.
+  # The one committed binary artefact, rebuilt from source every run. nocturn-qjs.wasm is go:embed'd,
+  # so a plain `go build` needs no wasi-sdk — the price is a megabyte of opaque bytes nobody rebuilds,
+  # and it came due once: the recipe named a file its pinned quickjs does not have, silently.
   #
-  # nocturn-qjs.wasm is go:embed'd, so a plain `go build` needs no wasi-sdk and no quickjs checkout —
-  # what "one binary, no foreign runtime" costs. The price is a megabyte of opaque bytes in git that
-  # nobody rebuilds, and it came due: the build script named a source file its own pinned quickjs
-  # release does not have, silently, because recipe and artefact had no way to disagree out loud.
-  #
-  # So on main the rebuild is committed rather than merely reported: a tampered .wasm is overwritten
-  # by one built from reviewable sources. Changing what the guest does means changing the C.
-  #
-  # The commit is heal's, not this job's — build.sh downloads a tarball, fetches a remote and
-  # compiles five C files from the checked-out tree, so there must be no credential for it to find.
-  #
-  # The workflow's path filter cannot hide a swapped artefact (it lives under internal/), but it does
-  # cost the other property: a docs-only push no longer re-reconciles recipe and artefact. If that is
-  # wanted back the answer is a weekly `schedule:`, not pretending the filter is free.
+  # Rebuilding and committing is the hardening: a tampered .wasm is overwritten by one built from
+  # reviewable C. The commit is heal's, not this job's — build.sh runs code from the checkout, so
+  # there must be no credential here for it to find.
   guest:
     name: Interpreter guest — rebuilt from source
     runs-on: ubuntu-latest
@@ -134,13 +119,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # DISABLED until internal/tui/ is committed — it is not in HEAD today, so the generator would
-      # run against a path the repository does not have. Re-enable in the commit that lands the
-      # terminal UI, not before.
-      #
-      # *_gsx.go are generated from .gsx and committed, so a plain build needs no generator. The
-      # generator itself is fetched at a tag, which is safe for a reason worth naming: `go install
-      # pkg@version` verifies against sum.golang.org, so a repointed tag is caught there.
+      # DISABLED until internal/tui/ is committed — it is not in HEAD, so the generator would run
+      # against a path that does not exist. The tag is safe unpinned: `go install pkg@version`
+      # verifies against sum.golang.org.
       #
       # - name: Regenerate the GSX
       #   run: |
@@ -228,7 +209,7 @@ jobs:
       contents: write
     # No timeout-minutes here: it is not a valid key on a job that calls a reusable workflow. The
     # limit lives on heal.yml's own job.
-    uses: ./.github/workflows/heal.yml
+    uses: ./.github/workflows/_heal.yml
     with:
       subject: "chore(ci): regenerate what drifted from its sources"
       what: "Committed artefacts did not match what their sources produce."

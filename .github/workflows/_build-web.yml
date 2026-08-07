@@ -1,0 +1,80 @@
+name: _build-web
+
+# The Angular half: tests, the production bundle, and the version drift gate. Everything downstream
+# — the Android package, the iOS compile, a release asset — starts from the artefact this uploads,
+# so the app is built once and the same bytes are what get tested, packaged and shipped.
+#
+# It is also why iOS costs what it costs and no more: the macOS runner downloads this bundle instead
+# of running npm at ten times the Linux rate.
+
+on:
+  workflow_call:
+    inputs:
+      check-drift:
+        description: >
+          Reconcile the native projects against package.json. True for the gate; false on a tag,
+          where the same check already ran on the commit being released and there is no heal job to
+          consume a patch.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: App — tests, bundle, version drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      # Nothing here pushes — drift goes to heal as a patch — so no credential belongs in .git/config.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      # --ignore-scripts: no dependency executes anything at install time. Verified rather than
+      # assumed — every native package here (esbuild, lmdb, msgpackr-extract, @parcel/watcher)
+      # resolves a prebuilt linux-x64 package from the lockfile, and both the tests and the
+      # production build pass without their scripts. A local `npm install` is NOT covered by this.
+      - run: npm ci --ignore-scripts
+
+      # Both Angular builders type-check, so a separate tsc --noEmit would only repeat them.
+      - name: Test
+        run: npm test
+
+      # Production is the default configuration and enforces the bundle budgets in angular.json.
+      - name: Build
+        run: npm run build
+
+      # package.json is the only place `version` and `config.buildNumber` are written; re-applying
+      # and diffing is what makes that true rather than merely intended. Trapeze is idempotent.
+      - name: Re-apply the native configuration
+        if: inputs.check-drift
+        run: npm run cap:config
+
+      - uses: ./.github/actions/drift
+        if: inputs.check-drift
+        with:
+          paths: mobile/android mobile/ios
+          name: trapeze
+          hint: npm run cap:config
+
+      # The copied web assets are gitignored on both platforms, so the bundle only exists after a
+      # build — and the packagers must use the bundle that was tested, not a second one from the same
+      # sources.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mobile-bundle
+          path: mobile/dist
+          retention-days: 1

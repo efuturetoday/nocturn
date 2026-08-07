@@ -1,0 +1,70 @@
+name: CI Mobile
+
+# The gate for the companion app. The build itself lives in _build-android.yml, because release.yml
+# calls the same one on a tag — a release must ship what the gate tested, not a second build that
+# resembles it.
+#
+# Drift is reconciled as in ci.yml: a pull request that let a generated file go stale FAILS, a push
+# to main HEALS. Detection and healing are separate jobs because detection runs npm ci and Gradle,
+# which on a pull request is the author's code.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/ci-mobile.yml'
+      - '.github/workflows/_build-web.yml'
+      - '.github/workflows/_build-android.yml'
+      - '.github/workflows/_build-ios.yml'
+      - '.github/workflows/_heal.yml'
+      - '.github/actions/drift/**'
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/ci-mobile.yml'
+      - '.github/workflows/_build-web.yml'
+      - '.github/workflows/_build-android.yml'
+      - '.github/workflows/_build-ios.yml'
+      - '.github/workflows/_heal.yml'
+      - '.github/actions/drift/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Superseded pull-request runs are cancelled; main runs are not, because heal writes and the window
+# between its commit and its push is the one place cancellation is not free.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The bundle is built once and both packagers start from it — which is also what keeps the macOS
+# runner cheap, since it downloads rather than rebuilds.
+jobs:
+  web:
+    uses: ./.github/workflows/_build-web.yml
+
+  android:
+    needs: web
+    uses: ./.github/workflows/_build-android.yml
+
+  # Compile-only, unsigned, on a macOS runner that bills at ten times the Linux rate. It is the only
+  # thing here that ever opens the Xcode project, so without it an iOS-side breakage waits for
+  # someone to notice on a Mac.
+  ios:
+    needs: web
+    uses: ./.github/workflows/_build-ios.yml
+
+  # Granted here and nowhere else in this file: heal is the only job that can write.
+  heal:
+    needs: [web, android, ios]
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    # No timeout-minutes here: it is not a valid key on a job that calls a reusable workflow. The
+    # limit lives on _heal.yml's own job.
+    uses: ./.github/workflows/_heal.yml
+    with:
+      subject: "chore(mobile): regenerate what drifted from its sources"
+      what: "The native projects did not match what package.json and the installed plugins produce."

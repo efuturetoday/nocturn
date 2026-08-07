@@ -1,0 +1,30 @@
+name: CI Satellite
+
+# The gate for the ESP32-S3 firmware, which until now was built nowhere: four lines of C that do not
+# compile were discovered at flash time, over a serial cable. The build itself lives in
+# _build-satellite.yml, because release.yml calls the same one on a tag.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'satellite/**'
+      - '.github/workflows/ci-satellite.yml'
+      - '.github/workflows/_build-satellite.yml'
+  pull_request:
+    paths:
+      - 'satellite/**'
+      - '.github/workflows/ci-satellite.yml'
+      - '.github/workflows/_build-satellite.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-satellite.yml

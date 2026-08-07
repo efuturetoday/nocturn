@@ -1,0 +1,100 @@
+name: _build-android
+
+# The Android package, from the bundle _build-web.yml already built and tested. Called by ci-mobile.yml
+# as the gate and by release.yml on a `mobile-v*` tag, so a release ships what the gate looked at
+# rather than a second build that resembles it.
+#
+# Android only, and the name says so. iOS is not packaged anywhere: an .ipa at a GitHub release is
+# installable by nobody, so it ships through TestFlight, from an archive made in Xcode.
+# _build-ios.yml only proves it compiles.
+
+on:
+  workflow_call:
+    inputs:
+      check-drift:
+        description: >
+          Reconcile the Gradle files cap sync regenerates. True for the gate; false on a tag, where
+          there is no heal job to consume a patch.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android — assemble
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # Which Android platforms the runner image carries is implicit and changes without us;
+      # variables.gradle asks for compileSdk 36. Naming the packages makes a missing one fail
+      # legibly instead of as an ANDROID_HOME error.
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0'
+
+      # Third-party, so SHA-pinned — as is setup-android above. The actions/* stay on tags: the same
+      # company already owns the runner and the token. Dependabot moves digest and comment together.
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+
+      # cap sync needs the CLI and the plugins' native sources — not the app's own build, which
+      # arrives as the artefact below.
+      - run: npm ci --ignore-scripts
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: mobile-bundle
+          path: mobile/dist
+
+      - name: Sync the bundle into the project
+        run: npx cap sync android
+
+      # Derived, not read from the checkout, which on a drifted main carries the wrong number until
+      # heal fixes it — after this job has already packaged it.
+      - name: Derive the version from package.json
+        run: npm run cap:config
+
+      # cap sync regenerates two COMMITTED files, for the same reason internal/tui/*_gsx.go is
+      # committed: so a plain Gradle build needs no Node. Same reason, same gate.
+      - uses: ./.github/actions/drift
+        if: inputs.check-drift
+        with:
+          paths: mobile/android/app/capacitor.build.gradle mobile/android/capacitor.settings.gradle
+          name: capacitor
+          hint: npx cap sync android
+
+      # Debug-signed, and that is not an oversight: assembleRelease without a signing config produces
+      # an APK Android refuses to install at all, which is worse than one it installs with a warning.
+      # A keystore secret and a signingConfig in build.gradle turn this into assembleRelease.
+      - name: Assemble
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      # Uploaded on every run, not only on a tag: it is what release.yml attaches, and an artefact
+      # from the run that tested it is the point of calling this workflow rather than repeating it.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mobile-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 1

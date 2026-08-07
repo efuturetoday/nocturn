@@ -1,0 +1,60 @@
+name: _build-satellite
+
+# The ESP32-S3 firmware build, called by ci-satellite.yml as the gate and by release.yml on a
+# `satellite-v*` tag. Same container satellite/build.sh uses on a developer's machine, so what CI
+# compiles is what you compile.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Firmware — compiles
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: espressif/idf:v5.5
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # The image carries the toolchain but the entrypoint that activates it is replaced by the job,
+      # so the environment is sourced by hand.
+      - name: Build
+        working-directory: satellite
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py build
+
+      # Where the flash went. The partition table gives the factory image 3 MB and there is no OTA
+      # slot, so an image that outgrows it is not a warning — it is a board that cannot be flashed.
+      - name: Size
+        working-directory: satellite
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py size
+
+      # Four files rather than one: the merged image is what a fresh board wants at offset 0, the
+      # three parts are what an incremental flash of a known board needs.
+      #
+      # idf.py rather than esptool directly — the subcommand name and argument style have moved
+      # between esptool majors, idf.py's has not.
+      - name: Collect the images
+        working-directory: satellite
+        run: |
+          . "$IDF_PATH/export.sh"
+          mkdir -p dist
+          cp build/factory_01.bin build/bootloader/bootloader.bin \
+             build/partition_table/partition-table.bin dist/
+          idf.py merge-bin -o dist/merged.bin
+          ls -l dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: satellite-images
+          path: satellite/dist
+          retention-days: 1

@@ -1,0 +1,148 @@
+name: Release
+
+# Attaches artefacts to the release release-please just created. The tag prefix says which component
+# was released, and each job gates on its own.
+#
+# The mobile and satellite halves build nothing of their own — they call the same _build-web.yml,
+# _build-android.yml and _build-satellite.yml the gates call, then attach what came out. A release
+# that built its own copy would be shipping something no gate ever looked at.
+#
+# The binaries are the exception, and for a reason: ci.yml cross-compiles six targets to /dev/null
+# to prove they compile. Here they are built for real, with the version stamped in.
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'mobile-v*'
+      - 'satellite-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  binaries:
+    name: Binaries — six targets
+    if: startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # -X main.version is the whole reason `nocturn version` has ever printed anything but "dev":
+      # cmd/nocturn/cli.go:26 declares the variable and has described this recipe in a comment since
+      # long before anything supplied it.
+      #
+      # CGO_ENABLED=0 for the same reason ci.yml uses it — a build that needed cgo would break the
+      # claim on the box, not just the build.
+      - name: Build and archive
+        env:
+          CGO_ENABLED: 0
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            bin="nocturn"; [ "$os" = windows ] && bin="nocturn.exe"
+            GOOS="$os" GOARCH="$arch" go build \
+              -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+              -o "dist/$bin" ./cmd/nocturn
+            tar -czf "dist/nocturn_${version}_${os}_${arch}.tar.gz" -C dist "$bin"
+            rm -f "dist/$bin"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+          ls -l dist
+
+      # No body, body_path or generate_release_notes on purpose: with all three unset the action keeps
+      # the existing body (`body = workflowBody || existingReleaseBody`), which is release-please's
+      # changelog. Setting any of them would overwrite it.
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: dist/*
+
+  # check-drift is off here: the same check already ran on this commit when it was pushed to main,
+  # and on a tag there is no heal job to consume a patch — it would emit one into the void.
+  build-web:
+    if: startsWith(github.ref_name, 'mobile-v')
+    uses: ./.github/workflows/_build-web.yml
+    with:
+      check-drift: false
+
+  build-android:
+    needs: build-web
+    uses: ./.github/workflows/_build-android.yml
+    with:
+      check-drift: false
+
+  # iOS is not packaged, but a tag that does not compile for iOS should not be released quietly. No
+  # macOS cost on the other tags — this gates only on mobile-v*.
+  build-ios:
+    needs: build-web
+    uses: ./.github/workflows/_build-ios.yml
+    with:
+      check-drift: false
+
+  mobile:
+    name: Mobile — Android package
+    needs: [build-android, build-ios]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: mobile-apk
+          path: apk
+
+      # Named after the release rather than left as app-debug.apk, which says nothing on a download
+      # page. The release notes carry the TestFlight link; iOS is distributed there.
+      - name: Name it after the release
+        run: |
+          version="${GITHUB_REF_NAME#mobile-v}"
+          mv apk/app-debug.apk "apk/nocturn_${version}.apk"
+          ls -l apk
+
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: apk/*
+
+  build-satellite:
+    if: startsWith(github.ref_name, 'satellite-v')
+    uses: ./.github/workflows/_build-satellite.yml
+
+  satellite:
+    name: Satellite — firmware images
+    needs: build-satellite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: satellite-images
+          path: images
+
+      - name: Name them after the release
+        run: |
+          version="${GITHUB_REF_NAME#satellite-v}"
+          mv images/factory_01.bin "images/nocturn-satellite_${version}.bin"
+          mv images/merged.bin "images/nocturn-satellite_${version}_merged.bin"
+          ls -l images
+
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: images/*

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bump-minor-pre-major": true,
+  "separate-pull-requests": true,
+  "last-release-sha": "f3dcb2ddc17e0abbef8580ae80ae6d3b878c6fc2",
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "include-component-in-tag": false,
+      "exclude-paths": [
+        "mobile",
+        "satellite",
+        "docs"
+      ]
+    },
+    "mobile": {
+      "release-type": "node",
+      "component": "mobile"
+    },
+    "satellite": {
+      "release-type": "simple",
+      "component": "satellite"
+    }
+  }
+}
