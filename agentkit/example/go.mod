@@ -12,11 +12,6 @@ require (
 
 require github.com/sashabaranov/go-openai v1.41.2 // indirect
 
-
-
-
-
-
 replace github.com/efuturetoday/nocturn/agentkit => ..
 
 replace github.com/efuturetoday/nocturn/agentkit/openai => ../openai
