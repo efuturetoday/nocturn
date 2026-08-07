@@ -1,0 +1,24 @@
+# Native project configuration, applied by `npm run cap:config`.
+#
+# The version and the build number live in package.json (`version` and `buildNumber`) and are written
+# from here into both platforms, so a release is one edit rather than the same two numbers typed into
+# build.gradle and the Xcode project by hand.
+#
+# Declaring the two variables is what makes trapeze substitute them from the environment; without the
+# block it resolves them to empty and writes that — silently, and an empty MARKETING_VERSION leaves
+# the Xcode project unparseable. They carry no default on purpose: the cap:config script supplies
+# both, and a missing one should be visible rather than quietly become a number nobody chose.
+vars:
+  VERSION:
+  BUILD:
+
+platforms:
+  ios:
+    targets:
+      App:
+        version: $VERSION
+        buildNumber: $BUILD
+
+  android:
+    versionName: $VERSION
+    versionCode: $BUILD

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Nocturn</string>
+    <string name="title_activity_main">Nocturn</string>
+    <string name="package_name">me.itexpert.nocturn</string>
+    <string name="custom_url_scheme">me.itexpert.nocturn</string>
+</resources>

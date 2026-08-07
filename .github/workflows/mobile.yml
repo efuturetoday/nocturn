@@ -1,0 +1,110 @@
+name: Mobile
+
+# The companion app, checked the way ci.yml checks the daemon: it builds, its tests pass, and the two
+# native projects still say what package.json says.
+#
+# Unlike ci.yml this filters on paths. ci.yml deliberately runs everything on every push because its
+# jobs guard the shipped binary — a filter there would skip exactly the run that catches a swapped
+# artefact. Nothing here guards anything outside mobile/, so a Go-only pull request should not pay
+# for a Gradle run.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile.yml'
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: App — tests, bundle, version drift
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+
+      # Both Angular builders type-check — the application builder over what main.ts reaches, the
+      # unit-test builder over the specs — so a separate tsc --noEmit would only repeat them.
+      - name: Test
+        run: npm test
+
+      # The production configuration is the default, and it enforces the bundle budgets in
+      # angular.json, so a dependency that doubles the initial chunk fails here.
+      - name: Build
+        run: npm run build
+
+      # trapeze.yaml exists so `version` and `buildNumber` in package.json are the ONLY places those
+      # two numbers are written. This is what makes that true rather than merely intended: re-apply
+      # the config and fail if either native project moves. Same shape as the GSX drift check in
+      # ci.yml, and it is idempotent — a second run on an applied tree produces no diff.
+      - name: Native projects match package.json
+        run: |
+          npm run cap:config
+          if ! git diff --exit-code -- android ios; then
+            echo "::error::android/ or ios/ has drifted from package.json — run: npm run cap:config"
+            exit 1
+          fi
+
+      # Handed to the android job rather than rebuilt there: the copied web assets are gitignored on
+      # both platforms (android/.gitignore, ios/.gitignore), so the bundle only exists after a build.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mobile-bundle
+          path: mobile/dist
+          retention-days: 1
+
+  android:
+    name: Android — assemble
+    needs: web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v5
+
+      # cap sync needs the CLI and the plugins' native sources, so the install is not optional here.
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: mobile-bundle
+          path: mobile/dist
+      - name: Sync the bundle into the project
+        run: npx cap sync android
+
+      # Debug, not release: this compiles the manifest, the resources and the Gradle config without
+      # needing a keystore. It is what catches a dangling @xml/network_security_config, a malformed
+      # intent-filter, or a plugin that rejects the SDK level — none of which a web build can see.
+      - name: Assemble
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
