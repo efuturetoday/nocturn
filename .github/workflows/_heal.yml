@@ -37,7 +37,7 @@ jobs:
       # diffs against the tree the detecting jobs saw, and applying to a moved tip fails for the
       # binary artefact and can silently SUCCEED against the wrong base for text. The push below
       # targets the branch by name; if it moved, the push is rejected, which is the right outcome.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
 
