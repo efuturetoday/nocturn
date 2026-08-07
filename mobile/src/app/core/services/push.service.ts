@@ -4,6 +4,7 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { AuthService } from './auth.service';
 import { ConnectionService } from './connection.service';
 import { NotificationService } from './notification.service';
+import { isDemoUrl } from '../demo/is-demo';
 
 /**
  * PushService registers this device's native APNs token with the daemon so it can be woken while
@@ -48,6 +49,9 @@ export class PushService {
 
   private async ensure(): Promise<void> {
     if (this.started) return;
+    // No daemon means nothing can ever wake this device, so asking for the permission would be a
+    // prompt with no payoff — and in the demo it would be the first thing a reviewer sees.
+    if (isDemoUrl(this.conn.currentUrl())) return;
     this.started = true;
     const perm = await PushNotifications.requestPermissions();
     if (perm.receive === 'granted') await PushNotifications.register();

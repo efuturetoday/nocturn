@@ -1,5 +1,7 @@
 import { Injectable, signal, computed } from '@angular/core';
 import type { ClientCommand, ServerEvent } from '../protocol/nocturn-protocol';
+import { DemoSocket, type SocketLike } from '../demo/demo-socket';
+import { isDemoUrl } from '../demo/is-demo';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
@@ -17,10 +19,14 @@ const BACKOFF_CAP_MS = 30_000;
  * register via `onEvent()` and react to `state` — so ConnectionService depends on neither
  * (no circular DI). The control plane is STATE SYNC, not RPC: commands are fire-and-forget;
  * authoritative state arrives as pushed events. Consumers resync on (re)connect.
+ *
+ * The socket itself is the only thing that varies: a `demo` host opens the in-app `DemoSocket`
+ * instead (see `core/demo/`), which speaks the same protocol from a script. Everything below —
+ * state, backoff, demux — is blind to which one it got.
  */
 @Injectable({ providedIn: 'root' })
 export class ConnectionService {
-  private ws: WebSocket | null = null;
+  private ws: SocketLike | null = null;
   private url = '';
   private manualClose = false;
   private attempt = 0;
@@ -105,11 +111,11 @@ export class ConnectionService {
 
   private open(): void {
     this._state.set(this.attempt === 0 ? 'connecting' : 'reconnecting');
-    let ws: WebSocket;
+    let ws: SocketLike;
     try {
       const u = new URL(this.url);
       if (this.token) u.searchParams.set('token', this.token);
-      ws = new WebSocket(u.toString());
+      ws = isDemoUrl(this.url) ? new DemoSocket() : new WebSocket(u.toString());
     } catch {
       this.scheduleReconnect();
       return;

@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
+import { Component, ChangeDetectionStrategy, computed, inject } from '@angular/core';
 import { Router } from '@angular/router';
 import {
   IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonIcon, IonSpinner,
@@ -9,6 +9,7 @@ import { ConnectionService } from '../../core/services/connection.service';
 import { AuthService } from '../../core/services/auth.service';
 import { AccountsService } from '../../core/services/accounts.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
+import { isDemoUrl } from '../../core/demo/is-demo';
 
 @Component({
   selector: 'app-settings',
@@ -59,6 +60,14 @@ import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
 
       <ion-list inset="true">
         <ion-list-header><ion-label>Connection</ion-label></ion-list-header>
+        @if (demo()) {
+          <ion-item>
+            <ion-label>
+              <h2>Demo mode</h2>
+              <ion-note>Sample data. No daemon is connected and nothing leaves this device.</ion-note>
+            </ion-label>
+          </ion-item>
+        }
         <ion-item>
           <ion-label>
             <h2>{{ connection.currentUrl() ?? '—' }}</h2>
@@ -81,6 +90,9 @@ export class SettingsPage {
   protected readonly auth = inject(AuthService);
   protected readonly accounts = inject(AccountsService);
   private readonly router = inject(Router);
+
+  /** Say so when the app is running against the in-app demo rather than a daemon. */
+  protected readonly demo = computed(() => isDemoUrl(this.connection.currentUrl()));
 
   constructor() {
     addIcons({ logOutOutline });

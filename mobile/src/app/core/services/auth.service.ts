@@ -4,6 +4,7 @@ import { Preferences } from '@capacitor/preferences';
 import { Device } from '@capacitor/device';
 import { Capacitor } from '@capacitor/core';
 import { ConnectionService } from './connection.service';
+import { DEMO_BEARER, isDemoUrl } from '../demo/is-demo';
 import type { PairResponse, JoinResponse, JoinConfirmResponse, PendingJoin } from '../protocol/nocturn-protocol';
 
 /**
@@ -45,14 +46,17 @@ export class AuthService {
     });
   }
 
-  /** The stored bearer for a daemon (keyed by host), or null if this device isn't paired to it. */
+  /** The stored bearer for a daemon (keyed by host), or null if this device isn't paired to it. The
+      demo has no daemon to pair with, so it answers with its stand-in and never touches storage. */
   async bearerFor(wsUrl: string): Promise<string | null> {
+    if (isDemoUrl(wsUrl)) return DEMO_BEARER;
     const { value } = await Preferences.get({ key: this.key(wsUrl) });
     return value ?? null;
   }
 
   /** Register (or, with "", clear) this device's native push token so the daemon can wake it. */
   async registerPush(wsUrl: string, token: string): Promise<void> {
+    if (isDemoUrl(wsUrl)) return; // no host to POST to — the demo is entirely in-process
     const bearer = await this.bearerFor(wsUrl);
     if (!bearer) return;
     await fetch(this.httpBase(wsUrl) + '/register', {

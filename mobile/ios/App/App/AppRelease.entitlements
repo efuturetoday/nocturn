@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The Release entitlements. App.entitlements keeps `development` for local builds, which get a
+	     sandbox APNs token; a TestFlight or App Store build must be `production` or the token the
+	     device registers is one the live APNs host will reject. The daemon picks the matching host
+	     from NOCTURN_APNS_PRODUCTION. -->
+	<key>aps-environment</key>
+	<string>production</string>
+</dict>
+</plist>

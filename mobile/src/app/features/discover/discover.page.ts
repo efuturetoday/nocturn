@@ -7,6 +7,7 @@ import { radioOutline } from 'ionicons/icons';
 import { DiscoveryService } from '../../core/services/discovery.service';
 import { ConnectionService } from '../../core/services/connection.service';
 import { AuthService } from '../../core/services/auth.service';
+import { DEMO_BEARER, isDemoUrl } from '../../core/demo/is-demo';
 
 const RESCAN_MS = 4000;
 
@@ -155,7 +156,9 @@ export class DiscoverPage {
 
   protected async connect(url: string): Promise<void> {
     await this.discovery.remember(url);
-    let bearer = await this.auth.bearerFor(url);
+    // The demo has nothing to pair with, so it skips the pairing sheet — but is remembered like any
+    // host, which is what lets the connection guard re-enter it after a relaunch.
+    let bearer = isDemoUrl(url) ? DEMO_BEARER : await this.auth.bearerFor(url);
     if (!bearer) {
       // Not paired to this daemon yet → pairing overlay; it dismisses with the bearer.
       const modal = await this.modalCtrl.create({
