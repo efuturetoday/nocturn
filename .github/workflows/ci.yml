@@ -77,14 +77,15 @@ jobs:
         with:
           persist-credentials: false
 
-      # The pins live in build.sh, so they are the cache key: bump either and the cache invalidates
-      # itself rather than serving a stale toolchain. No restore-keys — a prefix fallback could serve
-      # a cache built from different pins.
+      # The whole script is the key, not a grep for two of its variables: the quickjs pin that
+      # actually decides what is fetched is QJS_NG_SHA, and the wasi-sdk digests are in a function —
+      # neither matched the old pattern, so correcting a digest served the old cache. No restore-keys,
+      # so there is no prefix fallback that could serve a cache built from different pins.
       - name: Resolve the toolchain pins
         id: pins
         run: |
           {
-            echo "key=$(grep -E '^(WASI_SDK_VER|QJS_NG_REF)=' internal/script/qjs/build.sh | md5sum | cut -d' ' -f1)"
+            echo "key=$(sha256sum internal/script/qjs/build.sh | cut -d' ' -f1)"
           } >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@v6
@@ -116,8 +117,9 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      # Nothing here pushes — the gsx patch goes to heal — so the token has no business being
-      # readable by `go test` and a third-party generator.
+      # Defence in depth, not the guarantee: what keeps a push-capable token out of this job is
+      # `permissions` (workflow-level contents: read). This only keeps it out of .git/config while
+      # `go test` and a third-party generator run.
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
@@ -217,9 +219,10 @@ jobs:
         run: go build -o /dev/null ./cmd/nocturn
 
   # Granted here and nowhere else in this file: heal is the only job that can write, and it runs no
-  # project code. `needs` covers both detecting jobs, so a red build heals nothing.
+  # project code. `needs` covers EVERY job, not just the two that detect drift — an artefact must not
+  # be committed while a target it has to build for is red.
   heal:
-    needs: [guest, go]
+    needs: [guest, go, crosscompile]
     if: github.event_name == 'push'
     permissions:
       contents: write

@@ -13,10 +13,14 @@ on:
     paths:
       - 'mobile/**'
       - '.github/workflows/mobile.yml'
+      - '.github/workflows/heal.yml'
+      - '.github/actions/drift/**'
   pull_request:
     paths:
       - 'mobile/**'
       - '.github/workflows/mobile.yml'
+      - '.github/workflows/heal.yml'
+      - '.github/actions/drift/**'
   workflow_dispatch:
 
 permissions:
@@ -38,7 +42,8 @@ jobs:
         working-directory: mobile
 
     steps:
-      # Nothing here pushes — drift goes to heal as a patch — so no credential belongs in .git/config.
+      # Defence in depth: the guarantee is `permissions` above, this only keeps the token out of
+      # .git/config while npm ci and the build run.
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
@@ -51,8 +56,8 @@ jobs:
 
       # --ignore-scripts: no dependency executes anything at install time. Verified rather than
       # assumed — every native package here (esbuild, lmdb, msgpackr-extract, @parcel/watcher)
-      # resolves a prebuilt platform package, and both the tests and the production build pass
-      # without their scripts. package.json's `allowScripts` covers local installs, not this one.
+      # resolves a prebuilt linux-x64 package from the lockfile, and both the tests and the
+      # production build pass without their scripts. A local `npm install` is NOT covered by this.
       - run: npm ci --ignore-scripts
 
       # Both Angular builders type-check, so a separate tsc --noEmit would only repeat them.
@@ -115,9 +120,8 @@ jobs:
         with:
           packages: 'platforms;android-36 build-tools;36.0.0'
 
-      # The only third-party action here, so the only one pinned to a SHA — the actions/* are
-      # GitHub's own, which already owns the runner and the token. Dependabot moves digest and
-      # comment together.
+      # Third-party, so SHA-pinned — as is setup-android above. The actions/* stay on tags: the same
+      # company already owns the runner and the token. Dependabot moves digest and comment together.
       - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
 
       # cap sync needs the CLI and the plugins' native sources.

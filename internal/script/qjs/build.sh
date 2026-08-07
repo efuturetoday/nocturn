@@ -98,13 +98,20 @@ fetch_qjs() {
       echo "build.sh: cannot fetch quickjs-ng $QJS_NG_SHA ($QJS_NG_REF)" >&2
       exit 1
     fi
-    git -C "$cache/quickjs-ng" checkout -q FETCH_HEAD
   fi
-  got="$(git -C "$cache/quickjs-ng" rev-parse HEAD)"
+
+  # Outside the `if`, and the same argument as for the SDK above: rev-parse says which commit is
+  # checked out, not what is on disk. A cached checkout whose quickjs.c was edited while HEAD stayed
+  # put would compile straight into the artefact. Reset the tree from the object database and drop
+  # anything untracked, so what is compiled is what the pinned commit says.
+  got="$(git -C "$cache/quickjs-ng" rev-parse FETCH_HEAD 2>/dev/null || true)"
   if [ "$got" != "$QJS_NG_SHA" ]; then
-    echo "build.sh: quickjs-ng checkout is $got, pinned to $QJS_NG_SHA" >&2
+    rm -rf "$cache/quickjs-ng"   # do not leave a wedged checkout for the next run to restore
+    echo "build.sh: quickjs-ng checkout is ${got:-missing}, pinned to $QJS_NG_SHA" >&2
     exit 1
   fi
+  git -C "$cache/quickjs-ng" checkout -q --force FETCH_HEAD
+  git -C "$cache/quickjs-ng" clean -qxfd
   echo "$cache/quickjs-ng"
 }
 

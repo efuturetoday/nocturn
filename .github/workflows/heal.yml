@@ -34,12 +34,18 @@ jobs:
       contents: write
 
     steps:
-      # Credentials stay — this is the job that pushes. The branch is the one the event pushed to,
-      # never a hard-coded main: a name here would keep committing to main the day someone widens
-      # `branches:`.
+      # Credentials stay — this is the job that pushes.
+      #
+      # The SHA, not the branch name: the patches are diffs against the tree the detecting jobs
+      # checked out, and a branch tip is a moving target. Applying to a drifted base fails outright
+      # for the binary artefact (git apply --binary checks the preimage blob id) and, worse, can
+      # SUCCEED against the wrong base for text, because plain git apply matches on context.
+      #
+      # The push below then targets the branch by name. If it moved meanwhile the push is rejected,
+      # which is the right outcome — a rejected heal is a retry, a wrong one is a commit.
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
 
       # continue-on-error because the common case is that NOTHING drifted, and a pattern that matches
       # no artifact is an error to this action rather than an empty result. A green build must not go

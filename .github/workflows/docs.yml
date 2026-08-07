@@ -3,11 +3,9 @@ name: Docs
 # Builds docs/ on pull requests, publishes to Pages on main. Both halves here — one workflow per
 # thing that builds, so there is no second copy of the build steps.
 #
-# The site has its own domain (docs/public/CNAME, DNS in Cloudflare) because 112 hand-written
-# absolute links would otherwise need a /nocturn prefix, and need it removed again later.
-#
-# Pages does not serve private repositories: until this one is public, deploy fails and only the
-# build tells you anything.
+# The site is served under /nocturn — astro.config.mjs sets `base` accordingly — because Pages
+# serves a project repository at owner.github.io/repo. Attaching a domain later means adding a
+# docs/public/CNAME and removing that base, which is 112 hand-written absolute links either way.
 
 on:
   push:
@@ -50,8 +48,8 @@ jobs:
           cache-dependency-path: docs/package-lock.json
 
       # --ignore-scripts: no dependency executes anything at install time. Verified rather than
-      # assumed — sharp and esbuild both resolve prebuilt platform packages, and the site builds.
-      # package.json's `allowScripts` covers local installs, not this one.
+      # assumed — sharp and esbuild both resolve prebuilt linux-x64 packages from the lockfile, and
+      # the site builds. A local `npm install` is NOT covered by this.
       - run: npm ci --ignore-scripts
         working-directory: docs
 
@@ -65,8 +63,10 @@ jobs:
           path: docs/dist
 
   # Only main publishes; without the guard a pull request would deploy over the live site.
+  # `github.ref`, not `event_name != pull_request`: workflow_dispatch has no branch filter, so the
+  # looser test would let any branch be published onto the live site by hand.
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 5

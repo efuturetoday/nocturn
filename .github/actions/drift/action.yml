@@ -36,6 +36,10 @@ runs:
         NAME: ${{ inputs.name }}
         HINT: ${{ inputs.hint }}
       run: |
+        # set -f, or bash expands `internal/tui/*_gsx.go` against the WORKING TREE before git sees
+        # it — and a pathspec listing only the files that still exist cannot report the one the
+        # generator deleted. git must receive the pattern, not its expansion.
+        set -f
         git add --intent-to-add -- $PATHS
         if git diff --quiet -- $PATHS; then
           echo "$NAME matches its sources."
