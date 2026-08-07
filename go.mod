@@ -24,6 +24,7 @@ require (
 require (
 	github.com/efuturetoday/nocturn/agentkit v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/gate v0.0.0
+	github.com/efuturetoday/nocturn/agentkit/gemini v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/openai v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/runtime v0.0.0
 	github.com/lmittmann/tint v1.2.0
@@ -36,3 +37,5 @@ replace (
 	github.com/efuturetoday/nocturn/agentkit/runtime => ./agentkit/runtime
 	github.com/efuturetoday/nocturn/agentkit/tools => ./agentkit/tools
 )
+
+replace github.com/efuturetoday/nocturn/agentkit/gemini => ./agentkit/gemini
