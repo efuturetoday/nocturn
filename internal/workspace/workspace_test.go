@@ -135,7 +135,8 @@ func TestWorkspace_Open_UserAndAgentStoresSeparate(t *testing.T) {
 	writeAgent(t, dir, "helper", nil)
 	w := openWSDir(t, answerLLM{text: "done"}, dir)
 
-	uid, _ := w.Chats().Start("hello there")
+	uid := chat.NewID()
+	w.Chats().Submit(uid, "hello there")
 	if !eventually(func() bool {
 		msgs, _ := w.Chats().Transcript(uid)
 		return len(msgs) >= 2
@@ -260,7 +261,8 @@ func setupMarkRead(t *testing.T) (w *workspace.Workspace, userID, agentID string
 	writeAgent(t, dir, "helper", nil)
 	w = openWSDir(t, answerLLM{text: "done"}, dir)
 
-	userID, _ = w.Chats().Start("a user question")
+	userID = chat.NewID()
+	w.Chats().Submit(userID, "a user question")
 	if !eventually(func() bool {
 		msgs, _ := w.Chats().Transcript(userID)
 		return len(msgs) >= 2

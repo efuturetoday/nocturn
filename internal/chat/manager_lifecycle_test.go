@@ -223,7 +223,8 @@ func TestManager_Inflight_ZeroWhenIdle(t *testing.T) {
 	m, _ := newManagerRT(t, runtime.New(fakeLLM{}))
 	defer m.CloseAll()
 
-	id, _ := m.Start("hi")
+	id := chat.NewID()
+	m.Submit(id, "hi")
 	if !eventually(func() bool {
 		msgs, _ := m.Transcript(id)
 		return len(msgs) >= 2 && zeroInflight(m.Inflight(id))
@@ -247,7 +248,9 @@ func TestManager_ReapIdle_UnloadsIdleSession(t *testing.T) {
 		m, _ := newManagerRT(t, runtime.New(fakeLLM{}))
 		defer m.CloseAll()
 
-		id, first := m.Start("hi")
+		id := chat.NewID()
+		m.Submit(id, "hi")
+		first := m.Open(id)
 		synctest.Wait() // turn completes; idleSince stamped at TurnEnd
 
 		time.Sleep(pastIdleTTL) // reaper ticks every minute; crosses the TTL
@@ -316,7 +319,7 @@ func TestManager_ReloadAfterReap_AppendsNewForestGroup_NeverRewrites(t *testing.
 // pumps to drain.
 func TestManager_CloseAll_Idempotent_AndWaitsForPumps(t *testing.T) {
 	m, _ := newManagerRT(t, runtime.New(fakeLLM{}))
-	m.Start("hi")
+	m.Submit(chat.NewID(), "hi")
 	m.CloseAll()
 	m.CloseAll() // must be a no-op, not a panic on the already-closed stop channel
 }
@@ -326,7 +329,7 @@ func TestManager_CloseAll_Idempotent_AndWaitsForPumps(t *testing.T) {
 func TestManager_CloseAll_StopsReaper(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := newManagerRT(t, runtime.New(fakeLLM{}))
-		m.Start("hi")
+		m.Submit(chat.NewID(), "hi")
 		synctest.Wait()
 		m.CloseAll()
 		synctest.Wait() // reaper (and every pump) must have exited; else the bubble deadlocks
@@ -338,7 +341,8 @@ func TestManager_Delete_StopsSessionAndRemovesTranscript(t *testing.T) {
 	m, _ := newManagerRT(t, runtime.New(fakeLLM{}))
 	defer m.CloseAll()
 
-	id, _ := m.Start("hi")
+	id := chat.NewID()
+	m.Submit(id, "hi")
 	if !eventually(func() bool { msgs, _ := m.Transcript(id); return len(msgs) >= 2 }) {
 		t.Fatal("turn did not persist before Delete")
 	}
@@ -361,20 +365,22 @@ func TestManager_Delete_UnknownID_DelegatesToStore(t *testing.T) {
 	}
 }
 
-// Start mints a valid chat id and submits the first message.
-func TestManager_Start_MintsIDAndSubmits(t *testing.T) {
+// NewID mints an id Submit accepts, which is how every caller starts a chat: the id is the client's
+// to choose, and Submit is the one path that also records the in-flight input.
+func TestManager_NewIDThenSubmit_StartsAChat(t *testing.T) {
 	m, _ := newManagerRT(t, runtime.New(fakeLLM{}))
 	defer m.CloseAll()
 
-	id, sess := m.Start("hello")
+	id := chat.NewID()
 	if !chat.ValidID(id) {
-		t.Fatalf("Start minted id %q, which is not a valid chat id", id)
+		t.Fatalf("NewID minted %q, which is not a valid chat id", id)
 	}
-	if sess == nil {
-		t.Fatal("Start returned a nil session")
+	m.Submit(id, "hello")
+	if sess := m.Open(id); sess == nil {
+		t.Fatal("Open returned a nil session for a submitted chat")
 	}
 	if !eventually(func() bool { msgs, _ := m.Transcript(id); return len(msgs) >= 2 }) {
-		t.Fatal("Start did not submit the first message")
+		t.Fatal("Submit did not run the first turn")
 	}
 }
 

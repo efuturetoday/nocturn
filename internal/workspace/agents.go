@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
@@ -116,18 +117,33 @@ func (w *Workspace) agentRuntime(base agentkit.ToolSet, a agent.Agent) (*runtime
 	), nil
 }
 
-// FireAgent starts the named agent's run over task and returns the run's id. The run is a first-class
-// chat in the agent manager: it streams live, persists its transcript to the agent store, and is
-// openable by its id — a notify or reminder it sets carries provenance back to it. It is
-// fire-and-forget (the run outlives the caller on the manager's background ctx); ctx is only used to
-// reject a call once the daemon is shutting down. The run's authority comes from its agentRuntime
-// (cage + gate + autonomy-resolved approver).
+// defaultTask is what a run is triggered with when the caller names no task. An agent's WORK is its
+// instructions, which are its system prompt; the task is only the message that sets it going, and
+// most callers have nothing to add to it.
+//
+// It is not merely a nicety. An empty task becomes an empty user message, and a provider rejects
+// that outright — "400: messages.1: Invalid input" — so every run fired without one died before it
+// began, with the reason buried in an error the UI truncated.
+const defaultTask = "Run now."
+
+// FireAgent starts the named agent's run over task and returns the run's id. An empty task becomes
+// defaultTask. The run is a first-class chat in the agent manager: it streams live, persists its
+// transcript to the agent store, and is openable by its id — a notify or reminder it sets carries
+// provenance back to it. It is fire-and-forget (the run outlives the caller on the manager's
+// background ctx); ctx is only used to reject a call once the daemon is shutting down. The run's
+// authority comes from its agentRuntime (cage + gate + autonomy-resolved approver).
 func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, error) {
 	if _, ok := w.agents.Get(name); !ok {
 		return "", fmt.Errorf("workspace %q: no agent %q", w.name, name)
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	// Defaulted HERE rather than in each caller, because every path into a run goes through this one
+	// function: the terminal, the WebSocket surface and the scheduler. A guard in one of them is a
+	// guard the other two do not have.
+	if strings.TrimSpace(task) == "" {
+		task = defaultTask
 	}
 	id := chat.NewID()
 	w.log.With("component", "agent").Info("firing agent", "agent", name, "run", id)

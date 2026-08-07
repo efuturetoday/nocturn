@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -80,6 +82,7 @@ type Workspace struct {
 	vault         *secret.Vault     // this workspace's own encrypted credential vault; nil when locked
 	accounts      *MCPAuth          // MCP OAuth session orchestration; nil when the vault is locked
 	log           *slog.Logger
+	caps          capabilities // current discovery state; read by Inventory, see inventory.go
 }
 
 // Open builds (creating its directory if needed) a workspace named name rooted at dir: it assembles
@@ -246,14 +249,14 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 
 	// Discover + install plugins as top-level tools, each caged to a subset of the base tools and
 	// gated exactly like the model's own calls. Their credentials are bound host-side on the injector.
-	nPlugins, err := installPlugins(dir, base, toolset, injector, &diag)
+	pluginNames, err := installPlugins(dir, base, toolset, injector, &diag)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: plugins: %w", name, err)
 	}
 
 	// Discover + connect the remote MCP servers declared in <dir>/mcp/*.json and fold their tools in
 	// (as <server>_<tool>), each gated on the net host-allowlist like http_read/http_write (ADR-9).
-	nMCP := installMCP(dir, toolset, injector, scanner, &diag, wslog.With("component", "mcp"))
+	mcpStatus := installMCP(dir, toolset, injector, scanner, &diag, wslog.With("component", "mcp"))
 
 	// The persona is resolved ONCE: the assistant's identity must not shift mid-run. Only the facts
 	// around it are live, which is why the prompt goes in as a function rather than a string.
@@ -351,9 +354,24 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// One readiness line stating what the workspace discovered — so an operator sees the assembled
 	// stack (agents/skills/plugins/tools) at a glance instead of inferring it from behavior.
 	wslog.With("component", "workspace").Info("workspace opened",
-		"agents", len(agents), "skills", len(skillDirs), "plugins", nPlugins, "mcp", nMCP,
-		"tools", len(toolset), "skipped", diag.Len())
+		"agents", len(agents), "skills", len(skillDirs), "plugins", len(pluginNames),
+		"mcp", len(mcpStatus), "tools", len(toolset), "skipped", diag.Len())
+
+	// Record what discovery found. Inventory derives the rest on demand, so this is the only place
+	// that has to change when something starts re-discovering.
+	w.caps.set(mcpStatus, pluginNames, slices.Sorted(maps.Keys(skillDirs)))
 	return w, nil
+}
+
+// toolNames lists a toolset's tools, sorted — a map has no order, and a list that reshuffles itself
+// between two looks is unreadable.
+func toolNames(ts agentkit.ToolSet) []string {
+	out := make([]string, 0, len(ts))
+	for _, s := range ts.Specs() {
+		out = append(out, s.Name)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // OpenAll opens every workspace under root (each subdirectory is one, by name), always including a
@@ -487,20 +505,23 @@ func agentCage(base agentkit.ToolSet, a agent.Agent) (agentkit.ToolSet, error) {
 // dispatch to the base tools its manifest lists — its cage — and every action it takes is gated the
 // same way the model's own calls are. A credential value lives in the vault under the (lowercased)
 // credential name; a missing value simply means the plugin runs unauthenticated.
-func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Injector, diag *agentkit.Diagnostics) (int, error) {
+// It returns the names it installed, so the UI can name them rather than count them.
+func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Injector, diag *agentkit.Diagnostics) ([]string, error) {
 	plugins := plugin.Discover(filepath.Join(dir, "plugins"), base, diag)
+	var names []string
 	for _, p := range plugins.All() {
 		pts, err := p.Tools()
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, t := range pts {
 			n := t.Spec().Name
 			if _, dup := toolset[n]; dup {
-				return 0, fmt.Errorf("plugin %q tool %q collides with an existing tool", p.Name(), n)
+				return nil, fmt.Errorf("plugin %q tool %q collides with an existing tool", p.Name(), n)
 			}
 			toolset[n] = t
 		}
+		names = append(names, p.Name())
 		if inj != nil {
 			owner := plugin.Owner(p.Name())
 			for _, c := range p.Credentials() {
@@ -513,7 +534,7 @@ func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Inje
 			}
 		}
 	}
-	return len(plugins), nil
+	return names, nil
 }
 
 // mcpSetupTimeout bounds the startup handshake + tools/list for one MCP server.
@@ -527,13 +548,18 @@ const mcpSetupTimeout = 30 * time.Second
 // that fails to load/connect/list is logged and skipped, never bricking the workspace (like a flaky
 // plugin). Credentials are token (a bearer the operator seeded in the vault under mcp.SecretName)
 // or public; interactive credential entry and OAuth wiring are a later slice.
-func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scanner *secret.Scanner, diag *agentkit.Diagnostics, log *slog.Logger) int {
+// It reports one MCPStatus per DECLARED server, connected or not: a server that was configured and
+// did not come up is the single most useful thing this list can say, and a count cannot say it.
+func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scanner *secret.Scanner, diag *agentkit.Diagnostics, log *slog.Logger) []MCPStatus {
 	servers := mcp.Discover(filepath.Join(dir, "mcp"), diag)
-	installed := 0
+	var out []MCPStatus
 	for _, srv := range servers.All() {
+		st := MCPStatus{Name: srv.Name, URL: srv.URL, State: MCPFailed}
 		conn, err := mcp.NewConn(srv, inj, scanner)
 		if err != nil {
 			log.Warn("mcp server skipped (bad config)", "server", srv.Name, "err", err)
+			st.Note = "bad config: " + err.Error()
+			out = append(out, st)
 			continue
 		}
 		conn.SetLogger(log)
@@ -546,29 +572,35 @@ func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scan
 				// The server wants OAuth and isn't authorized yet — not a failure, an action for the
 				// operator. The daemon cannot open a browser; the interactive flow is the CLI.
 				log.Info("mcp server needs authorization", "server", srv.Name, "action", "run: nocturn auth "+srv.Name)
+				st.State, st.Note = MCPNeedsAuth, "run: nocturn auth "+srv.Name
 			} else {
 				log.Warn("mcp server skipped", "server", srv.Name, "err", err)
+				st.Note = err.Error()
 			}
+			out = append(out, st)
 			continue
 		}
 		clash := false
 		for _, t := range mtools {
 			if _, dup := toolset[t.Spec().Name]; dup {
 				log.Warn("mcp tool name collides, skipping server", "server", srv.Name, "tool", t.Spec().Name)
+				st.Note = "tool name " + t.Spec().Name + " already taken"
 				clash = true
 				break
 			}
 		}
 		if clash {
+			out = append(out, st)
 			continue
 		}
 		for _, t := range mtools {
 			toolset[t.Spec().Name] = t
 		}
-		installed++
+		st.State, st.Tools = MCPConnected, len(mtools)
+		out = append(out, st)
 		log.Debug("mcp server connected", "server", srv.Name, "tools", len(mtools))
 	}
-	return installed
+	return out
 }
 
 // connectMCP performs one server's discovery (handshake + tools/list) on the setup ctx.

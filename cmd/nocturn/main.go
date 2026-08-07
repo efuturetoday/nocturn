@@ -7,7 +7,6 @@
 package main
 
 import (
-	"bufio"
 	"cmp"
 	"context"
 	"errors"
@@ -17,7 +16,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 
 	"github.com/joho/godotenv"
 
@@ -26,17 +24,24 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/gemini"
 	"github.com/efuturetoday/nocturn/agentkit/openai"
 	"github.com/efuturetoday/nocturn/internal/auth"
-	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
 	"github.com/efuturetoday/nocturn/internal/push"
 	"github.com/efuturetoday/nocturn/internal/serve"
 	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/tools"
+	"github.com/efuturetoday/nocturn/internal/tui"
+	"github.com/efuturetoday/nocturn/internal/tui/logring"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
-const wsRoot = "./nocturn-data/workspaces"
+// dataRoot is everything nocturn persists outside a workspace: the workspaces themselves, the device
+// registry, the terminal UI's log.
+const (
+	dataRoot   = "./nocturn-data"
+	wsRoot     = dataRoot + "/workspaces"
+	devicePath = dataRoot + "/devices.json"
+)
 
 func main() {
 	_ = godotenv.Load()
@@ -58,45 +63,65 @@ func runApp(serveAddr string) int {
 		return 1
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	// One stdin reader, shared by the chat loop and the approval prompt: a turn blocks the input
-	// loop, so stdin is free while the approver asks.
-	stdin := bufio.NewReader(os.Stdin)
-
-	// Logs go to stderr (structured); the terminal UI keeps stdout. In daemon mode, stderr is the
-	// operator's window into the running backend. tint-tinted on a TTY, JSON when piped.
-	//
-	// The default level follows who is watching. Serving, that is an operator, and silence would be
-	// the wrong default for a background process. In the terminal chat it is somebody having a
-	// conversation, and on one terminal the two streams interleave: an answer ends up with a
-	// timestamp glued to it and the approval prompt scrolls away under diagnostics. So the chat is
-	// quiet unless something is wrong, and NOCTURN_LOG turns it back up.
-	defaultLevel := slog.LevelWarn
+	// The daemon dies on SIGINT. The chat does not: it clears the terminal's ISIG, so Ctrl+C arrives
+	// there as a keystroke that cancels the running TURN, and go-tui handles a real SIGINT itself by
+	// stopping its loop. Deriving the app context from the signal here would cancel every session
+	// mid-turn behind the UI's back.
+	ctx := context.Background()
 	if serveAddr != "" {
-		defaultLevel = slog.LevelInfo
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(ctx, os.Interrupt)
+		defer stop()
 	}
-	logger := newLogger(os.Stderr, defaultLevel)
+
+	// Where the diagnostics go is decided by who is watching, and the two answers share no terminal.
+	// The daemon writes to stderr, the operator's window into a running backend: tint-tinted on a
+	// TTY, JSON when piped. The terminal UI owns the screen, so its diagnostics go to a file and
+	// nothing is printed at all — which is what lets the level be INFO rather than the WARN a shared
+	// terminal used to force. NOCTURN_LOG still wins either way.
+	var logger *slog.Logger
+	var ring *logring.Ring
+	if serveAddr != "" {
+		logger = newLogger(os.Stderr, slog.LevelInfo)
+	} else {
+		f, err := logFile(dataRoot)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "nocturn: log file:", err)
+			return 1
+		}
+		// Discarded deliberately: this runs as the process leaves, the screen is already gone, and
+		// the only place a complaint could go is the file that failed to close.
+		defer func() { _ = f.Close() }()
+		ring = logring.New(2000) // what Ctrl+L shows; the file is the full record
+		logger = newLogger(f, slog.LevelInfo, ring)
+	}
 
 	llm := openai.New(baseURL, apiKey, model,
 		openai.WithEffort(agentkit.Effort(os.Getenv("OPENAI_REASONING_EFFORT"))),
 		openai.WithLogger(agentkit.SlogLogger(logger)),
 	)
 
-	// The terminal prompts inline; the daemon routes approvals out of band to a connected device via
-	// the hitl broker, and wakes a backgrounded device with a push (APNs) when none is attached.
+	// The terminal asks in a modal on the screen it owns; the daemon routes approvals out of band to
+	// a connected device via the hitl broker, and wakes a backgrounded device with a push (APNs) when
+	// none is attached. Both are gate.Approver — the runtime cannot tell them apart.
 	var approver gate.Approver
 	var broker *hitl.Broker
 	var devices *auth.Store
 	var embedder *speaker.Embedder
 	var notifier tools.Notifier
+	var ui tui.Deps
 	if serveAddr == "" {
-		approver = &terminalApprover{in: stdin}
-		notifier = printNotifier{} // proactive notify prints to the terminal
+		ui = tui.Deps{
+			Feed:     tui.NewFeed(),
+			Approver: tui.NewApprover(),
+			Ring:     ring,
+			Model:    model,
+		}
+		approver = ui.Approver
+		notifier = tui.NewNotifier(ui.Feed) // a proactive notify becomes a notice in the transcript
 	} else {
 		var err error
-		devices, err = auth.New("./nocturn-data/devices.json")
+		devices, err = auth.New(devicePath)
 		if err != nil {
 			logger.Error("device store", "err", err)
 			return 1
@@ -150,6 +175,13 @@ func runApp(serveAddr string) int {
 		Notifier: notifier, Active: active, Speaker: embedder, Embed: embedCfg, Log: logger,
 	}
 
+	// The terminal takes the screen BEFORE any of this runs — opening a workspace does vault work
+	// and MCP handshakes over the network, and a second of a live terminal nobody owns is a second
+	// of the user's keystrokes being echoed by the shell and lost.
+	if serveAddr == "" {
+		return runTUI(ctx, ui, host, model)
+	}
+
 	spaces, err := workspace.OpenAll(host, wsRoot)
 	if err != nil {
 		logger.Error("open workspaces", "err", err)
@@ -165,13 +197,36 @@ func runApp(serveAddr string) int {
 		}
 		return 0
 	}
-
-	// Terminal mode has no daemon subscriptions to race against, so start the schedulers here.
-	for _, ws := range spaces {
-		go ws.StartAgents(ctx)
-	}
-	run(ctx, spaces[workspace.DefaultWorkspace], stdin, model)
 	return 0
+}
+
+// runTUI draws the terminal chat, opening the workspaces behind the first frame. The order inside
+// the opener is load-bearing: the UI's sinks must be registered before any session can open,
+// because the chat manager snapshots its event sink when a session's pump starts — an agent firing
+// first would stream into nothing.
+func runTUI(ctx context.Context, ui tui.Deps, host workspace.Host, model string) int {
+	err := tui.Run(ctx, ui, func(ctx context.Context) (*workspace.Workspace, error) {
+		spaces, err := workspace.OpenAll(host, wsRoot)
+		if err != nil {
+			return nil, err
+		}
+		ws := spaces[workspace.DefaultWorkspace]
+		ui.Feed.Attach(ws)
+		for _, space := range spaces {
+			go space.StartAgents(ctx)
+		}
+		host.Log.Info("nocturn chat starting", "workspaces", len(spaces), "model", model)
+		return ws, nil
+	})
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, "nocturn:", err)
+	if errors.Is(err, tui.ErrNoTerminal) {
+		fmt.Fprintln(os.Stderr, "run `nocturn serve` for the daemon")
+		return 2
+	}
+	return 1
 }
 
 // liveModel builds the duplex speech model from GEMINI_*, or nil when it is not configured.
@@ -285,22 +340,6 @@ func (p *pushNotifier) Notify(ctx context.Context, n tools.Notification) error {
 	return p.sender.Send(ctx, push.Message{Title: title, Body: n.Message, Data: data}, tokens)
 }
 
-// printNotifier is the notify tool's terminal fallback: a proactive notification prints inline.
-type printNotifier struct{}
-
-func (printNotifier) Notify(_ context.Context, n tools.Notification) error {
-	label := n.Kind
-	if label == "" {
-		label = tools.NotifyKind
-	}
-	if n.Title != "" {
-		fmt.Printf("\n[%s] %s: %s\n", label, n.Title, n.Message)
-	} else {
-		fmt.Printf("\n[%s] %s\n", label, n.Message)
-	}
-	return nil
-}
-
 // pushWaker bridges the device registry and a push Sender into hitl.Pusher: it wakes every device
 // with a registered token so it can foreground and answer the pending approval over the WebSocket.
 type pushWaker struct {
@@ -323,191 +362,4 @@ func (p *pushWaker) Push(ctx context.Context, intent string) error {
 		Body:  intent,
 		Data:  map[string]string{"type": "approval"},
 	}, tokens)
-}
-
-// run is the terminal loop: the first message (or one after /new) starts a chat; /chats lists,
-// /open resumes, /quit exits. One chat is active at a time — switching closes the previous session
-// (its transcript is already persisted and reloads on resume).
-func run(ctx context.Context, ws *workspace.Workspace, stdin *bufio.Reader, model string) {
-	mgr := ws.Chats()
-	defer ws.Close() // stop both managers' reapers + close every live session on exit
-	turnDone := make(chan struct{}, 1)
-
-	// The Manager owns the live sessions and drains each one's events; the REPL just prints them
-	// (one chat active at a time). No local session ownership.
-	mgr.OnEvent(func(_ string, ev agentkit.Event) { renderEvent(ev, turnDone) })
-	// Agent runs stream from a separate manager; print them with a marker and never touch turnDone —
-	// a background run's TurnEnd must not release a user turn the REPL is waiting on.
-	ws.AgentChats().OnEvent(func(id string, ev agentkit.Event) { renderAgentEvent(id, ev) })
-	var activeID string
-
-	fmt.Printf("nocturn (model %q) — /chats · /open <id> · /new · /agents · /fire <name> <task> · /quit\n", model)
-	fmt.Print("\ntype a message to start a chat.\n")
-	for {
-		fmt.Print("\n> ")
-		line, err := stdin.ReadString('\n')
-		if err != nil {
-			return // EOF
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		switch {
-		case line == "/quit" || line == "/exit":
-			return
-		case line == "/chats":
-			listChats(mgr)
-			continue
-		case line == "/agents":
-			listAgents(ws)
-			continue
-		case strings.HasPrefix(line, "/fire "):
-			fireAgent(ctx, ws, strings.TrimPrefix(line, "/fire "))
-			continue
-		case line == "/new":
-			activeID = "" // the next message starts a fresh chat; the old one keeps living in the Manager
-			fmt.Println("new chat — type your first message.")
-			continue
-		case strings.HasPrefix(line, "/open "):
-			activeID = strings.TrimSpace(strings.TrimPrefix(line, "/open "))
-			mgr.Open(activeID) // spin/get the live session; its events print via OnEvent
-			fmt.Printf("opened %s — type to continue.\n", activeID)
-			continue
-		}
-
-		// A plain line: start a new chat, or continue the active one — id-addressed, no session owned.
-		if activeID == "" {
-			activeID, _ = mgr.Start(line)
-		} else {
-			mgr.Open(activeID).Submit(line)
-		}
-		select {
-		case <-turnDone:
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func listChats(mgr *chat.Manager) {
-	metas, err := mgr.List()
-	if err != nil {
-		fmt.Println("list:", err)
-		return
-	}
-	if len(metas) == 0 {
-		fmt.Println("(no chats yet)")
-		return
-	}
-	for _, m := range metas {
-		fmt.Printf("  %s  %-42s  %d turns  %s\n", m.ID, m.Name, m.Turns, m.Updated.Format("Jan 2 15:04"))
-	}
-}
-
-func listAgents(ws *workspace.Workspace) {
-	agents := ws.Agents()
-	if len(agents) == 0 {
-		fmt.Println("(no agents — add one at agents/<name>/agent.md)")
-		return
-	}
-	for _, a := range agents {
-		when := a.When
-		if when == "" {
-			when = "manual"
-		}
-		fmt.Printf("  %-16s tools:%v  when:%s\n", a.Name, a.Tools, when)
-	}
-}
-
-func fireAgent(ctx context.Context, ws *workspace.Workspace, rest string) {
-	name, task, _ := strings.Cut(strings.TrimSpace(rest), " ")
-	if name == "" {
-		fmt.Println("usage: /fire <name> <task>")
-		return
-	}
-	id, err := ws.FireAgent(ctx, name, strings.TrimSpace(task))
-	if err != nil {
-		fmt.Println("agent:", err)
-		return
-	}
-	fmt.Printf("fired %s → run %s (streaming below)\n", name, id)
-}
-
-// renderAgentEvent prints an agent run's streamed events with a run marker. Unlike renderEvent it
-// signals no turn-done channel: agent runs are background and must not release a user turn.
-func renderAgentEvent(id string, ev agentkit.Event) {
-	switch e := ev.(type) {
-	case agentkit.Token:
-		if e.Frame == 0 {
-			fmt.Print(e.Text)
-		}
-	case agentkit.ToolStart:
-		fmt.Printf("\n  [agent %s] → %s(%s)\n", id, e.Tool, e.Args)
-	case agentkit.TurnEnd:
-		if e.Frame == 0 {
-			fmt.Printf("\n[agent %s done]\n", id)
-		}
-	}
-}
-
-// renderEvent prints one streamed event to the terminal and signals done on the top-level TurnEnd.
-// The Manager's pump feeds it every live session's events (see OnEvent).
-func renderEvent(ev agentkit.Event, done chan<- struct{}) {
-	switch e := ev.(type) {
-	case agentkit.Token:
-		fmt.Print(e.Text)
-	case agentkit.Thinking:
-		fmt.Printf("\033[2m%s\033[0m", e.Text)
-	case agentkit.ToolStart:
-		fmt.Printf("\n  → %s(%s)\n", e.Tool, e.Args)
-	case agentkit.ToolEnd:
-		if e.Err != nil {
-			fmt.Printf("  ← %s: %v\n", e.Tool, e.Err)
-		}
-	case agentkit.TurnEnd:
-		if e.Frame != 0 {
-			return // a sub-agent turn ended; the user's turn is the top-level one
-		}
-		if e.Err != nil {
-			fmt.Printf("\n[stopped: %v]", e.Err)
-		}
-		fmt.Printf("\n[tokens: %d]\n", e.Tokens.Total)
-		select {
-		case done <- struct{}{}:
-		default:
-		}
-	}
-}
-
-// terminalApprover asks for approval on the terminal, sharing the chat's stdin reader.
-type terminalApprover struct {
-	in *bufio.Reader
-}
-
-func (t *terminalApprover) Ask(_ context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
-	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
-	fmt.Print("\n  [approve] " + a.Kind)
-	if a.Target != "" {
-		fmt.Print(" → " + a.Target)
-	}
-	fmt.Print(" ? [y=session / a=always")
-	for i, s := range suggest {
-		fmt.Printf(" / %d=always %s", i+1, s.Target)
-	}
-	fmt.Print(" / N] ")
-
-	line, _ := t.in.ReadString('\n')
-	switch choice := strings.ToLower(strings.TrimSpace(line)); choice {
-	case "y":
-		return true, exact, gate.RecallSession, nil
-	case "a":
-		return true, exact, gate.RecallAlways, nil
-	default:
-		if n, err := strconv.Atoi(choice); err == nil && n >= 1 && n <= len(suggest) {
-			return true, suggest[n-1], gate.RecallAlways, nil
-		}
-		return false, gate.Grant{}, gate.RecallNever, nil
-	}
 }

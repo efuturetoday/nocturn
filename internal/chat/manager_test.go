@@ -57,11 +57,13 @@ func TestManager_TurnSurvivesWithoutViewer_AndOpenShares(t *testing.T) {
 		}
 	})
 
-	id, sess := m.Start("hi")
+	id := chat.NewID()
+	m.Submit(id, "hi")
+	sess := m.Open(id)
 
 	// Open returns the same live session (shared) — a second open never spins a duplicate.
 	if got := m.Open(id); got != sess {
-		t.Fatal("Open must return the SAME live session as Start (shared, not duplicated)")
+		t.Fatal("Open must return the SAME live session every time (shared, not duplicated)")
 	}
 
 	// The turn completes with no one streaming it — the pump drains the session regardless.

@@ -101,21 +101,11 @@ func (m *Manager) openLocked(id string) *agentkit.Session {
 	return lv.sess
 }
 
-// Start mints a new chat id and submits its first message on a fresh live session.
-func (m *Manager) Start(text string) (string, *agentkit.Session) {
-	id := NewID()
-	m.mu.Lock()
-	sess := m.openLocked(id)
-	m.mu.Unlock()
-	m.log.Info("chat started", "chat", id)
-	m.touch(id, text)
-	sess.Submit(text)
-	return id, sess
-}
-
 // Submit sends text to chat id (opening it if needed) and records the input as the in-flight turn's
 // user message, so a client that reopens before the turn ends still sees the message and the running
-// state (the transcript only gets it at TurnEnd). This is the server path; Start is the REPL path.
+// state (the transcript only gets it at TurnEnd). Every caller mints its own id with NewID: only
+// Submit records the in-flight input, so a path that skipped it would leave a reopening client
+// looking at a running turn whose question is missing.
 func (m *Manager) Submit(id, text string) {
 	m.mu.Lock()
 	sess := m.openLocked(id)

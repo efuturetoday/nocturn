@@ -274,8 +274,8 @@ func TestInstallPlugins_BindsCredentialsUnderOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, err := installPlugins(dir, base, toolset, inj, nil); err != nil || n != 1 {
-		t.Fatalf("installPlugins = %d, %v; want 1, nil", n, err)
+	if names, err := installPlugins(dir, base, toolset, inj, nil); err != nil || len(names) != 1 {
+		t.Fatalf("installPlugins = %v, %v; want one plugin, nil", names, err)
 	}
 
 	// As the plugin owner, the credential is injected at the bound host.

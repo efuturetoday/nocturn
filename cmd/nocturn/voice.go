@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,7 +123,7 @@ func approvalExperiment(log *slog.Logger) []workspace.VoiceOption {
 		kinds[i] = strings.TrimSpace(kinds[i])
 	}
 
-	var approver gate.Approver = &terminalApprover{in: bufio.NewReader(os.Stdin)}
+	var approver gate.Approver = &stdinApprover{in: bufio.NewReader(os.Stdin)}
 	mode := os.Getenv("NOCTURN_VOICE_APPROVE")
 	if d, err := time.ParseDuration(mode); err == nil && d >= 0 {
 		approver = delayedApprover{after: d, log: log}
@@ -131,6 +132,40 @@ func approvalExperiment(log *slog.Logger) []workspace.VoiceOption {
 	}
 	log.Warn("approval experiment armed — voice sessions will ask", "kinds", kinds, "approve", mode)
 	return []workspace.VoiceOption{workspace.VoiceAsk(kinds...), workspace.VoiceApprover(approver)}
+}
+
+// stdinApprover asks for approval by printing a line and reading the answer from stdin. It belongs
+// to this harness alone: the chat is a full-screen UI that owns the terminal and asks in a modal, so
+// a prompt written straight to stdout only makes sense here, where the loopback page is the UI and
+// the terminal is otherwise idle.
+type stdinApprover struct {
+	in *bufio.Reader
+}
+
+func (s *stdinApprover) Ask(_ context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
+	fmt.Print("\n  [approve] " + a.Kind)
+	if a.Target != "" {
+		fmt.Print(" → " + a.Target)
+	}
+	fmt.Print(" ? [y=session / a=always")
+	for i, s := range suggest {
+		fmt.Printf(" / %d=always %s", i+1, s.Target)
+	}
+	fmt.Print(" / N] ")
+
+	line, _ := s.in.ReadString('\n')
+	switch choice := strings.ToLower(strings.TrimSpace(line)); choice {
+	case "y":
+		return true, exact, gate.RecallSession, nil
+	case "a":
+		return true, exact, gate.RecallAlways, nil
+	default:
+		if n, err := strconv.Atoi(choice); err == nil && n >= 1 && n <= len(suggest) {
+			return true, suggest[n-1], gate.RecallAlways, nil
+		}
+		return false, gate.Grant{}, gate.RecallNever, nil
+	}
 }
 
 // delayedApprover stands in for a human on a second device: it waits, then says yes.

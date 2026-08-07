@@ -31,6 +31,11 @@ import (
 // not gated. The matcher lives here with the tool that owns it, like FileKind's in internal/tools.
 const Kind = "memory"
 
+// IndexBudget is how many bytes of catalog reach the system prompt. Exported because it is a ceiling
+// a PERSON has to be able to see: it is enforced, not requested, so a workspace that has quietly
+// grown past it is dropping notes from every prompt with nothing on screen to say so.
+const IndexBudget = maxIndexBytes
+
 const (
 	// maxIndexBytes caps what reaches the system prompt. Deliberately tight: the index is paid for in
 	// EVERY turn, forever. Because the index is DERIVED, this ceiling is enforced rather than

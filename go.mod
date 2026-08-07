@@ -17,7 +17,6 @@ require (
 
 require (
 	github.com/miekg/dns v1.1.43 // indirect
-	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 )
 
@@ -27,6 +26,7 @@ require (
 	github.com/efuturetoday/nocturn/agentkit/gemini v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/openai v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/runtime v0.0.0
+	github.com/grindlemire/go-tui v0.18.2
 	github.com/lmittmann/tint v1.2.0
 )
 

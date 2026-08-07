@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,12 +21,12 @@ import (
 // ctx with the active chat id, so agentkit's own turn/tool/llm lines correlate without each call
 // site passing it. Redaction is by convention: log identifiers, never secret values.
 //
-// def is the level to use when NOCTURN_LOG says nothing, and it differs by what is running rather
-// than being one constant. A daemon has an operator watching stderr and should say what it is doing;
-// the terminal chat has a PERSON watching, and to them the same stream is a second program talking
-// over the one they are using — an approval prompt buried under three DBG lines is a prompt that
-// gets missed. NOCTURN_LOG always wins, so debugging either of them is unchanged.
-func newLogger(w io.Writer, def slog.Level) *slog.Logger {
+// def is the level to use when NOCTURN_LOG says nothing. NOCTURN_LOG always wins.
+//
+// also receives every record w's handler does, after ctx enrichment. The terminal UI passes its
+// in-memory ring there: it owns the screen, so its diagnostics arrive as data for a pane instead of
+// as text nobody can place. Nothing about the file or the level changes for the daemon.
+func newLogger(w io.Writer, def slog.Level, also ...slog.Handler) *slog.Logger {
 	level := def
 	switch strings.ToLower(os.Getenv("NOCTURN_LOG")) {
 	case "debug":
@@ -45,7 +46,69 @@ func newLogger(w io.Writer, def slog.Level) *slog.Logger {
 	} else {
 		base = slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})
 	}
+	if len(also) > 0 {
+		base = multiHandler{gate: base, extra: also}
+	}
 	return slog.New(ctxHandler{Handler: base, badge: badge})
+}
+
+// multiHandler fans one record out to several handlers. slog has no built-in fan-out and this is
+// the whole of it; a dependency for these few lines would not earn its place.
+//
+// gate alone decides what is enabled, so every destination sees exactly the same records: the
+// terminal UI's log pane is a window on the file, not a second, wider log with its own formatting
+// cost on lines the file drops.
+type multiHandler struct {
+	gate  slog.Handler
+	extra []slog.Handler
+}
+
+func (m multiHandler) Enabled(ctx context.Context, l slog.Level) bool {
+	return m.gate.Enabled(ctx, l)
+}
+
+// Handle delivers to every handler even if one fails, and reports the first failure — a broken log
+// file must not cost the pane its line.
+func (m multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	err := m.gate.Handle(ctx, r.Clone())
+	for _, h := range m.extra {
+		if e := h.Handle(ctx, r.Clone()); e != nil && err == nil {
+			err = e
+		}
+	}
+	return err
+}
+
+func (m multiHandler) WithAttrs(as []slog.Attr) slog.Handler {
+	out := multiHandler{gate: m.gate.WithAttrs(as), extra: make([]slog.Handler, len(m.extra))}
+	for i, h := range m.extra {
+		out.extra[i] = h.WithAttrs(as)
+	}
+	return out
+}
+
+func (m multiHandler) WithGroup(name string) slog.Handler {
+	out := multiHandler{gate: m.gate.WithGroup(name), extra: make([]slog.Handler, len(m.extra))}
+	for i, h := range m.extra {
+		out.extra[i] = h.WithGroup(name)
+	}
+	return out
+}
+
+// logFile opens the terminal UI's diagnostic log, append-only and owner-only. One generation is
+// rotated away past sizeLimit so an unattended machine cannot fill its disk with a chat log.
+func logFile(root string) (*os.File, error) {
+	const sizeLimit = 8 << 20
+	path := filepath.Join(root, "nocturn.log")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, err
+	}
+	if fi, err := os.Stat(path); err == nil && fi.Size() > sizeLimit {
+		if err := os.Rename(path, path+".1"); err != nil {
+			return nil, err
+		}
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 }
 
 // isTerminal reports whether w is a character device (a real terminal), so we colorize only when a
@@ -55,6 +118,12 @@ func isTerminal(w io.Writer) bool {
 	if !ok {
 		return false
 	}
+	return isTerminalFile(f)
+}
+
+// isTerminalFile is the same test for a file the caller already holds — stdin has no io.Writer side,
+// and the full-screen UI needs both ends to be a terminal before it takes one over.
+func isTerminalFile(f *os.File) bool {
 	fi, err := f.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
