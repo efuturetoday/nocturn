@@ -12,6 +12,11 @@ name: _build-ios
 on:
   workflow_call:
     inputs:
+      ref:
+        description: What to check out. Empty is the triggering ref; release.yml passes the tag.
+        required: false
+        default: ''
+        type: string
       check-drift:
         description: >
           Reconcile the SPM package cap sync regenerates. True for the gate; false on a tag, where
@@ -35,6 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@v5

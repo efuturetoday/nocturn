@@ -31,6 +31,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tags: ${{ steps.tags.outputs.list }}
 
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
@@ -72,3 +75,33 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -qam "chore(mobile): apply the release version to the native projects"
           git push origin "HEAD:$branch"
+
+      # The tags just cut, as a JSON list for the matrix below. Named one by one rather than derived
+      # from `paths_released`, because the per-package outputs cannot be indexed by a matrix variable
+      # — and three explicit lines are clearer than the expression that would do it. A fourth package
+      # means a fourth line here.
+      - name: Collect the tags
+        id: tags
+        env:
+          ROOT: ${{ steps.release.outputs.tag_name }}
+          MOBILE: ${{ steps.release.outputs['mobile--tag_name'] }}
+          SATELLITE: ${{ steps.release.outputs['satellite--tag_name'] }}
+        run: |
+          list=$(jq -cn --args '$ARGS.positional | map(select(. != ""))' "$ROOT" "$MOBILE" "$SATELLITE")
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          echo "tagged: $list"
+
+  # release-please tags with GITHUB_TOKEN, and GitHub starts no workflow from what that token does.
+  # So the tag push cannot trigger release.yml — it is called here instead, which is what the tool's
+  # own documentation does. One call per tag, because a single merge can release several components.
+  release:
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    strategy:
+      matrix:
+        tag: ${{ fromJSON(needs.release-please.outputs.tags) }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ matrix.tag }}

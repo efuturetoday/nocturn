@@ -10,12 +10,22 @@ name: Release
 # The binaries are the exception, and for a reason: ci.yml cross-compiles six targets to /dev/null
 # to prove they compile. Here they are built for real, with the version stamped in.
 
+# Two ways in. `workflow_call` is the one that matters: release-please tags with GITHUB_TOKEN, and
+# GitHub refuses to start workflows from what that token does — a deliberate loop guard, not a gap.
+# So release-please.yml calls this directly once it has tagged, which is what the tool's own
+# documentation does too. The tag trigger stays for tags pushed by a human.
 on:
   push:
     tags:
       - 'v*'
       - 'mobile-v*'
       - 'satellite-v*'
+  workflow_call:
+    inputs:
+      tag:
+        description: The tag to build artefacts for. Empty on a tag push, where the ref is the tag.
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -23,15 +33,20 @@ permissions:
 jobs:
   binaries:
     name: Binaries — six targets
-    if: startsWith(github.ref_name, 'v')
+    if: startsWith(inputs.tag || github.ref_name, 'v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
 
     steps:
+      # The caller runs on main, so the ref has to be named — otherwise this builds main and labels
+      # it with the tag.
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.tag || github.ref_name }}
           persist-credentials: false
 
       - uses: actions/setup-go@v6
@@ -49,13 +64,13 @@ jobs:
         env:
           CGO_ENABLED: 0
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           mkdir -p dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os="${target%/*}"; arch="${target#*/}"
             bin="nocturn"; [ "$os" = windows ] && bin="nocturn.exe"
             GOOS="$os" GOARCH="$arch" go build \
-              -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+              -ldflags "-s -w -X main.version=${TAG}" \
               -o "dist/$bin" ./cmd/nocturn
             tar -czf "dist/nocturn_${version}_${os}_${arch}.tar.gz" -C dist "$bin"
             rm -f "dist/$bin"
@@ -68,20 +83,23 @@ jobs:
       # changelog. Setting any of them would overwrite it.
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: dist/*
 
   # check-drift is off here: the same check already ran on this commit when it was pushed to main,
   # and on a tag there is no heal job to consume a patch — it would emit one into the void.
   build-web:
-    if: startsWith(github.ref_name, 'mobile-v')
+    if: startsWith(inputs.tag || github.ref_name, 'mobile-v')
     uses: ./.github/workflows/_build-web.yml
     with:
+      ref: ${{ inputs.tag || github.ref_name }}
       check-drift: false
 
   build-android:
     needs: build-web
     uses: ./.github/workflows/_build-android.yml
     with:
+      ref: ${{ inputs.tag || github.ref_name }}
       check-drift: false
 
   # iOS is not packaged, but a tag that does not compile for iOS should not be released quietly. No
@@ -90,6 +108,7 @@ jobs:
     needs: build-web
     uses: ./.github/workflows/_build-ios.yml
     with:
+      ref: ${{ inputs.tag || github.ref_name }}
       check-drift: false
 
   mobile:
@@ -99,6 +118,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
 
     steps:
       - uses: actions/download-artifact@v8
@@ -110,17 +131,20 @@ jobs:
       # page. The release notes carry the TestFlight link; iOS is distributed there.
       - name: Name it after the release
         run: |
-          version="${GITHUB_REF_NAME#mobile-v}"
+          version="${TAG#mobile-v}"
           mv apk/app-debug.apk "apk/nocturn_${version}.apk"
           ls -l apk
 
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: apk/*
 
   build-satellite:
-    if: startsWith(github.ref_name, 'satellite-v')
+    if: startsWith(inputs.tag || github.ref_name, 'satellite-v')
     uses: ./.github/workflows/_build-satellite.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
 
   satellite:
     name: Satellite — firmware images
@@ -129,6 +153,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
 
     steps:
       - uses: actions/download-artifact@v8
@@ -140,7 +166,7 @@ jobs:
       # Flattened here, where the version is known and the names can say what they are.
       - name: Name them after the release
         run: |
-          version="${GITHUB_REF_NAME#satellite-v}"
+          version="${TAG#satellite-v}"
           mkdir -p out
           mv images/factory_01.bin "out/nocturn-satellite_${version}.bin"
           mv images/merged.bin     "out/nocturn-satellite_${version}_merged.bin"
@@ -149,4 +175,5 @@ jobs:
 
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: out/*

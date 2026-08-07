@@ -6,6 +6,12 @@ name: _build-satellite
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        description: What to check out. Empty is the triggering ref; release.yml passes the tag.
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -22,6 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       # The component manager fetches esp-sr's models on a cold tree, which build.sh's own comment
