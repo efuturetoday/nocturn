@@ -28,11 +28,15 @@ import { sendOutline, stopOutline } from 'ionicons/icons';
       />
       <ion-buttons slot="end">
         @if (running()) {
-          <ion-button color="danger" (click)="cancel.emit()">
+          <ion-button color="danger" aria-label="Stop generation" (click)="cancel.emit()">
             <ion-icon slot="icon-only" name="stop-outline" />
           </ion-button>
         } @else {
-          <ion-button [disabled]="!draft().trim() || disabled()" (click)="submit()">
+          <ion-button
+            [disabled]="!draft().trim() || disabled()"
+            aria-label="Send message"
+            (click)="submit()"
+          >
             <ion-icon slot="icon-only" name="send-outline" />
           </ion-button>
         }
@@ -40,7 +44,12 @@ import { sendOutline, stopOutline } from 'ionicons/icons';
     </ion-toolbar>
   `,
   styles: `
-    .composer { --padding-start: 10px; --padding-end: 6px; --padding-top: 6px; --padding-bottom: 6px; }
+    .composer {
+      --padding-start: 10px;
+      --padding-end: 6px;
+      --padding-top: 6px;
+      --padding-bottom: 6px;
+    }
     .composer-input {
       --background: var(--ion-background-color-step-100);
       --border-radius: 20px;
