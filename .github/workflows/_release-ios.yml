@@ -107,5 +107,5 @@ jobs:
           APP_STORE_CONNECT_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
           IOS_DIST_CERT_P12: ${{ secrets.IOS_DIST_CERT_P12 }}
           IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
-          TESTFLIGHT_GROUP: Public Beta
+          TESTFLIGHT_GROUP: GitHub
         run: bundle exec fastlane beta
