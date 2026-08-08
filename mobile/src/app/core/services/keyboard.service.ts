@@ -68,7 +68,12 @@ export class KeyboardService {
     document.documentElement.style.setProperty('--kb-height', '0px');
   }
 
+  /** Guarded on `open`: keyboardDidHide arrives a beat after keyboardWillHide, and a fast
+   *  hide-then-show — tapping straight from one field into another — lands a show in between. Left
+   *  unguarded, the late DID event strips `kb-open` off a keyboard that is back up, and the composer
+   *  drops to rest while the keys are on screen. */
   private settle(): void {
+    if (this._open()) return;
     document.documentElement.classList.remove('kb-open');
   }
 

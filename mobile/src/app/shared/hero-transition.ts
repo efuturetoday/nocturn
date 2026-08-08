@@ -88,7 +88,7 @@ function cameraMove(
   enteringEl: HTMLElement,
   leavingEl: HTMLElement | undefined,
   hero: HTMLElement | undefined,
-  chat: HTMLElement,
+  chat: HTMLElement | undefined,
 ): Animation {
   const root = createAnimation(`camera-${direction}`).easing(CAMERA).duration(DURATION).addElement(enteringEl);
 
@@ -116,15 +116,24 @@ function cameraMove(
   // the whole way invisible and snaps in at the end — the animation runs perfectly and looks like no
   // animation at all.
   const parts: Animation[] = [
-    createAnimation()
-      .addElement(chat)
-      .fromTo(
-        'transform',
-        direction === 'down' ? `translateY(${throwPx}px)` : 'translateY(0)',
-        direction === 'down' ? 'translateY(0)' : `translateY(${throwPx}px)`,
-      ),
     createAnimation().addElement(enteringEl).beforeRemoveClass('ion-page-invisible'),
   ];
+
+  // Guarded like the hero below it. Ionic omits leavingEl when there is nothing to leave — a cold
+  // start straight onto a route, or a replaced history entry — and substituting the entering page
+  // for the missing one would translate the arriving hero off the bottom of the screen as if it were
+  // the chat.
+  if (chat) {
+    parts.push(
+      createAnimation()
+        .addElement(chat)
+        .fromTo(
+          'transform',
+          direction === 'down' ? `translateY(${throwPx}px)` : 'translateY(0)',
+          direction === 'down' ? 'translateY(0)' : `translateY(${throwPx}px)`,
+        ),
+    );
+  }
 
   if (hero) {
     for (const [selector, depth] of PLANES) {
@@ -151,5 +160,5 @@ export const heroToChat: AnimationBuilder = (_baseEl: HTMLElement, opts: unknown
 /** Chat → hero: the same move, reversed. The camera pans back up to the sky. */
 export const chatToHero: AnimationBuilder = (_baseEl: HTMLElement, opts: unknown): Animation => {
   const { enteringEl, leavingEl } = opts as { enteringEl: HTMLElement; leavingEl?: HTMLElement };
-  return cameraMove('up', enteringEl, leavingEl, enteringEl, leavingEl ?? enteringEl);
+  return cameraMove('up', enteringEl, leavingEl, enteringEl, leavingEl);
 };

@@ -210,8 +210,14 @@ export class ShellPage {
   private readonly nav = inject(NavController);
 
   // User chats only, newest first — agent runs have their own home under Agents.
+  //
+  // Date.parse, not a string compare. `updated` is a Go time.Time marshalled as RFC3339, which
+  // carries the daemon's offset — so a run of "+02:00" stamps sorts lexically among "+01:00" ones by
+  // their digits rather than their instants, and the order silently scrambles across a DST change.
   protected readonly chats = computed(() =>
-    [...this.chatList.chats()].filter((c) => c.source !== 'agent').sort((a, b) => b.updated.localeCompare(a.updated)),
+    [...this.chatList.chats()]
+      .filter((c) => c.source !== 'agent')
+      .sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated)),
   );
 
   constructor() {

@@ -21,13 +21,17 @@ import { ConnectionService } from '../core/services/connection.service';
     }
   `,
   styles: `
-    /* Clears the composer bar (~56px) and whatever occupies the bottom edge under it. */
+    /* Clears the composer bar (~56px) and the home indicator under it; the keyboard lift rides on
+       top as a transform. A transform rather than an animated bottom, for the same reason the
+       composer uses one: animating bottom runs layout and paint every frame, and this moves on the
+       same 250ms curve as the composer beside it. */
     .conn-pill {
       position: fixed;
       left: 50%;
-      transform: translateX(-50%);
-      bottom: calc(56px + var(--nocturn-bottom-inset, 0px));
-      transition: bottom 0.25s ease-out;
+      bottom: calc(56px + var(--ion-safe-area-bottom, 0px));
+      transform: translateX(-50%)
+        translateY(calc(-1 * max(0px, var(--kb-height, 0px) - var(--ion-safe-area-bottom, 0px))));
+      transition: transform 0.25s ease-out;
       z-index: 20;
       padding: 0.3125rem 0.875rem;
       border-radius: 999px;

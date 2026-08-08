@@ -32,9 +32,12 @@ import { heroToChat } from '../../shared/hero-transition';
       <svg lucideMenu [size]="24" />
     </ion-menu-button>
 
+    <!-- hero-page, not hero. The name hero is the composer's skin contract (see composer.ts) and is
+         applied to app-composer further down; one name on both would have this page's scoped rule
+         match the composer host too, handing it the page background through inheritance. -->
     <ion-content
       [fullscreen]="true"
-      class="hero"
+      class="hero-page"
     >
       <div class="galaxy" aria-hidden="true">
         <div class="plate"></div>
@@ -86,7 +89,7 @@ import { heroToChat } from '../../shared/hero-transition';
     }
 
     /* The page is a single screenful by definition; nothing here scrolls. */
-    .hero { --background: var(--ion-background-color); --overflow: hidden; }
+    .hero-page { --background: var(--ion-background-color); --overflow: hidden; }
 
     .stage {
       position: relative;

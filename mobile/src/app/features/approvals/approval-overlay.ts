@@ -233,13 +233,20 @@ export class ApprovalOverlayComponent implements OnDestroy {
   protected readonly deny = DENY_OPTION;
 
   constructor() {
-    // An arriving ask puts the keyboard away. The sheet is fixed to the bottom of the screen, so an
+    // An ARRIVING ask puts the keyboard away. The sheet is fixed to the bottom of the screen, so an
     // open keyboard covers it outright — and the composer, which follows the keyboard up, would be
     // sitting on top of the one thing that has to be answered. Dismissing is safe in a way that
     // answering never is: it costs the user a tap to resume typing and cannot decide anything.
+    //
+    // Only on the empty→non-empty edge. The list also changes when a second ask joins the queue or
+    // one of several resolves, and re-dismissing then would fight a keyboard the user had
+    // deliberately brought back up to type in another chat behind the sheet.
+    let hadPending = false;
     effect(() => {
-      if (this.approval.pending().length === 0) return;
-      untracked(() => this.keyboard.dismiss());
+      const pending = this.approval.pending().length > 0;
+      const arrived = pending && !hadPending;
+      hadPending = pending;
+      if (arrived) untracked(() => this.keyboard.dismiss());
     });
   }
 

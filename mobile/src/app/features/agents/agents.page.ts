@@ -73,7 +73,11 @@ export class AgentsPage {
 
   protected readonly agents = this.agentsSvc.agents;
   protected readonly runs = computed(() =>
-    [...this.chatList.chats()].filter((c) => c.source === 'agent').sort((a, b) => b.updated.localeCompare(a.updated)),
+    // Date.parse, not a string compare — see the same note in shell.page.ts: `updated` is RFC3339
+    // with an offset, so lexical order is not chronological order.
+    [...this.chatList.chats()]
+      .filter((c) => c.source === 'agent')
+      .sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated)),
   );
 
   /** Trigger a run now (fire-and-forget); it surfaces under Runs when it starts. */

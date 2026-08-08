@@ -74,14 +74,16 @@ ion-list.list-inset ion-list-header ion-label {
 /* Roomier rows: Ionic's 44px ios default packs a two-line row (name + sub) tight. Give items more
    breathing, and drop the LAST row's hairline so a card never ends on a divider Ionic's own
    last-child removal misses.
-   The child combinators are load-bearing. A swipeable row is an ion-item wrapped in an
-   ion-item-sliding, which makes it the only ion-item among ITS siblings — so a descendant
-   `ion-item:last-of-type` matches every row in the list and silently erases all the dividers. */
+   Two things about the selector are load-bearing. The child combinators: a swipeable row is an
+   ion-item wrapped in an ion-item-sliding, which makes it the only ion-item among ITS siblings, so a
+   DESCENDANT rule matches every row in the list and erases all the dividers. And :last-child rather
+   than :last-of-type: a list may mix plain rows with swipeable ones, and :last-of-type would pick
+   the last of EACH kind — two rows losing their divider, neither necessarily the last one. */
 ion-list.list-inset ion-item {
   --min-height: 3.5rem;
 }
-ion-list.list-inset > ion-item:last-of-type,
-ion-list.list-inset > ion-item-sliding:last-of-type > ion-item {
+ion-list.list-inset > ion-item:last-child,
+ion-list.list-inset > ion-item-sliding:last-child > ion-item {
   --inner-border-width: 0;
 }
 
