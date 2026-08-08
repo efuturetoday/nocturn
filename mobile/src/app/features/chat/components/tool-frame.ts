@@ -1,7 +1,6 @@
 import { Component, ChangeDetectionStrategy, input, inject, computed, signal, effect } from '@angular/core';
-import { IonIcon, IonAccordion, IonAccordionGroup, IonItem } from '@ionic/angular/standalone';
-import { addIcons } from 'ionicons';
-import { checkmarkCircle, alertCircle, ellipsisHorizontalCircle } from 'ionicons/icons';
+import { IonAccordion, IonAccordionGroup, IonItem } from '@ionic/angular/standalone';
+import { LucideCircleCheck, LucideCircleAlert, LucideCircleEllipsis } from '@lucide/angular';
 import { ConversationService } from '../../../core/services/conversation.service';
 import { ApprovalService } from '../../../core/services/approval.service';
 import type { ToolView } from '../../../core/services/chat-view';
@@ -17,13 +16,22 @@ import { highlightCode } from '../../../shared/highlight';
 @Component({
   selector: 'app-tool-frame',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [IonIcon, IonAccordion, IonAccordionGroup, IonItem],
+  imports: [
+    IonAccordion, IonAccordionGroup, IonItem,
+    LucideCircleCheck, LucideCircleAlert, LucideCircleEllipsis,
+  ],
   host: { class: 'tool-frame' },
   template: `
     <ion-accordion-group (ionChange)="onToggle($event)">
       <ion-accordion [value]="tool().key">
         <ion-item slot="header" lines="none" class="head">
-          <ion-icon [name]="icon()" [color]="color()" slot="start" aria-hidden="true" />
+          <!-- One directive per state rather than a dynamic name: the icon is IMPORTED, so there is
+               no registry to look a string up in. @switch is what makes that a compile-time choice. -->
+          @switch (state()) {
+            @case ('err') { <svg lucideCircleAlert slot="start" [size]="16" class="st err" /> }
+            @case ('running') { <svg lucideCircleEllipsis slot="start" [size]="16" class="st run" /> }
+            @default { <svg lucideCircleCheck slot="start" [size]="16" class="st ok" /> }
+          }
           <div class="head-main">
             <span class="tool-name">{{ tool().tool }}</span>
             @if (argsPreview()) {
@@ -69,7 +77,10 @@ import { highlightCode } from '../../../shared/highlight';
       --padding-start: 0; --inner-padding-end: 0.25rem; --padding-top: 0; --padding-bottom: 0;
       font-size: 0.8rem;
     }
-    .head ion-icon { margin-inline-end: 0.375rem; font-size: 1rem; }
+    .head > svg.st { margin-inline-end: 0.375rem; }
+    .head > svg.st.ok { color: var(--ion-color-success); }
+    .head > svg.st.err { color: var(--ion-color-danger); }
+    .head > svg.st.run { color: var(--ion-color-medium); }
     .head-main { display: flex; align-items: center; gap: 0.375rem; min-width: 0; overflow: hidden; }
     .tool-name { font-family: var(--ion-font-family-monospace, monospace); flex-shrink: 0; }
     .args {
@@ -124,15 +135,11 @@ export class ToolFrameComponent {
   protected readonly inputHtml = signal('');
   protected readonly outputHtml = signal('');
 
-  protected readonly icon = computed(() => {
+  /** Which of the three outcome icons to draw. One value, so the template picks a directive. */
+  protected readonly state = computed<'err' | 'running' | 'done'>(() => {
     const t = this.tool();
-    if (t.err) return 'alert-circle';
-    return t.running ? 'ellipsis-horizontal-circle' : 'checkmark-circle';
-  });
-  protected readonly color = computed(() => {
-    const t = this.tool();
-    if (t.err) return 'danger';
-    return t.running ? 'medium' : 'success';
+    if (t.err) return 'err';
+    return t.running ? 'running' : 'done';
   });
 
   protected readonly durationLabel = computed(() => {
@@ -174,7 +181,6 @@ export class ToolFrameComponent {
   });
 
   constructor() {
-    addIcons({ checkmarkCircle, alertCircle, ellipsisHorizontalCircle });
 
     // Live timer while actually executing — frozen while this branch is parked on an approval (frozen()).
     effect((onCleanup) => {

@@ -1,9 +1,8 @@
 import { Component, ChangeDetectionStrategy, input, inject, computed, signal } from '@angular/core';
 import {
-  IonNote, IonSpinner, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent, IonIcon,
+  IonNote, IonSpinner, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,
 } from '@ionic/angular/standalone';
-import { addIcons } from 'ionicons';
-import { construct, chevronForward, closeOutline } from 'ionicons/icons';
+import { LucideWrench, LucideChevronRight, LucideX } from '@lucide/angular';
 import { ToolFrameComponent } from './tool-frame';
 import { MarkdownComponent } from '../../../shared/markdown';
 import { ApprovalService } from '../../../core/services/approval.service';
@@ -14,8 +13,8 @@ import type { ChatMessageView } from '../../../core/services/chat-view';
   selector: 'app-message-bubble',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    IonNote, IonSpinner, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent, IonIcon,
-    ToolFrameComponent, MarkdownComponent,
+    IonNote, IonSpinner, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,
+    ToolFrameComponent, MarkdownComponent, LucideWrench, LucideChevronRight, LucideX,
   ],
   host: {
     class: 'message-bubble',
@@ -34,13 +33,13 @@ import type { ChatMessageView } from '../../../core/services/chat-view';
         @if (anyRunning()) {
           <ion-spinner name="dots" />
         } @else {
-          <ion-icon name="construct" aria-hidden="true" />
+          <svg lucideWrench [size]="16" />
         }
         <span class="summary">{{ toolSummary() }}</span>
         @if (anyWaiting()) {
           <span class="wait">needs approval</span>
         }
-        <ion-icon class="chev" name="chevron-forward" aria-hidden="true" />
+        <svg lucideChevronRight class="chev" [size]="16" />
       </button>
 
       <ion-modal [isOpen]="open()" (didDismiss)="open.set(false)">
@@ -50,7 +49,7 @@ import type { ChatMessageView } from '../../../core/services/chat-view';
               <ion-title>Tools</ion-title>
               <ion-buttons slot="end">
                 <ion-button (click)="open.set(false)" aria-label="Close">
-                  <ion-icon slot="icon-only" name="close-outline" />
+                  <svg lucideX [size]="22" />
                 </ion-button>
               </ion-buttons>
             </ion-toolbar>
@@ -111,7 +110,7 @@ import type { ChatMessageView } from '../../../core/services/chat-view';
       background: var(--ion-background-color-step-150); border: 0; border-radius: 0.625rem;
       color: inherit; text-align: left; cursor: pointer; font-size: 0.8rem; min-height: 2.25rem;
     }
-    .tools-trigger ion-icon { font-size: 1rem; color: var(--ion-color-medium); flex-shrink: 0; }
+    .tools-trigger > svg { color: var(--ion-color-medium); }
     .tools-trigger ion-spinner { width: 1rem; height: 1rem; flex-shrink: 0; }
     .tools-trigger .summary {
       flex: 1; min-width: 0; font-family: var(--ion-font-family-monospace, monospace);
@@ -145,6 +144,5 @@ export class MessageBubbleComponent {
   });
 
   constructor() {
-    addIcons({ construct, chevronForward, closeOutline });
   }
 }

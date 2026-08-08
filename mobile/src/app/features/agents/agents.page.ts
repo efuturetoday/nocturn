@@ -1,10 +1,9 @@
 import { Component, ChangeDetectionStrategy, inject, computed } from '@angular/core';
 import { Router } from '@angular/router';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonIcon, IonNote, IonBadge, IonButton,
+  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonBadge, IonButton,
 } from '@ionic/angular/standalone';
-import { addIcons } from 'ionicons';
-import { playOutline } from 'ionicons/icons';
+import { LucidePlay } from '@lucide/angular';
 import { AgentService } from '../../core/services/agent.service';
 import { ChatListService } from '../../core/services/chat-list.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
@@ -22,8 +21,8 @@ import type { AgentInfo, ChatMeta } from '../../core/protocol/nocturn-protocol';
   selector: 'app-agents',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    WorkspaceHeaderComponent, ChatRowComponent,
-    IonContent, IonList, IonListHeader, IonItem, IonLabel, IonIcon, IonNote, IonBadge, IonButton,
+    WorkspaceHeaderComponent, ChatRowComponent, LucidePlay,
+    IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonBadge, IonButton,
   ],
   template: `
     <app-workspace-header />
@@ -42,7 +41,7 @@ import type { AgentInfo, ChatMeta } from '../../core/protocol/nocturn-protocol';
               </ion-note>
             </ion-label>
             <ion-button slot="end" fill="clear" (click)="fire(a)" [attr.aria-label]="'Run ' + a.name">
-              <ion-icon slot="icon-only" name="play-outline" />
+              <svg lucidePlay [size]="20" />
             </ion-button>
           </ion-item>
         } @empty {
@@ -74,12 +73,12 @@ export class AgentsPage {
 
   protected readonly agents = this.agentsSvc.agents;
   protected readonly runs = computed(() =>
-    [...this.chatList.chats()].filter((c) => c.source === 'agent').sort((a, b) => b.updated.localeCompare(a.updated)),
+    // Date.parse, not a string compare — see the same note in shell.page.ts: `updated` is RFC3339
+    // with an offset, so lexical order is not chronological order.
+    [...this.chatList.chats()]
+      .filter((c) => c.source === 'agent')
+      .sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated)),
   );
-
-  constructor() {
-    addIcons({ playOutline });
-  }
 
   /** Trigger a run now (fire-and-forget); it surfaces under Runs when it starts. */
   protected fire(a: AgentInfo): void {
@@ -88,6 +87,6 @@ export class AgentsPage {
 
   protected openRun(r: ChatMeta): void {
     (document.activeElement as HTMLElement | null)?.blur();
-    void this.router.navigate(['/agents', 'run', r.id]); // ChatPage opens it (kind "agent") from the route
+    void this.router.navigate(['/app/agents', 'run', r.id]); // ChatPage opens it (kind "agent") from the route
   }
 }
