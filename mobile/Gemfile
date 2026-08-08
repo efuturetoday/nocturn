@@ -1,0 +1,9 @@
+# fastlane is a build-time tool, not a dependency of the app — it never ships in an artefact, the same
+# way `go-tui/cmd/tui` generates the .gsx templates without appearing in go.mod. It runs in exactly
+# one place: .github/workflows/_release-ios.yml, on the macOS runner where Ruby is preinstalled.
+#
+# Pinned exactly. A release that signs and submits to Apple should not change behaviour because a
+# minor version shipped overnight; Gemfile.lock pins what hangs below it.
+source "https://rubygems.org"
+
+gem "fastlane", "2.237.0"

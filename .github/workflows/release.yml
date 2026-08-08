@@ -104,14 +104,16 @@ jobs:
       ref: ${{ inputs.tag || github.ref_name }}
       check-drift: false
 
-  # iOS is not packaged, but a tag that does not compile for iOS should not be released quietly. No
-  # macOS cost on the other tags — this gates only on mobile-v*.
+  # iOS goes to TestFlight rather than into the release's assets — Apple has no sideloading, so there
+  # is no file to attach. The archive is signed here, which proves more than the unsigned compile the
+  # gate runs. `secrets: inherit` is what carries the Apple credentials down; without it the lane
+  # fails on the first ENV.fetch.
   ios:
     needs: web
-    uses: ./.github/workflows/_build-ios.yml
+    uses: ./.github/workflows/_release-ios.yml
+    secrets: inherit
     with:
       ref: ${{ inputs.tag || github.ref_name }}
-      check-drift: false
 
   # The packaging jobs carry a `package-` prefix so the ids above can be the plain domain names the
   # gates use — a check reads the same in ci-mobile.yml and here.
@@ -132,7 +134,8 @@ jobs:
           path: apk
 
       # Named after the release rather than left as app-debug.apk, which says nothing on a download
-      # page. The release notes carry the TestFlight link; iOS is distributed there.
+      # page. Android is the only half with a file to download; the iOS one went to TestFlight, and
+      # the release notes carry the link.
       - name: Name it after the release
         run: |
           version="${TAG#mobile-v}"

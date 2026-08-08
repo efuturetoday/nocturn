@@ -47,11 +47,17 @@ jobs:
       # the two native projects, and ci-mobile.yml fails when they disagree — so the release pull
       # request would be red on arrival. Doing it here keeps ONE writer for the native projects.
       #
+      # The build number is settled here too, and for the same reason it is settled at all: nothing
+      # else knows a release is happening. release-please only touches `version`, so config.buildNumber
+      # sat at 1 for every release ever — which Android reads as "not newer" and refuses to install
+      # over what a tester already has. tools/build-number.mjs derives it from the version, so the
+      # number that ships is in the tag rather than computed somewhere at upload time.
+      #
       # separate-pull-requests means one pull request per component, and the action's per-path
       # outputs cover releases only — `pr` is merely the first of them. So the mobile one is found by
       # its branch name, which release-please builds as
       # `release-please--branches--<target>--components--<component>`.
-      - name: Apply the mobile version to the native projects
+      - name: Apply the mobile version and build number to the native projects
         if: steps.release.outputs.prs_created == 'true'
         env:
           PRS: ${{ steps.release.outputs.prs }}
@@ -66,9 +72,10 @@ jobs:
           git checkout "$branch"
           cd mobile
           npm ci --ignore-scripts
+          npm pkg set config.buildNumber="$(node tools/build-number.mjs)"
           npm run cap:config
           cd ..
-          if git diff --quiet -- mobile/android mobile/ios; then
+          if git diff --quiet -- mobile/package.json mobile/android mobile/ios; then
             echo "The native projects already match package.json."
             exit 0
           fi
@@ -104,5 +111,9 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/release.yml
+    # The mobile tag signs and ships to TestFlight two levels down, in _release-ios.yml. Secrets do
+    # not cross a workflow_call boundary on their own, and there are two of them between here and
+    # there — so `inherit` is needed at BOTH call sites or the Apple credentials arrive empty.
+    secrets: inherit
     with:
       tag: ${{ matrix.tag }}

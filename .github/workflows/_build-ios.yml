@@ -5,9 +5,13 @@ name: _build-ios
 # Mac otherwise.
 #
 # Signing off is what makes it possible with no certificate and no Apple account — and what limits
-# it: entitlements still pass, and the .app installs nowhere. iOS ships through TestFlight.
+# it: entitlements still pass, and the .app installs nowhere. That limit is deliberate here. This is
+# the pull request gate, and a fork's pull request gets no secrets; a gate that needed them would be
+# a gate that never ran on a contribution. Releases sign for real in _release-ios.yml.
 #
-# macOS bills at ten times the Linux rate, hence: bundle from _build-web, sync, compile, nothing else.
+# The macOS runner is the slowest and scarcest one here — and the one that bills at ten times the
+# Linux rate the day this repository stops being public. Hence: bundle from _build-web, sync,
+# compile, nothing else.
 
 on:
   workflow_call:

@@ -39,6 +39,15 @@ testem.log
 /typings
 __screenshots__/
 
+# Release. The .env holds the App Store Connect key for a local `fastlane beta`; the rest is what a
+# run leaves behind — the archive, the signed ipa, and the profile sigh downloads every time.
+/build
+/fastlane/.env*
+/fastlane/README.md
+/fastlane/report.xml
+*.ipa
+*.mobileprovision
+
 # System files
 .DS_Store
 Thumbs.db

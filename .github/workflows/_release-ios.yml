@@ -1,0 +1,111 @@
+name: _release-ios
+
+# The iOS half of a `mobile-v*` release: archive signed, upload to TestFlight, and hand the build to
+# the external group behind the public link with "What to Test" taken from mobile/CHANGELOG.md.
+#
+# This is _build-ios.yml with a certificate. That job stays as it is and stays the pull request gate,
+# where signing must be impossible: a fork's pull request gets no secrets, and a gate that needed them
+# would be a gate that never ran on a contribution.
+#
+# Everything up to `cap sync` is the same trade _build-ios.yml makes — the web bundle arrives as an
+# artefact from _build-web.yml instead of being rebuilt here, because Angular has no business
+# compiling on a macOS runner.
+#
+# Nothing here decides a number. The version and the build number were settled in the release pull
+# request and are in the tag; this job archives what it checks out. The drift check is off on a tag
+# for the usual reason — no heal job exists to take the patch.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: What to check out. release.yml passes the tag.
+        required: false
+        default: ''
+        type: string
+    secrets:
+      APP_STORE_CONNECT_KEY_ID:
+        description: The App Store Connect API key's Key ID.
+        required: true
+      APP_STORE_CONNECT_ISSUER_ID:
+        description: The issuer the key belongs to.
+        required: true
+      APP_STORE_CONNECT_KEY_P8:
+        description: >
+          The .p8 private key, base64. Needs the App Manager role — with Developer, sigh may not
+          create a profile and pilot may not submit to Beta App Review.
+        required: true
+      IOS_DIST_CERT_P12:
+        description: The Apple Distribution certificate and its private key as a .p12, base64.
+        required: true
+      IOS_DIST_CERT_PASSWORD:
+        description: The password the .p12 was exported with.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    name: iOS
+    runs-on: macos-15
+    # The archive is minutes; waiting out App Store Connect's processing so the changelog and the
+    # group can be attached is the long half, and it is not ours to hurry.
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      # 4.0 is what Gemfile.lock was resolved against. The runner's preinstalled Ruby drifts with the
+      # image; the lockfile does not.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+          bundler-cache: true
+          working-directory: mobile
+
+      # For cap sync and the release-notes script. The bundle itself arrives below.
+      - run: npm ci --ignore-scripts
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: mobile-bundle
+          path: mobile/dist
+
+      - name: Sync the bundle into the project
+        run: npx cap sync ios
+
+      # Same reasoning as _build-ios.yml: derived here rather than trusted from the checkout, which on
+      # a drifted main carries the wrong number. On a tag it should already agree — this is what makes
+      # sure of it.
+      - name: Derive the version from package.json
+        run: npm run cap:config
+
+      - name: Resolve the Swift packages
+        working-directory: mobile/ios/App
+        run: xcodebuild -project App.xcodeproj -resolvePackageDependencies
+
+      # The group name is not a secret and belongs in the open, where a rename is a reviewable diff.
+      # It has to match App Store Connect letter for letter: a typo creates a SECOND group instead of
+      # failing, and the testers behind the public link would never see the build.
+      - name: Archive, upload and submit
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+          IOS_DIST_CERT_P12: ${{ secrets.IOS_DIST_CERT_P12 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          TESTFLIGHT_GROUP: Public Beta
+        run: bundle exec fastlane beta

@@ -1,0 +1,110 @@
+# The iOS half of a `mobile-v*` release: archive signed, upload, and hand TestFlight the changelog.
+#
+# fastlane is here for what happens AFTER the archive, not for the signing. Importing a certificate is
+# ten lines of `security`; waiting out App Store Connect's build processing, writing "What to Test",
+# attaching the build to an external group and submitting it to Beta App Review is a REST dance with a
+# self-signed ES256 token. `upload_to_testflight` is that dance.
+#
+# Deliberately no `match`: it wants a second private repository for encrypted certificates, which buys
+# nothing for one maintainer. The distribution certificate is a secret; the provisioning profile is
+# fetched fresh on every run from the same API key, so it rotates itself.
+
+require "base64"
+require "json"
+require "shellwords"
+require "tmpdir"
+
+# mobile/ — the Fastfile lives in mobile/fastlane, and fastlane's `sh` runs in that subdirectory
+# rather than here, so every path below is anchored explicitly instead of hoping for a CWD.
+ROOT = File.expand_path("..", __dir__)
+
+# The same string as PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*] on the Release configuration in
+# ios/App/App.xcodeproj/project.pbxproj. sigh creates the profile under this name on the first run and
+# downloads it on every one after; if the two ever disagree, xcodebuild fails at the export step with
+# a profile-not-found rather than signing with something unintended.
+PROFILE = "Nocturn App Store"
+
+default_platform(:ios)
+
+platform :ios do
+  desc "Archive, upload to TestFlight, and submit to the public beta group"
+  lane :beta do
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("APP_STORE_CONNECT_KEY_ID"),
+      issuer_id: ENV.fetch("APP_STORE_CONNECT_ISSUER_ID"),
+      key_content: ENV.fetch("APP_STORE_CONNECT_KEY_P8"),
+      is_key_content_base64: true,
+    )
+
+    package = JSON.parse(File.read(File.join(ROOT, "package.json")))
+    version = package["version"]
+    UI.message("#{version} (#{package.dig("config", "buildNumber")})")
+
+    # Neither number is decided here. Both were settled in the release pull request and are in the
+    # tag — release-please writes the version, tools/build-number.mjs the build number, trapeze
+    # carries both into the native projects. A lane that asked TestFlight for the next build number
+    # would be a second source for something git already records, and would leave Android's
+    # versionCode — which has no store to ask — behind.
+
+    # Fails the lane when the section is missing, which is the point — a build reaching external
+    # testers with empty release notes is worse than one that does not reach them.
+    notes = sh(
+      "cd #{ROOT.shellescape} && node tools/release-notes.mjs #{version.shellescape}",
+      log: false,
+    ).strip
+
+    certificate = nil
+    begin
+      # Only on CI. A developer's Mac already holds the distribution certificate, and importing the
+      # .p12 there would quietly add a second copy to the login keychain.
+      if is_ci
+        setup_ci
+        certificate = File.join(Dir.tmpdir, "nocturn-distribution.p12")
+        File.binwrite(certificate, Base64.decode64(ENV.fetch("IOS_DIST_CERT_P12")))
+        import_certificate(
+          certificate_path: certificate,
+          certificate_password: ENV.fetch("IOS_DIST_CERT_PASSWORD"),
+          keychain_name: "fastlane_tmp_keychain",
+          keychain_password: "",
+        )
+      end
+
+      # No adhoc/development flag, so this is the App Store profile. readonly: false lets it be
+      # created the first time; afterwards the same name is downloaded.
+      get_provisioning_profile(
+        api_key: api_key,
+        provisioning_name: PROFILE,
+        readonly: false,
+      )
+
+      # -scheme, not -target: the Capacitor plugins are Swift Package products and hang off the
+      # SCHEME, so a target build loses every one of their modules. Same reasoning as _build-ios.yml.
+      build_app(
+        project: "ios/App/App.xcodeproj",
+        scheme: "App",
+        configuration: "Release",
+        export_method: "app-store",
+        output_directory: File.join(ROOT, "build"),
+        export_options: {
+          signingStyle: "manual",
+          provisioningProfiles: {
+            CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier) => PROFILE,
+          },
+        },
+      )
+
+      # distribute_external requires groups, and the group name has to match App Store Connect letter
+      # for letter — a typo creates a SECOND group rather than failing, and the testers behind the
+      # public link never see the build.
+      upload_to_testflight(
+        api_key: api_key,
+        changelog: notes,
+        distribute_external: true,
+        groups: [ENV.fetch("TESTFLIGHT_GROUP")],
+        notify_external_testers: true,
+      )
+    ensure
+      File.delete(certificate) if certificate && File.exist?(certificate)
+    end
+  end
+end

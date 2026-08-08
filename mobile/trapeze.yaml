@@ -1,7 +1,12 @@
 # The version and build number live in package.json — `version` and `config.buildNumber` — and are
-# written from here into both platforms, so a release is one edit:
+# written from here into both platforms, so a change is one edit:
 #
-#     npm pkg set config.buildNumber=2 && npm run cap:config
+#     npm pkg set config.buildNumber=20001 && npm run cap:config
+#
+# On a release neither is typed: release-please writes `version` and release-please.yml derives
+# `config.buildNumber` from it with tools/build-number.mjs, then runs the line above on the release
+# pull request. So the numbers that ship are in the tag, and this stays the only thing that writes
+# them into android/ and ios/. Nothing downstream recomputes them — fastlane archives what it finds.
 #
 # `config` because npm exports `npm_package_config_*` to scripts while a custom top-level field is
 # not exported at all. That keeps cap:config a line of environment assignments rather than a

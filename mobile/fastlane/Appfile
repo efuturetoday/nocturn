@@ -1,0 +1,4 @@
+# The two identifiers every action here needs. Neither is a secret: both already stand in the open in
+# ios/App/App.xcodeproj/project.pbxproj (PRODUCT_BUNDLE_IDENTIFIER and DEVELOPMENT_TEAM).
+app_identifier "me.itexpert.nocturn"
+team_id "D6N7CJ46UW"
