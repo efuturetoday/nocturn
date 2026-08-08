@@ -26,7 +26,7 @@ on:
 # call site.
 jobs:
   heal:
-    name: Heal what drifted
+    name: Heal
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

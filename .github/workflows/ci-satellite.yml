@@ -26,5 +26,5 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  satellite:
     uses: ./.github/workflows/_build-satellite.yml

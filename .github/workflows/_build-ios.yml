@@ -29,8 +29,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: iOS — compiles unsigned
+  ios:
+    name: iOS
     runs-on: macos-15
     timeout-minutes: 30
     defaults:
@@ -86,7 +86,7 @@ jobs:
       # the repository — Xcode synthesises one, which `xcodebuild -list` confirms.
       #
       # The CODE_SIGN settings are what let this run with no certificate at all.
-      - name: Build unsigned
+      - name: Build the app unsigned
         working-directory: mobile/ios/App
         run: |
           xcodebuild \

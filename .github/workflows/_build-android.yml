@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   android:
-    name: Android — assemble
+    name: Android
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -93,7 +93,7 @@ jobs:
       # Debug-signed, and that is not an oversight: assembleRelease without a signing config produces
       # an APK Android refuses to install at all, which is worse than one it installs with a warning.
       # A keystore secret and a signingConfig in build.gradle turn this into assembleRelease.
-      - name: Assemble
+      - name: Assemble the debug APK
         working-directory: mobile/android
         run: ./gradlew assembleDebug --no-daemon
 

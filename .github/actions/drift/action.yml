@@ -6,7 +6,7 @@ description: Fail on a pull request when a generated file is stale; hand the fix
 #
 # The split exists because the jobs that regenerate run build scripts, generators and test suites —
 # on a pull request, the author's code. They must not hold a token that can push while they do. So
-# detection never writes, and healing (.github/workflows/heal.yml) never runs project code.
+# detection never writes, and healing (.github/workflows/_heal.yml) never runs project code.
 inputs:
   paths:
     description: Space-separated pathspecs to reconcile, relative to working-directory.

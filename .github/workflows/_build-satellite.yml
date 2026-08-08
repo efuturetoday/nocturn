@@ -17,8 +17,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Firmware — compiles
+  satellite:
+    name: Firmware
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container: espressif/idf:v5.5
@@ -60,7 +60,7 @@ jobs:
 
       # Where the flash went. The partition table gives the factory image 3 MB and there is no OTA
       # slot, so an image that outgrows it is not a warning — it is a board that cannot be flashed.
-      - name: Size
+      - name: Report the flash size
         working-directory: satellite
         run: |
           . "$IDF_PATH/export.sh"

@@ -23,7 +23,9 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: The tag to build artefacts for. Empty on a tag push, where the ref is the tag.
+        description: >
+          The tag to build artefacts for. Only set on a `workflow_call`; a tag push has no inputs at
+          all and every expression below falls back to `github.ref_name`.
         required: true
         type: string
 
@@ -32,7 +34,7 @@ permissions:
 
 jobs:
   binaries:
-    name: Binaries — six targets
+    name: Binaries
     if: startsWith(inputs.tag || github.ref_name, 'v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -88,15 +90,15 @@ jobs:
 
   # check-drift is off here: the same check already ran on this commit when it was pushed to main,
   # and on a tag there is no heal job to consume a patch — it would emit one into the void.
-  build-web:
+  web:
     if: startsWith(inputs.tag || github.ref_name, 'mobile-v')
     uses: ./.github/workflows/_build-web.yml
     with:
       ref: ${{ inputs.tag || github.ref_name }}
       check-drift: false
 
-  build-android:
-    needs: build-web
+  android:
+    needs: web
     uses: ./.github/workflows/_build-android.yml
     with:
       ref: ${{ inputs.tag || github.ref_name }}
@@ -104,16 +106,18 @@ jobs:
 
   # iOS is not packaged, but a tag that does not compile for iOS should not be released quietly. No
   # macOS cost on the other tags — this gates only on mobile-v*.
-  build-ios:
-    needs: build-web
+  ios:
+    needs: web
     uses: ./.github/workflows/_build-ios.yml
     with:
       ref: ${{ inputs.tag || github.ref_name }}
       check-drift: false
 
-  mobile:
-    name: Mobile — Android package
-    needs: [build-android, build-ios]
+  # The packaging jobs carry a `package-` prefix so the ids above can be the plain domain names the
+  # gates use — a check reads the same in ci-mobile.yml and here.
+  package-mobile:
+    name: APK Release
+    needs: [android, ios]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -140,15 +144,15 @@ jobs:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: apk/*
 
-  build-satellite:
+  satellite:
     if: startsWith(inputs.tag || github.ref_name, 'satellite-v')
     uses: ./.github/workflows/_build-satellite.yml
     with:
       ref: ${{ inputs.tag || github.ref_name }}
 
-  satellite:
-    name: Satellite — firmware images
-    needs: build-satellite
+  package-satellite:
+    name: Firmware Release
+    needs: satellite
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

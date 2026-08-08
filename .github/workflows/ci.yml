@@ -57,7 +57,7 @@ jobs:
   # reviewable C. The commit is heal's, not this job's — build.sh runs code from the checkout, so
   # there must be no credential here for it to find.
   guest:
-    name: Interpreter guest — rebuilt from source
+    name: QJS WASM Build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -102,7 +102,7 @@ jobs:
           retention-days: 1
 
   go:
-    name: Go — build, vet, race tests
+    name: Go
     needs: guest
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -193,7 +193,7 @@ jobs:
           done
 
   crosscompile:
-    name: One binary, six targets
+    name: Cross-Compile
     needs: guest
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -237,7 +237,7 @@ jobs:
     permissions:
       contents: write
     # No timeout-minutes here: it is not a valid key on a job that calls a reusable workflow. The
-    # limit lives on heal.yml's own job.
+    # limit lives on _heal.yml's own job.
     uses: ./.github/workflows/_heal.yml
     with:
       subject: "chore(ci): regenerate what drifted from its sources"

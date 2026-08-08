@@ -26,6 +26,7 @@ permissions:
 
 jobs:
   build:
+    name: Site
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -55,7 +56,8 @@ jobs:
 
       # Also validates every tool and gate-kind YAML against the Zod schema, so a reference page
       # that describes a tool wrongly fails here rather than being published wrong.
-      - run: npx astro build
+      - name: Build the site
+        run: npx astro build
         working-directory: docs
 
       - uses: actions/upload-pages-artifact@v5
@@ -66,6 +68,7 @@ jobs:
   # `github.ref`, not `event_name != pull_request`: workflow_dispatch has no branch filter, so the
   # looser test would let any branch be published onto the live site by hand.
   deploy:
+    name: Pages Deploy
     if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
