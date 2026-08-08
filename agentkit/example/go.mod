@@ -10,7 +10,7 @@ require (
 	github.com/efuturetoday/nocturn/agentkit/tools v0.0.0
 )
 
-require github.com/sashabaranov/go-openai v1.41.2 // indirect
+require github.com/sashabaranov/go-openai v1.42.0 // indirect
 
 replace github.com/efuturetoday/nocturn/agentkit => ..
 
