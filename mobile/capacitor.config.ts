@@ -18,9 +18,11 @@ const config: CapacitorConfig = {
     // no light variant to fall back to.
     Keyboard: { resize: KeyboardResize.None, style: KeyboardStyle.Dark },
   },
-  server: {
-    url: 'http://192.168.2.179:4200'
-  }
+  // `server.url` points the webview at a dev server instead of the bundled assets. Convenient on the
+  // LAN, fatal in a shipped build — and invisible once committed, because `cap sync` bakes it into
+  // ios/App/App/capacitor.config.json, which is gitignored. So it comes from the environment and is
+  // absent by default: `CAP_SERVER_URL=http://192.168.x.x:4200 npx cap sync ios`.
+  ...(process.env['CAP_SERVER_URL'] ? { server: { url: process.env['CAP_SERVER_URL'] } } : {}),
 };
 
 export default config;
