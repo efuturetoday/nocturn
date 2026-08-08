@@ -48,6 +48,14 @@ __screenshots__/
 *.ipa
 *.mobileprovision
 
+# Signing material. `fastlane cert` drops three files here, and the one it calls .p12 is not a PKCS#12
+# at all — it is the private key as plain PEM, no password. Ignored by extension rather than by name
+# because the names are certificate ids nobody can predict.
+*.cer
+*.certSigningRequest
+*.p12
+*.p8
+
 # System files
 .DS_Store
 Thumbs.db
