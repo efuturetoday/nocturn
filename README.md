@@ -74,7 +74,7 @@ cp .env.example .env
 # Start the local terminal chat
 ./nocturn
 
-# Or start the daemon your phone and satellites connect to
+# Or start the server your phone and satellites connect to
 ./nocturn serve
 ```
 
@@ -83,15 +83,27 @@ strictly local in a `nocturn-data/` folder.)*
 
 ## 📱 The companion app
 
-The iOS app is what answers an approval when you are nowhere near the machine: it finds your daemon
-by name on your own network — no account, no relay — and shows the ask as the gate recorded it, never
-as the conversation phrased it. It is also a full client: the same chats the terminal is talking to,
+The app is what answers an approval when you are nowhere near the machine: it finds nocturn by name
+on your own network — no account, no relay — and shows the ask as the gate recorded it, never as the
+conversation phrased it. It is also a full client: the same chats the terminal is talking to,
 and every tool call the model made, timed and attributable.
 
 Screenshots and the walkthrough are in the
-**[app guide](https://efuturetoday.github.io/nocturn/guides/the-app/)**. iOS first — a TestFlight
-link lands here with the public beta; Android is on the way (the app is Capacitor, so the same
-codebase builds it).
+**[app guide](https://efuturetoday.github.io/nocturn/guides/the-app/)**.
+
+<table>
+<tr>
+<td align="center"><img src="docs/public/qr/testflight.png" width="200" alt="TestFlight"></td>
+<td align="center"><img src="docs/public/qr/android.png" width="200" alt="Android APK"></td>
+</tr>
+<tr>
+<td align="center"><a href="https://testflight.apple.com/join/TdMWnxYF">Public beta</a></td>
+<td align="center"><a href="https://github.com/efuturetoday/nocturn/releases/latest">Latest release</a></td>
+</tr>
+</table>
+
+No nocturn of your own yet? On the first screen tap **Enter server manually** and enter `demo` as the
+host — sample data, held entirely on the device.
 
 ## 🧱 Architecture
 

@@ -58,7 +58,7 @@ design does not claim to survive:
   recognition chooses context and address, never permission, and a spoken instruction that wants
   authority is still confirmed out of band.
 - **Physical access to a paired device.** A phone someone else is holding can approve.
-- **Denial of service** against your own daemon on your own network.
+- **Denial of service** against your own server on your own network.
 
 ## Known gaps
 

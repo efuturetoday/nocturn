@@ -91,7 +91,7 @@ code without embeddings.
 
 ## Indexing it yourself
 
-A running daemon does this on its own, so these exist for the two moments a schedule is the wrong
+A running server does this on its own, so these exist for the two moments a schedule is the wrong
 shape: the first index of a folder, where you want to watch it happen and see what it cost, and
 after changing the embedding model, where the answer is "delete the index and build it again" and
 you should be the one deciding to spend that.
@@ -120,7 +120,7 @@ Add `-w <workspace>` for anything other than `main`.
 
 ## It keeps itself in step
 
-A running daemon reconciles the folder with the index **every minute**. Add a document and it becomes
+A running server reconciles the folder with the index **every minute**. Add a document and it becomes
 searchable; edit one and it is re-indexed; delete one and it leaves. No restart, no command.
 
 That is affordable because a reconcile over an unchanged folder is a directory walk: a file whose

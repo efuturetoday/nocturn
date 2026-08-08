@@ -1,27 +1,27 @@
 ---
 title: Remote access
-description: The serve daemon, the companion app, pairing a device, and how a background approval reaches your phone.
+description: The serve server, the companion app, pairing a device, and how a background approval reaches your phone.
 ---
 
 import { Badge } from '@astrojs/starlight/components';
 
-The terminal chat is one way in. The other is the **daemon**: one command turns a workspace into
+The terminal chat is one way in. The other is the **server**: one command turns a workspace into
 something your phone can talk to over your own network.
 
 ```bash
 nocturn serve            # listens on :8080 by default, or $NOCTURN_ADDR
 ```
 
-The daemon is not a cloud service and does not phone home. It listens on your LAN, announces itself
+The server is not a cloud service and does not phone home. It listens on your LAN, announces itself
 over Bonjour/DNS-SD as `_nocturn._tcp` so the companion app can find it without you typing an IP,
 and speaks a small tagged-JSON protocol over one WebSocket per device.
 
 ## Pairing a device
 
-Every connection is gated on a bearer token, and the daemon never stores the token itself — only its
+Every connection is gated on a bearer token, and the server never stores the token itself — only its
 SHA-256 hash, compared in constant time. Getting a device its token happens in one of three ways.
 
-**The first device** redeems a bootstrap code that the daemon prints at startup (`POST /pair`). That
+**The first device** redeems a bootstrap code that the server prints at startup (`POST /pair`). That
 is the only time a code comes from the machine itself.
 
 **Every device after that** asks an already-paired one for permission:
@@ -37,7 +37,7 @@ already-trusted device to hand it a code.
 
 **A device that cannot read a code** is enrolled *for* — a speaker in a hallway has no display to
 show one and no keyboard to enter one, so the exchange above has nothing to work with. An
-already-paired device asks the daemon to mint a bearer on its behalf (`POST /devices`) and hands it
+already-paired device asks the server to mint a bearer on its behalf (`POST /devices`) and hands it
 over. Letting such a device enrol itself is not the alternative: anything that can enrol itself is
 not being authorised by anyone.
 
@@ -84,7 +84,7 @@ page of its own: **[the voice satellite](/nocturn/guides/speaking/)**.
 
 ## Approvals when nobody is looking
 
-This is the reason the daemon exists. An agent running on a schedule hits something that needs your
+This is the reason the server exists. An agent running on a schedule hits something that needs your
 yes, with no terminal in front of it. If a device is paired, the ask is routed out of band: a push
 wakes your phone, you approve or deny in the app, and the agent continues or stops.
 
@@ -110,8 +110,8 @@ That is a real barrier, and it is the wrong one for a tool meant to be downloade
 that holds the APNs credential so you do not have to, and forwards a wake to your device. It stays
 consistent with everything else here only because of what a push already is — a signal with **no
 authority**, carrying no decision and no content. A relay therefore learns that some device should
-look at its daemon, and nothing about what is being asked or how you answered. The decision still
-travels over the authenticated WebSocket, directly between your daemon and your phone, and a relay
+look at its server, and nothing about what is being asked or how you answered. The decision still
+travels over the authenticated WebSocket, directly between your server and your phone, and a relay
 that went hostile could annoy you but never approve anything.
 
 ## Not there yet

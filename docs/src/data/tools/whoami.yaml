@@ -45,7 +45,7 @@ notes: >-
 
 
   **This tool only exists where recognition does.** Without `NOCTURN_SPEAKER_MODEL` pointing at a
-  model, the daemon does not register it at all — and neither does the terminal chat, which has no
+  model, the server does not register it at all — and neither does the terminal chat, which has no
   microphone in the first place. A tool that could answer nothing but "unknown" for the life of the
   process is worse than a missing one: it costs a slot in every prompt and invites a question whose
   answer is always no.

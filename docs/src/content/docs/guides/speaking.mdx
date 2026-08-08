@@ -44,7 +44,7 @@ talk now?** Green means yes, and green is used for nothing else.
 |---|---|---|
 | `boot` | white, slow breath | Powering up |
 | `no-network` | amber, slow breath | Not associated, or associated without an address |
-| `no-daemon` | amber, spinning | On the network, looking for a daemon |
+| `no-server` | amber, spinning | On the network, looking for a server |
 | `fault` | red, **slow blink** | Will not recover without a person |
 | `idle` | dim blue, steady | Link up, waiting for the wake word |
 | `listening` | green, breathing | A session is open — talk |
@@ -67,17 +67,17 @@ connecting is a moment and not a state.
 recording is steady. Red-means-recording is understood by everyone who walks into a room, which is
 exactly why it is worth spending the colour twice rather than inventing a private one nobody knows.
 
-The board decides all of this from what **it** observed, not from what the daemon believes. A round
+The board decides all of this from what **it** observed, not from what the server believes. A round
 trip is 150–250 ms on a LAN and immediacy ends around 200, so anything a person perceives as slow —
 the ring lighting up when they speak — is local. Where the two disagree, the observation wins: the
-person is in the room and the daemon is not.
+person is in the room and the server is not.
 
 ## Configuring it
 
 Spoken conversations need a **second, different model**: one that takes and returns a continuous
 audio stream rather than answering a turn at a time. It is not a setting on the chat model — it is a
 separate endpoint, and leaving it unset means a device asking for a spoken session is simply told
-this daemon has none.
+this server has none.
 
 ```ini
 GEMINI_API_KEY=your-key-here
@@ -112,12 +112,12 @@ documentation are not the same.
 Voice is a domain on the [same protocol](/nocturn/guides/remote-access/) as everything else, not a
 separate channel: `voice.wake` opens a spoken session, `voice.credit` says how much speech the device
 can hold, and the audio itself is binary frames — the only frames on the socket that are not
-commands. The daemon answers with `voice.state` on each transition and `voice.interrupt` when you
+commands. The server answers with `voice.state` on each transition and `voice.interrupt` when you
 talk over it, which tells the device to drop whatever it has buffered but not yet played.
 
 One connection carries all of it because a second one would need a second copy of everything that
 already hangs off a device's connection — pairing, the approval routing, presence. It also means a
-device that can already talk to the daemon can already speak, without another endpoint or another
+device that can already talk to the server can already speak, without another endpoint or another
 token.
 
 Three ways this differs from chat, all deliberate:
@@ -148,7 +148,7 @@ there.
 Speech comes back **credited**, not paced. A live model emits a sentence far faster than it is
 spoken, so something has to decide the rate — and the only real clock in the system is the far
 speaker's own crystal. The device grants its whole playout queue when a session opens and grants more
-as playback consumes it; the daemon sends what it has been granted and holds the rest. Nothing is
+as playback consumes it; the server sends what it has been granted and holds the rest. Nothing is
 metered by a timer, so there is no rate to get wrong, and overflow is structurally impossible rather
 than merely unlikely.
 
@@ -156,7 +156,7 @@ The window is deliberately much larger than the round trip that reopens it. Size
 buffer about as deep as the delay in refilling it — the queue is empty every time credit arrives, and
 no amount of tuning either number helps.
 
-Between the daemon and one connection sits a short queue, four frames of it. A frame that finds it
+Between the server and one connection sits a short queue, four frames of it. A frame that finds it
 full **waits** rather than being discarded: the queue only fills when the socket behind it has stopped
 draining, which is precisely when nothing more should be sent. Dropping instead would put a gap in
 the middle of a sentence to solve a problem that waiting solves by itself. Speech goes to a device's
@@ -171,11 +171,11 @@ the link under load is not flow control.
 device sends silence upstream instead of the microphone, because the model must never hear the
 device's own voice: what echo cancellation leaves of a reply still measures louder than a person,
 and no voice detector on either side can tell the two apart. Until the canceller is measured good
-enough, talking over a reply reaches nobody — let it finish. `voice.interrupt` remains the daemon's
+enough, talking over a reply reaches nobody — let it finish. `voice.interrupt` remains the server's
 message to drop buffered, unplayed speech, and `voice.barge` is reserved for the device-side
 detector (`BARGE_IN_LOCAL`, parked behind the same measurement).
 
-A daemon with no live model configured refuses `voice.wake` and says so, rather than opening a
+A server with no live model configured refuses `voice.wake` and says so, rather than opening a
 session that can never answer.
 
 ## Approvals in the middle of a sentence
@@ -202,7 +202,7 @@ earns the pause it puts in a conversation.
 
 ## Knowing who is speaking
 
-With `NOCTURN_SPEAKER_MODEL` pointing at a speaker-embedding checkpoint, the daemon recognises which
+With `NOCTURN_SPEAKER_MODEL` pointing at a speaker-embedding checkpoint, the server recognises which
 enrolled voice is talking, continuously, from the audio a session is already sending. Enrolled voices
 live in the workspace's `voices.json`; with none of them, or with no model, nothing below happens and
 the spoken path behaves exactly as it did.
@@ -232,7 +232,7 @@ device in both.
 
 ## Recording the uplink
 
-Setting `NOCTURN_VOICE_CAPTURE` to a directory makes the daemon write what a device's microphone
+Setting `NOCTURN_VOICE_CAPTURE` to a directory makes the server write what a device's microphone
 sends to WAV files there — 16 kHz mono, the rate the link already carries.
 
 It exists for one job: obtaining recordings of a voice through the microphone, room and echo
@@ -288,6 +288,6 @@ echo canceller — and the take records which one it came through. Enrolling som
 a second device therefore adds that channel rather than replacing the first: a person's score is
 their best single take, so having enrolled twice can only help them.
 
-The command opens no workspace and talks to no daemon. It edits one file, and a daemon started
+The command opens no workspace and talks to no server. It edits one file, and a server started
 afterwards picks it up. An unreadable recording is skipped with its name on stderr and counted in the
 summary, because a silently thinner profile is one that recognises worse for a reason nobody sees.

@@ -178,6 +178,76 @@ dependency that has no business inside a package the whole workspace links.
 from the two share no scale, so reciprocal rank fusion uses only the order each produced. *Realized
 in `knowledge` (+ `knowledge/embed`).*
 
+## ADR-13 — The terminal is a full-screen surface, and it OWNS the screen
+The REPL printed the conversation to stdout with `fmt.Print` while slog printed diagnostics to
+stderr, and on one terminal the two interleave: an answer with a timestamp glued into it, an
+approval prompt scrolled away under three lines nobody asked for. The old fix was to run the chat at
+WARN, which is not a fix but a decision to stop looking. The real one is to give the terminal a
+single owner. `internal/tui` is a full-screen alternate-screen app and the only writer to the
+screen; diagnostics go to `nocturn-data/nocturn.log` and, in parallel, to an in-memory ring the log
+pane opens on. Nothing prints while it runs, which is what lets the default level go back up to
+INFO. It refuses to start without a TTY rather than degrading — with the REPL gone there is no
+non-interactive chat to fall back to, and escape sequences in a pipe are worse than a sentence.
+
+**It is `serve`'s sibling, not its replacement.** Both sit on the `workspace` facade, both fold the
+same `agentkit` event stream, neither knows the other exists. That symmetry is what keeps the
+terminal from growing a second, quieter model of a chat.
+
+**The fold is a package, not a renderer.** `internal/tui/transcript` turns events into blocks with
+no terminal, no clock and no I/O, and it is a deliberate port of the mobile client's
+`chat-model.ts` — same merge rules, same frame nesting, pinned by the same convergence test (fold a
+live turn, seed the snapshot that turn persists, assert they render alike). Two clients folding one
+stream is a place where drift is silent and expensive; one shape, tested from both ends, is the
+answer. It also carries the whole testable surface: go-tui offers no way to drive an App against a
+mock terminal, so the fold, the approver and the log ring are covered without a PTY and the
+assembled layout is verified by running it.
+
+**Ctrl+C cancels the turn; it does not quit.** The framework clears `ISIG`, so it arrives as a
+keystroke, and a full-screen UI is the first place where "stop what you are doing" and "kill the
+program" are plainly different requests. That also fixes something the old terminal approver got
+wrong: it ignored `ctx`, so a cancelled turn left the asking goroutine blocked in `ReadString`
+forever. The new one honours it.
+
+**No timeout on a terminal approval, unlike `hitl`'s two minutes.** Out of band nobody may be
+looking; here somebody is, and `gate.Check` pauses the turn's clock around the ask. A deadline would
+only refuse what the reader was still reading. The option SET is the same as the broker's, in the
+same order, minted from `gate.Action` alone and never from anything the model wrote — but the
+broker's code is not reused: its multi-device presence, re-presentation and push wakeups have no
+meaning at a keyboard. *Realized in `tui` (+ `tui/transcript`, `tui/logring`).*
+
+## ADR-14 — The explainers are rendered from code (Remotion), and they live outside the binary
+What nocturn is hardest to explain is not its structure but its *order*: a turn arrives, the model
+asks for a tool, `gate.Check` turns that into an `Action{Kind, Target}`, the ask leaves the machine,
+a human answers on a second device, and only then does the effect happen. Every one of those is a
+box in a diagram and none of them is the point — the point is that they happen in that sequence, and
+that the human sits between the ask and the effect. The same holds for the two threat classes, which
+are only distinguishable by *which* defense catches them, and for zero ambient authority, which is a
+statement about what the guest does not have until the host hands it over. Static pictures say the
+nouns and drop the verbs.
+
+`media/` is a Remotion project: React components, one composition per explainer, rendered to video
+by CI. Chosen because the source is text — reviewable in a pull request, diffable, and correctable
+by editing one line rather than by finding whoever still has the project file. A timeline editor
+would make the explainers the one part of this repository that cannot be reviewed. It also lets a
+composition read the same schema `docs/` already validates its tool and capability tables against,
+so an explainer that names the gated tools cannot quietly fall out of step with the ones that exist.
+
+**It is not part of the binary and not part of the Go build.** Nocturn's identity is a single Go
+binary with no foreign runtime, and a React project in the tree reads as a breach of exactly that
+until someone says otherwise — so: its own directory, its own `package.json`, outside `go.work`,
+never imported, never linked. The claim is about what ships, and no explainer ships.
+
+**The rendered files are not committed.** `qjs.wasm` and the generated `_gsx.go` are committed
+because the build needs them; nothing needs a video. CI renders the compositions and the docs build
+consumes them in the same run, which keeps tens of megabytes of re-encoded binary out of every edit
+to a caption. Anchor the ignore rule at the root (`/media/out/`) — the unanchored form would match
+any `out/` at any depth, which this repository has already been bitten by once.
+
+**Licensing is a headcount question, not an open-source one.** Remotion's Free License covers
+individuals and companies of up to three people; from four it requires a paid Company License, and
+the project being open source does not enter into it. That is a condition on the people rendering,
+so it is worth re-checking when the set of people who render changes — not when the code does.
+
 ---
 
 ## Trust boundary — Variant A: loop in the host, plugins/skills in WASM

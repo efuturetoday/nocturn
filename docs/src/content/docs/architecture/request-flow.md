@@ -20,7 +20,7 @@ flowchart TD
     G -->|yes| J
     G -->|no| H{An approver?}
     H -->|none: strict| X
-    H -->|terminal| I[You answer at the prompt]
+    H -->|terminal| I[You answer in the modal, the turn waits]
     H -->|out of band| I2[Push wakes your phone, you answer in the app]
     I --> J
     I2 --> J

@@ -15,25 +15,39 @@ job.
 
 ## Getting it
 
-The app is **iOS today**, built with Angular under Capacitor. A **TestFlight link lands here with
-the public beta**; an Android build is planned, and the framework choice is what makes that a build
-target rather than a rewrite — what genuinely differs is the push transport.
+<div style="display:flex;gap:2rem;flex-wrap:wrap;margin:1.5rem 0;">
+  <figure style="margin:0;text-align:center;">
+    <img src="/nocturn/qr/testflight.svg" alt="TestFlight" width="200" />
+    <figcaption><a href="https://testflight.apple.com/join/TdMWnxYF">Public beta</a></figcaption>
+  </figure>
+  <figure style="margin:0;text-align:center;">
+    <img src="/nocturn/qr/android.svg" alt="Android APK" width="200" />
+    <figcaption><a href="https://github.com/efuturetoday/nocturn/releases/latest">Latest release</a></figcaption>
+  </figure>
+</div>
 
-Until then you can build it yourself from `mobile/` in the repository; the README there has the
-steps.
+**iOS** goes through TestFlight — Apple has no sideloading, so there is nothing to download here.
+**Android** is an APK on the latest release; it is debug-signed, so Android warns about an unknown
+source. One codebase builds both: Angular under Capacitor, with the push transport as the only real
+difference.
+
+You can also build it yourself from `mobile/` in the repository; the README there has the steps.
+
+No nocturn of your own yet? Tap **Enter server manually** on the first screen and enter `demo` as the
+host — sample data, held entirely on the device, and enough to see what an approval looks like.
 
 ## Pairing
 
-The daemon has to be running: `nocturn serve`. The app finds it on your network over Bonjour, so
+Nocturn has to be running: `nocturn serve`. The app finds it on your network over Bonjour, so
 you do not type an IP.
 
-![The app's connect screen: a daemon found on the network by name, its WebSocket address underneath, and a link to enter a server by hand.](../../../assets/screenshots/app-connect-discovery.jpg)
+![The app's connect screen: a server found on the network by name, its WebSocket address underneath, and a link to enter a server by hand.](../../../assets/screenshots/app-connect-discovery.jpg)
 
-- **The first device** redeems a bootstrap code the daemon prints at startup.
+- **The first device** redeems a bootstrap code the server prints at startup.
 - **Every device after that** asks an already-paired one, and the code appears *there* — you read it
   on a device you already trust and type it on the new one.
 
-![The pairing sheet: six empty code boxes, the daemon's address above them, and a link for a device that already has a paired sibling to join instead.](../../../assets/screenshots/app-pair-device.jpg)
+![The pairing sheet: six empty code boxes, the server's address above them, and a link for a device that already has a paired sibling to join instead.](../../../assets/screenshots/app-pair-device.jpg)
 
 A device merely on your network cannot join. It needs a human at a device you already trust.
 
@@ -49,7 +63,7 @@ The full flow, including devices with no screen to show a code, is in
 | **Agents** | the scheduled agents in a workspace, and firing one by hand |
 | **Reminders** | what the assistant has been asked to bring back to you |
 | **Pairing and joins** | approving the next device |
-| **Discovery** | finding daemons on the network |
+| **Discovery** | finding servers on the network |
 
 ![The Home tab: a pending reminder with the time it fires, and the workspace's recent conversations underneath.](../../../assets/screenshots/app-home-reminders-recent-chats.jpg)
 
@@ -73,7 +87,7 @@ result it returned:
 
 ## Approvals when you are nowhere near it
 
-This is the case the daemon exists for. An agent runs on a schedule, hits something that needs your
+This is the case the server exists for. An agent runs on a schedule, hits something that needs your
 yes, and there is no terminal in front of it. A push wakes your phone, you decide, the run continues
 or stops.
 
@@ -82,7 +96,7 @@ or stops.
 The push carries **no authority** — it wakes the app, and the decision travels back over the
 authenticated connection, never inside the notification ([why, and what it costs an
 attacker](/nocturn/guides/remote-access/#approvals-when-nobody-is-looking)). That is also what will
-make a hosted relay safe to run later: a relay learns that some device should look at its daemon, and
+make a hosted relay safe to run later: a relay learns that some device should look at its server, and
 nothing about what was asked or how you answered.
 
 Push over the internet currently needs your own Apple Developer account and the four

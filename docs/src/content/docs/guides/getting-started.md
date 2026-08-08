@@ -77,7 +77,7 @@ changes a file, it stops and asks — right there in the terminal. That pause is
 
 **This is the test drive, not the product.** The terminal chat is one process, one window, and it
 only runs while you are sitting in front of it — which is the opposite of what Nocturn is for. Use
-it to confirm your model works and to watch an approval happen once. Then move to the daemon.
+it to confirm your model works and to watch an approval happen once. Then move to the server.
 
 ## 4. Run it for real
 
@@ -85,23 +85,23 @@ it to confirm your model works and to watch an approval happen once. Then move t
 ./nocturn serve
 ```
 
-That is the actual thing. The daemon holds your workspaces open, announces itself on your network so
+That is the actual thing. The server holds your workspaces open, announces itself on your network so
 [the app](/nocturn/guides/the-app/) can find it without an IP, and keeps running when you close the
 laptop lid on the terminal you started it from.
 
 Three things only exist here:
 
 - **Agents on a schedule.** A cron agent firing at 6am is the whole idea — work that happens while
-  you are asleep. Scheduling lives in the process, not in the daemon: a terminal session runs the
-  same schedulers. What the daemon adds is outliving the terminal you would otherwise have to leave
+  you are asleep. Scheduling lives in the process, not in the server: a terminal session runs the
+  same schedulers. What the server adds is outliving the terminal you would otherwise have to leave
   open.
 - **Approvals when you are not there.** An unattended run that reaches the network or a file routes
-  the ask to your phone. With no daemon there is no route, and a `guarded` agent falls back to
+  the ask to your phone. With no server there is no route, and a `guarded` agent falls back to
   refusing — which is safe and useless.
 - **Everything that is not a keyboard.** The companion app, a voice satellite, anything that speaks
   the protocol. They all connect here.
 
-The daemon prints a pairing code on its first start. That code is the one time a code comes from the
+The server prints a pairing code on its first start. That code is the one time a code comes from the
 machine itself — every device after that is enrolled by a device you already trust. See
 [the companion app](/nocturn/guides/the-app/) for the rest of that flow.
 
@@ -154,4 +154,4 @@ environment, which means the passphrase is as protected as the environment it si
 - [Remote access](/nocturn/guides/remote-access/) — the protocol, pairing, device classes.
 - [Plugins](/nocturn/guides/writing-plugins/) — connect it to your own services.
 - [The TUI](/nocturn/guides/the-chat/) — commands and the approval prompt, in the terminal.
-- [The command line](/nocturn/reference/cli/) — every subcommand, and which need a running daemon.
+- [The command line](/nocturn/reference/cli/) — every subcommand, and which need a running server.

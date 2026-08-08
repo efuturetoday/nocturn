@@ -181,7 +181,7 @@ statement of what the plugin can reach — `"uses": ["http_read"]` here — and 
 running anything. The code cannot widen it.
 
 **A restart is required.** Plugins are discovered when a workspace opens, and there is no watcher on
-`plugins/`. A daemon that was already running does not see the new folder.
+`plugins/`. A server that was already running does not see the new folder.
 
 :::danger[Installing is the decision — there is no review step]
 Dropping the folder in **is** the authorization. Nothing prompts you afterwards, and nothing asks

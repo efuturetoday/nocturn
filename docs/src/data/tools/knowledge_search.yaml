@@ -15,7 +15,7 @@ intro: >-
   nothing, and reaches nothing `file_read` could not already reach.
 
 
-  It exists only when this daemon has an embedding endpoint configured. Without one the tool is not
+  It exists only when this server has an embedding endpoint configured. Without one the tool is not
   registered at all, rather than registered and failing on every call.
 
 input:

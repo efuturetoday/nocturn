@@ -141,7 +141,7 @@ host (`api.example.com` → `*.example.com`), the containing directory for a pat
 
 The out-of-band approver transmits this as data: the action, and one entry per answer carrying the
 grant it would write and the recall it would write it with. A device answers by naming an entry the
-daemon minted, so it can never name a grant that was not offered — the one-step rule is enforced by
+server minted, so it can never name a grant that was not offered — the one-step rule is enforced by
 what exists on the wire, not by a device behaving.
 
 ## When nobody can be asked

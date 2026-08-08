@@ -1,15 +1,15 @@
 ---
 title: The command line
-description: Every nocturn subcommand, what it needs, and which of them talk to a running daemon.
+description: Every nocturn subcommand, what it needs, and which of them talk to a running server.
 ---
 
 One binary, and everything below is it. `nocturn help` prints the same list; this page adds what the
 help has no room for — what each command needs before it will work, and whether it touches a running
-daemon or the files on disk.
+server or the files on disk.
 
 ```
 nocturn                      Open the interactive terminal assistant
-nocturn serve                Run the WebSocket daemon
+nocturn serve                Run the WebSocket server
 nocturn voice                Run the browser voice PoC harness
 nocturn enroll               Ask a satellite to record its microphone
 nocturn voices ls|add|rm     Manage the voices a workspace can recognise
@@ -29,21 +29,21 @@ the default workspace, not on all of them.
 
 | Command | What it does |
 |---|---|
-| `nocturn` | The terminal assistant, in the default workspace. Also starts that workspace's **cron agents** — scheduling lives in the process, not in the daemon. |
-| `nocturn serve [--addr :8080]` | The [WebSocket daemon](/nocturn/guides/remote-access/) the app and satellites connect to. `NOCTURN_ADDR` sets the default. This is what keeps agents running once you close the terminal. |
+| `nocturn` | The terminal assistant, in the default workspace. Also starts that workspace's **cron agents** — scheduling lives in the process, not in the server. |
+| `nocturn serve [--addr :8080]` | The [WebSocket server](/nocturn/guides/remote-access/) the app and satellites connect to. `NOCTURN_ADDR` sets the default. This is what keeps agents running once you close the terminal. |
 | `nocturn voice [--port 8788] [-w workspace]` | A **PoC harness**, in its own words: a browser page for testing the voice path on loopback, with no pairing. Not a way to use Nocturn. |
 
 ## Voice
 
 | Command | What it does |
 |---|---|
-| `nocturn enroll --device <name> [--seconds 60] [--addr :8080]` | Asks a **running daemon** to have that satellite record its microphone, so a voice can be enrolled from the room and channel it will later be recognised in. The ring goes steady red while it records. |
+| `nocturn enroll --device <name> [--seconds 60] [--addr :8080]` | Asks a **running server** to have that satellite record its microphone, so a voice can be enrolled from the room and channel it will later be recognised in. The ring goes steady red while it records. |
 | `nocturn voices ls [-w workspace]` | Who this workspace can recognise. |
 | `nocturn voices add [--device <name>] [-w ws] <person> <files or dirs…>` | Enrol from 16 kHz mono WAVs — what the uplink already writes. `--device` is **required and never guessed**: a voice through a phone and through a hallway speaker are two channels. Needs `NOCTURN_SPEAKER_MODEL`. |
 | `nocturn voices rm <person> [-w workspace]` | Forget a voice entirely. |
 
-`voices` edits `voices.json` directly and talks to no daemon; one started afterwards picks it up.
-`enroll` is the opposite — it needs a daemon, because the microphone is on the other side of it. See
+`voices` edits `voices.json` directly and talks to no server; one started afterwards picks it up.
+`enroll` is the opposite — it needs a server, because the microphone is on the other side of it. See
 [the voice satellite](/nocturn/guides/speaking/).
 
 ## Knowledge
@@ -66,7 +66,7 @@ Indexing **sends your documents to the configured embedding provider**, so it ne
 | `nocturn secret ls [-w workspace]` | The credential names this workspace holds — names only, never values. |
 
 A target is owner-namespaced: `plugin:<name>/<credential>` or `mcp:<name>`. All three need the vault
-open (`NOCTURN_MASTER_PASSPHRASE`), and none of them needs a running daemon — they read the workspace
+open (`NOCTURN_MASTER_PASSPHRASE`), and none of them needs a running server — they read the workspace
 folder directly. Where the value then lives is on [the vault](/nocturn/guides/vault/).
 
 ## Looking around
@@ -78,16 +78,24 @@ folder directly. Where the value then lives is on [the vault](/nocturn/guides/va
 
 ## Inside the terminal assistant
 
-Once `nocturn` is running, these are typed at the prompt rather than at the shell:
+`nocturn` with no arguments is a full-screen surface and needs a real terminal; piped into anything
+it refuses and exits `2`. Everything it can do is behind `Ctrl+P`, the command palette. The slash
+commands remain for typists and are typed into the composer rather than at the shell:
 
 | | |
 |---|---|
-| `/chats` | List this workspace's conversations |
-| `/new` | Start a fresh one |
-| `/open <id>` | Reopen one by id |
-| `/agents` | List the declared agents |
-| `/fire <name>` | Run one now, in the background |
+| `/chats` | Move the keyboard to the conversation list |
+| `/new` | Start a fresh conversation |
+| `/open <id>` | Reopen one by id — a chat or an agent run |
+| `/agents` | Open the palette on the agents that can be fired |
+| `/fire <name> <task>` | Run one now; `task` is optional |
+| `/help` | Open the palette |
 | `/quit`, `/exit` | Leave |
+
+Anything else beginning with `/` is sent to the model.
+
+The keys are in [The TUI](/nocturn/guides/the-chat/). The two that hold everywhere: `Ctrl+C` cancels
+the running turn and never the program, `Ctrl+Q` leaves from any depth.
 
 ## What is deliberately missing
 

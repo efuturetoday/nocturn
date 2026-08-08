@@ -56,7 +56,7 @@ nocturn serve        # start, or restart if it was already running
 ```
 
 Like plugins and MCP servers, skills are read when a workspace opens — there is no watcher on
-`skills/`, so a running daemon does not notice a new folder.
+`skills/`, so a running server does not notice a new folder.
 
 Unlike them, nothing else happens. No credential to connect, no manifest to review, no restart
 worth being careful about: from that point the assistant simply knows the skill's `description`, and

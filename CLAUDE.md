@@ -43,7 +43,7 @@ agentkit deliberately leaves to its consumer (transcript persistence, skill sour
 and composition per workspace.
 
 ```
-cmd/nocturn        the binary: process spine, workspace open, terminal chat, `serve` daemon
+cmd/nocturn        the binary: process spine, workspace open, `serve` daemon
 internal/…         see §3
 agentkit/…         the engine + gate/runtime/openai/tools
 mobile/            the companion app (Angular + Capacitor, iOS) — the second device
@@ -54,7 +54,7 @@ sdk/_template/     the starting point for a plugin (manifest + JS + TS source)
 ### Request flow
 
 ```
-   user turn (terminal REPL, or the mobile app over WebSocket)
+   user turn (the terminal UI, or the mobile app over WebSocket)
         │
    cmd/nocturn ──> workspace.Open assembles the per-workspace stack
         │           (tools = the cage · gate = policy+grants+approver · persona · chat store)
@@ -111,6 +111,11 @@ a one-minute reconcile that costs a directory walk when nothing changed) ·
 `chat` (file-backed transcript store + Manager) · `agent` (declaration + cron only; execution is
 injected by the workspace) · `workspace` (the composition root) · `serve` (WebSocket surface,
 tagged JSON, one file per domain) ·
+`tui` (+`/transcript`, `/logring`) (the terminal surface, `serve`'s sibling: a full-screen go-tui app
+over the same facade. `transcript` is the pure event→blocks fold — the Go port of the mobile
+`chat-model.ts`, pinned to it by a convergence test; `logring` is the in-memory log the pane shows.
+The approver is plain channels. All three are tested without a terminal, which the assembled loop
+cannot be) ·
 `speaker` (who spoke: Kaldi-compatible filterbank → embedding → cosine, plus `voices.json` per
 workspace. 100% top-1 among 2–6 enrolled voices. **The threshold belongs to a CHANNEL, not to the
 package** — 0.50 fits close-talking, the satellite needs 0.45, measured. Chooses context and address,
@@ -137,10 +142,15 @@ CGO — the package doc says why not onnxruntime, wasm or a tensor framework, wi
 
 **Dependencies:** agentkit core: **none**. nocturn: `wazero`, `coder/websocket`,
 `libp2p/zeroconf/v2`, `x/crypto`, `x/net`, `x/oauth2`, `aho-corasick` (leak scanner only),
-`yaml.v3` (skill frontmatter only), `lmittmann/tint`, `godotenv`. `go-openai` is indirect.
+`yaml.v3` (skill frontmatter only), `lmittmann/tint`, `godotenv`,
+`grindlemire/go-tui` (the terminal UI; pre-1.0, PINNED — its only runtime dependency is `x/sys`).
+`go-openai` is indirect.
 **Rejected:** langchaingo (290 deps, brings its own loop that bypasses our security).
 **Dev tools:** `wat2wasm` (brew wabt) for the WAT test guests; `wasi-sdk` + a quickjs-ng checkout
-to rebuild the interpreter wasm (only when the shim changes — the built `.wasm` is committed).
+to rebuild the interpreter wasm (only when the shim changes — the built `.wasm` is committed);
+`go-tui/cmd/tui` for the `.gsx` templates (`go install …/cmd/tui@v0.18.2` — deliberately NOT a
+`go tool` directive, which would drag `x/tools`, `x/mod` and `x/sync` into `go.mod` for a generator
+that never ships in the binary; the generated `_gsx.go` are committed and CI fails on drift).
 
 ---
 
@@ -218,6 +228,53 @@ Read this before touching anything security-shaped — it is easy to assume the 
   in the right Mel bin, gain absorbed — and same-speaker similarity sat at 0.73 instead of 0.98.
   Read the training code, and pin the frontend against the implementation, not against a reading
   of it. Anything that feeds a pretrained network deserves this suspicion.
+- **In `.gsx`, a computed `class={…}` is silently dropped.** Tailwind classes are resolved by the
+  generator at build time, so only a string LITERAL becomes layout options. `class={"flex-col grow " + f()}`
+  compiles, generates, runs — and produces an element with no layout at all, which reads as a
+  layout bug rather than a dropped attribute. Anything that varies goes through a typed attribute
+  (`borderStyle`, `width`, `padding`). Same trap for indentation: `pl-N` built from a depth is
+  computed, so nesting is drawn with a sized spacer element instead.
+- **A `ref` inside a PURE `templ` points at a discarded element.** A pure templ builds its element in
+  its CONSTRUCTOR; on a re-render `Mount` calls the factory again (it needs a fresh instance for
+  `UpdateProps`) but then renders the CACHED one and throws the fresh copy away — so the ref is
+  rebound every frame to an element that is not in the tree, and hit-testing it finds nothing. Only
+  the very first frame works, which reads as "clicking does nothing" rather than as a lifecycle bug.
+  Refs belong on elements built inside a STRUCT component's `Render`, which is what actually runs.
+  Inside a loop, `ref={m} key={k}` generates `RefMap.Put(k, el)` — that is the intended form.
+  Clicking is ref + `ContainsPoint` and nothing else: go-tui's own `HandleClicks` is exactly that
+  (`click.go`), there is no event target on a `MouseEvent`, and there is no hover at all
+  (`MouseAction` is Press/Release/Drag — motion is reported only with a button held).
+- **The wheel IS built in; the scrollbar is not.** An unconsumed `MouseEvent` falls through to
+  element hit-testing and `handleScrollEvent` scrolls by ONE line (`app_events.go:52-60`,
+  `element_focus.go:183`). Our panes intercept it anyway: three lines is the readable step, and —
+  load-bearing — a pane re-asserts `scrollOffset={…}` every render, so a scroll the framework writes
+  straight onto `e.scrollY` is overwritten by the next frame. The bar itself is drawn and never read:
+  `MouseDrag` appears only in the two input parsers. Clicking and dragging it is ours
+  (`onScrollbar`/`scrollToPoint` in `pane.gsx`), derived from `ContentRect()` and `MaxScroll()` — the
+  thumb's height is deliberately NOT re-derived, since a copy of a drawing rule goes quietly wrong
+  the day the rule changes.
+- **`Element.ContainsPoint` is wrong for a CHILD of a bordered or padded container.** A child's rect
+  is measured from its scroll container's content box starting at zero; ContainsPoint converts a
+  screen point by adding every scrollable ancestor's scroll offset (`element_focus.go:147`) and never
+  subtracts where that content box begins. Top-level elements are fine — which is why the panes
+  hit-test themselves correctly — but a line inside a pane is off by the border, so a click lands one
+  row down and misses the last visible row entirely. Subtract the container's `ContentRect()` origin
+  from the point first and let ContainsPoint add the scroll, which is the half it gets right
+  (`internal/tui/tool.go:toolAt`, pinned by `TestHitTestingAChildOfAScrolledPane`). This is also why
+  `sidebar.clickAt` computes its row from `ContentRect()` by hand rather than asking the rows.
+- **A trapping `<modal>` ends its KeyMap with `OnPreemptStop(AnyKey)`** — a catch-all that matches
+  everything. go-tui dispatches in three passes: focus-gated stop handlers, then preempt, then
+  normal. So a key meant to close an overlay has to be `OnPreemptStop` on the ROOT; an ordinary
+  `OnStop` never runs, and the only way out of the overlay is quitting the program. The panes' own
+  `OnFocused` scroll keys survive because the focus-gated pass runs first. Same file, second trap:
+  `Modal` implements no `PropsUpdater`, so a cached modal keeps the KeyMap its factory produced the
+  first time it opened — which is why every overlay's keys live on the root, rebuilt per render.
+- **A `.gsx` component whose whole body is inside an `if` returns nil**, and the framework
+  dereferences what Render returns — a nil-pointer panic on the first frame. Keep the outer element
+  unconditional. Also: `<markdown>`, `<input>`, `<textarea>` and `<modal>` only work inside a STRUCT
+  component (they mount against a receiver), and the generator's parser chokes on an unnamed
+  `struct{}` parameter — which is one more reason the logic lives in `app.go` and the `.gsx` holds
+  only the shape.
 - **A nested `go.mod` needs `GOWORK=off`.** `internal/onnx/reference/` is its own module so gomlx
   stays out of nocturn's graph. That works — the parent skips it — but `go.work` does not cover it
   either, so plain `go build ./...` inside it fails with "directory prefix . does not contain
@@ -264,9 +321,20 @@ NOCTURN_SPEAKER_CORPUS=/tmp/corpus go test ./internal/speaker/ -run Evaluate -v 
 internal/speaker/reference/setup.sh   # torch venv, ONLY to regenerate the filterbank reference
 
 cp .env.example .env                  # OPENAI_BASE_URL / _MODEL / _API_KEY
-go run ./cmd/nocturn                  # interactive terminal chat
+go run ./cmd/nocturn                  # the full-screen terminal chat (needs a TTY; exits 2 if piped)
 go run ./cmd/nocturn serve            # the WebSocket daemon the mobile app talks to
-#   in chat: /chats /new /open <id> /agents /fire <name> /quit
+#   keys: Ctrl+P the command palette (everything is in there) · Tab next region, named in the hint
+#         line · Enter open/send · Ctrl+C cancel the TURN · Ctrl+N new · Ctrl+K workspace ·
+#         Ctrl+L log pane · Ctrl+Q quit · j/k/PgUp/PgDn/g/G scroll · ←→ filter the conversation list
+#         click a tool line for its whole input and output · in the workspace view: 1-7 open a
+#         section, / filters the three long ones, Esc peels one layer
+#   in chat: /new /open <id> /chats /agents /fire <name> <task> /help /quit — /help and /agents
+#         open the palette rather than writing into the transcript
+#   its diagnostics go to nocturn-data/nocturn.log — nothing prints while the UI owns the screen
+
+# The .gsx templates compile to committed *_gsx.go; regenerate after touching one.
+go install github.com/grindlemire/go-tui/cmd/tui@v0.18.2
+tui generate ./internal/tui/...
 #   subcommands: auth <provider> · secret set|ls · ls · version · help (most take -w)
 
 cd docs && npx astro build            # the schema validates every tool/capability entry

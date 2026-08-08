@@ -1,6 +1,6 @@
 ---
 title: The layered design
-description: What sits on what — from a guest with no authority at all, out to the chat and the daemon — and which layer each guarantee actually comes from.
+description: What sits on what — from a guest with no authority at all, out to the chat and the server — and which layer each guarantee actually comes from.
 ---
 
 Nocturn is built so that the parts which can be talked into something are the parts with the least
@@ -9,7 +9,7 @@ time.
 
 ```mermaid
 flowchart TB
-  subgraph L6 ["6 · Interfaces — terminal chat, serve daemon, companion app"]
+  subgraph L6 ["6 · Interfaces — terminal chat, serve server, companion app"]
    subgraph L5 ["5 · Workspace — the composition root, one stack per folder"]
     subgraph L4 ["4 · Model adapter — streaming, tool_calls"]
      subgraph L3 ["3 · agentkit — the turn loop, policy-blind"]
@@ -87,7 +87,7 @@ derive their own vault key from.
 
 ## 6 · The interfaces
 
-The terminal chat, the `serve` daemon, and the companion app. The most convenient layer and the
+The terminal chat, the `serve` server, and the companion app. The most convenient layer and the
 least trusted: it can start work and show results, but it cannot grant power. An approval shown in
 the app is *transported* by this layer, never *decided* by it — which is exactly why the decision is
 allowed to live on a second device.
