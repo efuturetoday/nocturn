@@ -83,9 +83,18 @@ if (notes.length > LIMIT) {
   const kept = [];
   let used = marker.length;
   for (const line of notes.split('\n')) {
-    if (used + line.length + 1 > LIMIT) break;
-    used += line.length + 1;
-    kept.push(line);
+    const room = LIMIT - used;
+    if (line.length + 1 <= room) {
+      used += line.length + 1;
+      kept.push(line);
+      continue;
+    }
+    // The line does not fit. Cutting INSIDE it beats dropping it: one entry longer than the budget
+    // would otherwise reduce the notes to the heading above it and the marker — a tester learning
+    // less than if nothing had been truncated at all. Below a line's worth of room it is not worth
+    // the ragged fragment.
+    if (room > 80) kept.push(line.slice(0, room - 1));
+    break;
   }
   notes = kept.join('\n').trimEnd() + marker;
   console.error(`release-notes: ${version} exceeded ${LIMIT} characters and was cut`);

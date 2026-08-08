@@ -112,8 +112,14 @@ jobs:
       contents: write
     uses: ./.github/workflows/release.yml
     # The mobile tag signs and ships to TestFlight two levels down, in _release-ios.yml. Secrets do
-    # not cross a workflow_call boundary on their own, and there are two of them between here and
-    # there — so `inherit` is needed at BOTH call sites or the Apple credentials arrive empty.
-    secrets: inherit
+    # not cross a workflow_call boundary on their own, and there are two boundaries between here and
+    # there — so both call sites forward, or the Apple credentials arrive empty. Named rather than
+    # inherited: nothing else down there has any business seeing a secret.
+    secrets:
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+      IOS_DIST_CERT_P12: ${{ secrets.IOS_DIST_CERT_P12 }}
+      IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
     with:
       tag: ${{ matrix.tag }}

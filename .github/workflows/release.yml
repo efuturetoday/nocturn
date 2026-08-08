@@ -28,6 +28,24 @@ on:
           all and every expression below falls back to `github.ref_name`.
         required: true
         type: string
+    # Named one by one rather than inherited. `secrets: inherit` hands the callee EVERY secret the
+    # repository has, including the ones added next year for something unrelated — and the callee here
+    # runs fastlane, which is a large third-party surface. Optional because only `mobile-v*` reaches
+    # the job that uses them; the other two tags call this with none.
+    #
+    # On a tag PUSH there is no caller at all, and `secrets.X` below resolves to the repository secret
+    # directly. Declaring them here does not change that path.
+    secrets:
+      APP_STORE_CONNECT_KEY_ID:
+        required: false
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: false
+      APP_STORE_CONNECT_KEY_P8:
+        required: false
+      IOS_DIST_CERT_P12:
+        required: false
+      IOS_DIST_CERT_PASSWORD:
+        required: false
 
 permissions:
   contents: read
@@ -106,12 +124,17 @@ jobs:
 
   # iOS goes to TestFlight rather than into the release's assets — Apple has no sideloading, so there
   # is no file to attach. The archive is signed here, which proves more than the unsigned compile the
-  # gate runs. `secrets: inherit` is what carries the Apple credentials down; without it the lane
-  # fails on the first ENV.fetch.
+  # gate runs. The five secrets are what the lane fetches; without them it fails on the first
+  # ENV.fetch.
   ios:
     needs: web
     uses: ./.github/workflows/_release-ios.yml
-    secrets: inherit
+    secrets:
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+      IOS_DIST_CERT_P12: ${{ secrets.IOS_DIST_CERT_P12 }}
+      IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
     with:
       ref: ${{ inputs.tag || github.ref_name }}
 
