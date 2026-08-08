@@ -1,9 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, computed, DestroyRef } from '@angular/core';
 import { Router } from '@angular/router';
-import { IonContent, IonSpinner, IonIcon, IonFooter, IonSkeletonText, AlertController, ModalController } from '@ionic/angular/standalone';
+import { IonContent, IonSpinner, IonFooter, IonSkeletonText, AlertController, ModalController } from '@ionic/angular/standalone';
 import { PairPage } from '../pair/pair.page';
-import { addIcons } from 'ionicons';
-import { radioOutline } from 'ionicons/icons';
+import { LucideRadio } from '@lucide/angular';
 import { DiscoveryService } from '../../core/services/discovery.service';
 import { ConnectionService } from '../../core/services/connection.service';
 import { AuthService } from '../../core/services/auth.service';
@@ -14,7 +13,7 @@ const RESCAN_MS = 4000;
 @Component({
   selector: 'app-discover',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [IonContent, IonSpinner, IonIcon, IonFooter, IonSkeletonText],
+  imports: [IonContent, IonSpinner, IonFooter, IonSkeletonText, LucideRadio],
   template: `
     <ion-content [fullscreen]="true">
       <div class="nebula" aria-hidden="true"></div>
@@ -31,7 +30,7 @@ const RESCAN_MS = 4000;
           <div class="results">
             @for (h of discovery.hosts(); track h.url) {
               <button class="host" (click)="connect(h.url)">
-                <ion-icon name="radio-outline" aria-hidden="true" />
+                <svg lucideRadio [size]="21" />
                 <span class="host-text"><b>{{ h.name }}</b><small>{{ h.url }}</small></span>
               </button>
             } @empty {
@@ -92,7 +91,7 @@ const RESCAN_MS = 4000;
       border: 1px solid var(--ion-background-color-step-150); border-radius: 0.875rem;
       font: inherit; text-align: left; cursor: pointer;
     }
-    .host ion-icon { font-size: 1.3rem; color: var(--ion-color-primary); }
+    .host > svg { color: var(--ion-color-primary); }
     .host-text { display: flex; flex-direction: column; }
     .host-text small { color: var(--ion-color-medium); font-size: 0.75rem; }
     .host.skeleton { cursor: default; }
@@ -123,7 +122,6 @@ export class DiscoverPage {
   );
 
   constructor() {
-    addIcons({ radioOutline });
     // Perpetual discovery: scan now, then re-scan on an interval so the spinner keeps listening
     // and newly-appearing daemons show up. Cleaned up when the page is destroyed.
     void this.discovery.scan();
@@ -175,6 +173,6 @@ export class DiscoverPage {
     }
     this.connection.connect(url, bearer);
     // Root nav: replace history so you can't swipe/back into the discover screen from the app.
-    await this.router.navigate(['/tabs', 'chat'], { replaceUrl: true });
+    await this.router.navigate(['/app', 'home'], { replaceUrl: true });
   }
 }

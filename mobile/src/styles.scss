@@ -12,6 +12,19 @@
 /* Force the dark colour scheme so native form controls / scrollbars match the theme. */
 :root {
   color-scheme: dark;
+
+  /* The app's reading measure. Every column of content — the chat transcript, the composer, the
+     inset list cards, the approval sheet — stops here and centres. Without it a pinned sidebar or a
+     tablet stretches a two-line row across 1200px and the eye loses the left edge on the way back.
+     One token so the surfaces cannot drift apart. */
+  --nocturn-measure: 660px;
+
+  /* How much of the bottom edge is occupied right now — by the home indicator, or by the keyboard
+     once it is up. Anything anchored to the bottom sits on THIS instead of on the safe-area inset,
+     and then rides the keyboard without needing to know anything about it. max(), so it needs no
+     open/closed state: --kb-height is 0px while the keyboard is down, and larger than the inset
+     whenever it is up. */
+  --nocturn-bottom-inset: max(var(--ion-safe-area-bottom, 0px), var(--kb-height, 0px));
 }
 
 /* Safe areas: ion-header/ion-toolbar (top) and ion-footer (bottom) apply their insets
@@ -34,8 +47,21 @@ ion-list-header {
    min-height AND a ~29px label margin-top — while the last item hugs the card's bottom edge. Zero
    those out and pad the card symmetrically so top and bottom breathe equally. Scoped to inset lists
    so non-inset pages (Home) are untouched. */
+/* Mode classes in the selector, matching Ionic's own `.list-md.list-inset { margin: 16px }`. Ionic's
+   stylesheets load AFTER this file (see angular.json), so an equally specific rule loses and the
+   card stays pinned to the left edge of a wide pane instead of centring. */
+ion-list.list-md.list-inset,
+ion-list.list-ios.list-inset {
+  /* The measure, but never at the cost of the 16px gutter: min() keeps the card inset from the
+     screen edge on a phone and centres it once there is room to spare. */
+  max-width: min(var(--nocturn-measure), calc(100% - 2rem));
+  margin-inline: auto;
+}
 ion-list.list-inset {
   padding-block: 0.75rem;
+  /* State the radius rather than inherit it: Ionic's md inset list rounds by 2px and its ios one by
+     8px, so the same card reads as a rectangle on one platform and a card on the other. */
+  border-radius: 0.5rem;
 }
 ion-list.list-inset ion-list-header {
   min-height: 0;
@@ -46,12 +72,16 @@ ion-list.list-inset ion-list-header ion-label {
 }
 
 /* Roomier rows: Ionic's 44px ios default packs a two-line row (name + sub) tight. Give items more
-   breathing, and drop the last item's hairline so single-item islands (e.g. one reminder) don't
-   render a stray divider Ionic's own last-child removal misses. */
+   breathing, and drop the LAST row's hairline so a card never ends on a divider Ionic's own
+   last-child removal misses.
+   The child combinators are load-bearing. A swipeable row is an ion-item wrapped in an
+   ion-item-sliding, which makes it the only ion-item among ITS siblings — so a descendant
+   `ion-item:last-of-type` matches every row in the list and silently erases all the dividers. */
 ion-list.list-inset ion-item {
   --min-height: 3.5rem;
 }
-ion-list.list-inset ion-item:last-of-type {
+ion-list.list-inset > ion-item:last-of-type,
+ion-list.list-inset > ion-item-sliding:last-of-type > ion-item {
   --inner-border-width: 0;
 }
 
@@ -68,24 +98,92 @@ ion-list-header ion-label {
   letter-spacing: -0.01em;
 }
 
-/* Keyboard-follow footer ([kbFollow], shared/kb-follow.directive.ts). The directive host-binds a
-   translateY(-keyboardHeight) transform + --kb-fill; these global rules carry the transition (matches
-   the ~0.25s iOS curve → slides in sync, no late snap) and the fill strip below the lifted footer
-   (behind the keyboard's rounded corners) so content doesn't leak through. Global because the styled
-   element belongs to the consuming page. NO will-change: it would promote the footer to its own
-   compositor layer that paints over the tab bar for the whole leaving-page transition. */
-.kb-follow {
-  position: relative;
+/* Lucide icons. Each one is an <svg class="lucide lucide-…"> rendered by a directive imported per
+   icon (@lucide/angular) — no icon registry, no loader, no runtime fetch.
+
+   An SVG is display:inline by default, so it sits on the TEXT BASELINE and takes part in the line
+   box: inside an ion-item, ion-button or ion-toolbar that shows up as a few px of phantom descender
+   under the glyph, a row that stops centring, and a slot="start" icon riding high. Taking it out of
+   the line box is the whole fix — and it has to be global, because the icon is a child of a
+   component that did not declare it (Ionic supplies the slot, we supply the svg).
+
+   Ionic's own spacing rules are written for `ion-icon`, so the slot gaps are re-stated here. */
+svg.lucide {
+  display: block;
+  line-height: 0;
+  flex-shrink: 0;
+}
+ion-item > svg.lucide[slot='start'] {
+  margin-inline-end: 1rem;
+}
+ion-item > svg.lucide[slot='end'] {
+  margin-inline-start: 1rem;
+}
+
+/* The composer's field must not set the pill's height — the SEND DISC should, so the disc looks
+   nestled in rather than adrift in a tall box. Ionic gives its native input a fixed 44px for touch
+   reasons, 4px taller than the 40px disc, which leaves 7.5px of air above and below it. The pill's
+   own padding is the touch target here, so the field can collapse to its text.
+   Global, not scoped: ion-input is a SCOPED component, so the <input> it creates is a real DOM
+   descendant but carries none of our _ngcontent attributes — a component style cannot reach it. */
+ion-input.composer-input input.native-input {
+  height: auto;
+  min-height: 0;
+}
+
+/* An icon slotted into an Ionic button is the topmost hit target, and an <svg> is one — so the
+   click lands on a <path> and the button never sees it (the menu button silently did nothing).
+   ion-icon avoids this by setting pointer-events: none on itself; a plain svg has to be told. */
+ion-menu-button svg.lucide,
+ion-button svg.lucide,
+ion-fab-button svg.lucide,
+ion-item[button] svg.lucide {
+  pointer-events: none;
+}
+
+/* The composer following the keyboard.
+   Driven by `--kb-height` and the `kb-open` class that KeyboardService writes on <html> at
+   keyboardWillShow — i.e. at the START of the iOS animation, which is the only moment early enough
+   to be in sync (every Capacitor resize mode lands ~200ms after it finishes).
+
+   ONE animated property. The lift is the keyboard height MINUS the home-indicator inset, so the
+   footer's own inset band ends up parked behind the keys instead of sitting between the pill and
+   them: visually the inset is swallowed, mechanically nothing about it changes, and there is no
+   second property that could desync from the first. It also makes a fill strip below the footer
+   unnecessary — the inset band is the fill.
+
+   Gated behind the class rather than emitting translateY(0) when closed: a permanent transform
+   promotes the element to its own compositor layer for the whole life of the page. NO will-change,
+   for the same reason. */
+ion-footer.composer-bar {
   transition: transform 0.25s ease-out;
 }
-.kb-follow::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  height: var(--kb-fill, 0);
-  background: var(--ion-toolbar-background, var(--ion-background-color-step-100));
+html.kb-open ion-footer.composer-bar {
+  transform: translateY(calc(-1 * max(0px, var(--kb-height, 0px) - var(--ion-safe-area-bottom, 0px))));
+}
+
+/* The hero has no footer to lift — its lockup is vertically centred, and on a short screen the keys
+   reach into the pill. Centring inside a box shortened at the bottom by the keyboard moves the centre
+   up by exactly HALF that height, so that is the offset. A transform, not padding: the artwork must
+   not be re-laid-out (the mascot is sized in vh and the backdrop is absolutely positioned), and this
+   way it rides the same curve as the composer opposite.
+
+   Global rather than in home.page.ts because the class it keys off lives on <html>, which a
+   component's scoped styles cannot reach without :host-context. */
+app-home .stage {
+  transition: transform 0.25s ease-out;
+}
+html.kb-open app-home .stage {
+  transform: translateY(calc(var(--kb-height, 0px) / -2));
+}
+
+/* Ionic puts the home-indicator inset on the LAST toolbar of a footer itself, toggled by its own
+   keyboard controller (@ionic/core components/footer/footer.ios.css, `.footer-toolbar-padding`).
+   Footer styles are unencapsulated, so that selector reaches the toolbar inside app-composer and the
+   inset was being applied twice — 68px of dead space under the pill on a notch device. Ours is the
+   one that stays, because it is the one the transform above is netted against. */
+ion-footer.composer-bar.footer-toolbar-padding ion-toolbar:last-of-type {
+  padding-bottom: 0;
 }
 
 /* Syntax highlighting: highlight.js emits `.hljs-*` class spans (see shared/highlight.ts); colour

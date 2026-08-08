@@ -1,0 +1,112 @@
+/* The Nocturn night sky — the backdrop of the hero page.
+   CSS and one SVG asset only: no canvas, no WebGL, no dependency, and prefers-reduced-motion is
+   honoured for free at the bottom of this file.
+
+   It lives here rather than in home.page.ts because angular.json caps a component's styles at 4 kB
+   (error at 8 kB), and the layered backdrop plus its keyframes does not fit that budget. Registered
+   in angular.json BEFORE theme/variables.css, which must stay last.
+
+   Layer order, back to front: nebula plate · three star layers · accent bloom · vignette · floor.
+   The floor lands on the OPAQUE --ion-background-color: styles.scss explains why a page must never
+   end up transparent (Ionic's page transitions let the leaving and entering pages bleed together). */
+
+/* The artwork's own base, named in the header of theme/variables.css. It is the colour the nebula
+   plate is painted on, not a UI surface, which is why it is not part of the step ramp. On :root so
+   the hero's own component styles can reach it too. */
+:root {
+  --nocturn-artwork-rgb: 15, 7, 28;
+}
+
+.galaxy {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.galaxy > * {
+  position: absolute;
+  inset: 0;
+}
+
+/* The plate is inset NEGATIVELY so the slow scale-and-pan never exposes an edge. The artwork is
+   pulled UP (8%) so its bright core lands behind the mascot and wordmark, leaving the bottom third —
+   where the input sits — on the dark end of the plate. */
+.galaxy .plate {
+  inset: -8%;
+  background: url('/assets/brand/nebula.jpg') center 8% / cover no-repeat;
+  animation: nocturn-drift 74s ease-in-out infinite alternate;
+}
+
+/* One star asset, three times, at three scales and offsets — depth without three assets. The scales
+   stay close to 100%: past roughly 160% the asset's own sparkles are magnified enough to go soft. */
+.galaxy .stars {
+  background-image: url('/assets/brand/stars.svg');
+  background-repeat: no-repeat;
+  animation: nocturn-twinkle 5.5s ease-in-out infinite;
+}
+.galaxy .stars-1 { background-size: 105% auto; background-position: 12% 8%;  opacity: 0.9; }
+.galaxy .stars-2 { background-size: 128% auto; background-position: 68% 34%; opacity: 0.7; animation-duration: 8s;  animation-delay: -2.4s; }
+.galaxy .stars-3 { background-size: 158% auto; background-position: 30% 72%; opacity: 0.5; animation-duration: 11s; animation-delay: -5.1s; }
+
+/* The accent bloom sits behind the input, not behind the whole screen — it is what makes the pill
+   look lit rather than pasted on, and it is the page's one loud use of the brand purple. */
+.galaxy .bloom {
+  inset: auto;
+  left: 50%;
+  top: 62%;
+  width: 460px;
+  height: 460px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(
+    circle,
+    rgba(var(--ion-color-primary-rgb), 0.28) 0%,
+    rgba(var(--ion-color-primary-rgb), 0.09) 42%,
+    transparent 68%
+  );
+  animation: nocturn-breathe 9s ease-in-out infinite;
+}
+
+.galaxy .vignette {
+  background: radial-gradient(ellipse at 50% 44%, transparent 40%, rgba(var(--ion-background-color-rgb), 0.55) 100%);
+}
+
+/* The floor: barely there at the top so the artwork reads, full page colour by the bottom so the
+   input is always legible whatever the nebula happens to be doing behind it. It reaches the page
+   colour at 92%, not 100% — the last stretch has to be FLAT, or the pill sits on a gradient that
+   keeps moving under it as the plate drifts. */
+.galaxy .floor {
+  background: linear-gradient(
+    to bottom,
+    rgba(var(--nocturn-artwork-rgb), 0.2) 0%,
+    rgba(var(--nocturn-artwork-rgb), 0.46) 44%,
+    rgba(var(--ion-background-color-rgb), 0.86) 74%,
+    var(--ion-background-color) 92%
+  );
+}
+
+@keyframes nocturn-drift {
+  from { transform: scale(1) translate3d(0, 0, 0); }
+  to   { transform: scale(1.1) translate3d(-2.5%, 1.5%, 0); }
+}
+
+@keyframes nocturn-twinkle {
+  0%, 100% { opacity: 0.28; }
+  50%      { opacity: 1; }
+}
+
+@keyframes nocturn-breathe {
+  0%, 100% { opacity: 0.78; transform: translate(-50%, -50%) scale(1); }
+  50%      { opacity: 1;    transform: translate(-50%, -50%) scale(1.07); }
+}
+
+/* The sky still reads as a sky when it holds still; only the motion is optional. */
+@media (prefers-reduced-motion: reduce) {
+  .galaxy .plate,
+  .galaxy .stars,
+  .galaxy .bloom {
+    animation: none;
+  }
+  .galaxy .stars { opacity: 0.8; }
+}

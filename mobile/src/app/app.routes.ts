@@ -2,15 +2,17 @@ import { Routes } from '@angular/router';
 import { connectionGuard } from './core/guards/connection.guard';
 
 /**
- * Discover sits outside the tab shell. Once connected, the tab-ROOT pages live under the `tabs`
- * shell: Home · Chat (list) · Agents · Settings. The active workspace is auto-selected (first) on
- * connect and switchable in Settings.
+ * Discover sits outside the app shell. Everything else lives under `app`, inside the ShellPage's
+ * ion-router-outlet, so the side menu is reachable from every screen — including from inside a
+ * chat, which is what makes the drawer's history the way back.
  *
- * Full-screen chat DETAIL (`chat/new`, `chat/:id`, `agents/run/:id`) lives OUTSIDE `tabs` — as
- * top-level siblings — so it renders in the ROOT outlet and covers the tab bar (the Ionic-native
- * way to a tab-less full-screen page; no CSS hiding). Back returns to `/tabs/chat` (the list).
- * `:id` binds to a component input via withComponentInputBinding(). `chat/new` must precede
- * `chat/:id` so it isn't captured as an id.
+ * Chat DETAIL is an ordinary shell child. It used to be a root-outlet sibling purely so it would
+ * cover the bottom tab bar; with the tab bar gone there is nothing to cover, and being a child is
+ * what gives it the menu.
+ *
+ * `:id` binds to a component input via withComponentInputBinding(). `data.kind` selects which
+ * conversation store the reused ChatPage binds to (user chats vs agent runs) — the ChatPage
+ * provider reads it, so the id-addressed commands carry the right kind.
  */
 export const routes: Routes = [
   { path: '', redirectTo: 'discover', pathMatch: 'full' },
@@ -19,22 +21,19 @@ export const routes: Routes = [
     loadComponent: () => import('./features/discover/discover.page').then((m) => m.DiscoverPage),
   },
   {
-    path: 'tabs',
+    path: 'app',
     canActivate: [connectionGuard],
-    loadComponent: () => import('./features/tabs/tabs.page').then((m) => m.TabsPage),
+    loadComponent: () => import('./features/shell/shell.page').then((m) => m.ShellPage),
     children: [
       { path: 'home', loadComponent: () => import('./features/home/home.page').then((m) => m.HomePage) },
-      { path: 'chat', loadComponent: () => import('./features/chats/chats.page').then((m) => m.ChatsPage) },
+      { path: 'reminders', loadComponent: () => import('./features/reminders/reminders.page').then((m) => m.RemindersPage) },
       { path: 'agents', loadComponent: () => import('./features/agents/agents.page').then((m) => m.AgentsPage) },
       { path: 'settings', loadComponent: () => import('./features/settings/settings.page').then((m) => m.SettingsPage) },
-      { path: '', redirectTo: 'chat', pathMatch: 'full' },
+      // The chat id is client-minted, so a fresh chat navigates straight here (no /chat/new step).
+      { path: 'chat/:id', data: { kind: 'user' }, loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
+      { path: 'agents/run/:id', data: { kind: 'agent' }, loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
+      { path: '', redirectTo: 'home', pathMatch: 'full' },
     ],
   },
-  // Full-screen (tab-less) chat detail — root-outlet siblings of `tabs`. The id is client-minted, so
-  // a fresh chat navigates straight here (no /chat/new intermediate).
-  // `data.kind` selects which conversation store the reused ChatPage binds to (user chats vs agent
-  // runs) — the ChatPage provider reads it, so the id-addressed commands carry the right kind.
-  { path: 'chat/:id', canActivate: [connectionGuard], data: { kind: 'user' }, loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
-  { path: 'agents/run/:id', canActivate: [connectionGuard], data: { kind: 'agent' }, loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },
   { path: '**', redirectTo: 'discover' },
 ];

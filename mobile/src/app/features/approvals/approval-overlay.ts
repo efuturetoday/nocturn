@@ -1,7 +1,8 @@
-import { Component, ChangeDetectionStrategy, OnDestroy, inject, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, OnDestroy, inject, signal, effect, untracked } from '@angular/core';
 import { IonButton } from '@ionic/angular/standalone';
 import { ApprovalService } from '../../core/services/approval.service';
 import { ChatListService } from '../../core/services/chat-list.service';
+import { KeyboardService } from '../../core/services/keyboard.service';
 import { DENY_OPTION, type ApprovalOption } from '../../core/protocol/nocturn-protocol';
 import type { PendingApproval } from '../../core/services/chat-view';
 
@@ -130,8 +131,14 @@ const TICK_MS = 50;
     }
     .panel {
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 1001;
+      /* The sheet holds the most consequential decision in the app; stretched across a desktop pane
+         its buttons become metre-wide bars. Same measure as every other column. */
+      max-width: var(--nocturn-measure); margin-inline: auto;
       max-height: 85vh; overflow-y: auto;
-      padding: 0.5rem 1.25rem calc(1.25rem + var(--ion-safe-area-bottom, 0px));
+      /* Carried by the padding rather than by the bottom offset: the sheet has to reach the screen
+         edge or a strip of the page shows under it. The token means the content clears the home
+         indicator normally, and the keyboard if one is somehow still up when the ask lands. */
+      padding: 0.5rem 1.25rem calc(1.25rem + var(--nocturn-bottom-inset, 0px));
       background: var(--ion-background-color-step-50);
       border-top-left-radius: 1.25rem; border-top-right-radius: 1.25rem;
       box-shadow: 0 -0.5rem 1.5rem rgb(0 0 0 / 0.4);
@@ -221,8 +228,20 @@ const TICK_MS = 50;
 export class ApprovalOverlayComponent implements OnDestroy {
   protected readonly approval = inject(ApprovalService);
   private readonly chatList = inject(ChatListService);
+  private readonly keyboard = inject(KeyboardService);
 
   protected readonly deny = DENY_OPTION;
+
+  constructor() {
+    // An arriving ask puts the keyboard away. The sheet is fixed to the bottom of the screen, so an
+    // open keyboard covers it outright — and the composer, which follows the keyboard up, would be
+    // sitting on top of the one thing that has to be answered. Dismissing is safe in a way that
+    // answering never is: it costs the user a tap to resume typing and cannot decide anything.
+    effect(() => {
+      if (this.approval.pending().length === 0) return;
+      untracked(() => this.keyboard.dismiss());
+    });
+  }
 
   /** "<approvalId>:<optionId>" of the answer being held, or null. Only one can be held at a time. */
   private readonly held = signal<string | null>(null);

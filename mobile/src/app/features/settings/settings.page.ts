@@ -1,10 +1,9 @@
 import { Component, ChangeDetectionStrategy, computed, inject } from '@angular/core';
 import { Router } from '@angular/router';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonIcon, IonSpinner,
+  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonSpinner,
 } from '@ionic/angular/standalone';
-import { addIcons } from 'ionicons';
-import { logOutOutline } from 'ionicons/icons';
+import { LucideLogOut } from '@lucide/angular';
 import { ConnectionService } from '../../core/services/connection.service';
 import { AuthService } from '../../core/services/auth.service';
 import { AccountsService } from '../../core/services/accounts.service';
@@ -15,8 +14,8 @@ import { isDemoUrl } from '../../core/demo/is-demo';
   selector: 'app-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    WorkspaceHeaderComponent, IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote,
-    IonChip, IonIcon, IonSpinner,
+    WorkspaceHeaderComponent, LucideLogOut, IonContent, IonList, IonListHeader, IonItem, IonLabel,
+    IonNote, IonChip, IonSpinner,
   ],
   template: `
     <app-workspace-header />
@@ -78,11 +77,14 @@ import { isDemoUrl } from '../../core/demo/is-demo';
           </ion-chip>
         </ion-item>
         <ion-item button lines="none" (click)="disconnect()">
-          <ion-icon slot="start" name="log-out-outline" color="danger" />
+          <svg lucideLogOut slot="start" [size]="21" class="danger" />
           <ion-label color="danger">Disconnect</ion-label>
         </ion-item>
       </ion-list>
     </ion-content>
+  `,
+  styles: `
+    .danger { color: var(--ion-color-danger); }
   `,
 })
 export class SettingsPage {
@@ -93,10 +95,6 @@ export class SettingsPage {
 
   /** Say so when the app is running against the in-app demo rather than a daemon. */
   protected readonly demo = computed(() => isDemoUrl(this.connection.currentUrl()));
-
-  constructor() {
-    addIcons({ logOutOutline });
-  }
 
   protected connect(server: string): void {
     this.accounts.connect(server);

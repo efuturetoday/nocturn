@@ -1,13 +1,13 @@
 import {
-  Component, ChangeDetectionStrategy, inject, input, effect, signal, untracked, viewChild, ElementRef,
+  Component, ChangeDetectionStrategy, inject, input, effect, signal, untracked, viewChild, computed,
 } from '@angular/core';
 import {
-  IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonBackButton, IonIcon,
-  IonFooter, IonFab, IonFabButton,
-  type ViewWillEnter, type ViewWillLeave, type ViewDidEnter, type ViewDidLeave,
+  IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonButton, IonMenuButton,
+  IonFooter, IonFab, IonFabButton, NavController,
+  type ViewWillEnter, type ViewDidEnter, type ViewDidLeave,
 } from '@ionic/angular/standalone';
-import { addIcons } from 'ionicons';
-import { chevronDownOutline } from 'ionicons/icons';
+import { LucideMenu, LucidePlus, LucideChevronDown } from '@lucide/angular';
+import { chatToHero } from '../../shared/hero-transition';
 import { ActivatedRoute } from '@angular/router';
 import { ChatService } from '../../core/services/chat.service';
 import { AgentRunService } from '../../core/services/agent-run.service';
@@ -18,7 +18,6 @@ import { ConnectionService } from '../../core/services/connection.service';
 import { KeyboardService } from '../../core/services/keyboard.service';
 import { MessageBubbleComponent } from './components/message-bubble';
 import { ComposerComponent } from '../../shared/composer';
-import { KbFollowDirective } from '../../shared/kb-follow.directive';
 
 @Component({
   selector: 'app-chat',
@@ -35,40 +34,55 @@ import { KbFollowDirective } from '../../shared/kb-follow.directive';
     },
   ],
   imports: [
-    IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonBackButton, IonIcon,
+    IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonButton, IonMenuButton,
     IonFooter, IonFab, IonFabButton,
-    MessageBubbleComponent, ComposerComponent, KbFollowDirective,
+    MessageBubbleComponent, ComposerComponent,
+    LucideMenu, LucidePlus, LucideChevronDown,
   ],
   template: `
+    <!-- No back button: there is no list page behind this one any more. The drawer holds the
+         history, so the menu button IS the way back — and the plus starts a fresh chat without
+         going through it. -->
     <ion-header>
       <ion-toolbar>
-        <ion-buttons slot="start"><ion-back-button defaultHref="/tabs/chat" /></ion-buttons>
-        <ion-title>Chat</ion-title>
+        <ion-buttons slot="start">
+          <ion-menu-button menu="main"><svg lucideMenu [size]="24" /></ion-menu-button>
+        </ion-buttons>
+        <ion-title>{{ title() }}</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="newChat()" aria-label="New chat">
+            <svg lucidePlus [size]="24" />
+          </ion-button>
+        </ion-buttons>
       </ion-toolbar>
     </ion-header>
 
     <ion-content
       #content
       class="chat-content"
-      [style.--padding-bottom.px]="kb.height()"
       [scrollEvents]="true"
       (ionScroll)="onScroll()"
     >
-      @for (m of convo.messages(); track $index) {
-        <app-message-bubble [message]="m" />
-      }
+      <!-- The transcript keeps a reading measure of its own. Full-bleed bubbles on a tablet or a
+           pinned-sidebar desktop stretch a one-line answer across the whole pane, and the eye loses
+           the left edge on the way back. -->
+      <div class="thread">
+        @for (m of convo.messages(); track $index) {
+          <app-message-bubble [message]="m" />
+        }
+      </div>
 
       <!-- Always in the DOM; only toggle visibility (opacity/pointer-events). Mounting it with @if
            mid-scroll — exactly when atBottom flips crossing the threshold — inserts a slotted fixed
            element into ion-content and reflows, which stutters the scroll right as it appears. -->
       <ion-fab class="scroll-fab" [class.hidden]="atBottom()" slot="fixed" vertical="bottom" horizontal="end">
         <ion-fab-button size="small" aria-label="Scroll to latest" (click)="jumpToBottom()">
-          <ion-icon name="chevron-down-outline" />
+          <svg lucideChevronDown [size]="20" />
         </ion-fab-button>
       </ion-fab>
     </ion-content>
 
-    <ion-footer #footer kbFollow>
+    <ion-footer class="composer-bar ion-no-border">
       <app-composer
         [running]="convo.running()"
         [disabled]="!connection.connected()"
@@ -78,7 +92,28 @@ import { KbFollowDirective } from '../../shared/kb-follow.directive';
     </ion-footer>
   `,
   styles: `
-    .chat-content { --padding-start: 16px; --padding-end: 16px; --padding-top: 12px; --padding-bottom: 12px; }
+    /* The bottom padding tracks the lift below, so the last message clears the composer wherever
+       the composer currently is. Same expression as the transform in styles.scss. */
+    .chat-content {
+      --padding-start: 16px;
+      --padding-end: 16px;
+      --padding-top: 12px;
+      --padding-bottom: calc(12px + max(0px, var(--kb-height, 0px) - var(--ion-safe-area-bottom, 0px)));
+    }
+    /* The shared reading measure — the composer below lands on the same column. */
+    .thread { max-width: var(--nocturn-measure); margin-inline: auto; }
+
+    /* The composer bar: the toolbar surface carries the pill, as in the design. Opaque, so the
+       transcript ends AT it rather than sliding under it — which is also why the content below
+       reserves its height instead of a gradient having to hide the overlap. */
+    ion-footer.composer-bar {
+      --background: var(--ion-toolbar-background);
+      background: var(--ion-toolbar-background);
+      /* Clearance for the home indicator, held CONSTANT — see styles.scss for how the keyboard
+         parks it behind the keys rather than removing it. */
+      padding-bottom: var(--ion-safe-area-bottom, 0px);
+    }
+
     /* Jump-to-latest FAB: always mounted, shown/hidden via a class so it never mounts mid-scroll
        (which reflows and stutters the scroll). */
     .scroll-fab { transition: opacity 0.15s ease, transform 0.15s ease; }
@@ -97,7 +132,7 @@ import { KbFollowDirective } from '../../shared/kb-follow.directive';
     }
   `,
 })
-export class ChatPage implements ViewWillEnter, ViewWillLeave, ViewDidEnter, ViewDidLeave {
+export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
   /** The chat id, bound from the `:id` route param via withComponentInputBinding(). Client-minted, so
       it is set for a fresh chat too (navigated to straight from the ask box). */
   readonly id = input<string>();
@@ -112,10 +147,16 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, ViewDidEnter, Vie
   private readonly chatList = inject(ChatListService);
   protected readonly connection = inject(ConnectionService);
   protected readonly kb = inject(KeyboardService);
+  private readonly nav = inject(NavController);
+
+  /** The toolbar names the conversation, since the drawer no longer does it for us. Falls back
+      while the list is still loading (a freshly minted chat has no meta yet). */
+  protected readonly title = computed(
+    () => this.chatList.chats().find((c) => c.id === this.id())?.name
+      || (this.kind() === 'agent' ? 'Agent run' : 'New chat'),
+  );
 
   private readonly content = viewChild.required<IonContent>('content');
-  private readonly contentEl = viewChild.required('content', { read: ElementRef });
-  private readonly footer = viewChild.required('footer', { read: ElementRef });
   private lastScrollTop = 0;
   // Whether the scroll is parked at (or near) the newest message. Drives auto-scroll: we only
   // follow the stream while the user is already at the bottom. If they scrolled up to read, a live
@@ -123,8 +164,6 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, ViewDidEnter, Vie
   protected readonly atBottom = signal(true);
 
   constructor() {
-    addIcons({ chevronDownOutline });
-
     // Open the chat when the route param resolves/changes (ws = the active workspace). Viewing
     // state (which drives read-marking) is tied to the Ionic page lifecycle below, NOT here —
     // an Ionic tab shell keeps a routed page ALIVE when you switch away, so Angular's onDestroy
@@ -192,20 +231,6 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, ViewDidEnter, Vie
     if (i) this.chatList.stopViewing(i);
   }
 
-  // Collapse the keyboard-lift the INSTANT the leave starts — the leaving OnPush view isn't
-  // change-detected during the transition, so if we navigate with the keyboard open the footer's
-  // transform + the content's bottom padding stay stale (a big blank filler that only animates away
-  // at the end). Remove the inline styles imperatively (CD-independent); the directive/binding re-apply
-  // on re-enter. This RESETS (footer back to its normal spot), it does NOT hide it — so a CANCELED
-  // swipe-back leaves a normal, visible composer.
-  ionViewWillLeave(): void {
-    const f = this.footer().nativeElement as HTMLElement;
-    f.classList.remove('kb-follow'); // make it a vanilla footer for the slide (no compositor pin)
-    f.style.removeProperty('transform');
-    f.style.removeProperty('--kb-fill');
-    (this.contentEl().nativeElement as HTMLElement).style.removeProperty('--padding-bottom');
-  }
-
   /** Track how close the scroll is to the bottom, so live updates only follow when already there.
    * A swipe DOWN on the messages (scrollTop drops) dismisses an open keyboard, like iOS Messages. */
   protected async onScroll(): Promise<void> {
@@ -213,6 +238,15 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, ViewDidEnter, Vie
     if (this.kb.open() && el.scrollTop < this.lastScrollTop - 4) this.kb.dismiss();
     this.lastScrollTop = el.scrollTop;
     this.atBottom.set(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+  }
+
+  /** Start over: the hero mints the id, so this only has to get us there.
+   *
+   * Back through NavController with the reversed camera move — leaving a chat should undo the
+   * gesture that opened it rather than play some unrelated animation that lands in the same place. */
+  protected newChat(): void {
+    (document.activeElement as HTMLElement | null)?.blur();
+    void this.nav.navigateBack(['/app/home'], { animation: chatToHero });
   }
 
   /** Explicit user action (jump-to-latest button): smooth-scroll down and re-arm following. */

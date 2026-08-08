@@ -1,27 +1,32 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import {
-  IonHeader, IonToolbar, IonButtons, IonButton, IonIcon, ActionSheetController,
+  IonHeader, IonToolbar, IonButtons, IonButton, IonMenuButton, ActionSheetController,
 } from '@ionic/angular/standalone';
-import { addIcons } from 'ionicons';
-import { chevronDownOutline } from 'ionicons/icons';
+import { LucideMenu, LucideChevronDown } from '@lucide/angular';
 import { WorkspaceService } from '../core/services/workspace.service';
 
 /**
- * The shared tab-root header: a workspace SWITCHER as the title — the active workspace name plus a
- * chevron so it reads as tappable (opens the chooser). The bottom tab bar names the page, so no
- * page title is shown; connection status lives in a pill above the tab bar.
+ * The shared header for the shell's plain pages. The menu button leads on the left — it is how you
+ * leave any page, so it holds the position the thumb reaches for first — and the workspace SWITCHER
+ * sits on the right: the active workspace name plus a chevron so it reads as tappable.
+ *
+ * The switcher lives in a buttons slot rather than inside ion-title: a centred ion-title is not
+ * reliably clickable in ios mode, and the whole point of this title is that you can tap it.
  */
 @Component({
   selector: 'app-workspace-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [IonHeader, IonToolbar, IonButtons, IonButton, IonIcon],
+  imports: [IonHeader, IonToolbar, IonButtons, IonButton, IonMenuButton, LucideMenu, LucideChevronDown],
   template: `
     <ion-header>
       <ion-toolbar>
         <ion-buttons slot="start">
+          <ion-menu-button menu="main"><svg lucideMenu [size]="24" /></ion-menu-button>
+        </ion-buttons>
+        <ion-buttons slot="end">
           <ion-button class="ws-switch" (click)="choose()" aria-label="Switch workspace">
             <span class="ws-name">{{ ws.active() }}</span>
-            <ion-icon slot="end" name="chevron-down-outline" aria-hidden="true" />
+            <svg lucideChevronDown [size]="16" class="caret" />
           </ion-button>
         </ion-buttons>
       </ion-toolbar>
@@ -35,16 +40,12 @@ import { WorkspaceService } from '../core/services/workspace.service';
     }
     /* Match ion-title typography so the switcher reads as the page title, not a small button. */
     .ws-switch .ws-name { margin-right: 0.25rem; font-family: var(--font-display); font-size: 1.25rem; }
-    .ws-switch ion-icon[slot='end'] { color: var(--ion-color-medium); font-size: 1rem; }
+    .ws-switch .caret { color: var(--ion-color-medium); }
   `,
 })
 export class WorkspaceHeaderComponent {
   protected readonly ws = inject(WorkspaceService);
   private readonly sheets = inject(ActionSheetController);
-
-  constructor() {
-    addIcons({ chevronDownOutline });
-  }
 
   protected async choose(): Promise<void> {
     const current = this.ws.active();

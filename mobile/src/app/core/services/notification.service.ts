@@ -50,7 +50,7 @@ export class NotificationService {
     // the chat detail. Source comes from the live list (a fired run is there via chat.activity);
     // default to a user chat if it's not listed yet. ChatPage opens it from the route.
     const source = this.chatList.chats().find((c) => c.id === chatId)?.source;
-    await this.router.navigate(source === 'agent' ? ['/agents', 'run', chatId] : ['/chat', chatId]);
+    await this.router.navigate(source === 'agent' ? ['/app/agents', 'run', chatId] : ['/app/chat', chatId]);
   }
 
   private async present(n: Notification): Promise<void> {

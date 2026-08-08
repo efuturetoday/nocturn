@@ -1,6 +1,7 @@
 import { ApplicationConfig, provideBrowserGlobalErrorListeners, provideAppInitializer, inject } from '@angular/core';
-import { provideRouter, withComponentInputBinding } from '@angular/router';
+import { provideRouter, withComponentInputBinding, withPreloading, PreloadAllModules } from '@angular/router';
 import { provideIonicAngular } from '@ionic/angular/standalone';
+import { provideLucideConfig } from '@lucide/angular';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 
@@ -16,8 +17,23 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     // withComponentInputBinding: route params/query/data bind straight to component input()s.
-    provideRouter(routes, withComponentInputBinding()),
-    provideIonicAngular({}),
+    // Preloading matters for the FEEL, not just the speed: the hero → chat hand-off plays a custom
+    // transition, and a lazy chunk fetched at the moment of navigation delays its first frame by a
+    // few hundred ms. The screen sits still, then moves — which reads as a broken animation rather
+    // than as a slow one. Fetching the routes in idle time after the first paint removes the stall.
+    provideRouter(routes, withComponentInputBinding(), withPreloading(PreloadAllModules)),
+    // scrollPadding OFF. With `resize: none` Ionic switches on a fallback that pads the focused
+    // ion-content by its ESTIMATED keyboard height — a 290px default, not the real one — and clears
+    // it on a 120ms timeout after focusout (@ionic/core utils/input-shims/hacks/scroll-padding.js).
+    // On the hero that padding shrinks the content box and shoves the centred lockup upward: a
+    // layout jump nobody wrote, on a page whose whole requirement is that the keyboard just overlays
+    // it. scrollAssist stays ON — that is the separate hack stopping WebKit from relocating the
+    // focused input and dragging the page with it.
+    provideIonicAngular({ scrollPadding: false }),
+    // Lucide's default stroke of 2 is heavier than the ionicons weight the rest of the UI was drawn
+    // against; 1.75 sits at the same optical weight at 24px. Set once here so no icon has to carry
+    // the value at its call site.
+    provideLucideConfig({ strokeWidth: 1.75 }),
     // Eagerly construct the always-on listeners at startup (their constructors wire the effects:
     // error toasts, keyboard-follow, and the auto pairing-request overlay) + native chrome setup.
     provideAppInitializer(() => {
