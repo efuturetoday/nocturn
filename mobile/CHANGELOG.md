@@ -1,0 +1,15 @@
+# Changelog
+
+## [0.2.0](https://github.com/efuturetoday/nocturn/compare/mobile-v0.1.0...mobile-v0.2.0) (2026-08-09)
+
+
+### Features
+
+* **mobile:** side menu shell and galaxy hero ([6481274](https://github.com/efuturetoday/nocturn/commit/64812740b19136dd711ce851d91efadd466c0b89))
+* **mobile:** side menu shell and galaxy hero ([caab805](https://github.com/efuturetoday/nocturn/commit/caab8059a7a79b4d6249faddd4887b5dc4becff4))
+
+
+### Bug Fixes
+
+* **mobile:** address review findings ([d24f64b](https://github.com/efuturetoday/nocturn/commit/d24f64b4e4e698776bbc530df3ecf8c1c21e9c3e))
+* **mobile:** keep server.url out of the committed config ([a9f2861](https://github.com/efuturetoday/nocturn/commit/a9f28612eecdade0816b46eaecb7fa22841b34eb))

@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "scripts": {
     "ng": "ng",
     "start": "ng serve --host 0.0.0.0",
@@ -50,6 +50,6 @@
     "vitest": "^4.0.8"
   },
   "config": {
-    "buildNumber": "1"
+    "buildNumber": "20000"
   }
 }
