@@ -45,9 +45,17 @@ for an approval while the app is closed.
 
 Never put `server.url` in `capacitor.config.ts`. It points the webview at a dev server, which is
 convenient on the LAN and fatal in a shipped build — the install would reach for a machine that is
-not on that network. Release signs against `AppRelease.entitlements` (`aps-environment: production`),
-Debug against `App.entitlements` (`development`); the daemon picks the matching APNs host from
-`NOCTURN_APNS_PRODUCTION`.
+not on that network. `cap sync` bakes it into `ios/App/App/capacitor.config.json`, which is
+gitignored, so a committed one is invisible until a tester sees a blank screen. Release signs against
+`AppRelease.entitlements` (`aps-environment: production`), Debug against `App.entitlements`
+(`development`); the daemon picks the matching APNs host from `NOCTURN_APNS_PRODUCTION`.
+
+## Releasing
+
+A merged release-please pull request tags `mobile-v*`, and `.github/workflows/_release-ios.yml`
+archives the app signed, uploads it to TestFlight, sets "What to Test" from `mobile/CHANGELOG.md` and
+submits it to the external beta group. Nothing here is done by hand — see that workflow's header for
+the credentials it needs.
 
 ## Demo mode
 

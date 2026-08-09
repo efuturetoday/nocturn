@@ -7,7 +7,8 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "cap:config": "VERSION=$npm_package_version BUILD=$npm_package_config_buildNumber trapeze run trapeze.yaml --android-project android --ios-project ios/App -y"
+    "cap:config": "VERSION=$npm_package_version BUILD=$npm_package_config_buildNumber trapeze run trapeze.yaml --android-project android --ios-project ios/App -y",
+    "beta:notes": "node tools/release-notes.mjs"
   },
   "private": true,
   "packageManager": "npm@11.16.0",
