@@ -36,7 +36,16 @@ on:
           create a profile and pilot may not submit to Beta App Review.
         required: true
       IOS_DIST_CERT_P12:
-        description: The Apple Distribution certificate and its private key as a .p12, base64.
+        description: >
+          The Apple Distribution certificate and its private key as a .p12, base64. Export it from
+          Keychain Access, or with openssl and the LEGACY algorithms:
+
+            openssl pkcs12 -export -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES …
+
+          OpenSSL 3 defaults to AES/PBES2 with a SHA-256 MAC, which macOS `security import` cannot
+          read. It reports "MAC verification failed during PKCS12 import (wrong password?)" — the
+          password is fine, the algorithm is not. Verify before uploading by importing into a
+          throwaway keychain; `openssl pkcs12 -noout` accepts what macOS rejects.
         required: true
       IOS_DIST_CERT_PASSWORD:
         description: The password the .p12 was exported with.
