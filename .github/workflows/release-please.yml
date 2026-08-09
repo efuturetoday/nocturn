@@ -37,6 +37,16 @@ jobs:
       tags: ${{ steps.tags.outputs.list }}
 
     steps:
+      # release-please itself works entirely over the API and needs no working copy. The step below
+      # it does — it checks out the release branch, runs npm in it, and pushes back — and without
+      # this it dies on `fatal: not a git repository`. It never showed until a mobile release pull
+      # request actually appeared, because the step is gated on `prs_created`.
+      #
+      # persist-credentials stays ON here, alone in this repository: the push at the end is the whole
+      # point of the step. GitHub starts no workflow from what GITHUB_TOKEN pushes, which is the same
+      # loop guard that makes release.yml a `workflow_call` rather than a tag trigger.
+      - uses: actions/checkout@v5
+
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
@@ -68,8 +78,11 @@ jobs:
             echo "No mobile release pull request in this run."
             exit 0
           fi
-          git fetch --depth=1 origin "$branch"
-          git checkout "$branch"
+          # Named refspec, not a bare branch name: actions/checkout configures the remote to track
+          # only the branch it checked out, so a plain `git fetch origin "$branch"` leaves
+          # refs/remotes/origin/$branch unwritten and the checkout below finds no such ref.
+          git fetch --depth=1 origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+          git checkout -B "$branch" "origin/$branch"
           cd mobile
           npm ci --ignore-scripts
           npm pkg set config.buildNumber="$(node tools/build-number.mjs)"
@@ -81,7 +94,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -qam "chore(mobile): apply the release version to the native projects"
+          git commit -qam "chore(mobile): apply the release version and build number"
           git push origin "HEAD:$branch"
 
       # The tags just cut, as a JSON list for the matrix below. Named one by one rather than derived
