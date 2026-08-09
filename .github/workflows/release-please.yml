@@ -63,19 +63,25 @@ jobs:
       # over what a tester already has. tools/build-number.mjs derives it from the version, so the
       # number that ships is in the tag rather than computed somewhere at upload time.
       #
-      # separate-pull-requests means one pull request per component, and the action's per-path
-      # outputs cover releases only — `pr` is merely the first of them. So the mobile one is found by
+      # Asked of the open pull requests rather than of the action's outputs, and gated on nothing.
+      # `prs`/`prs_created` describe what release-please did IN THIS RUN, and that is the wrong
+      # question twice over: a run in which the step fails leaves the pull request without its
+      # commit forever, because the next run has nothing to report and skips; and release-please
+      # rewrites the release branch whenever it updates it, so a commit that survived once can be
+      # gone later. Asking what is OPEN makes the step idempotent and self-healing — it re-applies
+      # whatever got lost, and `git diff --quiet` below exits early on the runs where nothing moved.
+      #
+      # separate-pull-requests means one pull request per component, so the mobile one is found by
       # its branch name, which release-please builds as
       # `release-please--branches--<target>--components--<component>`.
       - name: Apply the mobile version and build number to the native projects
-        if: steps.release.outputs.prs_created == 'true'
         env:
-          PRS: ${{ steps.release.outputs.prs }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          branch=$(printf '%s' "$PRS" |
-            jq -r '.[] | select(.headBranchName | endswith("components--mobile")) | .headBranchName')
+          branch=$(gh pr list --state open --limit 100 --json headRefName \
+            --jq '[.[].headRefName | select(endswith("components--mobile"))] | first // ""')
           if [ -z "$branch" ]; then
-            echo "No mobile release pull request in this run."
+            echo "No open mobile release pull request."
             exit 0
           fi
           # Named refspec, not a bare branch name: actions/checkout configures the remote to track
