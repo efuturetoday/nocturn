@@ -57,7 +57,7 @@ permissions:
 jobs:
   ios:
     name: iOS
-    runs-on: macos-15
+    runs-on: macos-26
     # The archive is minutes; waiting out App Store Connect's processing so the changelog and the
     # group can be attached is the long half, and it is not ours to hurry.
     timeout-minutes: 90

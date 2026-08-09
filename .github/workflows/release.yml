@@ -20,6 +20,16 @@ on:
       - 'v*'
       - 'mobile-v*'
       - 'satellite-v*'
+  # For re-running a release after fixing the pipeline rather than the code. Neither other way in can
+  # do that: re-running a run replays the workflow files it started with, and a tag push reads them
+  # from the tag — so a fix committed to main afterwards is invisible to both. A dispatch runs main's
+  # workflows against the tag's source, which is exactly the shape of that problem.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The existing tag to build artefacts for, e.g. mobile-v0.2.0
+        required: true
+        type: string
   workflow_call:
     inputs:
       tag:
