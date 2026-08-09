@@ -45,7 +45,7 @@ jobs:
       # persist-credentials stays ON here, alone in this repository: the push at the end is the whole
       # point of the step. GitHub starts no workflow from what GITHUB_TOKEN pushes, which is the same
       # loop guard that makes release.yml a `workflow_call` rather than a tag trigger.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
