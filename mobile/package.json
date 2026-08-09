@@ -50,6 +50,6 @@
     "vitest": "^4.0.8"
   },
   "config": {
-    "buildNumber": "1"
+    "buildNumber": "20000"
   }
 }
