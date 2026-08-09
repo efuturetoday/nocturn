@@ -67,6 +67,20 @@ platform :ios do
           keychain_name: "fastlane_tmp_keychain",
           keychain_password: "",
         )
+
+        # import_certificate does NOT fail on a bad password. `security` prints "MAC verification
+        # failed during PKCS12 import (wrong password?)" among its own output and the lane walks on,
+        # so the first symptom is sigh, two steps later, reporting that it cannot find a code signing
+        # identity — which reads as a problem with the developer portal rather than with a secret.
+        # The same silence covers a .p12 that carries no private key.
+        identities = sh("security find-identity -v -p codesigning", log: false)
+        unless identities.include?("Apple Distribution")
+          UI.user_error!(
+            "No Apple Distribution identity in the keychain after importing IOS_DIST_CERT_P12. " \
+            "Either IOS_DIST_CERT_PASSWORD does not match the .p12, or the .p12 was exported " \
+            "without its private key.",
+          )
+        end
       end
 
       # No adhoc/development flag, so this is the App Store profile. readonly: false lets it be
