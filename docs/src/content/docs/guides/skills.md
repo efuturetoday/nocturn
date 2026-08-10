@@ -67,6 +67,24 @@ nothing to restart.
 Nothing else happens either way. No credential to connect, no manifest to review: from that point the
 assistant simply knows the skill's `description`, and reaches for the body when a request matches it.
 
+### From the catalog
+
+If the server is pointed at a catalog (`NOCTURN_CATALOG_URL`), the app browses it and installs an
+entry with one tap. The catalog is fetched by the server, from one host, over TLS, and it carries each
+skill's **whole `SKILL.md` inline** — so installing never fetches from a second place, and the app can
+show you exactly what will go into the assistant's prompt before anything is written.
+
+Worth being straight about what that showing is and is not. It is informed consent, not a control:
+nobody spots a subtle instruction buried in four thousand tokens on a phone. The controls that
+actually hold are the ones already in the architecture — a skill carries [no authority at
+all](/nocturn/architecture/threat-model/), and anything it talks the assistant into still meets the
+gate. Content signing is not built yet; when it is, it goes here.
+
+The install command names a catalog **entry**, and cannot carry a skill body. That distinction is the
+security of the whole feature: "install entry N of the catalog the server fetched" is a different act
+from "put this text into every prompt", and only the first exists on the wire. Sideloading stays what
+it always was — copying a folder on the host.
+
 ### Off is not gone
 
 Switching a skill off moves its folder to `skills/.disabled/`, which the daemon skips — so it leaves

@@ -26,6 +26,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/auth"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
+	"github.com/efuturetoday/nocturn/internal/library"
 	"github.com/efuturetoday/nocturn/internal/push"
 	"github.com/efuturetoday/nocturn/internal/serve"
 	"github.com/efuturetoday/nocturn/internal/speaker"
@@ -202,6 +203,15 @@ func runApp(serveAddr string, serveOpts ...serve.Option) int {
 		serveOpts = append(serveOpts, serve.OnDevicesChanged(func() {
 			ensureCLICredential(devices, logger)
 		}))
+		// The curated catalog, if this build is pointed at one. Absent by default: a daemon nobody
+		// configured a catalog for never reaches out to one, and the library is then missing rather
+		// than empty.
+		if url := os.Getenv("NOCTURN_CATALOG_URL"); url != "" {
+			serveOpts = append(serveOpts, serve.WithLibrary(
+				library.New(library.Source{URL: url}, dataRoot, logger),
+			))
+			logger.Info("library enabled", "catalog", url)
+		}
 		if err := serve.Serve(ctx, serveAddr, spaces, devices, broker, embedder, logger, serveOpts...); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("serve", "err", err)
 			return 1

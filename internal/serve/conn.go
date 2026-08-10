@@ -16,6 +16,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/auth"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/library"
 	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
@@ -72,6 +73,10 @@ type conn struct {
 	// voice can be enrolled through the device it will be recognised through.
 	capture *capture
 
+	// library is the curated catalog, shared by every connection; nil when none is configured, which
+	// makes the library absent rather than empty.
+	library *library.Store
+
 	// embedder turns speech into a speaker embedding, and is nil when this daemon has no model. It
 	// is shared across every connection: the model is tens of megabytes and immutable once loaded.
 	embedder *speaker.Embedder
@@ -99,11 +104,12 @@ func newConn(
 	device string,
 	can capabilities,
 	embedder *speaker.Embedder,
+	lib *library.Store,
 	log *slog.Logger,
 ) *conn {
 	return &conn{
 		ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, device: device, can: can,
-		embedder: embedder, log: log,
+		embedder: embedder, library: lib, log: log,
 		control: make(chan any, 64),
 		// Four frames — 80 ms. Short on purpose, and it is a latency budget rather than a buffer: this
 		// queue sits AHEAD of the device's own, so everything in it is speech a barge-in can no longer
@@ -333,6 +339,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.skillCmd(ctx, env.Cmd, data)
 	case "mcp":
 		c.mcpCmd(ctx, env.Cmd, data)
+	case "library":
+		c.libraryCmd(ctx, env.Cmd, data)
 	case "reminder":
 		c.reminder(ctx, env.Cmd, data)
 	case "agent":

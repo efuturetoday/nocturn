@@ -1,6 +1,10 @@
 package serve
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/efuturetoday/nocturn/internal/library"
+)
 
 // Option configures a daemon. Serve takes what it cannot run without as parameters and everything
 // else here, which is what keeps a new front-end from widening a signature every other caller then
@@ -13,6 +17,7 @@ type options struct {
 	webUI            http.Handler
 	version          string
 	onDevicesChanged func()
+	library          *library.Store
 }
 
 // WithWebUI serves h for every path the protocol does not claim, so the browser front-end and the
@@ -53,6 +58,13 @@ func WithVersion(v string) Option {
 // consistently with its neighbours is worth more here than reading consistently with WithWebUI.
 func OnDevicesChanged(fn func()) Option {
 	return func(o *options) { o.onDevicesChanged = fn }
+}
+
+// WithLibrary serves the curated catalog through the library.* commands. Without it the library is
+// ABSENT rather than empty — the same shape as knowledge_search without an embedder, and the reason
+// a daemon nobody configured a catalog for never reaches out to one.
+func WithLibrary(s *library.Store) Option {
+	return func(o *options) { o.library = s }
 }
 
 // apply folds opts onto the defaults.
