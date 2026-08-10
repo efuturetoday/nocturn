@@ -386,6 +386,11 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	return w, nil
 }
 
+// SkillsDir is where this workspace's skills live. Exported because managing them — listing, reading,
+// switching one off — is the consumer's job, the same way discovery is: internal/skill owns the
+// format and the rules, the workspace owns where they sit.
+func (w *Workspace) SkillsDir() string { return w.path("skills") }
+
 // Name returns the workspace name.
 func (w *Workspace) Name() string { return w.name }
 

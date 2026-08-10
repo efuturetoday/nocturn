@@ -29,6 +29,18 @@ func gateDaemon(t *testing.T, class auth.Class, opts ...Option) (*websocket.Conn
 // what happened to it.
 func gateDaemonStore(t *testing.T, class auth.Class, opts ...Option) (*websocket.Conn, context.Context, *auth.Store) {
 	t.Helper()
+	conn, ctx, devices, _ := gateDaemonAll(t, class, opts...)
+	return conn, ctx, devices
+}
+
+// gateDaemonAll is the full harness: a daemon, a socket authenticated as class, and both registries —
+// devices and workspaces — for the tests that are about what happened to either.
+func gateDaemonAll(
+	t *testing.T,
+	class auth.Class,
+	opts ...Option,
+) (*websocket.Conn, context.Context, *auth.Store, *workspace.Registry) {
+	t.Helper()
 	ctx := t.Context()
 	log := slog.New(slog.DiscardHandler)
 
@@ -53,7 +65,7 @@ func gateDaemonStore(t *testing.T, class auth.Class, opts ...Option) (*websocket
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { conn.CloseNow() })
-	return conn, ctx, devices
+	return conn, ctx, devices, spaces
 }
 
 // A join code IS an enrolment: whoever reads one can complete the join and walk away with a device.
