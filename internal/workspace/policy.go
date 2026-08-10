@@ -54,3 +54,22 @@ func agentPolicy() gate.Policy {
 		return base.Decide(a)
 	})
 }
+
+// ForgetNetAccess revokes a remembered "yes" for reaching host, reporting whether there was one.
+//
+// It is here rather than beside the MCP wiring because it is a permission decision, and this file is
+// where those live. Removing a server is the case that needs it: a grant records (Kind, Target) and
+// nothing about WHY it was given, so once the server that prompted the question is gone the answer
+// stands on its own — and the next server declared on that host would inherit a permission nobody
+// gave for it.
+//
+// The trade is worth naming, because it cuts the other way too. The same grant may be the one a
+// person gave so http_read could reach that host, and this takes that with it. Being asked once more
+// is the cheap side of that: the gate's whole model is ask-on-new and remember, so the recovery is
+// the designed path. Inheriting an unasked-for permission has no recovery at all.
+func (w *Workspace) ForgetNetAccess(host string) bool {
+	return w.grants.Forget(gate.Grant{Kind: tools.NetKind, Target: host})
+}
+
+// MCPDir is where this workspace's MCP server declarations live.
+func (w *Workspace) MCPDir() string { return w.path("mcp") }

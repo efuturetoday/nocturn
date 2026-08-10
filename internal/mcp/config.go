@@ -65,6 +65,9 @@ type OAuthDecl struct {
 // to leave room for the "_<tool>" suffix inside 64 chars.
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
+// ConfigFile is the server declaration inside a server's folder.
+const ConfigFile = "mcp.json"
+
 // Validate rejects a malformed server declaration fail-closed: an odd name, a
 // non-https URL (a token must never ride to a cleartext endpoint), an unknown
 // auth mode, a "token" auth alongside an OAuth block (one credential, one
@@ -148,7 +151,7 @@ func Discover(dir string, diag *agentkit.Diagnostics) Set {
 		if !e.IsDir() {
 			continue // each server is a folder
 		}
-		manifest := filepath.Join(dir, e.Name(), "mcp.json")
+		manifest := filepath.Join(dir, e.Name(), ConfigFile)
 		if info, err := os.Stat(manifest); err != nil || info.IsDir() {
 			continue // a folder without an mcp.json is not a server
 		}
