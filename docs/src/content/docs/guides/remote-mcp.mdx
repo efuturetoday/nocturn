@@ -50,7 +50,14 @@ request — the point being that you find out while looking at the file you just
 Like a plugin manifest, `mcp.json` is parsed **strictly**: an unknown field is an error, not a
 warning, so a typo'd `auth` never silently becomes "no credential".
 
-Delete the folder to remove the server — that also takes its credential shard with it.
+Delete the folder to remove the server — that also takes its credential shard with it, which is the
+point rather than a side effect: the shard is encrypted under a key derived from that folder's path,
+so it is readable nowhere else, and leaving it behind would be a token for a server nobody declares.
+Removing from the app does the same, and additionally **revokes the remembered network permission**
+for that server's host. A grant records what was allowed, never why, so once the server that prompted
+the question is gone the answer would stand on its own — and the next server declared on that host
+would inherit a "yes" nobody gave for it. The cost is that the same grant may be one you gave so
+`http_read` could reach that host; you are asked once more, which is what the gate is for.
 
 Declaring a server is an authority-relevant act: it hands the model that server's tools and wires
 your token to its host. That is why `mcp/` lives in the control plane, outside `mnt/` — the model
@@ -145,17 +152,19 @@ The order matters, and one step is easy to get wrong:
 2. **`nocturn auth` needs no server.** It reads the workspace folder directly and writes the token
    into that server's own encrypted shard. It also needs the vault open — without
    `NOCTURN_MASTER_PASSPHRASE` there is nowhere to put the token, and it says so.
-3. **Then start the server.** Servers are discovered and connected when a workspace opens, and only
-   then.
+3. **Then start the server.** On the command line, servers are discovered and connected when a
+   workspace opens. The app can make it look again at any time.
 
-:::caution[A new server needs a restart — including after connecting in the app]
-There is no watcher on `mcp/` and no reconnect after a successful sign-in. A server that was already
-running when you created the folder does not know the server exists; one that started *before* you
-signed in logged `mcp server needs authorization` and moved on. Connecting from the app stores the
-token and says "connected" — accurately — but the tools appear on the **next** start.
+:::note[Order only matters on the command line]
+There is no watcher on `mcp/`: a daemon that was already running when you created the folder does not
+know the server exists, and one that started *before* you signed in logged `mcp server needs
+authorization` and moved on. On the command line the fix is to restart once.
 
-So: create the folder, connect the account, then start the server. If you did it in another order,
-restart once and everything is in place.
+From the [companion app](/nocturn/guides/remote-access/) the order does not matter at all. It declares
+a server, connects the account and reconnects over the same connection — a server shows `connecting`
+while its handshake runs, then `connected` with its tool count, or `needs auth` with what to do about
+it. Signing in and then reconnecting brings the tools in without a restart, and without interrupting
+a conversation that is running.
 :::
 
 Once it is up the server's tools appear as `cloudflare_*`, and the first call asks about

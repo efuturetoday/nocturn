@@ -31,6 +31,10 @@ type MCPState string
 
 const (
 	MCPConnected MCPState = "connected"
+	// MCPConnecting is a server that is declared but has not been tried yet — the state between a
+	// device adding one and the reload that runs its handshake. Neither "connected" nor "failed" is
+	// true then, and picking either would be a claim nobody has checked.
+	MCPConnecting MCPState = "connecting"
 	// MCPNeedsAuth is not a failure but an errand: the server speaks OAuth and nobody has run
 	// `nocturn auth <name>` yet.
 	MCPNeedsAuth MCPState = "needs auth"

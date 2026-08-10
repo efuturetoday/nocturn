@@ -51,6 +51,23 @@ func (s *grantStore) Remember(g gate.Grant, recall gate.Recall) {
 	_ = s.write()
 }
 
+// Forget drops a grant from both halves, reporting whether it was there. The durable set is rewritten
+// so it does not come back at the next start — a revocation that only held until a restart would be
+// the worst kind, since nobody would be watching when it lapsed.
+func (s *grantStore) Forget(g gate.Grant) bool {
+	had := s.mem.Forget(g)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.durable[g]; !ok {
+		return had
+	}
+	delete(s.durable, g)
+	// Best-effort, like Remember: a failed write leaves the grant revoked in memory and back after a
+	// restart. Logging it is the caller's, which is why Forget reports what it did.
+	_ = s.write()
+	return true
+}
+
 // write persists the durable set atomically (write then rename). Callers hold s.mu.
 func (s *grantStore) write() error {
 	list := make([]gate.Grant, 0, len(s.durable))

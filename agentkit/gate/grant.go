@@ -24,11 +24,19 @@ func matchKind(pattern, kind string) bool { return pattern == "*" || pattern == 
 // Grants stores remembered approvals. Allowed reports whether an action is covered by any grant,
 // using the supplied Matcher for the Target (nil = ExactMatch); Remember records a new grant at the
 // given Recall (RecallSession = keep for this session, RecallAlways = keep durably; Check never calls
-// Remember with RecallNever). A durable implementation is the consumer's; MemGrants is the in-memory
-// default.
+// Remember with RecallNever); Forget drops one, reporting whether it was there.
+//
+// Forget exists because a remembered approval outlives the thing it was granted for. An answer to
+// "may this reach api.example.com?" is stored as (Kind, Target) and records nothing about why — so
+// when the consumer removes whatever prompted the question, only the consumer can know the grant is
+// now standing on its own. Without a way to drop it, the next thing to reach that target inherits an
+// answer nobody gave for it.
+//
+// A durable implementation is the consumer's; MemGrants is the in-memory default.
 type Grants interface {
 	Allowed(a Action, match Matcher) bool
 	Remember(g Grant, recall Recall)
+	Forget(g Grant) bool
 }
 
 // MemGrants is an in-memory Grants. It has no durable backing, so Always is remembered only for the
@@ -75,6 +83,15 @@ func (m *MemGrants) Remember(g Grant, _ Recall) {
 	m.mu.Lock()
 	m.set[g] = struct{}{}
 	m.mu.Unlock()
+}
+
+// Forget drops a grant, reporting whether it was there.
+func (m *MemGrants) Forget(g Grant) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, had := m.set[g]
+	delete(m.set, g)
+	return had
 }
 
 var _ Grants = (*MemGrants)(nil)

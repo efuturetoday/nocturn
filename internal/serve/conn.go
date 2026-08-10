@@ -331,6 +331,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.workspaceCmd(ctx, env.Cmd, data)
 	case "skill":
 		c.skillCmd(ctx, env.Cmd, data)
+	case "mcp":
+		c.mcpCmd(ctx, env.Cmd, data)
 	case "reminder":
 		c.reminder(ctx, env.Cmd, data)
 	case "agent":
