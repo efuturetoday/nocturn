@@ -172,3 +172,44 @@ func repoRoot(t *testing.T) string {
 		dir = parent
 	}
 }
+
+// An install command carries an ID and nothing that could BE the content. A wire form with a skill
+// body would be a way to put arbitrary text into every system prompt of every turn — a different
+// authority from "install entry N of a catalog the daemon fetched itself" — and the difference is
+// invisible in a diff that merely adds a field.
+//
+// The scanner walks the declared type rather than trusting a reading of it, so the rule survives
+// somebody adding a convenience field two years from now.
+func TestLibraryInstall_CarriesNoContent(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "library.go", nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	allowed := map[string]bool{"Cmd": true, "Ws": true, "Kind": true, "ID": true}
+	var found bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSpec)
+		if !ok || ts.Name.Name != "LibraryInstall" {
+			return true
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok {
+			return true
+		}
+		found = true
+		for _, fld := range st.Fields.List {
+			for _, name := range fld.Names {
+				if !allowed[name.Name] {
+					t.Errorf("LibraryInstall carries %q — an install command must name an entry, never supply one",
+						name.Name)
+				}
+			}
+		}
+		return false
+	})
+	if !found {
+		t.Fatal("LibraryInstall not found — did the type move? The rule moves with it.")
+	}
+}

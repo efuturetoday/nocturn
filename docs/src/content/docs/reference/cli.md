@@ -34,6 +34,11 @@ the default workspace, not on all of them.
 | `nocturn pair [--open] [--addr :8080]` | Mint a pairing code on the **running** server and print it with a one-click link. Reads the server's own 0600 credential, so it works whenever the server is up — including over SSH on a headless box, long after the code printed at startup expired. `--open` launches a browser. |
 | `nocturn voice [--port 8788] [-w workspace]` | A **PoC harness**, in its own words: a browser page for testing the voice path on loopback, with no pairing. Not a way to use Nocturn. |
 
+`NOCTURN_CATALOG_URL` points the server at a curated catalog of skills and MCP servers, which the app
+then browses and installs from. Unset — the default — the library is **absent**, not empty: nothing is
+fetched and no request leaves the machine for it. See [Skills](/nocturn/guides/skills/) and
+[Remote MCP servers](/nocturn/guides/remote-mcp/).
+
 ## Voice
 
 | Command | What it does |

@@ -345,7 +345,7 @@ func serveOn(
 		if !can.approve {
 			approver = nil
 		}
-		newConn(ws, spaces, devices, approver, hub, dev.ID, can, embedder,
+		newConn(ws, spaces, devices, approver, hub, dev.ID, can, embedder, cfg.library,
 			log.With("remote", r.RemoteAddr, "device", dev.ID, "class", dev.Class)).serve(r.Context())
 	})
 
