@@ -5,7 +5,8 @@ import { Device } from '@capacitor/device';
 import { Capacitor } from '@capacitor/core';
 import { ConnectionService } from './connection.service';
 import { DEMO_BEARER, isDemoUrl } from '../demo/is-demo';
-import type { PairResponse, JoinResponse, JoinConfirmResponse, PendingJoin } from '../protocol/nocturn-protocol';
+import { httpBase } from '../util/daemon-url';
+import type { PairResponse, JoinResponse, JoinConfirmResponse, PendingJoin, EnrolledDevice } from '../protocol/nocturn-protocol';
 
 /**
  * AuthService owns device pairing + the per-daemon bearer. A device must pair before `/ws` will
@@ -27,13 +28,28 @@ export class AuthService {
   /** Pending device-join requests + their codes (live from the `join.list` event). */
   readonly joins = this._joins.asReadonly();
 
+  private readonly _devices = signal<EnrolledDevice[]>([]);
+  /** The household's enrolled devices (live from the `device.list` event). */
+  readonly devices = this._devices.asReadonly();
+
+  private readonly _selfId = signal<string | null>(null);
+  /** Which of those devices is this one — the daemon says so, rather than the client matching names. */
+  readonly selfId = this._selfId.asReadonly();
+
   constructor() {
     this.conn.onEvent((e) => {
       if (e.type === 'join.list') this._joins.set(e.joins);
+      if (e.type === 'device.list') {
+        this._devices.set(e.devices);
+        if (e.self) this._selfId.set(e.self);
+      }
     });
-    // Re-request pending joins on every (re)connect; then they arrive live.
+    // Re-request pending joins and the device roster on every (re)connect; then they arrive live.
     effect(() => {
-      if (this.conn.state() === 'connected') this.conn.send({ cmd: 'join.list' });
+      if (this.conn.state() === 'connected') {
+        this.conn.send({ cmd: 'join.list' });
+        this.conn.send({ cmd: 'device.list' });
+      }
     });
 
     // Bearer rejected (close 4401) → forget it and send the user back to pair.
@@ -59,7 +75,7 @@ export class AuthService {
     if (isDemoUrl(wsUrl)) return; // no host to POST to — the demo is entirely in-process
     const bearer = await this.bearerFor(wsUrl);
     if (!bearer) return;
-    await fetch(this.httpBase(wsUrl) + '/register', {
+    await fetch(httpBase(wsUrl) + '/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}` },
       body: JSON.stringify({ token, platform: this.platform() }),
@@ -77,13 +93,20 @@ export class AuthService {
     return res.bearer;
   }
 
-  /** Ask an already-paired daemon to join → joinId (the code is revealed on a paired device). */
-  async join(wsUrl: string): Promise<string> {
+  /**
+   * Ask an already-paired daemon to join → the joinId, plus how many paired devices are connected to
+   * display the code.
+   *
+   * `reachable` is not decoration. The join list is gated on the enrol capability, so a household
+   * whose only such device is asleep has nowhere to show the code — and a caller told nothing but
+   * "here is your joinId" waits on a code field forever, with no error to explain it.
+   */
+  async join(wsUrl: string): Promise<{ joinId: string; reachable: number }> {
     const res = await this.post<JoinResponse>(wsUrl, '/join', {
       name: await this.deviceName(),
       platform: this.platform(),
     });
-    return res.joinId;
+    return { joinId: res.joinId, reachable: res.reachable ?? 0 };
   }
 
   /** Confirm a join with the code read off a paired device → bearer. */
@@ -98,6 +121,18 @@ export class AuthService {
     await Preferences.remove({ key: this.key(wsUrl) });
   }
 
+  /**
+   * Revoke a device's bearer on the daemon.
+   *
+   * Forgetting THIS device is allowed and is the "sign this browser out" action — the daemon closes
+   * the socket with 4401 on the next connection, which the existing auth-error effect already turns
+   * into "drop the stored bearer and go back to pairing". So the sign-out path is the same one a
+   * revoked-elsewhere device takes, and there is only one of them to get right.
+   */
+  forget(id: string): void {
+    this.conn.send({ cmd: 'device.forget', id });
+  }
+
   /** Always send the platform (ios | android | web) — the daemon records it for push routing. */
   private platform(): string {
     return Capacitor.getPlatform();
@@ -110,17 +145,23 @@ export class AuthService {
     try {
       const info = await Device.getInfo();
       const label = info.name && info.name !== info.model ? info.name : `${info.manufacturer} ${info.model}`.trim();
-      this.cachedName = label || 'Nocturn Mobile';
+      this.cachedName = label || this.fallbackName();
     } catch {
-      this.cachedName = 'Nocturn Mobile';
+      this.cachedName = this.fallbackName();
     }
     return this.cachedName;
+  }
+
+  /** The label when the platform will not name itself. It is the name a human reads in the device
+      list, so a browser must not appear there as a phone. */
+  private fallbackName(): string {
+    return this.platform() === 'web' ? 'Nocturn Web' : 'Nocturn Mobile';
   }
 
   // ── internals ────────────────────────────────────────────────────────────────
 
   private async post<T>(wsUrl: string, path: string, body: unknown): Promise<T> {
-    const r = await fetch(this.httpBase(wsUrl) + path, {
+    const r = await fetch(httpBase(wsUrl) + path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -131,12 +172,6 @@ export class AuthService {
 
   private async store(wsUrl: string, bearer: string): Promise<void> {
     await Preferences.set({ key: this.key(wsUrl), value: bearer });
-  }
-
-  /** ws://host:port/ws → http(s)://host:port (pairing is plain HTTP on the same host). */
-  private httpBase(wsUrl: string): string {
-    const u = new URL(wsUrl);
-    return `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}`;
   }
 
   private key(wsUrl: string): string {

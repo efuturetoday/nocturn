@@ -51,7 +51,9 @@ func main() {
 // runApp opens every workspace and runs either the interactive terminal assistant (serveAddr == "")
 // or the out-of-band WebSocket daemon (serveAddr set). It returns a Unix exit code. Only this path
 // needs the LLM endpoint — the light commands (auth, secret, ls) do not.
-func runApp(serveAddr string) int {
+//
+// serveOpts configure the daemon and are ignored by the terminal path, which has no socket to serve.
+func runApp(serveAddr string, serveOpts ...serve.Option) int {
 	baseURL := os.Getenv("OPENAI_BASE_URL")
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	model := os.Getenv("OPENAI_MODEL")
@@ -191,7 +193,16 @@ func runApp(serveAddr string) int {
 		logger.Info("nocturn daemon starting", "addr", serveAddr, "workspaces", len(spaces), "model", model)
 		// serve.Serve wires each workspace's chat subscriptions and only then starts its agent
 		// schedulers, so a scheduled firing can never race the subscription wiring.
-		if err := serve.Serve(ctx, serveAddr, spaces, devices, broker, embedder, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// Keep the command line's own credential true after the registry is edited from a phone or a
+		// browser. Forgetting that row is a legitimate thing to want — it is how a leaked cli-bearer is
+		// revoked — but without this it would also disable `nocturn pair` until the next restart, which
+		// is the least convenient moment to discover a restart is needed. The daemon stays the only
+		// writer of that file; ensureCLICredential is idempotent, so this costs a lookup when nothing
+		// relevant changed.
+		serveOpts = append(serveOpts, serve.OnDevicesChanged(func() {
+			ensureCLICredential(devices, logger)
+		}))
+		if err := serve.Serve(ctx, serveAddr, spaces, devices, broker, embedder, logger, serveOpts...); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("serve", "err", err)
 			return 1
 		}

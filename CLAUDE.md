@@ -111,6 +111,10 @@ a one-minute reconcile that costs a directory walk when nothing changed) ·
 `chat` (file-backed transcript store + Manager) · `agent` (declaration + cron only; execution is
 injected by the workspace) · `workspace` (the composition root) · `serve` (WebSocket surface,
 tagged JSON, one file per domain) ·
+`webui` (the browser front-end, `go:embed`ded: the SAME Angular bundle `mobile/` ships, copied in by
+`generate.sh` and gitignored except a load-bearing `.gitkeep`. A file server and nothing else —
+it knows no classes, no capabilities, no bearers, because assets carry no authority. Absent bundle =
+a 503 page naming the build command, so a bare clone builds and runs) ·
 `tui` (+`/transcript`, `/logring`) (the terminal surface, `serve`'s sibling: a full-screen go-tui app
 over the same facade. `transcript` is the pure event→blocks fold — the Go port of the mobile
 `chat-model.ts`, pinned to it by a convergence test; `logring` is the in-memory log the pane shows.
@@ -177,6 +181,44 @@ Read this before touching anything security-shaped — it is easy to assume the 
   fresh ask is denied fail-closed; `Guarded` routes the ask out-of-band to the human. A missing or
   typo'd dial therefore never escalates authority. With no device wired, guarded collapses to
   strict.
+- **Device classes are interpreted in ONE function**, `serve.capabilitiesOf`, with `serve.classFor`
+  its neighbour deriving which class a holder gets from the platform it already sends. `internal/auth`
+  stores a class and never compares one — not even behind a `func(Class) bool`, which is the same
+  coupling wearing a hat. Pairing is mechanism: `/pair` and `/join/confirm` hand back a bearer and
+  never branch on a class, and **the class is never on the wire** — a value the client controls is not
+  a fact about the client. `capabilities` is unexported (the compiler holds half the rule) and
+  `internal/serve/invariant_test.go` walks the tree for class constants outside three allowlisted
+  files (it holds the other half, and has a companion test proving the scanner can still see).
+  `ClassWeb` = approve + enrol, **not** captureAudio — the one flag that keeps it from being a second
+  spelling of `ClassApp`, and what makes `covers()` refuse to let a browser mint a `ClassTool`.
+  `bootstrap` (arm a pairing code) belongs to **`ClassTool` alone**: its bearer is a 0600 file beside
+  the vault, so it already implies holding the workspace — and giving it to an app would make an app
+  *cover* a tool, i.e. mintable through `POST /devices`.
+- **Every credential with a TTL has a way to get another one.** The bootstrap code was armed once at
+  startup for 5 minutes; missing that window had no exit but restarting the daemon or deleting
+  `devices.json`. Now: `nocturn pair` (→ `POST /pair/code`) any time, `auth.BootstrapMaxTries = 5`
+  guesses mirroring `joinMaxTries`, and `daemon.json` carries **two** bits — `paired` and `bootstrap` —
+  because one could not tell "join is the way in" from "there is no way in", which is what walked the
+  user into an impossible flow. `householdCanEnrol` is the single predicate both `serveOn` and
+  `handleDaemon` ask, so they cannot disagree.
+- **Devices are revocable** (`device.list`/`device.forget`, gated on `enrol`; `auth.Store.Forget`).
+  Before this a lost phone meant hand-editing `devices.json` and restarting.
+- **Only our own pages may talk to the daemon from a browser** (`internal/serve/origin.go`, applied
+  in `cors` which wraps the whole mux, so it also gates the `/ws` upgrade). `Access-Control-Allow-Origin: *`
+  was not the usual harmless case: no cookies are involved, but the thing an attacker's page would
+  read is the RESPONSE, and the response to `/pair` is a bearer. Allowed: no `Origin` at all (curl,
+  the CLI, native clients), same-origin against `r.Host`, Capacitor's webview origins (defaults read
+  out of the pinned source — `capacitor://localhost`, `https://localhost`), and `NOCTURN_DEV_ORIGINS`
+  for `ng serve` against a remote daemon.
+- **`hostOK` runs BEFORE `originOK`, and that order is the point.** Comparing `Origin` to `r.Host` is
+  self-referential — whoever owns a DNS name owns both, which is DNS rebinding, and it was **measured
+  bypassing the origin gate** before this existed (foreign Host → 403; `Origin == Host == evil.example`
+  → through to the handler). So the Host must be un-rebindable: an IP literal (nothing resolves),
+  `localhost`, or `.local` (mDNS answers only on the segment). A real hostname is indistinguishable
+  from the attack, so it is named once via `NOCTURN_HOSTNAMES`.
+- **A browser is not a second device for the unattended case.** No push provider carries one, so
+  `ClassWeb` answers only while its tab is open. The phone is still what the out-of-band claim rests
+  on.
 - **Zero ambient authority:** the wazero guest gets nothing; every capability is an explicitly
   handed host window — unforgeable by absence.
 - **Secrets** never enter the guest: presence only, value injected host-side at the boundary.
@@ -322,7 +364,14 @@ internal/speaker/reference/setup.sh   # torch venv, ONLY to regenerate the filte
 
 cp .env.example .env                  # OPENAI_BASE_URL / _MODEL / _API_KEY
 go run ./cmd/nocturn                  # the full-screen terminal chat (needs a TTY; exits 2 if piped)
-go run ./cmd/nocturn serve            # the WebSocket daemon the mobile app talks to
+go run ./cmd/nocturn serve            # the daemon: WebSocket + the browser UI at the same address
+#   --host picks the interface ("" = all, 127.0.0.1 = this machine only, which also suppresses the
+#   mDNS advert), --port the port, --no-web serves the protocol without the UI.
+
+# The browser UI is the SAME Angular bundle as the app, go:embed'd from internal/webui/dist — which
+# is gitignored but for a .gitkeep, so a bare clone builds and serves a "not built" page instead.
+cd mobile && npm ci && npm run build && cd ..
+go generate ./internal/webui/         # copies dist/mobile/browser in; no bundle = says so, exits 0
 #   keys: Ctrl+P the command palette (everything is in there) · Tab next region, named in the hint
 #         line · Enter open/send · Ctrl+C cancel the TURN · Ctrl+N new · Ctrl+K workspace ·
 #         Ctrl+L log pane · Ctrl+Q quit · j/k/PgUp/PgDn/g/G scroll · ←→ filter the conversation list

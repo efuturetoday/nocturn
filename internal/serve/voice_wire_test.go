@@ -167,12 +167,12 @@ func TestConn_AnAnsweringDeviceIsKept(t *testing.T) {
 var fastHeartbeat = heartbeat{every: 50 * time.Millisecond, wait: 50 * time.Millisecond}
 
 // serveTest starts the daemon on a free port and returns its address.
-func serveTest(t *testing.T, ctx context.Context, spaces map[string]*workspace.Workspace, devices *auth.Store, log *slog.Logger, beat heartbeat) string {
+func serveTest(t *testing.T, ctx context.Context, spaces map[string]*workspace.Workspace, devices *auth.Store, log *slog.Logger, beat heartbeat, opts ...Option) string {
 	t.Helper()
 	broker := hitl.NewBroker(nil, log)
 	ready := make(chan string, 1)
 	go func() {
-		_ = serveOn(ctx, "127.0.0.1:0", spaces, devices, broker, nil, log, beat, func(addr string) { ready <- addr })
+		_ = serveOn(ctx, "127.0.0.1:0", spaces, devices, broker, nil, log, beat, func(addr string) { ready <- addr }, opts...)
 	}()
 	select {
 	case addr := <-ready:

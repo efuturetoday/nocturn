@@ -206,6 +206,28 @@ export interface JoinList {
   joins: PendingJoin[];
 }
 
+/** One enrolled device. The bearer hash never crosses the wire — the daemon blanks it at the source. */
+export interface EnrolledDevice {
+  id: string;
+  name: string;
+  /** app | web | appliance | tool — what it IS, not what it may do. */
+  class?: string;
+  platform?: Platform;
+  added: string;
+  lastUsed?: string;
+}
+
+/**
+ * The household's devices, replying to device.list, and pushed to every device that may enrol
+ * whenever one is forgotten — two admin screens must not show two different answers.
+ */
+export interface DeviceList {
+  type: "device.list";
+  devices: EnrolledDevice[];
+  /** The id of the device this connection belongs to, so "this device" needs no guessing by name. */
+  self?: string;
+}
+
 /**
  * An out-of-band approval request, as STRUCTURE rather than prose: `kind` and `target` are the gate
  * action verbatim and `options` are the answers the daemon minted for this exact approval. The
@@ -352,6 +374,7 @@ export type ServerEvent =
   | WorkspaceList
   | ChatActivity
   | JoinList
+  | DeviceList
   | ApprovalRequest
   | ApprovalResolved
   | ReminderList
@@ -450,6 +473,21 @@ export interface JoinListCmd {
   cmd: "join.list";
 }
 
+/** Request the household's enrolled devices (→ DeviceList). Devices that may enrol only. */
+export interface DeviceListCmd {
+  cmd: "device.list";
+}
+
+/**
+ * Revoke one device's bearer. The exit from "my phone is lost": until this existed the only remedy
+ * was editing devices.json by hand and restarting the daemon. Takes effect on the device's next
+ * connection.
+ */
+export interface DeviceForgetCmd {
+  cmd: "device.forget";
+  id: string;
+}
+
 /**
  * Answer a pending approval with the id of the option chosen. Anything the daemon did not offer —
  * DENY_OPTION, an unknown id, an omitted field — refuses, so there is no value that approves by
@@ -509,6 +547,8 @@ export type ClientCommand =
   | AgentFireCmd
   | WorkspaceListCmd
   | JoinListCmd
+  | DeviceListCmd
+  | DeviceForgetCmd
   | ApprovalResolve
   | ReminderListCmd
   | ReminderCancelCmd
@@ -547,6 +587,15 @@ export interface JoinRequest {
 }
 export interface JoinResponse {
   joinId: string;
+  /**
+   * How many paired devices are connected right now to display the code.
+   *
+   * Zero is not an error — the join stays open and a device that connects later will show it — but it
+   * is the difference between "read the code off your phone" and "nothing can show you a code yet",
+   * and a client that cannot tell them apart leaves the user waiting on a screen nobody will look at.
+   * Absent from daemons predating this field.
+   */
+  reachable?: number;
 }
 
 /** POST /join/confirm — submit the code read off an already-paired device. */

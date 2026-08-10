@@ -106,8 +106,12 @@ machine itself — every device after that is enrolled by a device you already t
 [the companion app](/nocturn/guides/the-app/) for the rest of that flow.
 
 ```bash
-./nocturn serve --addr :8080     # the default; $NOCTURN_ADDR also works
+./nocturn serve                  # every interface, port 8080
+./nocturn serve --host 127.0.0.1 # this machine only; $NOCTURN_HOST/$NOCTURN_PORT set the defaults
 ```
+
+That address serves the browser UI as well as the protocol, so the same app your phone runs is a
+tab away.
 
 Conversations are shared, not per device: start something in the terminal, pick it up on your phone,
 finish it in the terminal again.

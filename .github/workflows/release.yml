@@ -61,9 +61,26 @@ permissions:
   contents: read
 
 jobs:
+  # The browser UI is served out of the binary, so a released binary needs the bundle built before
+  # `go build` runs. It is the SAME reusable workflow the mobile release calls, and the same artefact:
+  # the bundle is built once and tested once, and those are the bytes that ship in both places.
+  #
+  # Its `if` is disjoint from the `web` job below by construction — a `mobile-v…` tag does not start
+  # with `v` — so exactly one of the two runs per release.
+  binaries-web:
+    name: Web Bundle
+    if: startsWith(inputs.tag || github.ref_name, 'v')
+    uses: ./.github/workflows/_build-web.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      # Same reasoning as the `web` job: the drift check already ran on this commit when it was
+      # pushed to main, and on a tag there is no heal job to consume the patch it would emit.
+      check-drift: false
+
   binaries:
     name: Binaries
     if: startsWith(inputs.tag || github.ref_name, 'v')
+    needs: binaries-web
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -83,6 +100,22 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # Restores mobile/dist/mobile/browser, which is exactly where generate.sh looks — so the
+      # workflow does not carry a second copy of that path, and moving it is one edit in one file.
+      - uses: actions/download-artifact@v6
+        with:
+          name: mobile-bundle
+          path: mobile/dist
+
+      # Not `go generate ./...`: that would run every generator in the tree during a release build.
+      # This one, by name, and it fails loudly here — a released binary that silently serves the
+      # "web UI not built" page is the one case where the friendly fallback would be wrong.
+      - name: Embed the web UI
+        run: |
+          internal/webui/generate.sh
+          test -f internal/webui/dist/index.html \
+            || { echo "the bundle did not land in internal/webui/dist"; exit 1; }
 
       # -X main.version is the whole reason `nocturn version` has ever printed anything but "dev":
       # cmd/nocturn/cli.go:26 declares the variable and has described this recipe in a comment since

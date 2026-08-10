@@ -30,12 +30,28 @@ type hub struct {
 	// and read-only after, so a connection reads it without synchronising.
 	beat heartbeat
 
+	// devicesChanged is called after a connection modifies the device registry, or nil. Daemon-wide
+	// like beat, and written once at construction — it is a fact about this daemon rather than about
+	// any one connection, which is why it lives here and not on conn.
+	devicesChanged func()
+
 	mu    sync.Mutex
 	conns map[*conn]struct{}
 	seq   uint64
 }
 
 func newHub(beat heartbeat) *hub { return &hub{beat: beat, conns: map[*conn]struct{}{}} }
+
+// notifyDevicesChanged runs the daemon's registry hook, if it has one.
+//
+// Synchronously and before the refreshed roster is broadcast, so what the hook does — re-minting the
+// command line's credential — is already in the registry by the time any client sees the list. A
+// roster missing a row that reappears a moment later reads as a bug.
+func (h *hub) notifyDevicesChanged() {
+	if h.devicesChanged != nil {
+		h.devicesChanged()
+	}
+}
 
 func (h *hub) add(c *conn) {
 	h.mu.Lock()
@@ -112,6 +128,23 @@ func (h *hub) newest(device string) *conn {
 	return newest
 }
 
+// countMatching reports how many live connections want accepts.
+//
+// It answers "is there anybody out there who could show this code", which /join needs in order to
+// tell a joining device something true instead of leaving it to wait on a screen nobody will ever
+// look at.
+func (h *hub) countMatching(want func(*conn) bool) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for c := range h.conns {
+		if want(c) {
+			n++
+		}
+	}
+	return n
+}
+
 // countOf reports how many connections a device holds.
 func (h *hub) countOf(device string) int {
 	h.mu.Lock()
@@ -126,11 +159,21 @@ func (h *hub) countOf(device string) int {
 }
 
 // broadcast sends msg to every connection without blocking (a slow one drops it and resyncs).
-func (h *hub) broadcast(msg any) {
+func (h *hub) broadcast(msg any) { h.broadcastTo(func(*conn) bool { return true }, msg) }
+
+// broadcastTo is broadcast narrowed to the connections want accepts.
+//
+// It exists because one message is not for everyone: a pending join carries the code that completes
+// it, so it may only reach a connection allowed to enrol. The predicate takes the connection rather
+// than a capability so that what a class may do stays read from conn.can, which serve.go computed
+// once at accept time — there is no second place a class is interpreted.
+func (h *hub) broadcastTo(want func(*conn) bool, msg any) {
 	h.mu.Lock()
 	conns := make([]*conn, 0, len(h.conns))
 	for c := range h.conns {
-		conns = append(conns, c)
+		if want(c) {
+			conns = append(conns, c)
+		}
 	}
 	h.mu.Unlock()
 	for _, c := range conns {
@@ -141,12 +184,47 @@ func (h *hub) broadcast(msg any) {
 // bootstrapTTL is how long a first-device pairing code stays valid.
 const bootstrapTTL = 5 * time.Minute
 
-// cors wraps a handler to allow any origin (the companion app's origin is not fixed) and answers the
-// preflight OPTIONS with 204. Pairing endpoints carry no cookies, so allow-all is safe here.
-func cors(h http.Handler) http.Handler {
+// cors admits browser requests from the app's own origins and the page this daemon served, and
+// refuses every other one outright. It answers the preflight OPTIONS with 204.
+//
+// It replaces an allow-all header, and the reason is worth keeping: these endpoints carry no cookies,
+// which is normally what makes Access-Control-Allow-Origin: * harmless — the browser attaches no
+// ambient authority, so the attacker's page learns nothing. That argument fails here, because the
+// thing it would learn is the RESPONSE, and the response to /pair is a bearer. Any page the household
+// visits could scan the LAN, find a daemon with a code armed, and grind /pair from the victim's own
+// browser without ever being on the network.
+//
+// Refusing rather than merely withholding the header: a browser would block the read either way, but
+// a 403 says so where a log can see it, and it stops the request before it reaches a handler that
+// would otherwise spend a pairing attempt.
+//
+// This wraps the whole mux, so it is also the gate on the /ws upgrade — one rule, one place, nothing
+// to drift.
+func cors(h http.Handler, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		// Which address this was sent TO, before which page sent it. Checking the Host first is not an
+		// ordering preference: the Origin check compares Origin against Host, so it is only meaningful
+		// once Host is known to be an address a stranger could not have pointed here (see hostOK).
+		if !hostOK(r.Host) {
+			log.Warn("request refused: this daemon is not addressed by that name",
+				"host", r.Host, "path", r.URL.Path, "remote", r.RemoteAddr,
+				"hint", "reach it by IP, localhost or its .local name, or set "+hostnamesEnv)
+			http.Error(w, "unknown host — set "+hostnamesEnv+" to allow this name", http.StatusForbidden)
+			return
+		}
+		if !originOK(r) {
+			log.Warn("request refused: origin not allowed",
+				"origin", r.Header.Get("Origin"), "path", r.URL.Path, "remote", r.RemoteAddr)
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
+		// Echo the caller's origin rather than "*". Vary tells any cache that the answer depends on it,
+		// so one origin's 200 is never replayed to another.
+		if origin := r.Header.Get("Origin"); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -160,23 +238,38 @@ func cors(h http.Handler) http.Handler {
 // connection must carry a paired device's bearer; the first device pairs via POST /pair with the
 // bootstrap code logged at startup, further devices via POST /join + /join/confirm. One backend,
 // many fronts — the backend is the truth.
-func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, embedder *speaker.Embedder, log *slog.Logger) error {
-	return serveOn(ctx, addr, spaces, devices, broker, embedder, log, defaultHeartbeat, nil)
+func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, embedder *speaker.Embedder, log *slog.Logger, opts ...Option) error {
+	return serveOn(ctx, addr, spaces, devices, broker, embedder, log, defaultHeartbeat, nil, opts...)
 }
 
 // serveOn is Serve with the two things only a test varies: the liveness check its connections run,
 // and a hook for the address it actually bound (so a test can ask for port 0 and still find the
 // daemon). Production passes defaultHeartbeat and nil.
-func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, embedder *speaker.Embedder, log *slog.Logger, beat heartbeat, ready func(string)) error {
+func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, embedder *speaker.Embedder, log *slog.Logger, beat heartbeat, ready func(string), opts ...Option) error {
 	log = log.With("component", "serve")
-	if code := devices.Bootstrap(bootstrapTTL); code != "" {
-		log.Info("no app paired — enter this code in the companion app", "code", code, "validFor", bootstrapTTL)
+	cfg := apply(opts)
+	// Arm a bootstrap code only while nothing in the registry could bring a device in by itself.
+	//
+	// The test is a capability, not "is the registry empty", and the difference is the whole flow: the
+	// daemon enrols its own command line (ClassTool) at startup, and an appliance may be enrolled on
+	// someone's behalf. Neither can relay a join code, so counting them as "a device is paired" would
+	// retire the bootstrap code while nothing was left that could pair the first phone — a household
+	// nobody can ever enter. The decision lives here rather than in auth because it is a question
+	// about what a class may DO, and capabilitiesOf is the one place that is known.
+	if !householdCanEnrol(devices) {
+		code := devices.ArmBootstrap(bootstrapTTL)
+		// Name the way to get another one in the same breath as the code. This line scrolls past on a
+		// busy server and the code behind it dies in five minutes; without the second half, missing it
+		// once used to mean restarting the daemon.
+		log.Info("nothing paired yet — enter this code in the app or the web UI; `nocturn pair` mints a new one any time",
+			"code", code, "validFor", bootstrapTTL)
 	}
 
 	// Every device is a sink of the whole daemon: chat activity (list changes) AND live chat events
 	// (tokens/tools/turnEnd, tagged with chatId) are broadcast to all connections; the client routes
 	// by chatId. So a session's turn is never tied to one connection.
 	hub := newHub(beat)
+	hub.devicesChanged = cfg.onDevicesChanged
 	for name, ws := range spaces {
 		ws.OnChatUpdate(func(m chat.Meta) {
 			hub.broadcast(ChatActivity{Type: "chat.activity", Ws: name, Chat: m})
@@ -214,14 +307,22 @@ func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Work
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/daemon.json", func(w http.ResponseWriter, r *http.Request) {
+		handleDaemon(w, r, devices, cfg.version)
+	})
 	mux.HandleFunc("/pair", func(w http.ResponseWriter, r *http.Request) { handlePair(w, r, devices, log) })
+	mux.HandleFunc("/pair/code", func(w http.ResponseWriter, r *http.Request) { handleArm(w, r, devices, log) })
 	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) { handleJoin(w, r, devices, hub, log) })
 	mux.HandleFunc("/join/confirm", func(w http.ResponseWriter, r *http.Request) { handleJoinConfirm(w, r, devices, log) })
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) { handleRegister(w, r, devices, log) })
 	mux.HandleFunc("POST /devices", func(w http.ResponseWriter, r *http.Request) { handleEnrol(w, r, devices, log) })
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			OriginPatterns: []string{"*"}, // dev: the companion app's origin is not fixed
+			// The Origin was already checked by cors, which wraps this mux — see originOK. Skipping the
+			// library's own check is what keeps that ONE rule authoritative: coder/websocket compares
+			// the Origin host to r.Host, which would be right for the served page and wrong for
+			// capacitor://localhost, so leaving it on would mean two rules disagreeing about the phone.
+			InsecureSkipVerify: true,
 		})
 		if err != nil {
 			log.Warn("ws accept failed", "err", err, "remote", r.RemoteAddr)
@@ -251,6 +352,13 @@ func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Work
 			log.With("remote", r.RemoteAddr, "device", dev.ID, "class", dev.Class)).serve(r.Context())
 	})
 
+	// The browser front-end, last and least specific. ServeMux matches the longest pattern, so every
+	// route above still wins over this catch-all — registering it does not put assets in front of the
+	// protocol, and a path the protocol does not claim is by definition one for the app's router.
+	if cfg.webUI != nil {
+		mux.Handle("/", cfg.webUI)
+	}
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -262,7 +370,7 @@ func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Work
 		ready(addr)
 	}
 
-	srv := &http.Server{Handler: cors(mux)}
+	srv := &http.Server{Handler: cors(mux, log)}
 	// Graceful shutdown on cancel; stop() cancels the hook if ListenAndServe returns first, so the
 	// watcher never leaks.
 	stop := context.AfterFunc(ctx, func() {

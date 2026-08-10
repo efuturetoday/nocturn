@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,7 +20,9 @@ import (
 	"github.com/efuturetoday/nocturn/internal/mcp"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/serve"
 	"github.com/efuturetoday/nocturn/internal/skill"
+	"github.com/efuturetoday/nocturn/internal/webui"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
@@ -36,12 +39,36 @@ func dispatch(args []string) int {
 	switch args[0] {
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-		addr := fs.String("addr", envOr("NOCTURN_ADDR", ":8080"), "listen address for the WebSocket daemon")
-		fs.Usage = usage(fs, "serve [--addr :8080]", "Run the out-of-band WebSocket daemon instead of the terminal UI.")
+		// Host and port rather than one address string. The daemon now hands out a page as well as a
+		// socket, so which interface it binds is a decision worth having to make in words: "" and
+		// 0.0.0.0 are every interface, 127.0.0.1 is this machine only (and, being loopback, also
+		// suppresses the mDNS advertisement).
+		host := fs.String("host", envOr("NOCTURN_HOST", ""),
+			`interface to bind: "" or 0.0.0.0 for all, 127.0.0.1 for this machine only`)
+		port := fs.String("port", envOr("NOCTURN_PORT", "8080"), "port to listen on")
+		noWeb := fs.Bool("no-web", false, "do not serve the browser UI (the WebSocket protocol is unaffected)")
+		fs.Usage = usage(fs, "serve [--host 127.0.0.1] [--port 8080] [--no-web]",
+			"Run the out-of-band WebSocket daemon and the browser UI instead of the terminal UI.")
 		if code, done := parseFlags(fs, args[1:]); done {
 			return code
 		}
-		return runApp(*addr)
+		opts := []serve.Option{serve.WithVersion(version)}
+		if !*noWeb {
+			// --no-web hands the daemon no UI at all rather than a disabled one: serve never imports
+			// the assets, so "off" is the absence of a handler, not a flag it has to keep checking.
+			opts = append(opts, serve.WithWebUI(webui.Handler()))
+		}
+		return runApp(net.JoinHostPort(*host, *port), opts...)
+	case "pair":
+		fs := flag.NewFlagSet("pair", flag.ContinueOnError)
+		addr := fs.String("addr", ":8080", "address of the running daemon")
+		open := fs.Bool("open", false, "open the pairing link in a browser")
+		fs.Usage = usage(fs, "pair [--open] [--addr :8080]",
+			"Mint a fresh pairing code on the running daemon, and print it with a one-click link.")
+		if code, done := parseFlags(fs, args[1:]); done {
+			return code
+		}
+		return cmdPair(*addr, *open)
 	case "voice":
 		fs := flag.NewFlagSet("voice", flag.ContinueOnError)
 		port := fs.Int("port", 8788, "loopback port for the voice PoC harness")
@@ -55,7 +82,10 @@ func dispatch(args []string) int {
 		return cmdVoice(*port, *wsName)
 	case "enroll":
 		fs := flag.NewFlagSet("enroll", flag.ContinueOnError)
-		addr := fs.String("addr", envOr("NOCTURN_ADDR", ":8080"), "address of the running daemon")
+		// A dial target, not a bind: this connects to a daemon someone else is running, which is why it
+		// keeps a single address (":8080" resolves to localhost, see wsURL) while `serve` splits into
+		// --host and --port.
+		addr := fs.String("addr", ":8080", "address of the running daemon")
 		device := fs.String("device", "", "which satellite should record")
 		seconds := fs.Int("seconds", 60, "how long to record")
 		fs.Usage = usage(fs, "enroll --device <name> [--seconds 60] [--addr :8080]",
@@ -94,7 +124,8 @@ func printUsage(w io.Writer) {
 
 Usage:
   nocturn                      Open the interactive terminal assistant (default workspace)
-  nocturn serve [--addr :8080] Run the out-of-band WebSocket daemon
+  nocturn serve [--host --port] Run the WebSocket daemon and the browser UI
+  nocturn pair [--open]        Mint a pairing code on the running daemon (any time, not just at start)
   nocturn voice [--port 8788]  Run the browser voice PoC harness (loopback only, no pairing)
   nocturn enroll --device <n>  Ask a satellite to record its microphone, for voice enrolment
   nocturn voices ls|add|rm     Manage the voices a workspace can recognise

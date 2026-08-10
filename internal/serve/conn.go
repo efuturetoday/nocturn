@@ -327,6 +327,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.chat(ctx, env.Cmd, data)
 	case "join":
 		c.join(ctx, env.Cmd)
+	case "device":
+		c.deviceCmd(ctx, env.Cmd, data)
 	case "approval":
 		c.approval(ctx, env.Cmd, data)
 	case "presence":

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/subtle"
+	"slices"
 	"time"
 )
 
@@ -41,6 +42,42 @@ func (s *Store) Join(name, platform string) string {
 	return id
 }
 
+// CapJoins prunes expired joins and then keeps at most n of the rest, dropping the oldest first.
+//
+// /join cannot be authenticated — the caller has nothing to authenticate with yet — so without a
+// ceiling anyone who can reach the daemon can mint pending joins without limit and bury the
+// household's pairing screen. Oldest-first is what keeps the flow usable for the person actually
+// standing there: the request they just made is the one that survives the eviction.
+func (s *Store) CapJoins(n int) {
+	if n < 1 {
+		// A ceiling of zero would mean "no device may ever join", which no caller can want, and the
+		// arithmetic below would slice past the end reaching for it. Refusing to act beats panicking
+		// inside the registry on the way to a pairing screen.
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	ids := make([]string, 0, len(s.joins))
+	for id, j := range s.joins {
+		if now.After(j.expires) {
+			delete(s.joins, id)
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) < n {
+		return
+	}
+	// Sort by expiry, which orders by creation: every join gets the same TTL, so the one expiring
+	// soonest is the one made longest ago.
+	slices.SortFunc(ids, func(a, b string) int { return s.joins[a].expires.Compare(s.joins[b].expires) })
+	for _, id := range ids[:len(ids)-n+1] {
+		delete(s.joins, id)
+	}
+}
+
 // PendingJoins lists the open join requests with their codes, for an already-paired device to relay
 // to a human. Expired entries are pruned in passing.
 func (s *Store) PendingJoins() []PendingJoin {
@@ -58,10 +95,26 @@ func (s *Store) PendingJoins() []PendingJoin {
 	return out
 }
 
-// ConfirmJoin redeems a joinId and its relayed code for a new device's bearer. A wrong code is
-// counted; past joinMaxTries the join is dropped so the 6-digit code cannot be brute-forced. An
-// unknown, expired, or exhausted join fails with ErrPairing.
-func (s *Store) ConfirmJoin(joinID, code string) (string, error) {
+// JoinPlatform returns the platform recorded when joinID asked to join, or "" if there is no such
+// open join. It reports what was stored and interprets none of it — the caller turns a platform into
+// a class, because only the caller knows what a class means.
+func (s *Store) JoinPlatform(joinID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.joins[joinID]
+	if !ok {
+		return ""
+	}
+	return j.platform
+}
+
+// ConfirmJoin redeems a joinId and its relayed code for a new device's bearer, enrolling it as
+// class. A wrong code is counted; past joinMaxTries the join is dropped so the 6-digit code cannot
+// be brute-forced. An unknown, expired, or exhausted join fails with ErrPairing.
+//
+// As in Pair, the class is supplied rather than decided: this package writes down what a class is,
+// and never what it means.
+func (s *Store) ConfirmJoin(joinID, code string, class Class) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	j, ok := s.joins[joinID]
@@ -77,6 +130,5 @@ func (s *Store) ConfirmJoin(joinID, code string) (string, error) {
 		return "", ErrPairing
 	}
 	delete(s.joins, joinID) // single-use
-	// The join flow requires a screen to relay the code, so whatever completes it is an app.
-	return s.addDevice(j.name, j.platform, ClassApp)
+	return s.addDevice(j.name, j.platform, class)
 }
