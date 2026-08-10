@@ -101,7 +101,7 @@ func (c *conn) voice(ctx context.Context, cmd string, data []byte) {
 		// The device's detector heard someone. It carries nothing but the fact, which is all a
 		// silence timer needs, and it is deliberately not audio: audio says what was said, this says
 		// somebody is still there.
-		for _, ws := range c.spaces {
+		for _, ws := range c.spaces.Snapshot() {
 			if sessions := ws.VoiceSessions(); sessions != nil && sessions.Active(c.device) {
 				sessions.Heard(c.device)
 				return
@@ -192,7 +192,7 @@ func (c *conn) audioIn(pcm []byte) {
 	c.capture.add(pcm, time.Now())
 	c.listen.add(pcm)
 
-	for _, ws := range c.spaces {
+	for _, ws := range c.spaces.Snapshot() {
 		if sessions := ws.VoiceSessions(); sessions != nil && sessions.Active(c.device) {
 			sessions.Feed(c.device, pcm)
 			return
@@ -223,7 +223,7 @@ func (c *conn) endVoice() {
 	if c.hub.countOf(c.device) > 0 {
 		return
 	}
-	for _, ws := range c.spaces {
+	for _, ws := range c.spaces.Snapshot() {
 		if sessions := ws.VoiceSessions(); sessions != nil {
 			sessions.Stop(c.device)
 		}

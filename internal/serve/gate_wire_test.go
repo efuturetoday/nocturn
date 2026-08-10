@@ -3,6 +3,8 @@ package serve
 import (
 	"context"
 	"log/slog"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,13 +41,13 @@ func gateDaemonStore(t *testing.T, class auth.Class, opts ...Option) (*websocket
 		t.Fatalf("mint: %v", err)
 	}
 
-	ws, err := workspace.Open(workspace.Host{Log: log}, workspace.DefaultWorkspace, t.TempDir())
+	spaces, err := workspace.NewRegistry(workspace.Host{Log: log}, t.TempDir())
 	if err != nil {
 		t.Fatalf("workspace: %v", err)
 	}
-	t.Cleanup(ws.Close)
+	t.Cleanup(spaces.Close)
 
-	addr := serveTest(t, ctx, map[string]*workspace.Workspace{workspace.DefaultWorkspace: ws}, devices, log, defaultHeartbeat, opts...)
+	addr := serveTest(t, ctx, spaces, devices, log, defaultHeartbeat, opts...)
 	conn, _, err := websocket.Dial(ctx, "ws://"+addr+"/ws?token="+bearer, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -138,17 +140,129 @@ func TestServeOn_ArmsTheBootstrapUnlessSomethingCanEnrol(t *testing.T) {
 				t.Fatalf("mint: %v", err)
 			}
 
-			ws, err := workspace.Open(workspace.Host{Log: log}, workspace.DefaultWorkspace, t.TempDir())
+			spaces, err := workspace.NewRegistry(workspace.Host{Log: log}, t.TempDir())
 			if err != nil {
 				t.Fatalf("workspace: %v", err)
 			}
-			t.Cleanup(ws.Close)
+			t.Cleanup(spaces.Close)
 
-			serveTest(t, ctx, map[string]*workspace.Workspace{workspace.DefaultWorkspace: ws}, devices, log, defaultHeartbeat)
+			serveTest(t, ctx, spaces, devices, log, defaultHeartbeat)
 
 			if got := devices.BootstrapPending(); got != tc.wantCode {
 				t.Errorf("with only a %s device present, bootstrap armed = %v, want %v", tc.class, got, tc.wantCode)
 			}
 		})
 	}
+}
+
+// Changing the household's set of workspaces takes `manage`. Listing does not — which workspaces
+// exist is context, and every paired device already names one on every chat command.
+func TestWorkspaceCommands_RefusedWithoutManage(t *testing.T) {
+	conn, ctx := gateDaemon(t, auth.ClassAppliance)
+
+	for _, cmd := range []map[string]any{
+		{"cmd": "workspace.create", "name": "work"},
+		{"cmd": "workspace.rename", "name": workspace.DefaultWorkspace, "title": "Zuhause"},
+		{"cmd": "workspace.delete", "name": "work"},
+	} {
+		send(t, conn, ctx, cmd)
+		got := awaitType(t, conn, ctx, "error")
+		if text, _ := got["text"].(string); text == "" {
+			t.Fatalf("%v was refused with no reason: %v", cmd["cmd"], got)
+		}
+	}
+
+	// Listing still works, and the refusals changed nothing.
+	send(t, conn, ctx, map[string]any{"cmd": "workspace.list"})
+	got := awaitType(t, conn, ctx, "workspace.list")
+	items, _ := got["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("a refused create still changed the set: %v", got)
+	}
+}
+
+// With manage, the three actions work end to end — and each broadcasts the new set rather than
+// answering only the device that asked, so every attached device converges on it.
+func TestWorkspaceCommands_CreateRenameDelete(t *testing.T) {
+	for _, class := range []auth.Class{auth.ClassApp, auth.ClassWeb, auth.ClassTool} {
+		t.Run(string(class), func(t *testing.T) {
+			conn, ctx := gateDaemon(t, class)
+
+			send(t, conn, ctx, map[string]any{"cmd": "workspace.create", "name": "work", "title": "Arbeit"})
+			got := awaitType(t, conn, ctx, "workspace.list")
+			if names := workspaceNames(got); !slices.Equal(names, []string{workspace.DefaultWorkspace, "work"}) {
+				t.Fatalf("after create, names = %v", names)
+			}
+			if title := workspaceTitle(got, "work"); title != "Arbeit" {
+				t.Fatalf("create did not set the title in the same breath: %q", title)
+			}
+
+			// The title is a label. The name it was created under is still its identity.
+			send(t, conn, ctx, map[string]any{"cmd": "workspace.rename", "name": "work", "title": "Büro"})
+			got = awaitType(t, conn, ctx, "workspace.list")
+			if title := workspaceTitle(got, "work"); title != "Büro" {
+				t.Fatalf("after rename, title = %q, want \"Büro\"", title)
+			}
+			if names := workspaceNames(got); !slices.Equal(names, []string{workspace.DefaultWorkspace, "work"}) {
+				t.Fatalf("rename moved the identity: %v", names)
+			}
+
+			send(t, conn, ctx, map[string]any{"cmd": "workspace.delete", "name": "work"})
+			got = awaitType(t, conn, ctx, "workspace.list")
+			if names := workspaceNames(got); !slices.Equal(names, []string{workspace.DefaultWorkspace}) {
+				t.Fatalf("after delete, names = %v", names)
+			}
+		})
+	}
+}
+
+// The default workspace is recreated at startup, so deleting it would appear to work and then undo
+// itself. Refusing is the honest answer.
+func TestWorkspaceDelete_RefusesTheDefault(t *testing.T) {
+	conn, ctx := gateDaemon(t, auth.ClassApp)
+
+	send(t, conn, ctx, map[string]any{"cmd": "workspace.delete", "name": workspace.DefaultWorkspace})
+	got := awaitType(t, conn, ctx, "error")
+	if text, _ := got["text"].(string); !strings.Contains(text, "default") {
+		t.Fatalf("the refusal did not say why: %q", text)
+	}
+}
+
+// A name becomes a directory and the input to this workspace's vault key, so it answers to the same
+// rule plugins, MCP servers and agents do — not to whatever a client typed.
+func TestWorkspaceCreate_RejectsAnInvalidName(t *testing.T) {
+	conn, ctx := gateDaemon(t, auth.ClassApp)
+
+	for _, name := range []string{"", "../escape", "Work", "with space", ".hidden"} {
+		send(t, conn, ctx, map[string]any{"cmd": "workspace.create", "name": name})
+		got := awaitType(t, conn, ctx, "error")
+		if text, _ := got["text"].(string); text == "" {
+			t.Fatalf("name %q was refused with no reason", name)
+		}
+	}
+}
+
+// workspaceNames pulls the sorted names out of a workspace.list frame.
+func workspaceNames(msg map[string]any) []string {
+	items, _ := msg["items"].([]any)
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		name, _ := m["name"].(string)
+		out = append(out, name)
+	}
+	return out
+}
+
+// workspaceTitle pulls one workspace's display title out of a workspace.list frame.
+func workspaceTitle(msg map[string]any, name string) string {
+	items, _ := msg["items"].([]any)
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		if n, _ := m["name"].(string); n == name {
+			title, _ := m["title"].(string)
+			return title
+		}
+	}
+	return ""
 }

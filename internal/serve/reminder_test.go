@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/tools"
+	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
 func TestReminderDispatch_BadJSON_PerCommand(t *testing.T) {
@@ -107,7 +108,11 @@ func TestReminderInfos_Empty_NotNil(t *testing.T) {
 // device over its live connection — so the accessors work on a workspace opened without a Notifier
 // rather than being absent.
 func TestWorkspace_ReminderAccessors_WithoutNotifier(t *testing.T) {
-	ws := openWorkspace(t) // Host{} carries no Notifier
+	spaces := openWorkspace(t) // Host{} carries no Notifier
+	ws, ok := spaces.Get(workspace.DefaultWorkspace)
+	if !ok {
+		t.Fatal("the registry has no default workspace")
+	}
 	if got := ws.Reminders(); got == nil || len(got) != 0 {
 		t.Errorf("Reminders() = %#v, want an empty non-nil slice", got)
 	}

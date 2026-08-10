@@ -184,13 +184,13 @@ func runApp(serveAddr string, serveOpts ...serve.Option) int {
 		return runTUI(ctx, ui, host, model)
 	}
 
-	spaces, err := workspace.OpenAll(host, wsRoot)
+	spaces, err := workspace.NewRegistry(host, wsRoot)
 	if err != nil {
 		logger.Error("open workspaces", "err", err)
 		return 1
 	}
 	if serveAddr != "" {
-		logger.Info("nocturn daemon starting", "addr", serveAddr, "workspaces", len(spaces), "model", model)
+		logger.Info("nocturn daemon starting", "addr", serveAddr, "workspaces", spaces.Len(), "model", model)
 		// serve.Serve wires each workspace's chat subscriptions and only then starts its agent
 		// schedulers, so a scheduled firing can never race the subscription wiring.
 		// Keep the command line's own credential true after the registry is edited from a phone or a
@@ -217,16 +217,19 @@ func runApp(serveAddr string, serveOpts ...serve.Option) int {
 // first would stream into nothing.
 func runTUI(ctx context.Context, ui tui.Deps, host workspace.Host, model string) int {
 	err := tui.Run(ctx, ui, func(ctx context.Context) (*workspace.Workspace, error) {
-		spaces, err := workspace.OpenAll(host, wsRoot)
+		spaces, err := workspace.NewRegistry(host, wsRoot)
 		if err != nil {
 			return nil, err
 		}
-		ws := spaces[workspace.DefaultWorkspace]
+		ws, ok := spaces.Get(workspace.DefaultWorkspace)
+		if !ok {
+			return nil, fmt.Errorf("workspace %q is missing", workspace.DefaultWorkspace)
+		}
 		ui.Feed.Attach(ws)
-		for _, space := range spaces {
+		for _, space := range spaces.Snapshot() {
 			go space.StartAgents(ctx)
 		}
-		host.Log.Info("nocturn chat starting", "workspaces", len(spaces), "model", model)
+		host.Log.Info("nocturn chat starting", "workspaces", spaces.Len(), "model", model)
 		return ws, nil
 	})
 	if err == nil {

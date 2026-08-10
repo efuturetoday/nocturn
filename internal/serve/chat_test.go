@@ -23,21 +23,27 @@ func (fakeLLM) Next(_ context.Context, _ []agentkit.Message, _ []agentkit.ToolSp
 
 // openWorkspace opens a real, empty workspace on a temp dir — its manager/store are real, so the
 // handlers exercise genuine delegation. It is closed on cleanup.
-func openWorkspace(t *testing.T) *workspace.Workspace {
+// openRegistry opens a registry over a fresh root. NewRegistry always includes DefaultWorkspace, so
+// the result has exactly one workspace, "main".
+func openRegistry(t *testing.T, h workspace.Host) *workspace.Registry {
 	t.Helper()
-	h := workspace.Host{LLM: fakeLLM{}, Log: slog.New(slog.DiscardHandler)}
-	ws, err := workspace.Open(h, "main", t.TempDir())
+	reg, err := workspace.NewRegistry(h, t.TempDir())
 	if err != nil {
-		t.Fatalf("workspace.Open: %v", err)
+		t.Fatalf("workspace.NewRegistry: %v", err)
 	}
-	t.Cleanup(ws.Close)
-	return ws
+	t.Cleanup(reg.Close)
+	return reg
 }
 
-// connWith builds a conn whose single workspace "main" is ws.
-func connWith(ws *workspace.Workspace) *conn {
+func openWorkspace(t *testing.T) *workspace.Registry {
+	t.Helper()
+	return openRegistry(t, workspace.Host{LLM: fakeLLM{}, Log: slog.New(slog.DiscardHandler)})
+}
+
+// connWith builds a conn over spaces.
+func connWith(spaces *workspace.Registry) *conn {
 	c := testConn()
-	c.spaces["main"] = ws
+	c.spaces = spaces
 	return c
 }
 
@@ -156,8 +162,7 @@ func TestChat_UnknownAction_Error(t *testing.T) {
 // ── chatSubmit: client-minted id is validated before it is ever a filesystem key ─────────────────
 
 func TestChatSubmit_InvalidID_SendsBadChatID_NoSubmit(t *testing.T) {
-	c := testConn()
-	c.spaces["main"] = &workspace.Workspace{} // reached but never dereferenced: invalid id returns first
+	c := connWith(openWorkspace(t)) // reached but never used: an invalid id returns first
 	c.chatSubmit(context.Background(), ChatSubmit{Ws: "main", Kind: "user", ID: "../evil", Text: "hi"})
 	recvError(t, c, "bad chat id")
 }

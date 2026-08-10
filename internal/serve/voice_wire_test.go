@@ -93,16 +93,16 @@ func daemonBeating(t *testing.T, beat heartbeat) (func() *websocket.Conn, contex
 		t.Fatalf("mint: %v", err)
 	}
 
-	ws, err := workspace.Open(
+	spaces, err := workspace.NewRegistry(
 		workspace.Host{Live: &echoLive{sess: newEchoSession()}, Log: log},
-		workspace.DefaultWorkspace, t.TempDir(),
+		t.TempDir(),
 	)
 	if err != nil {
 		t.Fatalf("workspace: %v", err)
 	}
-	t.Cleanup(ws.Close)
+	t.Cleanup(spaces.Close)
 
-	addr := serveTest(t, ctx, map[string]*workspace.Workspace{workspace.DefaultWorkspace: ws}, devices, log, beat)
+	addr := serveTest(t, ctx, spaces, devices, log, beat)
 
 	return func() *websocket.Conn {
 		t.Helper()
@@ -167,7 +167,15 @@ func TestConn_AnAnsweringDeviceIsKept(t *testing.T) {
 var fastHeartbeat = heartbeat{every: 50 * time.Millisecond, wait: 50 * time.Millisecond}
 
 // serveTest starts the daemon on a free port and returns its address.
-func serveTest(t *testing.T, ctx context.Context, spaces map[string]*workspace.Workspace, devices *auth.Store, log *slog.Logger, beat heartbeat, opts ...Option) string {
+func serveTest(
+	t *testing.T,
+	ctx context.Context,
+	spaces *workspace.Registry,
+	devices *auth.Store,
+	log *slog.Logger,
+	beat heartbeat,
+	opts ...Option,
+) string {
 	t.Helper()
 	broker := hitl.NewBroker(nil, log)
 	ready := make(chan string, 1)
