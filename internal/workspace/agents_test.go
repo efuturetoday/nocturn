@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
@@ -221,4 +222,39 @@ func TestFireAgent_OrphanedRun_ReadOnlyRuntime(t *testing.T) {
 	}) {
 		t.Error("an orphaned run must reopen under the read-only runtime (no tools)")
 	}
+}
+
+// TestWorkspace_Close_StopsBackgroundWork proves Close ends what StartAgents owns.
+//
+// It matters because a workspace can now be deleted while the process lives on. Before this, Close
+// stopped the chat managers and left the cron scheduler and the document reconcile running against a
+// directory on its way to the trash — invisible while the only caller was daemon shutdown, and a
+// leaked goroutine per deleted workspace afterwards.
+func TestWorkspace_Close_StopsBackgroundWork(t *testing.T) {
+	w := openWS(t, fakeLLM{})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.StartAgents(context.Background())
+	}()
+
+	// No synchronisation before Close on purpose: whichever wins, StartAgents must end. Close cancels
+	// a registered scheduler, and the latch it sets makes a StartAgents that has not registered yet
+	// return without starting. The daemon starts these in goroutines, so this interleaving is ordinary.
+	w.Close()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartAgents still running 5s after Close")
+	}
+}
+
+// TestWorkspace_Close_Idempotent proves Close tolerates being called twice — the registry calls it on
+// delete and the daemon calls it again on shutdown, and neither knows about the other.
+func TestWorkspace_Close_Idempotent(t *testing.T) {
+	w := openWS(t, fakeLLM{})
+	w.Close()
+	w.Close() // must not panic
 }

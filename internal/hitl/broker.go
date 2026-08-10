@@ -97,10 +97,27 @@ func NewBroker(pusher Pusher, log *slog.Logger) *Broker {
 	}
 }
 
+// The connection-bookkeeping methods — Attach, Detach, SetActive, Resolve, AnyActive — all tolerate a
+// NIL Broker and do nothing.
+//
+// That is what makes "absence rather than a check" true rather than merely intended. A device whose
+// class may not approve is handed no broker at all (internal/serve, at accept), so its connection
+// holds a nil *Broker for its whole life and calls these on it. Leaving them to explode put the same
+// three-line guard at every call site, and the day one site forgot — presence.set — a single message
+// from the least-trusted class panicked the read loop and killed the connection. One check on the
+// receiver cannot be forgotten by a caller that does not exist yet.
+//
+// Ask is deliberately NOT in that list. What an absent approver ANSWERS is a permission decision, and
+// gate already owns it ("nil approver = unattended, so any Ask is denied"). A second nil-tolerant
+// answer here would be a second place deciding the same thing, and the two could disagree.
+
 // Attach registers a connection, active (foreground) until it says otherwise, and re-presents any
 // open approvals so a device that connects mid-flight (or is woken by a push) can answer them. ctx is
 // the connection's, for the presenting sends.
 func (b *Broker) Attach(ctx context.Context, s Sink) {
+	if b == nil {
+		return
+	}
 	b.mu.Lock()
 	b.sinks[s] = true
 	b.mu.Unlock()
@@ -109,6 +126,9 @@ func (b *Broker) Attach(ctx context.Context, s Sink) {
 
 // Detach removes a connection.
 func (b *Broker) Detach(s Sink) {
+	if b == nil {
+		return
+	}
 	b.mu.Lock()
 	delete(b.sinks, s)
 	b.mu.Unlock()
@@ -117,6 +137,9 @@ func (b *Broker) Detach(s Sink) {
 // SetActive marks a connection foreground/background. Approvals route only to active connections; a
 // connection coming to the foreground gets the open approvals re-presented (the woken-by-push case).
 func (b *Broker) SetActive(ctx context.Context, s Sink, active bool) {
+	if b == nil {
+		return
+	}
 	b.mu.Lock()
 	if _, ok := b.sinks[s]; ok {
 		b.sinks[s] = active
@@ -142,6 +165,9 @@ func (b *Broker) presentPending(ctx context.Context, s Sink) {
 // DenyOption. First answer wins; later ones are dropped. An id this approval never offered refuses,
 // so a stale or forged answer cannot approve.
 func (b *Broker) Resolve(id, option string) {
+	if b == nil {
+		return
+	}
 	b.mu.Lock()
 	p := b.pending[id]
 	b.mu.Unlock()
@@ -227,6 +253,9 @@ func (b *Broker) conclude(ctx context.Context, id string) {
 // message goes over the live connection when a device is watching, and out of band (a push) only when
 // none is.
 func (b *Broker) AnyActive() bool {
+	if b == nil {
+		return false
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, active := range b.sinks {

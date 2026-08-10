@@ -156,10 +156,10 @@ func runApp(serveAddr string, serveOpts ...serve.Option) int {
 	master := buildMaster(logger)
 	// Proactive messages route by device presence, the same signal that routes approvals. The broker
 	// holds it; nil in terminal mode (no daemon), where every notification takes the print path.
-	var active func() bool
-	if broker != nil {
-		active = broker.AnyActive
-	}
+	// AnyActive is nil-tolerant, so this needs no guard: in terminal mode there is no broker and it
+	// reports nobody in the foreground, which is exactly right — every notification takes the print
+	// path.
+	active := broker.AnyActive
 	embedCfg, err := embedConfig()
 	if err != nil {
 		logger.Error("embedding config", "err", err)

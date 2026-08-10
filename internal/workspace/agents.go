@@ -28,22 +28,22 @@ func (r sessionRouter) Open(id string) *agentkit.Session {
 	return r.user.Open(id)
 }
 
-// Close stops both chat managers (their reapers and every live session). Call once on shutdown.
-func (w *Workspace) Close() {
-	w.chats.CloseAll()
-	w.agentChats.CloseAll()
-	if w.voice != nil {
-		w.voice.CloseAll()
-	}
-}
-
 // maxAgentRuns caps how many past runs each agent keeps. Runs are an audit tail (see them in the app),
 // not a permanent archive: a cron agent fires forever, so without a cap the agent store grows without
 // bound (seen in the wild at thousands of runs). Applied per agent, on every fire and once at Open.
 const maxAgentRuns = 50
 
+// defaultTask is what a run is triggered with when the caller names no task. An agent's WORK is its
+// instructions, which are its system prompt; the task is only the message that sets it going, and
+// most callers have nothing to add to it.
+//
+// It is not merely a nicety. An empty task becomes an empty user message, and a provider rejects
+// that outright — "400: messages.1: Invalid input" — so every run fired without one died before it
+// began, with the reason buried in an error the UI truncated.
+const defaultTask = "Run now."
+
 // Agents returns the workspace's declared agents, sorted by name.
-func (w *Workspace) Agents() []agent.Agent { return w.agents.All() }
+func (w *Workspace) Agents() []agent.Agent { return w.snapshot().agents.All() }
 
 // AgentChats returns the manager that owns agent-run sessions (the agent-store counterpart of Chats).
 func (w *Workspace) AgentChats() *chat.Manager { return w.agentChats }
@@ -56,20 +56,6 @@ func (w *Workspace) ChatManager(kind string) *chat.Manager {
 		return w.agentChats
 	}
 	return w.chats
-}
-
-// StartAgents runs the cron scheduler until ctx is cancelled — call it in a goroutine.
-//
-// The document reconcile rides along, because both are the same kind of thing: background work a
-// workspace does while nobody is asking it anything. Starting it here means one call site keeps
-// both, rather than a second one somebody adds to the daemon and forgets in the terminal.
-func (w *Workspace) StartAgents(ctx context.Context) {
-	if w.knowledge != nil {
-		// Its own goroutine: a reconcile that is waiting on an embedding provider must not hold up a
-		// scheduled agent, and vice versa.
-		go w.knowledge.Watch(ctx, knowledge.DefaultInterval)
-	}
-	w.sched.Start(ctx)
 }
 
 // Knowledge is this workspace's document store, or nil when no embedder is configured. The CLI uses
@@ -117,15 +103,6 @@ func (w *Workspace) agentRuntime(base agentkit.ToolSet, a agent.Agent) (*runtime
 	), nil
 }
 
-// defaultTask is what a run is triggered with when the caller names no task. An agent's WORK is its
-// instructions, which are its system prompt; the task is only the message that sets it going, and
-// most callers have nothing to add to it.
-//
-// It is not merely a nicety. An empty task becomes an empty user message, and a provider rejects
-// that outright — "400: messages.1: Invalid input" — so every run fired without one died before it
-// began, with the reason buried in an error the UI truncated.
-const defaultTask = "Run now."
-
 // FireAgent starts the named agent's run over task and returns the run's id. An empty task becomes
 // defaultTask. The run is a first-class chat in the agent manager: it streams live, persists its
 // transcript to the agent store, and is openable by its id — a notify or reminder it sets carries
@@ -133,7 +110,7 @@ const defaultTask = "Run now."
 // background ctx); ctx is only used to reject a call once the daemon is shutting down. The run's
 // authority comes from its agentRuntime (cage + gate + autonomy-resolved approver).
 func (w *Workspace) FireAgent(ctx context.Context, name, task string) (string, error) {
-	if _, ok := w.agents.Get(name); !ok {
+	if _, ok := w.snapshot().agents.Get(name); !ok {
 		return "", fmt.Errorf("workspace %q: no agent %q", w.name, name)
 	}
 	if err := ctx.Err(); err != nil {

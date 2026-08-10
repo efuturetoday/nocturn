@@ -2,16 +2,19 @@ package workspace_test
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/internal/chat"
+	"github.com/efuturetoday/nocturn/internal/tools"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
@@ -343,4 +346,52 @@ func TestWorkspace_OnChatUpdate_WiresBothStores(t *testing.T) {
 	if !seen[chat.SourceAgent] {
 		t.Error("OnChatUpdate did not fire for an agent-store save")
 	}
+}
+
+// TestWorkspace_Open_RestoresPersistedWakes proves the wake store is wired to <ws>/wakes.json and
+// restored only once the lookup seam is bound.
+//
+// A wake that came due while the process was down must resume its chat, which is the whole reason the
+// pending set is now persisted at all: it used to live only in a time.AfterFunc, so a restart dropped
+// every outstanding continuation with no log line and no error. The ordering is load-bearing too — an
+// overdue wake fires the instant its timer is armed, and firing consumes it, so arming before Bind
+// would lose exactly what the store exists to keep.
+func TestWorkspace_Open_RestoresPersistedWakes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		overdue := []tools.Wake{{
+			ID:     "wake-1",
+			FireAt: time.Now().Add(-time.Hour),
+			ChatID: "c1",
+			Note:   "re-check the deploy",
+		}}
+		data, err := json.Marshal(overdue)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "wakes.json"), data, 0o600); err != nil {
+			t.Fatalf("write wakes.json: %v", err)
+		}
+
+		h := workspace.Host{LLM: fakeLLM{}, Log: slog.New(slog.DiscardHandler)}
+		w, err := workspace.Open(h, "test", dir)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		synctest.Wait()
+
+		msgs, err := w.Chats().Transcript("c1")
+		if err != nil {
+			t.Fatalf("Transcript: %v", err)
+		}
+		if len(msgs) == 0 {
+			t.Fatal("the restored wake never resumed its chat — no transcript for c1")
+		}
+		if msgs[0].Content != "re-check the deploy" {
+			t.Fatalf("resumed chat opened with %q, want the wake note", msgs[0].Content)
+		}
+
+		w.Close()
+		synctest.Wait()
+	})
 }
