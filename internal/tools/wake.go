@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
@@ -62,20 +65,38 @@ func chatIDFrom(ctx context.Context) string {
 // (the diagnostic logger's ctxHandler folds it into every line).
 func ChatID(ctx context.Context) string { return chatIDFrom(ctx) }
 
+// Wake is one scheduled self-continuation, persisted so it survives a restart.
+//
+// It is persisted for the same reason a Reminder is, and the absence of that was a silent loss: a
+// wake lived only in a time.AfterFunc, so a restart — or a workspace being closed and reopened —
+// dropped every outstanding continuation with no log line and no error. The model had arranged to
+// come back in ten minutes and simply never did, which reads as the model forgetting rather than as
+// state being thrown away.
+type Wake struct {
+	ID     string    `json:"id"`
+	FireAt time.Time `json:"fireAt"`
+	ChatID string    `json:"chatId"`
+	Note   string    `json:"note"`
+}
+
 // Waker schedules self-wakes for whichever chat invoked wake. Min/Max clamp the delay; MaxPending
 // caps concurrent pending wakes (zero values fall back to 1s / 1h / 3). It holds the Sessions seam
 // (bound after the manager exists, see Bind) and resolves the firing chat by id — so one
 // workspace-shared Waker serves every chat.
+//
+// Its store is a control-plane file OUTSIDE the model's file mount, exactly like the reminder store.
 type Waker struct {
 	Min, Max   time.Duration
 	MaxPending int
 
+	path     string
 	log      *slog.Logger
 	sessions Sessions
 
 	mu     sync.Mutex
-	seq    uint64
-	timers map[uint64]*time.Timer
+	items  map[string]Wake
+	timers map[string]*time.Timer
+	seq    atomic.Uint64
 }
 
 // WakerOption configures a Waker.
@@ -91,13 +112,25 @@ func WithWakeLogger(l *slog.Logger) WakerOption {
 	}
 }
 
-// NewWaker builds a Waker. Bind must be called (once the manager exists) before a wake can fire; the
-// logger defaults to a no-op (never nil), so callers log unconditionally.
+// WithWakeStore persists pending wakes at path. An unset path is in-memory only (tests), which is
+// the same bargain NewReminders offers.
+func WithWakeStore(path string) WakerOption {
+	return func(w *Waker) { w.path = path }
+}
+
+// NewWaker builds a Waker, reading any persisted wakes (tolerantly — a missing or malformed file is
+// an empty store). Call Restore once Bind has run to arm them; Bind must be called before a wake can
+// fire. The logger defaults to a no-op (never nil), so callers log unconditionally.
 func NewWaker(opts ...WakerOption) *Waker {
-	w := &Waker{timers: map[uint64]*time.Timer{}, log: slog.New(slog.DiscardHandler)}
+	w := &Waker{
+		items:  map[string]Wake{},
+		timers: map[string]*time.Timer{},
+		log:    slog.New(slog.DiscardHandler),
+	}
 	for _, o := range opts {
 		o(w)
 	}
+	w.load()
 	return w
 }
 
@@ -177,52 +210,136 @@ func (w *Waker) clamp(d time.Duration) time.Duration {
 	return d
 }
 
-// schedule registers a one-shot timer that resumes chat id with note after delay, unless the pending
-// cap is reached.
+// schedule persists a wake and arms its timer, unless the pending cap is reached.
 func (w *Waker) schedule(delay time.Duration, id, note string) error {
+	wk := Wake{
+		ID:     fmt.Sprintf("wake-%d-%d", time.Now().UnixNano(), w.seq.Add(1)),
+		FireAt: time.Now().Add(delay),
+		ChatID: id,
+		Note:   note,
+	}
 	w.mu.Lock()
-	if len(w.timers) >= w.maxPending() {
+	if len(w.items) >= w.maxPending() {
 		w.mu.Unlock()
 		return ErrTooManyPending
 	}
-	w.seq++
-	tid := w.seq // captured by the closure BEFORE AfterFunc — no self-reference to the timer var
-	w.timers[tid] = time.AfterFunc(delay, func() { w.fired(tid, id, note) })
+	w.items[wk.ID] = wk
+	w.save()
+	w.enroll(wk)
 	w.mu.Unlock()
 	w.log.Debug("wake scheduled", slog.Duration("delay", delay), slog.String("chat", id))
 	return nil
 }
 
-// fired drops the timer from the pending set and resumes the chat by id. It runs detached (a timer
-// callback, no ctx). A nil seam (never bound) or a nil session (unresolvable chat) is a safe no-op.
-func (w *Waker) fired(tid uint64, id, note string) {
+// enroll arms a timer for one wake. Callers hold w.mu.
+func (w *Waker) enroll(wk Wake) {
+	if t, ok := w.timers[wk.ID]; ok {
+		t.Stop()
+	}
+	delay := max(time.Until(wk.FireAt), 0)
+	id := wk.ID
+	w.timers[id] = time.AfterFunc(delay, func() { w.fired(id) })
+}
+
+// Restore arms every persisted wake; one that came due while the process was down fires promptly
+// (the delay is clamped to ≥0), the same catch-up Reminders.Restore does.
+//
+// Call it AFTER Bind. An overdue wake fires as soon as its timer is armed, and firing consumes the
+// wake — so arming before the lookup seam exists would drop exactly the wakes this persistence was
+// built to keep.
+func (w *Waker) Restore() {
 	w.mu.Lock()
-	delete(w.timers, tid)
+	defer w.mu.Unlock()
+	for _, wk := range w.items {
+		w.enroll(wk)
+	}
+}
+
+// fired consumes the wake and resumes its chat by id. It runs detached (a timer callback, no ctx).
+func (w *Waker) fired(id string) {
+	w.mu.Lock()
+	wk, ok := w.items[id]
+	if ok {
+		if t := w.timers[id]; t != nil {
+			t.Stop()
+		}
+		delete(w.timers, id)
+		delete(w.items, id)
+		w.save()
+	}
 	w.mu.Unlock()
+	if !ok {
+		return
+	}
+	// A wake is one-shot and is already out of the store, so a resume that cannot happen is lost. It
+	// runs on a timer with no caller to return to — say so, or the one thing this tool exists for
+	// fails with no trace at all.
 	if w.sessions == nil {
+		w.log.Warn("wake fired but no session seam is bound — the continuation is lost", "chat", wk.ChatID)
 		return
 	}
-	sess := w.sessions.Open(id)
+	sess := w.sessions.Open(wk.ChatID)
 	if sess == nil {
+		w.log.Warn("wake fired but its chat could not be opened — the continuation is lost", "chat", wk.ChatID)
 		return
 	}
-	w.log.Info("wake fired", slog.String("chat", id))
-	sess.Submit(note)
+	w.log.Info("wake fired", slog.String("chat", wk.ChatID))
+	sess.Submit(wk.Note)
 }
 
 // Pending reports how many wakes are scheduled but not yet fired.
 func (w *Waker) Pending() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return len(w.timers)
+	return len(w.items)
 }
 
-// Cancel stops every pending wake.
+// Cancel stops every pending timer, leaving the wakes persisted to be re-armed by the next Restore —
+// the same shutdown semantics as Reminders.Cancel.
 func (w *Waker) Cancel() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for tid, t := range w.timers {
+	for id, t := range w.timers {
 		t.Stop()
-		delete(w.timers, tid)
+		delete(w.timers, id)
 	}
+}
+
+// load reads the persisted wakes (tolerant: missing/malformed → empty). Called once at construction.
+func (w *Waker) load() {
+	if w.path == "" {
+		return
+	}
+	data, err := os.ReadFile(w.path)
+	if err != nil {
+		return
+	}
+	var list []Wake
+	if err := json.Unmarshal(data, &list); err != nil {
+		return
+	}
+	for _, wk := range list {
+		w.items[wk.ID] = wk
+	}
+}
+
+// save persists the pending set atomically (write then rename), 0600. Callers hold w.mu.
+func (w *Waker) save() {
+	if w.path == "" {
+		return
+	}
+	list := make([]Wake, 0, len(w.items))
+	for _, wk := range w.items {
+		list = append(list, wk)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].FireAt.Before(list[j].FireAt) })
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return
+	}
+	tmp := w.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, w.path)
 }

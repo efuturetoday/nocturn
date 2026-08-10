@@ -185,18 +185,14 @@ func (c *conn) serve(ctx context.Context) {
 	c.log.Info("ws connection opened")
 	go c.writer(ctx)
 	go c.heartbeat(ctx)
-	if c.broker != nil {
-		c.broker.Attach(ctx, c)
-	}
+	c.broker.Attach(ctx, c) // nil-tolerant: a class that may not approve was handed no broker
 	c.hub.add(c)
 	defer func() {
 		c.hub.remove(c)
 		// Release anyone waiting to queue speech before anything else: a voice writer blocked on this
 		// connection's queue must be let go, or the teardown below waits for it.
 		close(c.closed)
-		if c.broker != nil {
-			c.broker.Detach(c)
-		}
+		c.broker.Detach(c)
 		// Chat sessions are server-owned and keep running past this connection — their answer is
 		// still worth having when the client returns. A spoken one is not: audio has nobody to play
 		// to and a live model bills for every second, so it ends with the device.

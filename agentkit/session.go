@@ -23,11 +23,19 @@ var (
 // Session is a live conversation: a serialized turn loop driven by Submit (input in) and observed
 // via Subscribe (event stream out). It holds the running history.
 type Session struct {
-	llm        LLM
-	tools      ToolSet
-	skills     SkillSet
-	system     string
-	systemFn   func() string // optional: supplies the system prompt per turn; wins over system
+	llm LLM
+	// What the model is given, each supplied by a function evaluated ONCE PER TURN rather than held
+	// as a value. A turn is the right granularity for all three: the tool list goes to the provider at
+	// turn start and the model plans against it, so it must not shift underneath a turn in progress —
+	// but a consumer whose world changed between two turns (a skill installed, an MCP server
+	// connected) should be answered by the very next one, not by the next session.
+	//
+	// Only the function form is stored, and the value forms below are sugar over it. Holding both a
+	// value and a function would mean a precedence rule — "which one wins" — for no gain: a constant
+	// is a function that returns the same thing.
+	toolsFn    func() ToolSet
+	skillsFn   func() SkillSet
+	systemFn   func() string
 	timeout    time.Duration
 	tokenLimit int
 	tokenizer  Tokenizer // optional: estimate Step.Tokens when the provider reports none
@@ -52,18 +60,31 @@ type Session struct {
 // Option configures a Session.
 type Option func(*Session)
 
-func WithTools(t ToolSet) Option      { return func(s *Session) { s.tools = t } }
-func WithSkills(sk SkillSet) Option   { return func(s *Session) { s.skills = sk } }
-func WithSystem(system string) Option { return func(s *Session) { s.system = system } }
+// WithToolsFunc supplies the toolset through a function evaluated once per turn, for a consumer
+// whose available tools change over a session's lifetime — an extension installed or removed while
+// the conversation is open. The turn boundary is what makes it safe: a turn is handed its set once
+// and works with it throughout, so a tool can never vanish between two calls the model already
+// planned together, and the next turn simply sees the new world.
+func WithToolsFunc(fn func() ToolSet) Option { return func(s *Session) { s.toolsFn = fn } }
+
+// WithSkillsFunc is WithToolsFunc for the skill catalog, evaluated on the same boundary.
+func WithSkillsFunc(fn func() SkillSet) Option { return func(s *Session) { s.skillsFn = fn } }
 
 // WithSystemFunc supplies the system prompt through a function evaluated once per turn, for a prompt
-// whose content can change over a session's lifetime (a consumer folding in mutable context). It
-// wins over WithSystem when both are set. Safe because the system message is ephemeral — assemble
-// prepends it to the durable history rather than storing it — so a changed prompt cannot corrupt a
-// persisted transcript. fn must be safe for concurrent use only insofar as the caller shares it
-// across sessions; one session evaluates it on its own turn goroutine.
+// whose content can change over a session's lifetime (a consumer folding in mutable context). Safe
+// because the system message is ephemeral — assemble prepends it to the durable history rather than
+// storing it — so a changed prompt cannot corrupt a persisted transcript.
+//
+// All three funcs must be safe for concurrent use only insofar as the caller shares one across
+// sessions; a single session evaluates it on its own turn goroutine.
 func WithSystemFunc(fn func() string) Option { return func(s *Session) { s.systemFn = fn } }
-func WithEffort(e Effort) Option             { return func(s *Session) { s.effort = e } }
+
+// The value forms, sugar over the funcs above: a constant is a function that returns the same thing
+// every turn.
+func WithTools(t ToolSet) Option    { return WithToolsFunc(func() ToolSet { return t }) }
+func WithSkills(sk SkillSet) Option { return WithSkillsFunc(func() SkillSet { return sk }) }
+func WithSystem(v string) Option    { return WithSystemFunc(func() string { return v }) }
+func WithEffort(e Effort) Option    { return func(s *Session) { s.effort = e } }
 
 func WithLogger(l Logger) Option {
 	return func(s *Session) {
@@ -217,8 +238,8 @@ func (s *Session) turn(ctx context.Context, input string) {
 
 	Emit(ctx, TurnStart{})
 	s.appendMsgs(Message{Role: RoleUser, Content: input})
-	tools := s.toolset()
-	_, produced, total, err := s.run(ctx, tools, s.assemble())
+	v := s.view()
+	_, produced, total, err := s.run(ctx, v.tools, s.assemble(v))
 	// A wall-clock deadline cancels ctx with cause ErrTurnTimeout — surface that clear reason instead
 	// of the bare "context canceled" the aborted model/tool call bubbled up.
 	if context.Cause(ctx) == ErrTurnTimeout {
@@ -370,24 +391,47 @@ func stopReason(err error) string {
 	}
 }
 
-// toolset returns the tools the model sees: the session's tools plus, when the session has skills,
-// the skill_load tool that pulls a skill body into context on demand.
-func (s *Session) toolset() ToolSet {
-	if len(s.skills) == 0 {
-		return s.tools
+// turnView is what ONE turn was handed: the tools the model may call, the skills it may load, and
+// the system prompt naming them. All three are resolved together, once, at the top of a turn.
+//
+// Together is the point. The skill catalog goes into the system prompt and skill_load goes into the
+// toolset; resolving them at two moments would let a turn advertise a skill its load tool no longer
+// knows, or the reverse. One resolution per turn makes that unrepresentable.
+type turnView struct {
+	tools  ToolSet
+	skills SkillSet
+	system string
+}
+
+// view resolves the per-turn inputs. Callers take it once and pass it down.
+func (s *Session) view() turnView {
+	v := turnView{}
+	if s.toolsFn != nil {
+		v.tools = s.toolsFn()
 	}
-	merged := make(ToolSet, len(s.tools)+1)
-	maps.Copy(merged, s.tools)
-	lt := s.skills.LoadTool()
-	merged[lt.Spec().Name] = lt
-	return merged
+	if s.skillsFn != nil {
+		v.skills = s.skillsFn()
+	}
+	if s.systemFn != nil {
+		v.system = s.systemFn()
+	}
+	if len(v.skills) > 0 {
+		// The tools the model sees are the session's plus skill_load, which pulls a skill body into
+		// context on demand. Merged into a copy: v.tools came from the consumer and stays untouched.
+		merged := make(ToolSet, len(v.tools)+1)
+		maps.Copy(merged, v.tools)
+		lt := v.skills.LoadTool()
+		merged[lt.Spec().Name] = lt
+		v.tools = merged
+	}
+	return v
 }
 
 // assemble builds the messages sent to the model: the (ephemeral) system prompt and skills catalog,
 // followed by the durable history.
-func (s *Session) assemble() []Message {
+func (s *Session) assemble(v turnView) []Message {
 	var conv []Message
-	if sys := s.systemPrompt(); sys != "" {
+	if sys := v.systemPrompt(); sys != "" {
 		conv = append(conv, Message{Role: RoleSystem, Content: sys})
 	}
 	s.mu.Lock()
@@ -396,13 +440,10 @@ func (s *Session) assemble() []Message {
 	return conv
 }
 
-func (s *Session) systemPrompt() string {
-	sys := s.system
-	if s.systemFn != nil {
-		sys = s.systemFn()
-	}
-	if len(s.skills) > 0 {
-		sys += "\n\n" + skillsCatalog(s.skills)
+func (v turnView) systemPrompt() string {
+	sys := v.system
+	if len(v.skills) > 0 {
+		sys += "\n\n" + skillsCatalog(v.skills)
 	}
 	return strings.TrimSpace(sys)
 }
@@ -481,8 +522,8 @@ func Once(ctx context.Context, llm LLM, input string, opts ...Option) (string, e
 
 	Emit(ctx, TurnStart{})
 	s.appendMsgs(Message{Role: RoleUser, Content: input})
-	tools := s.toolset()
-	answer, produced, total, err := s.run(ctx, tools, s.assemble())
+	v := s.view()
+	answer, produced, total, err := s.run(ctx, v.tools, s.assemble(v))
 	s.appendMsgs(produced...)
 	s.persist()
 	Emit(ctx, TurnEnd{Err: err, Tokens: total})

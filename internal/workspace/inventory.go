@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"slices"
-	"sync"
 
 	"github.com/efuturetoday/nocturn/internal/memory"
 )
@@ -21,63 +20,24 @@ type Inventory struct {
 	Tools   []string // every tool in the workspace toolset, including those the two above added
 }
 
-// MCPStatus is one declared MCP server and what became of it. A server that failed is kept, with
-// the reason: the absence of a server you configured is exactly what you opened this view to find,
-// and a list that silently omits it cannot tell you.
-type MCPStatus struct {
-	Name  string
-	URL   string
-	State MCPState
-	Tools int    // tools it contributed; 0 unless connected
-	Note  string // why it is not connected, in the words the log used
-}
-
-// MCPState is how far a server got.
-type MCPState string
-
-const (
-	MCPConnected MCPState = "connected"
-	// MCPNeedsAuth is not a failure but an errand: the server speaks OAuth and nobody has run
-	// `nocturn auth <name>` yet.
-	MCPNeedsAuth MCPState = "needs auth"
-	MCPFailed    MCPState = "failed"
-)
-
-// capabilities is the workspace's current discovery state — the one place a reconciler writes and
-// the inventory reads. It is guarded because those are different goroutines the moment anything
-// re-discovers on a timer, the way the knowledge index already does.
-//
-// Open fills it once. Nothing re-fills it yet; the point of the type is that when something does,
-// there is exactly one writer to change and no second copy to forget.
-type capabilities struct {
-	mu      sync.RWMutex
-	mcp     []MCPStatus
-	plugins []string
-	skills  []string
-}
-
-func (c *capabilities) set(mcp []MCPStatus, plugins, skills []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.mcp, c.plugins, c.skills = mcp, plugins, skills
-}
-
-// snapshot copies, so a reader can range over the result while a reconcile replaces the originals.
-func (c *capabilities) snapshot() (mcp []MCPStatus, plugins, skills []string) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return slices.Clone(c.mcp), slices.Clone(c.plugins), slices.Clone(c.skills)
-}
-
 // Inventory reports what the workspace can do, read fresh.
 //
-// The toolset is read straight from the field: a ToolSet is immutable by construction, so a future
-// reconcile REPLACES w.tools rather than mutating it, and this sees the new one on the next call.
-// That swap is the one thing such a change has to make safe for concurrent readers — this method is
-// one of them.
+// Every field comes from ONE snapshot, read once. That is the whole reason discovery state lives
+// there rather than in a struct of its own beside the toolset: two reads — the discovery lists from
+// one place and the tools from another — could land either side of a reload and report a workspace
+// that never existed, with the new tool list against the old MCP list. On the wire this is what a
+// device polls right after installing something, so the torn read was not hypothetical.
+//
+// The slices are cloned because a snapshot is shared: a caller may range over the result for as long
+// as it likes without holding anything back from being retired.
 func (w *Workspace) Inventory() Inventory {
-	mcp, plugins, skills := w.caps.snapshot()
-	return Inventory{MCP: mcp, Plugins: plugins, Skills: skills, Tools: toolNames(w.tools)}
+	a := w.snapshot()
+	return Inventory{
+		MCP:     slices.Clone(a.mcp),
+		Plugins: slices.Clone(a.names.plugins),
+		Skills:  slices.Clone(a.names.skills),
+		Tools:   toolNames(a.tools),
+	}
 }
 
 // Memory is the catalog of the assistant's notes — the block folded into every prompt. Empty when
@@ -120,14 +80,14 @@ func (w *Workspace) DocumentPaths() []string {
 // same rule the sandbox runs on, applied to the screen: that a credential exists is information a
 // person needs, what it says is not.
 func (w *Workspace) Secrets() []string {
-	if w.vault == nil {
+	if w.sec.vault == nil {
 		return nil // the vault is locked; nothing is known, not even the names
 	}
-	names := w.vault.Store().Names()
+	names := w.sec.vault.Store().Names()
 	slices.Sort(names)
 	return names
 }
 
 // VaultLocked reports whether the credential vault is sealed. A locked vault is why secrets and MCP
 // OAuth are unavailable, and saying so beats showing an empty list.
-func (w *Workspace) VaultLocked() bool { return w.vault == nil }
+func (w *Workspace) VaultLocked() bool { return w.sec.vault == nil }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -183,16 +185,18 @@ func TestWake_UnresolvableChat_NoOp(t *testing.T) {
 	})
 }
 
-// TestWake_Cancel_StopsAllPending proves Cancel stops every pending wake: after cancelling, advancing
-// past the delays resolves no chat.
-func TestWake_Cancel_StopsAllPending(t *testing.T) {
+// TestWake_Cancel_DisarmsButKeeps proves Cancel is shutdown, not deletion: after cancelling,
+// advancing past the delays resolves no chat, but the wakes are still outstanding — they are what the
+// next Restore re-arms. Deleting them here is the behaviour that used to lose a continuation across a
+// restart.
+func TestWake_Cancel_DisarmsButKeeps(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		fs := &fakeSessions{session: nil}
 		w := tools.NewWaker()
 		w.Bind(fs)
 		tool, _ := w.Tool()
 		ctx := tools.WithChatID(context.Background(), "c1")
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			if _, err := tool.Call(ctx, `{"seconds":60,"note":"n"}`); err != nil {
 				t.Fatalf("wake: %v", err)
 			}
@@ -206,9 +210,91 @@ func TestWake_Cancel_StopsAllPending(t *testing.T) {
 		if len(fs.openedIDs()) != 0 {
 			t.Fatalf("a cancelled wake still resolved a chat: %v", fs.openedIDs())
 		}
-		if w.Pending() != 0 {
-			t.Fatalf("pending after Cancel = %d, want 0", w.Pending())
+		if w.Pending() != 3 {
+			t.Fatalf("pending after Cancel = %d, want 3 (cancel disarms, it does not delete)", w.Pending())
 		}
+	})
+}
+
+// TestWake_SurvivesReopen proves the whole point of persisting: a wake set before the workspace goes
+// away is still there when it comes back, and it fires. Before this, a wake lived only in a
+// time.AfterFunc — a restart dropped it with no log line and no error.
+func TestWake_SurvivesReopen(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "wakes.json")
+
+		// First life: schedule, then shut down the way Workspace.Close does.
+		first := tools.NewWaker(tools.WithWakeStore(path))
+		first.Bind(&fakeSessions{})
+		tool, _ := first.Tool()
+		ctx := tools.WithChatID(context.Background(), "c1")
+		if _, err := tool.Call(ctx, `{"seconds":600,"note":"re-check the deploy"}`); err != nil {
+			t.Fatalf("wake: %v", err)
+		}
+		first.Cancel()
+
+		// Second life: a fresh Waker over the same store, bound and restored.
+		llm := newRecordLLM()
+		sess := agentkit.NewSession(context.Background(), llm)
+		fs := &fakeSessions{session: sess}
+		second := tools.NewWaker(tools.WithWakeStore(path))
+		if second.Pending() != 1 {
+			t.Fatalf("pending after reopen = %d, want 1", second.Pending())
+		}
+		second.Bind(fs)
+		second.Restore()
+
+		time.Sleep(11 * time.Minute)
+		synctest.Wait()
+		if got := fs.openedIDs(); len(got) != 1 || got[0] != "c1" {
+			t.Fatalf("restored wake resolved %v, want [c1]", got)
+		}
+		if second.Pending() != 0 {
+			t.Fatalf("pending after firing = %d, want 0", second.Pending())
+		}
+		select {
+		case note := <-llm.seen:
+			if note != "re-check the deploy" {
+				t.Fatalf("restored session saw note %q, want the wake note", note)
+			}
+		default:
+			t.Fatal("the restored session never ran a turn with the note")
+		}
+
+		sess.Close()
+		synctest.Wait()
+	})
+}
+
+// TestWake_Restore_OverdueFiresPromptly proves the catch-up: a wake that came due while the process
+// was down fires as soon as it is restored, rather than waiting out a delay that already elapsed.
+func TestWake_Restore_OverdueFiresPromptly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "wakes.json")
+		overdue := []tools.Wake{{
+			ID: "wake-1", FireAt: time.Now().Add(-time.Hour), ChatID: "c9", Note: "n",
+		}}
+		data, err := json.Marshal(overdue)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+
+		sess := agentkit.NewSession(context.Background(), newRecordLLM())
+		fs := &fakeSessions{session: sess}
+		w := tools.NewWaker(tools.WithWakeStore(path))
+		w.Bind(fs)
+		w.Restore()
+		synctest.Wait()
+
+		if got := fs.openedIDs(); len(got) != 1 || got[0] != "c9" {
+			t.Fatalf("overdue wake resolved %v, want [c9]", got)
+		}
+
+		sess.Close()
+		synctest.Wait()
 	})
 }
 

@@ -72,6 +72,14 @@ tool calls, run them **in parallel** through the tool set and feed the results b
 answer or when a guard trips. Results match their calls by **native id**, never positionally — this
 is what makes parallel execution safe.
 
+The turn is also the **resolution boundary** for what the model is given. Tools, skills and the system
+prompt are supplied as functions (`WithToolsFunc`, `WithSkillsFunc`, `WithSystemFunc`; the value forms
+are sugar over them) and asked **once, at the top of a turn**. A consumer whose world changed between
+two turns — an extension installed, a server connected — is therefore answered by the very next
+message, with no session to reopen. A turn already running keeps the set it was handed: the model is
+given a tool list and plans against it, so a tool must never vanish between two calls it already
+decided to make together.
+
 The output is a one-way **event stream** (`Subscribe()`), a sealed union the consumer type-switches
 over. Every event carries a **`Frame`**: the id of the enclosing call (`0` = the top-level agent). A
 tool call opens a frame whose id is its `ToolStart.ID`; everything emitted inside carries it. Because
