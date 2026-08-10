@@ -329,6 +329,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.presence(ctx, env.Cmd, data)
 	case "workspace":
 		c.workspaceCmd(ctx, env.Cmd, data)
+	case "skill":
+		c.skillCmd(ctx, env.Cmd, data)
 	case "reminder":
 		c.reminder(ctx, env.Cmd, data)
 	case "agent":

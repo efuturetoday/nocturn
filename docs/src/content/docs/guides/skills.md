@@ -55,12 +55,24 @@ cp -r examples/workspace/skills/summarize-url \
 nocturn serve        # start, or restart if it was already running
 ```
 
-Like plugins and MCP servers, skills are read when a workspace opens — there is no watcher on
-`skills/`, so a running server does not notice a new folder.
+There is no watcher on `skills/`, so a running daemon does not notice a folder you copied in — it
+reads them when the workspace opens. Restarting is one way to make it look again.
 
-Unlike them, nothing else happens. No credential to connect, no manifest to review, no restart
-worth being careful about: from that point the assistant simply knows the skill's `description`, and
-reaches for the body when a request matches it.
+The other is the [companion app](/nocturn/guides/remote-access/), which manages skills over the same
+connection everything else uses: it lists them, shows a skill's `SKILL.md` before you act on it, and
+switches one off or removes it. A change made there takes effect **on the next message** — including
+inside a conversation that is already open, and without interrupting a turn that is running. There is
+nothing to restart.
+
+Nothing else happens either way. No credential to connect, no manifest to review: from that point the
+assistant simply knows the skill's `description`, and reaches for the body when a request matches it.
+
+### Off is not gone
+
+Switching a skill off moves its folder to `skills/.disabled/`, which the daemon skips — so it leaves
+the catalog while everything you assembled stays where it is, bundled files included. Switching it
+back on moves it back. Removing it deletes the folder; unlike a workspace there is no trash, because
+a skill is instructions that came from somewhere and can come from there again.
 
 ## How a skill gets used
 
