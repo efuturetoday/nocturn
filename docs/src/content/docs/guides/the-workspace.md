@@ -43,6 +43,7 @@ nocturn-data/workspaces/main/
 ├─ vault.enc       ← the encrypted workspace vault
 ├─ grants.json     ← the permissions you chose to remember
 ├─ reminders.json  ← pending reminders
+├─ wakes.json      ← conversations waiting to resume themselves
 ├─ chats/          ← your conversations
 ├─ agent-runs/     ← transcripts of background agent runs
 ├─ agents/         ← one folder per agent, each with an agent.md
