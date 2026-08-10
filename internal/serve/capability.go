@@ -23,7 +23,27 @@ type capabilities struct {
 	enrol        bool // bring further devices into the household
 	captureAudio bool // make an appliance record its microphone to disk
 	bootstrap    bool // arm a fresh pairing code, opening the door from nothing
+	manage       bool // add, rename or remove a workspace and what it is made of
 }
+
+// manage is a capability rather than a gated action, and that is a decision worth stating because
+// installing a skill plainly grants authority.
+//
+// The gate exists for one threat: the MODEL exercising legitimate tools under instructions somebody
+// smuggled into its context, judged by a human on a device the injection cannot reach. Adding a
+// workspace or installing an MCP server is the opposite shape — a human command from an
+// authenticated device — and routing it through the approval broker would ask the phone to confirm
+// what the phone just tapped, framed by gate.Action{Kind, Target}, which exists to describe what the
+// MODEL wants. The precedent is device.forget: revoking a device is heavier than installing a skill
+// and it is a capability check, not an approval.
+//
+// A stolen bearer changes nothing either. App and web already hold approve — the power to release
+// gated file and network writes — and the command line's bearer is a 0600 file beside the vault, so
+// whoever has it holds the directory anyway. manage grants none of them something they did not
+// already dominate.
+//
+// The appliance is the one class without it, and that is the whole point of having the bit: a device
+// with no authenticated input path must not be able to add an MCP server to the household.
 
 // covers reports whether c permits everything other does — the subset test behind "you may not
 // enrol a device more capable than yourself".
@@ -31,7 +51,8 @@ func (c capabilities) covers(other capabilities) bool {
 	return (!other.approve || c.approve) &&
 		(!other.enrol || c.enrol) &&
 		(!other.captureAudio || c.captureAudio) &&
-		(!other.bootstrap || c.bootstrap)
+		(!other.bootstrap || c.bootstrap) &&
+		(!other.manage || c.manage)
 }
 
 // capabilitiesOf maps a device class to what it may do.
@@ -40,7 +61,7 @@ func capabilitiesOf(class auth.Class) capabilities {
 	case auth.ClassApp:
 		// Someone identified is holding it, so its answer is that person's answer, and it is the
 		// thing a household is administered from.
-		return capabilities{approve: true, enrol: true, captureAudio: true}
+		return capabilities{approve: true, enrol: true, captureAudio: true, manage: true}
 	case auth.ClassAppliance:
 		// Nothing. It has no authenticated input path, so it can neither consent on anyone's behalf
 		// nor vouch for a new device — and the approval broker takes the FIRST answer it receives,
@@ -63,17 +84,23 @@ func capabilitiesOf(class auth.Class) capabilities {
 		// Deliberately NOT given to app or web: a device that can already relay a join code has a way
 		// to bring another one in, and handing it this as well would let a phone mint disk-equivalent
 		// authority through POST /devices — because covers() would then say an app covers a tool.
-		return capabilities{captureAudio: true, bootstrap: true}
+		//
+		// It DOES manage, and for the same reason it may arm a code: its bearer is a 0600 file beside
+		// the vault, so it already holds the directory it would be managing. Withholding it would not
+		// stop anything — `mkdir` needs no permission — it would only stop the running daemon NOTICING,
+		// which means a restart to pick up what the same person just wrote. Refusing a capability that
+		// changes nothing but the need to restart is not caution, it is an obstacle.
+		return capabilities{captureAudio: true, bootstrap: true, manage: true}
 	case auth.ClassWeb:
 		// A browser holding the page this daemon served. It got here the same way the app did — a
 		// bootstrap code printed on the daemon's own stderr, or a join code relayed by an
 		// already-paired device — so there is a person at it and its answer is that person's answer.
 		//
-		// Not captureAudio, and that is the whole difference from ClassApp. Turning on an appliance's
+		// Not captureAudio, and that is the one difference from ClassApp. Turning on an appliance's
 		// microphone from a browser tab is a longer reach than a session in localStorage earns, and
 		// nothing the browser UI does needs it. It also keeps covers() honest: a web device does not
 		// cover ClassTool, so it cannot mint one.
-		return capabilities{approve: true, enrol: true}
+		return capabilities{approve: true, enrol: true, manage: true}
 	default:
 		// Including ClassUnknown: an unrecognised class is not a reason to guess generously.
 		return capabilities{}

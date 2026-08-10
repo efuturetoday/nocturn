@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -202,58 +203,44 @@ func TestWorkspace_Open_TwoWorkspaces_Isolated(t *testing.T) {
 	}
 }
 
-// TestOpenAll_AlwaysIncludesMain: OpenAll over an empty root still yields the default "main".
-func TestOpenAll_AlwaysIncludesMain(t *testing.T) {
-	h := workspace.Host{LLM: fakeLLM{}, Log: slog.New(slog.DiscardHandler)}
-	spaces, err := workspace.OpenAll(h, t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenAll: %v", err)
-	}
-	t.Cleanup(func() {
-		for _, w := range spaces {
-			w.Close()
-		}
-	})
-	main, ok := spaces[workspace.DefaultWorkspace]
+// A registry over an empty root still yields the default "main" — a fresh install and the terminal
+// always have somewhere to be.
+func TestNewRegistry_AlwaysIncludesMain(t *testing.T) {
+	reg := newRegistry(t, t.TempDir())
+	main, ok := reg.Get(workspace.DefaultWorkspace)
 	if !ok {
-		t.Fatalf("OpenAll must always include %q; got %v", workspace.DefaultWorkspace, keys(spaces))
+		t.Fatalf("registry must always include %q; got %v", workspace.DefaultWorkspace, reg.Names())
 	}
 	if main.Name() != workspace.DefaultWorkspace {
 		t.Errorf("main workspace name = %q, want %q", main.Name(), workspace.DefaultWorkspace)
 	}
 }
 
-// TestOpenAll_OpensEachSubdir: each subdirectory of root becomes a workspace by name, plus main.
-func TestOpenAll_OpensEachSubdir(t *testing.T) {
+// Each subdirectory of root becomes a workspace by name, plus main.
+func TestNewRegistry_OpensEachSubdir(t *testing.T) {
 	root := t.TempDir()
 	for _, n := range []string{"work", "home"} {
 		if err := os.MkdirAll(filepath.Join(root, n), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	h := workspace.Host{LLM: fakeLLM{}, Log: slog.New(slog.DiscardHandler)}
-	spaces, err := workspace.OpenAll(h, root)
-	if err != nil {
-		t.Fatalf("OpenAll: %v", err)
-	}
-	t.Cleanup(func() {
-		for _, w := range spaces {
-			w.Close()
-		}
-	})
-	for _, want := range []string{"work", "home", workspace.DefaultWorkspace} {
-		if _, ok := spaces[want]; !ok {
-			t.Errorf("OpenAll missing workspace %q; got %v", want, keys(spaces))
-		}
+	reg := newRegistry(t, root)
+	want := []string{"home", workspace.DefaultWorkspace, "work"}
+	if got := reg.Names(); !slices.Equal(got, want) {
+		t.Errorf("registry names = %v, want %v", got, want)
 	}
 }
 
-func keys(m map[string]*workspace.Workspace) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+// newRegistry opens a registry over root and closes it on cleanup.
+func newRegistry(t *testing.T, root string) *workspace.Registry {
+	t.Helper()
+	h := workspace.Host{LLM: fakeLLM{}, Log: slog.New(slog.DiscardHandler)}
+	reg, err := workspace.NewRegistry(h, root)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
 	}
-	return out
+	t.Cleanup(reg.Close)
+	return reg
 }
 
 // setupMarkRead builds a workspace with one user chat and one agent run, both persisted and unread,

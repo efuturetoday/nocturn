@@ -238,14 +238,34 @@ func cors(h http.Handler, log *slog.Logger) http.Handler {
 // connection must carry a paired device's bearer; the first device pairs via POST /pair with the
 // bootstrap code logged at startup, further devices via POST /join + /join/confirm. One backend,
 // many fronts — the backend is the truth.
-func Serve(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, embedder *speaker.Embedder, log *slog.Logger, opts ...Option) error {
+func Serve(
+	ctx context.Context,
+	addr string,
+	spaces *workspace.Registry,
+	devices *auth.Store,
+	broker *hitl.Broker,
+	embedder *speaker.Embedder,
+	log *slog.Logger,
+	opts ...Option,
+) error {
 	return serveOn(ctx, addr, spaces, devices, broker, embedder, log, defaultHeartbeat, nil, opts...)
 }
 
 // serveOn is Serve with the two things only a test varies: the liveness check its connections run,
 // and a hook for the address it actually bound (so a test can ask for port 0 and still find the
 // daemon). Production passes defaultHeartbeat and nil.
-func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, embedder *speaker.Embedder, log *slog.Logger, beat heartbeat, ready func(string), opts ...Option) error {
+func serveOn(
+	ctx context.Context,
+	addr string,
+	spaces *workspace.Registry,
+	devices *auth.Store,
+	broker *hitl.Broker,
+	embedder *speaker.Embedder,
+	log *slog.Logger,
+	beat heartbeat,
+	ready func(string),
+	opts ...Option,
+) error {
 	log = log.With("component", "serve")
 	cfg := apply(opts)
 	// Arm a bootstrap code only while nothing in the registry could bring a device in by itself.
@@ -270,41 +290,18 @@ func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Work
 	// by chatId. So a session's turn is never tied to one connection.
 	hub := newHub(beat)
 	hub.devicesChanged = cfg.onDevicesChanged
-	for name, ws := range spaces {
-		ws.OnChatUpdate(func(m chat.Meta) {
-			hub.broadcast(ChatActivity{Type: "chat.activity", Ws: name, Chat: m})
-		})
-		// Both managers' live events reach every device on the same wire form (chatEvent, tagged with
-		// the chat/run id) — so an agent run streams its tokens/tools exactly like a user chat, and the
-		// client renders it via the ONE reducer, distinguished only by id (agent runs list under kind
-		// "agent"). The event carries no kind: the client already knows which ids are agent runs.
-		stream := func(chatID string, ev agentkit.Event) {
-			if msg, ok := chatEvent(chatID, ev); ok {
-				hub.broadcast(msg)
-			}
-		}
-		ws.Chats().OnEvent(stream)
-		ws.AgentChats().OnEvent(stream)
-		// A reminder set, cancelled or fired changes what a device should be listing. Broadcast the
-		// bare fact and let each client re-list, so devices converge on the daemon's set.
-		ws.OnReminderChange(func() {
-			hub.broadcast(ReminderChanged{Type: "reminder.changed", Ws: name})
-		})
-		// The in-app half of a proactive delivery (a fired reminder or a notify): the notifier routes
-		// here when a device is in the foreground, and to the push otherwise — so this fires only in
-		// the former case, never both.
-		ws.OnNotification(func(n tools.Notification) {
-			hub.broadcast(Notification{
-				Type: "notification", Ws: n.Ws, Kind: n.Kind,
-				ChatID: n.ChatID, Title: n.Title, Message: n.Message,
-			})
-		})
-		// On daemon shutdown (Serve returns): stop both managers' reapers and close every live session.
-		defer ws.Close()
-		// Start the cron schedulers only AFTER this workspace's subscriptions are wired: a scheduled
-		// firing saves a transcript (→ OnSave/OnEvent), so starting earlier would race the wiring.
-		go ws.StartAgents(ctx)
+
+	// One place decides what the daemon does around a workspace, and the registry calls it for every
+	// workspace there will ever be — the ones open at startup, and the ones a device creates later.
+	// A startup loop could only do the first kind, which is how "created at runtime" would have
+	// silently meant "streams nothing and runs no agents".
+	spaces.OnOpen(func(ws *workspace.Workspace) { attach(ctx, hub, ws) })
+	for _, ws := range spaces.Snapshot() {
+		attach(ctx, hub, ws)
 	}
+	// On daemon shutdown (Serve returns): stop every workspace's reapers, timers and live sessions.
+	// A workspace deleted before then was already closed by the registry.
+	defer spaces.Close()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/daemon.json", func(w http.ResponseWriter, r *http.Request) {
@@ -393,4 +390,43 @@ func serveOn(ctx context.Context, addr string, spaces map[string]*workspace.Work
 
 	log.Info("ws daemon listening", "addr", addr)
 	return srv.Serve(ln)
+}
+
+// attach wires one workspace to the hub: chat activity, both event streams, reminder changes and
+// proactive notifications, and then starts its background work.
+//
+// The order at the end is load-bearing. Schedulers start only AFTER the subscriptions are in place,
+// because a scheduled firing saves a transcript and streams events — starting first would race the
+// wiring and lose the first run of a workspace created a moment ago.
+func attach(ctx context.Context, hub *hub, ws *workspace.Workspace) {
+	name := ws.Name()
+	ws.OnChatUpdate(func(m chat.Meta) {
+		hub.broadcast(ChatActivity{Type: "chat.activity", Ws: name, Chat: m})
+	})
+	// Both managers' live events reach every device on the same wire form (chatEvent, tagged with the
+	// chat/run id) — so an agent run streams its tokens/tools exactly like a user chat, and the client
+	// renders it via the ONE reducer, distinguished only by id (agent runs list under kind "agent").
+	// The event carries no kind: the client already knows which ids are agent runs.
+	stream := func(chatID string, ev agentkit.Event) {
+		if msg, ok := chatEvent(chatID, ev); ok {
+			hub.broadcast(msg)
+		}
+	}
+	ws.Chats().OnEvent(stream)
+	ws.AgentChats().OnEvent(stream)
+	// A reminder set, cancelled or fired changes what a device should be listing. Broadcast the bare
+	// fact and let each client re-list, so devices converge on the daemon's set.
+	ws.OnReminderChange(func() {
+		hub.broadcast(ReminderChanged{Type: "reminder.changed", Ws: name})
+	})
+	// The in-app half of a proactive delivery (a fired reminder or a notify): the notifier routes here
+	// when a device is in the foreground, and to the push otherwise — so this fires only in the former
+	// case, never both.
+	ws.OnNotification(func(n tools.Notification) {
+		hub.broadcast(Notification{
+			Type: "notification", Ws: n.Ws, Kind: n.Kind,
+			ChatID: n.ChatID, Title: n.Title, Message: n.Message,
+		})
+	})
+	go ws.StartAgents(ctx)
 }

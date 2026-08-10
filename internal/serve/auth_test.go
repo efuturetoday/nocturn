@@ -13,10 +13,10 @@ import (
 
 // openUnlockedWorkspace builds a workspace with a master key and one discover-mode MCP server, so its
 // Accounts() orchestrator is live and List() has something to report.
-func openUnlockedWorkspace(t *testing.T) *workspace.Workspace {
+func openUnlockedWorkspace(t *testing.T) *workspace.Registry {
 	t.Helper()
-	dir := t.TempDir()
-	srvDir := filepath.Join(dir, "mcp", "acme")
+	root := t.TempDir()
+	srvDir := filepath.Join(root, workspace.DefaultWorkspace, "mcp", "acme")
 	if err := os.MkdirAll(srvDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -28,11 +28,12 @@ func openUnlockedWorkspace(t *testing.T) *workspace.Workspace {
 		t.Fatal(err)
 	}
 	h := workspace.Host{LLM: fakeLLM{}, Master: master, Log: slog.New(slog.DiscardHandler)}
-	ws, err := workspace.Open(h, "main", dir)
+	spaces, err := workspace.NewRegistry(h, root)
 	if err != nil {
-		t.Fatalf("workspace.Open: %v", err)
+		t.Fatalf("workspace.NewRegistry: %v", err)
 	}
-	return ws
+	t.Cleanup(spaces.Close)
+	return spaces
 }
 
 // auth.list reports a workspace's connectable discover-mode servers and their status through the
@@ -54,8 +55,7 @@ func TestAuth_List_ReportsConnectableAccounts(t *testing.T) {
 // A locked vault has no orchestrator, so an auth command fails closed rather than silently doing
 // nothing — the operator learns the daemon must be unlocked.
 func TestAuth_VaultLocked_FailsClosed(t *testing.T) {
-	ws := openWorkspace(t) // Host without a Master
-	c := connWith(ws)
+	c := connWith(openWorkspace(t)) // Host without a Master
 	c.auth(context.Background(), "auth.begin", []byte(`{"cmd":"auth.begin","ws":"main","server":"acme"}`))
 	recvError(t, c, "vault locked")
 }

@@ -92,6 +92,9 @@ type Workspace struct {
 	accounts   *MCPAuth          // MCP OAuth session orchestration; nil when the vault is locked
 	log        *slog.Logger
 
+	// title is the display name, separate from name because name is identity — see meta.go.
+	title title
+
 	// The credential stack. It is durable — one vault on one file — and internal/secret is built to
 	// be reconciled rather than rebuilt: the Injector's own doc says bindings and resolvers are
 	// mutated at runtime, and RemoveBindingsFor exists for exactly the uninstall case. So each discovery pass
@@ -316,6 +319,8 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		reloaded:   make(chan struct{}),
 	}
 
+	w.title.set(readMeta(dir).Title)
+
 	// The first snapshot: discovery, the toolset, the per-agent runtimes. Everything above is durable and stays
 	// for the life of the workspace; everything this builds can be rebuilt at any time. It comes
 	// before the consumers below because they read through w.snapshot() — a voice driver caging
@@ -379,34 +384,6 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	reminders.Restore()
 	waker.Restore()
 	return w, nil
-}
-
-// OpenAll opens every workspace under root (each subdirectory is one, by name), always including a
-// "main" so a fresh install and the terminal have a default. It is the daemon's workspace registry.
-func OpenAll(h Host, root string) (map[string]*Workspace, error) {
-	entries, err := os.ReadDir(root)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-	spaces := map[string]*Workspace{}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		ws, err := Open(h, e.Name(), filepath.Join(root, e.Name()))
-		if err != nil {
-			return nil, err
-		}
-		spaces[e.Name()] = ws
-	}
-	if _, ok := spaces[DefaultWorkspace]; !ok {
-		ws, err := Open(h, DefaultWorkspace, filepath.Join(root, DefaultWorkspace))
-		if err != nil {
-			return nil, err
-		}
-		spaces[DefaultWorkspace] = ws
-	}
-	return spaces, nil
 }
 
 // Name returns the workspace name.

@@ -51,7 +51,7 @@ func (c *conn) failed(ctx context.Context, what string, err error) {
 // the socket's write side.
 type conn struct {
 	ws      *websocket.Conn
-	spaces  map[string]*workspace.Workspace // the daemon's workspaces, by name
+	spaces  *workspace.Registry // the daemon's workspaces
 	devices *auth.Store
 	// broker is nil when this device may not answer approvals. Absence rather than a check: the
 	// connection then has nothing to approve WITH, the same way a plugin outside its cage finds the
@@ -90,7 +90,17 @@ type conn struct {
 	closed chan struct{}
 }
 
-func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, device string, can capabilities, embedder *speaker.Embedder, log *slog.Logger) *conn {
+func newConn(
+	ws *websocket.Conn,
+	spaces *workspace.Registry,
+	devices *auth.Store,
+	broker *hitl.Broker,
+	hub *hub,
+	device string,
+	can capabilities,
+	embedder *speaker.Embedder,
+	log *slog.Logger,
+) *conn {
 	return &conn{
 		ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, device: device, can: can,
 		embedder: embedder, log: log,
@@ -157,21 +167,9 @@ func (c *conn) heartbeat(ctx context.Context) {
 	}
 }
 
-// requireKind enforces that a store-addressed chat command names a valid store — "user" or "agent".
-// Kind is mandatory (never defaulted): the client holds it per conversation and sends it on every
-// chat.* command, so a missing or unknown kind is a client bug, rejected rather than silently treated
-// as user chats.
-func (c *conn) requireKind(ctx context.Context, kind string) bool {
-	if kind == "user" || kind == "agent" {
-		return true
-	}
-	c.badRequest(ctx, "missing or invalid kind (want \"user\" or \"agent\")")
-	return false
-}
-
 // workspace resolves a workspace by name, writing an error and returning false if unknown.
 func (c *conn) workspace(ctx context.Context, name string) (*workspace.Workspace, bool) {
-	w, ok := c.spaces[name]
+	w, ok := c.spaces.Get(name)
 	if !ok {
 		c.badRequest(ctx, "unknown workspace: "+name)
 	}
@@ -330,7 +328,7 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 	case "presence":
 		c.presence(ctx, env.Cmd, data)
 	case "workspace":
-		c.workspaceCmd(ctx, env.Cmd)
+		c.workspaceCmd(ctx, env.Cmd, data)
 	case "reminder":
 		c.reminder(ctx, env.Cmd, data)
 	case "agent":
