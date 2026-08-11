@@ -99,7 +99,11 @@ func (c *conn) mcpCmd(ctx context.Context, cmd string, data []byte) {
 		// The declaration is on disk and the handshake has not run, so the server is CONNECTING and
 		// the list says so. Reporting "failed" for a server nobody has tried yet would be a lie, and
 		// reporting nothing would leave a device staring at a list its own command is missing from.
-		c.applyMCP(ws, "add", m.Name, connectingFor(srv))
+		first := mcpList(ws)
+		first.Items = append(first.Items, MCPInfo{
+			Name: srv.Name, URL: srv.URL, State: string(workspace.MCPConnecting),
+		})
+		c.applyMCP(ws, "add", m.Name, first)
 
 	case "mcp.remove":
 		var m MCPRemove
@@ -129,7 +133,7 @@ func (c *conn) mcpCmd(ctx context.Context, cmd string, data []byte) {
 			c.log.Info("revoked the remembered network grant of a removed MCP server",
 				"ws", ws.Name(), "server", m.Name, "host", host)
 		}
-		c.applyMCP(ws, "remove", m.Name, nil)
+		c.applyMCP(ws, "remove", m.Name, mcpListWithout(ws, m.Name))
 
 	case "mcp.reconnect":
 		var m MCPReconnect
@@ -141,22 +145,21 @@ func (c *conn) mcpCmd(ctx context.Context, cmd string, data []byte) {
 		if !ok {
 			return
 		}
-		c.applyMCP(ws, "reconnect", "", nil)
+		c.applyMCP(ws, "reconnect", "", mcpList(ws))
 
 	default:
 		c.badRequest(ctx, "unknown action: "+cmd)
 	}
 }
 
-// applyMCP answers with the set as it stands, then reloads the workspace and answers again.
+// applyMCP broadcasts the set as the caller says it now stands, then reloads the workspace and
+// broadcasts what actually happened.
 //
 // Twice on purpose. A reload runs every server's handshake, each bounded at thirty seconds, and it
 // runs on this connection's read loop — awaiting it would leave the device unable to send so much as
 // a chat message meanwhile. So the first list goes out immediately, carrying `connecting` for a
 // server that has not been tried, and the second carries what actually happened.
-func (c *conn) applyMCP(ws *workspace.Workspace, action, name string, pending []MCPInfo) {
-	first := mcpList(ws)
-	first.Items = append(first.Items, pending...)
+func (c *conn) applyMCP(ws *workspace.Workspace, action, name string, first MCPListResult) {
 	c.hub.broadcast(first)
 
 	log := c.log.With("ws", ws.Name(), "server", name, "action", action)
@@ -170,9 +173,22 @@ func (c *conn) applyMCP(ws *workspace.Workspace, action, name string, pending []
 	}()
 }
 
-// connectingFor is the placeholder entry for a server that is declared but not yet tried.
-func connectingFor(s mcp.Server) []MCPInfo {
-	return []MCPInfo{{Name: s.Name, URL: s.URL, State: string(workspace.MCPConnecting)}}
+// mcpListWithout is the list as it will be once the reload catches up with a removal.
+//
+// The inventory still holds the removed server until then — it describes the snapshot in use, not the
+// disk — so sending it unchanged would say "connected" about a folder that is already gone. It comes
+// back a second later corrected, which is exactly the flicker a person reads as the app not having
+// understood them.
+func mcpListWithout(ws *workspace.Workspace, name string) MCPListResult {
+	out := mcpList(ws)
+	kept := out.Items[:0]
+	for _, it := range out.Items {
+		if it.Name != name {
+			kept = append(kept, it)
+		}
+	}
+	out.Items = kept
+	return out
 }
 
 // mcpList renders a workspace's servers for the wire. It reports one entry per DECLARED server,

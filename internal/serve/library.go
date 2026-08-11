@@ -141,7 +141,11 @@ func (c *conn) install(ctx context.Context, ws *workspace.Workspace, kind, id st
 			return err
 		}
 		c.log.Info("installed an MCP server from the catalog", "ws", ws.Name(), "id", id, "server", item.Name)
-		c.applyMCP(ws, "install", item.Name, connectingFor(srv))
+		first := mcpList(ws)
+		first.Items = append(first.Items, MCPInfo{
+			Name: srv.Name, URL: srv.URL, State: string(workspace.MCPConnecting),
+		})
+		c.applyMCP(ws, "install", item.Name, first)
 		return nil
 
 	default:
