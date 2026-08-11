@@ -97,3 +97,27 @@ func TestMCP_RemoveDropsTheFolder(t *testing.T) {
 	// That the host's remembered grant went with it is Workspace.ForgetNetAccess's own test — the
 	// wire cannot see a grant, and inventing a way for it to would be API built for a test.
 }
+
+// The first frame after a removal must not still say "connected". The inventory describes the
+// snapshot in use, not the disk, and it keeps the server until the reload catches up — sending it
+// unchanged would claim a folder that is already gone is connected, then correct itself a second
+// later. That correction is exactly the flicker a person reads as the app not having understood them.
+func TestMCP_RemoveIsGoneFromTheFirstFrame(t *testing.T) {
+	conn, ctx, spaces := gateDaemonSpaces(t, auth.ClassApp)
+	ws, _ := spaces.Get(workspace.DefaultWorkspace)
+
+	send(t, conn, ctx, map[string]any{
+		"cmd": "mcp.add", "ws": workspace.DefaultWorkspace,
+		"name": "acme", "url": "https://acme.invalid/mcp",
+	})
+	awaitType(t, conn, ctx, "mcp.list") // connecting
+	awaitType(t, conn, ctx, "mcp.list") // the outcome
+	waitFor(t, func() bool { return len(ws.Inventory().MCP) == 1 })
+
+	send(t, conn, ctx, map[string]any{
+		"cmd": "mcp.remove", "ws": workspace.DefaultWorkspace, "name": "acme",
+	})
+	if got := mcpStates(awaitType(t, conn, ctx, "mcp.list")); len(got) != 0 {
+		t.Fatalf("the first frame after a removal still carried %v", got)
+	}
+}
