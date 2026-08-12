@@ -109,8 +109,18 @@ port, an `Embedder` port with a remote OpenAI-compatible adapter, hybrid cosine+
 reciprocal rank, an index OUTSIDE the mount that records its model and refuses to mix embedders, and
 a one-minute reconcile that costs a directory walk when nothing changed) ·
 `chat` (file-backed transcript store + Manager) · `agent` (declaration + cron only; execution is
-injected by the workspace) · `workspace` (the composition root) · `serve` (WebSocket surface,
-tagged JSON, one file per domain) ·
+injected by the workspace) ·
+`workspace` (the composition root, cut in two along ONE question — what may not exist twice. The
+durable half is built once by `Open`: one vault handle, one timer set per reminder and per wake, one
+chat store, one knowledge index. Everything discovery derives is a `snapshot`, swapped whole behind
+an atomic pointer by `Reload`, which is why a skill or an MCP server can arrive without a restart and
+without cutting a turn. `Registry` is the daemon's set of open workspaces and the only place one
+comes into or goes out of existence while the process runs; its `OnOpen` is where the daemon hangs
+the per-workspace wiring, so one created at runtime is not a second-class one) ·
+`serve` (WebSocket surface, tagged JSON, one file per domain) ·
+`library` (the curated catalog skills and MCP servers are installed from: daemon-wide, fetched lazily
+from ONE configured host over TLS with skill bodies INLINE, so installing never fetches from a second
+place. Absent — not empty — when `NOCTURN_CATALOG_URL` is unset) ·
 `webui` (the browser front-end, `go:embed`ded: the SAME Angular bundle `mobile/` ships, copied in by
 `generate.sh` and gitignored except a load-bearing `.gitkeep`. A file server and nothing else —
 it knows no classes, no capabilities, no bearers, because assets carry no authority. Absent bundle =
@@ -181,6 +191,34 @@ Read this before touching anything security-shaped — it is easy to assume the 
   fresh ask is denied fail-closed; `Guarded` routes the ask out-of-band to the human. A missing or
   typo'd dial therefore never escalates authority. With no device wired, guarded collapses to
   strict.
+- **`manage` is a capability, not a gated action** — and that is a decision, because installing a
+  skill plainly grants something. The gate exists for the MODEL acting under instructions somebody
+  smuggled into its context, judged by a human on a device the injection cannot reach. A device
+  adding a workspace or an MCP server is the opposite shape: a human command from an authenticated
+  device, and routing it through the broker would ask the phone to confirm what the phone just
+  tapped. The precedent is `device.forget` — revoking a device is heavier and is a capability check.
+  Held by `ClassApp`, `ClassWeb` and `ClassTool` (the command line already holds the directory;
+  withholding it would only stop the running daemon NOTICING what the same person just wrote), never
+  by `ClassAppliance` — which is the whole point of having the bit.
+- **`library.install` names an entry, it never carries one.** A wire form with a skill body would be
+  a way to put arbitrary text into every system prompt of every turn — a different authority from
+  "install entry N of a catalog the daemon fetched itself". `internal/serve/invariant_test.go` walks
+  the declared type so the rule survives a convenience field added later, with a counter-check
+  proving the scanner can still see. Sideloading stays a file copy on the host.
+- **Signing is NOT built, and the catalog does not pretend it is.** Weight sits on one TLS source
+  with bodies inline, plus a sha256 per entry checked before anything is written — which
+  authenticates nothing (whoever serves the catalog serves the digest) but turns a truncated response
+  into a refusal, and is the field a signature would be computed over. What it deliberately does NOT
+  rest on is a person reading a body first: nobody spots a subtle instruction in four thousand tokens
+  on a phone. The controls that hold are ADR-10 (a skill carries zero authority) and the `NetKind`
+  gate on an installed server's first call.
+- **Removing an MCP server revokes the remembered grant for its host** (`Workspace.ForgetNetAccess`,
+  `gate.Grants.Forget`). A grant records what, never why, so once the server is gone the answer stands
+  alone and the next server on that host would inherit a yes nobody gave it. It cuts both ways — the
+  same grant may be the one given so `http_read` could reach that host — and being asked once more is
+  the cheap side of that trade.
+- **The catalog fetch is host egress, like the LLM and embedding endpoints and APNs**: no model
+  output flows into it, so it passes no gate. Lazy, never at startup.
 - **Device classes are interpreted in ONE function**, `serve.capabilitiesOf`, with `serve.classFor`
   its neighbour deriving which class a holder gets from the platform it already sends. `internal/auth`
   stores a class and never compares one — not even behind a `func(Class) bool`, which is the same
