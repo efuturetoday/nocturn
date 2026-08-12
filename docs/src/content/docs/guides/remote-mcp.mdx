@@ -158,7 +158,8 @@ The order matters, and one step is easy to get wrong:
 :::note[Order only matters on the command line]
 There is no watcher on `mcp/`: a daemon that was already running when you created the folder does not
 know the server exists, and one that started *before* you signed in logged `mcp server needs
-authorization` and moved on. On the command line the fix is to restart once.
+authorization` and moved on. On the command line, `nocturn reload` makes it look again — including
+after `nocturn auth`, so signing in and picking up the tools does not need a restart.
 
 From the [companion app](/nocturn/guides/remote-access/) the order does not matter at all. It declares
 a server, connects the account and reconnects over the same connection — a server shows `connecting`

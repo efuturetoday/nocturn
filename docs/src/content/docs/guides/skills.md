@@ -56,7 +56,8 @@ nocturn serve        # start, or restart if it was already running
 ```
 
 There is no watcher on `skills/`, so a running daemon does not notice a folder you copied in — it
-reads them when the workspace opens. Restarting is one way to make it look again.
+reads them when the workspace opens. `nocturn reload` (`-w <workspace>` for another one) is how you
+tell it to look again; it prints what the workspace holds afterwards. Restarting works too.
 
 The other is the [companion app](/nocturn/guides/remote-access/), which manages skills over the same
 connection everything else uses: it lists them, shows a skill's `SKILL.md` before you act on it, and

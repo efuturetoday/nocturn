@@ -32,13 +32,6 @@ type MCPRemove struct {
 	Name string `json:"name"`
 }
 
-// MCPReconnect re-runs the workspace's discovery, so a server that was down or newly authorized is
-// tried again (client → server).
-type MCPReconnect struct {
-	Cmd string `json:"cmd"`
-	Ws  string `json:"ws"`
-}
-
 // MCPInfo is one declared server and what became of it.
 type MCPInfo struct {
 	Name  string `json:"name"`
@@ -59,6 +52,10 @@ type MCPListResult struct {
 //
 // Listing is ungated: which servers a workspace declares, and which of them failed, is the same kind
 // of fact as which workspaces exist. Declaring or dropping one takes `manage`.
+//
+// Trying a server AGAIN is not here, and that is the point of where it went. Re-running discovery
+// re-runs all of it — agents, skills, plugins, servers — so a command named for one of them would
+// promise a part and do the whole. It is workspace.reload.
 func (c *conn) mcpCmd(ctx context.Context, cmd string, data []byte) {
 	switch cmd {
 	case "mcp.list":
@@ -134,18 +131,6 @@ func (c *conn) mcpCmd(ctx context.Context, cmd string, data []byte) {
 				"ws", ws.Name(), "server", m.Name, "host", host)
 		}
 		c.applyMCP(ws, "remove", m.Name, mcpListWithout(ws, m.Name))
-
-	case "mcp.reconnect":
-		var m MCPReconnect
-		if err := json.Unmarshal(data, &m); err != nil {
-			c.badRequest(ctx, "bad mcp.reconnect")
-			return
-		}
-		ws, ok := c.workspace(ctx, m.Ws)
-		if !ok {
-			return
-		}
-		c.applyMCP(ws, "reconnect", "", mcpList(ws))
 
 	default:
 		c.badRequest(ctx, "unknown action: "+cmd)

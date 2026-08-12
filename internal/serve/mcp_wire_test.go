@@ -35,7 +35,6 @@ func TestMCP_ListIsOpen_ChangesNeedManage(t *testing.T) {
 	for _, cmd := range []map[string]any{
 		{"cmd": "mcp.add", "ws": workspace.DefaultWorkspace, "name": "acme", "url": "https://acme.example/mcp"},
 		{"cmd": "mcp.remove", "ws": workspace.DefaultWorkspace, "name": "acme"},
-		{"cmd": "mcp.reconnect", "ws": workspace.DefaultWorkspace},
 	} {
 		send(t, conn, ctx, cmd)
 		if e := awaitType(t, conn, ctx, "error"); e["text"] == "" {
