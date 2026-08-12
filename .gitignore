@@ -35,6 +35,14 @@ internal/script/qjs/.buildcache/
 # it while testing, and what sits in one of these is precisely what must never reach a remote.
 /nocturn-data*/
 
+# The embedded web UI: the Angular bundle, copied in from mobile/ by internal/webui/generate.sh.
+# Two megabytes of minified chunks whose filenames are content hashes, so committing it would rewrite
+# every name on every UI change. Release CI copies in the same artefact the mobile app ships.
+# The .gitkeep is committed and load-bearing: `//go:embed all:dist` fails to compile if the pattern
+# matches no files, and git will not track an empty directory.
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep
+
 # the reference environment for internal/speaker (torch/torchaudio, dev-only)
 /internal/speaker/reference/.venv/
 

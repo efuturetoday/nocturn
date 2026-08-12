@@ -37,6 +37,9 @@ notes: >-
   **Bounded, not gated.** `wake` reaches nothing external — it only schedules a continuation — so it
   carries no authority and never calls the gate. Any tool called in the *resumed* turn is gated
   normally. The risk it does carry is a runaway self-waking loop, so it is bounded instead: the delay
-  is clamped, the number of pending wakes is capped, and pending wakes are ephemeral — they live only
-  as long as the process. A wake resumes the exact conversation that scheduled it; delete that chat
-  and its pending wakes go with it.
+  is clamped and the number of pending wakes is capped. A wake resumes the exact conversation that
+  scheduled it; delete that chat and its pending wakes go with it.
+
+  Pending wakes are **persisted** (`wakes.json` in the workspace), so one survives a restart the way
+  a [reminder](/nocturn/reference/tools/remind/) does — including one that came due while the daemon
+  was down, which resumes as soon as it is back.

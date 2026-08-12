@@ -2,16 +2,20 @@ package workspace_test
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/internal/chat"
+	"github.com/efuturetoday/nocturn/internal/tools"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
@@ -199,58 +203,44 @@ func TestWorkspace_Open_TwoWorkspaces_Isolated(t *testing.T) {
 	}
 }
 
-// TestOpenAll_AlwaysIncludesMain: OpenAll over an empty root still yields the default "main".
-func TestOpenAll_AlwaysIncludesMain(t *testing.T) {
-	h := workspace.Host{LLM: fakeLLM{}, Log: slog.New(slog.DiscardHandler)}
-	spaces, err := workspace.OpenAll(h, t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenAll: %v", err)
-	}
-	t.Cleanup(func() {
-		for _, w := range spaces {
-			w.Close()
-		}
-	})
-	main, ok := spaces[workspace.DefaultWorkspace]
+// A registry over an empty root still yields the default "main" — a fresh install and the terminal
+// always have somewhere to be.
+func TestNewRegistry_AlwaysIncludesMain(t *testing.T) {
+	reg := newRegistry(t, t.TempDir())
+	main, ok := reg.Get(workspace.DefaultWorkspace)
 	if !ok {
-		t.Fatalf("OpenAll must always include %q; got %v", workspace.DefaultWorkspace, keys(spaces))
+		t.Fatalf("registry must always include %q; got %v", workspace.DefaultWorkspace, reg.Names())
 	}
 	if main.Name() != workspace.DefaultWorkspace {
 		t.Errorf("main workspace name = %q, want %q", main.Name(), workspace.DefaultWorkspace)
 	}
 }
 
-// TestOpenAll_OpensEachSubdir: each subdirectory of root becomes a workspace by name, plus main.
-func TestOpenAll_OpensEachSubdir(t *testing.T) {
+// Each subdirectory of root becomes a workspace by name, plus main.
+func TestNewRegistry_OpensEachSubdir(t *testing.T) {
 	root := t.TempDir()
 	for _, n := range []string{"work", "home"} {
 		if err := os.MkdirAll(filepath.Join(root, n), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	h := workspace.Host{LLM: fakeLLM{}, Log: slog.New(slog.DiscardHandler)}
-	spaces, err := workspace.OpenAll(h, root)
-	if err != nil {
-		t.Fatalf("OpenAll: %v", err)
-	}
-	t.Cleanup(func() {
-		for _, w := range spaces {
-			w.Close()
-		}
-	})
-	for _, want := range []string{"work", "home", workspace.DefaultWorkspace} {
-		if _, ok := spaces[want]; !ok {
-			t.Errorf("OpenAll missing workspace %q; got %v", want, keys(spaces))
-		}
+	reg := newRegistry(t, root)
+	want := []string{"home", workspace.DefaultWorkspace, "work"}
+	if got := reg.Names(); !slices.Equal(got, want) {
+		t.Errorf("registry names = %v, want %v", got, want)
 	}
 }
 
-func keys(m map[string]*workspace.Workspace) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+// newRegistry opens a registry over root and closes it on cleanup.
+func newRegistry(t *testing.T, root string) *workspace.Registry {
+	t.Helper()
+	h := workspace.Host{LLM: fakeLLM{}, Log: slog.New(slog.DiscardHandler)}
+	reg, err := workspace.NewRegistry(h, root)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
 	}
-	return out
+	t.Cleanup(reg.Close)
+	return reg
 }
 
 // setupMarkRead builds a workspace with one user chat and one agent run, both persisted and unread,
@@ -343,4 +333,52 @@ func TestWorkspace_OnChatUpdate_WiresBothStores(t *testing.T) {
 	if !seen[chat.SourceAgent] {
 		t.Error("OnChatUpdate did not fire for an agent-store save")
 	}
+}
+
+// TestWorkspace_Open_RestoresPersistedWakes proves the wake store is wired to <ws>/wakes.json and
+// restored only once the lookup seam is bound.
+//
+// A wake that came due while the process was down must resume its chat, which is the whole reason the
+// pending set is now persisted at all: it used to live only in a time.AfterFunc, so a restart dropped
+// every outstanding continuation with no log line and no error. The ordering is load-bearing too — an
+// overdue wake fires the instant its timer is armed, and firing consumes it, so arming before Bind
+// would lose exactly what the store exists to keep.
+func TestWorkspace_Open_RestoresPersistedWakes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		overdue := []tools.Wake{{
+			ID:     "wake-1",
+			FireAt: time.Now().Add(-time.Hour),
+			ChatID: "c1",
+			Note:   "re-check the deploy",
+		}}
+		data, err := json.Marshal(overdue)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "wakes.json"), data, 0o600); err != nil {
+			t.Fatalf("write wakes.json: %v", err)
+		}
+
+		h := workspace.Host{LLM: fakeLLM{}, Log: slog.New(slog.DiscardHandler)}
+		w, err := workspace.Open(h, "test", dir)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		synctest.Wait()
+
+		msgs, err := w.Chats().Transcript("c1")
+		if err != nil {
+			t.Fatalf("Transcript: %v", err)
+		}
+		if len(msgs) == 0 {
+			t.Fatal("the restored wake never resumed its chat — no transcript for c1")
+		}
+		if msgs[0].Content != "re-check the deploy" {
+			t.Fatalf("resumed chat opened with %q, want the wake note", msgs[0].Content)
+		}
+
+		w.Close()
+		synctest.Wait()
+	})
 }

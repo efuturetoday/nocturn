@@ -16,6 +16,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/auth"
 	"github.com/efuturetoday/nocturn/internal/hitl"
+	"github.com/efuturetoday/nocturn/internal/library"
 	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
@@ -51,7 +52,7 @@ func (c *conn) failed(ctx context.Context, what string, err error) {
 // the socket's write side.
 type conn struct {
 	ws      *websocket.Conn
-	spaces  map[string]*workspace.Workspace // the daemon's workspaces, by name
+	spaces  *workspace.Registry // the daemon's workspaces
 	devices *auth.Store
 	// broker is nil when this device may not answer approvals. Absence rather than a check: the
 	// connection then has nothing to approve WITH, the same way a plugin outside its cage finds the
@@ -72,6 +73,10 @@ type conn struct {
 	// voice can be enrolled through the device it will be recognised through.
 	capture *capture
 
+	// library is the curated catalog, shared by every connection; nil when none is configured, which
+	// makes the library absent rather than empty.
+	library *library.Store
+
 	// embedder turns speech into a speaker embedding, and is nil when this daemon has no model. It
 	// is shared across every connection: the model is tens of megabytes and immutable once loaded.
 	embedder *speaker.Embedder
@@ -90,10 +95,21 @@ type conn struct {
 	closed chan struct{}
 }
 
-func newConn(ws *websocket.Conn, spaces map[string]*workspace.Workspace, devices *auth.Store, broker *hitl.Broker, hub *hub, device string, can capabilities, embedder *speaker.Embedder, log *slog.Logger) *conn {
+func newConn(
+	ws *websocket.Conn,
+	spaces *workspace.Registry,
+	devices *auth.Store,
+	broker *hitl.Broker,
+	hub *hub,
+	device string,
+	can capabilities,
+	embedder *speaker.Embedder,
+	lib *library.Store,
+	log *slog.Logger,
+) *conn {
 	return &conn{
 		ws: ws, spaces: spaces, devices: devices, broker: broker, hub: hub, device: device, can: can,
-		embedder: embedder, log: log,
+		embedder: embedder, library: lib, log: log,
 		control: make(chan any, 64),
 		// Four frames — 80 ms. Short on purpose, and it is a latency budget rather than a buffer: this
 		// queue sits AHEAD of the device's own, so everything in it is speech a barge-in can no longer
@@ -157,21 +173,9 @@ func (c *conn) heartbeat(ctx context.Context) {
 	}
 }
 
-// requireKind enforces that a store-addressed chat command names a valid store — "user" or "agent".
-// Kind is mandatory (never defaulted): the client holds it per conversation and sends it on every
-// chat.* command, so a missing or unknown kind is a client bug, rejected rather than silently treated
-// as user chats.
-func (c *conn) requireKind(ctx context.Context, kind string) bool {
-	if kind == "user" || kind == "agent" {
-		return true
-	}
-	c.badRequest(ctx, "missing or invalid kind (want \"user\" or \"agent\")")
-	return false
-}
-
 // workspace resolves a workspace by name, writing an error and returning false if unknown.
 func (c *conn) workspace(ctx context.Context, name string) (*workspace.Workspace, bool) {
-	w, ok := c.spaces[name]
+	w, ok := c.spaces.Get(name)
 	if !ok {
 		c.badRequest(ctx, "unknown workspace: "+name)
 	}
@@ -185,18 +189,14 @@ func (c *conn) serve(ctx context.Context) {
 	c.log.Info("ws connection opened")
 	go c.writer(ctx)
 	go c.heartbeat(ctx)
-	if c.broker != nil {
-		c.broker.Attach(ctx, c)
-	}
+	c.broker.Attach(ctx, c) // nil-tolerant: a class that may not approve was handed no broker
 	c.hub.add(c)
 	defer func() {
 		c.hub.remove(c)
 		// Release anyone waiting to queue speech before anything else: a voice writer blocked on this
 		// connection's queue must be let go, or the teardown below waits for it.
 		close(c.closed)
-		if c.broker != nil {
-			c.broker.Detach(c)
-		}
+		c.broker.Detach(c)
 		// Chat sessions are server-owned and keep running past this connection — their answer is
 		// still worth having when the client returns. A spoken one is not: audio has nobody to play
 		// to and a live model bills for every second, so it ends with the device.
@@ -327,12 +327,20 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.chat(ctx, env.Cmd, data)
 	case "join":
 		c.join(ctx, env.Cmd)
+	case "device":
+		c.deviceCmd(ctx, env.Cmd, data)
 	case "approval":
 		c.approval(ctx, env.Cmd, data)
 	case "presence":
 		c.presence(ctx, env.Cmd, data)
 	case "workspace":
-		c.workspaceCmd(ctx, env.Cmd)
+		c.workspaceCmd(ctx, env.Cmd, data)
+	case "skill":
+		c.skillCmd(ctx, env.Cmd, data)
+	case "mcp":
+		c.mcpCmd(ctx, env.Cmd, data)
+	case "library":
+		c.libraryCmd(ctx, env.Cmd, data)
 	case "reminder":
 		c.reminder(ctx, env.Cmd, data)
 	case "agent":

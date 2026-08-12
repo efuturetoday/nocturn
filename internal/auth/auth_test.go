@@ -38,11 +38,11 @@ func newStore(t *testing.T) (*auth.Store, string) {
 // pairFirst pairs the first device via the bootstrap code and returns its bearer.
 func pairFirst(t *testing.T, s *auth.Store) string {
 	t.Helper()
-	code := s.Bootstrap(bootstrapTTL)
+	code := s.ArmBootstrap(bootstrapTTL)
 	if code == "" {
-		t.Fatal("Bootstrap returned empty code on a fresh store")
+		t.Fatal("ArmBootstrap returned empty code on a fresh store")
 	}
-	bearer, err := s.Pair(code, "first", "ios")
+	bearer, err := s.Pair(code, "first", "ios", auth.ClassApp)
 	if err != nil {
 		t.Fatalf("Pair: %v", err)
 	}
@@ -62,7 +62,7 @@ func joinDevice(t *testing.T, s *auth.Store, name, platform string) string {
 	if code == "" {
 		t.Fatalf("no pending code for joinID %q", id)
 	}
-	bearer, err := s.ConfirmJoin(id, code)
+	bearer, err := s.ConfirmJoin(id, code, auth.ClassApp)
 	if err != nil {
 		t.Fatalf("ConfirmJoin: %v", err)
 	}
@@ -137,13 +137,13 @@ func TestVerify_PairedBearerAccepted(t *testing.T) {
 func TestPair_FirstDeviceConsumesBootstrapCode(t *testing.T) {
 	t.Parallel()
 	s, _ := newStore(t)
-	code := s.Bootstrap(bootstrapTTL)
+	code := s.ArmBootstrap(bootstrapTTL)
 
-	if _, err := s.Pair(code, "first", "ios"); err != nil {
+	if _, err := s.Pair(code, "first", "ios", auth.ClassApp); err != nil {
 		t.Fatalf("first Pair: %v", err)
 	}
 	// Single-use: the same code cannot pair a second device.
-	if _, err := s.Pair(code, "second", "ios"); !errors.Is(err, auth.ErrPairing) {
+	if _, err := s.Pair(code, "second", "ios", auth.ClassApp); !errors.Is(err, auth.ErrPairing) {
 		t.Fatalf("reusing the bootstrap code: got %v, want ErrPairing", err)
 	}
 }
@@ -151,14 +151,14 @@ func TestPair_FirstDeviceConsumesBootstrapCode(t *testing.T) {
 func TestPair_WrongCodeRejected(t *testing.T) {
 	t.Parallel()
 	s, _ := newStore(t)
-	code := s.Bootstrap(bootstrapTTL)
+	code := s.ArmBootstrap(bootstrapTTL)
 
 	wrong := mutateDigit(code)
-	if _, err := s.Pair(wrong, "dev", "ios"); !errors.Is(err, auth.ErrPairing) {
+	if _, err := s.Pair(wrong, "dev", "ios", auth.ClassApp); !errors.Is(err, auth.ErrPairing) {
 		t.Fatalf("wrong code: got %v, want ErrPairing", err)
 	}
 	// A wrong attempt must not spend the armed code — the right one still works.
-	if _, err := s.Pair(code, "dev", "ios"); err != nil {
+	if _, err := s.Pair(code, "dev", "ios", auth.ClassApp); err != nil {
 		t.Fatalf("correct code after a wrong attempt: %v", err)
 	}
 }
@@ -167,7 +167,7 @@ func TestPair_NoBootstrapArmed(t *testing.T) {
 	t.Parallel()
 	s, _ := newStore(t)
 
-	if _, err := s.Pair("123456", "dev", "ios"); !errors.Is(err, auth.ErrPairing) {
+	if _, err := s.Pair("123456", "dev", "ios", auth.ClassApp); !errors.Is(err, auth.ErrPairing) {
 		t.Fatalf("Pair with no armed bootstrap: got %v, want ErrPairing", err)
 	}
 }
@@ -175,8 +175,8 @@ func TestPair_NoBootstrapArmed(t *testing.T) {
 func TestPair_EmptyNameDefaults(t *testing.T) {
 	t.Parallel()
 	s, path := newStore(t)
-	code := s.Bootstrap(bootstrapTTL)
-	if _, err := s.Pair(code, "", ""); err != nil {
+	code := s.ArmBootstrap(bootstrapTTL)
+	if _, err := s.Pair(code, "", "", auth.ClassApp); err != nil {
 		t.Fatalf("Pair: %v", err)
 	}
 
@@ -386,7 +386,7 @@ func TestAddDevice_RollsBackWhenPersistenceFails(t *testing.T) {
 	if _, err := s.Mint("cli", auth.ClassTool); err == nil {
 		t.Fatal("Mint into an unwritable directory succeeded, want an error")
 	}
-	if code := s.Bootstrap(time.Minute); len(code) != 6 {
+	if code := s.ArmBootstrap(time.Minute); len(code) != 6 {
 		t.Errorf("Bootstrap after a failed enrolment = %q, want a 6-digit code — the failed device still counts", code)
 	}
 }
@@ -420,4 +420,54 @@ func TestLoad_StampsPreClassRecordsAsApps(t *testing.T) {
 func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// List hands out copies. If the loop ever took the address of the element instead, blanking would
+// wipe the live registry — every bearer would stop authenticating and the damage would be persisted
+// on the next save. Cheap to assert, catastrophic to get wrong.
+func TestList_BlanksTheCopyAndNotTheRegistry(t *testing.T) {
+	t.Parallel()
+	s, _ := newStore(t)
+	bearer := pairFirst(t, s)
+	if err := s.RegisterPush(bearer, "apns-token-xyz", "ios"); err != nil {
+		t.Fatalf("RegisterPush: %v", err)
+	}
+
+	listed := s.List()
+	if len(listed) != 1 {
+		t.Fatalf("List = %d devices, want 1", len(listed))
+	}
+	// Neither is any caller's business: one is a secret's shadow, the other addresses a handset.
+	if listed[0].BearerHash != "" {
+		t.Error("List leaked the bearer hash")
+	}
+	if listed[0].PushToken != "" {
+		t.Error("List leaked the push token")
+	}
+	if listed[0].ID == "" || listed[0].Name == "" {
+		t.Error("List blanked something it was supposed to return")
+	}
+
+	// The registry itself is untouched: the bearer still authenticates and the push target survives.
+	if _, ok := s.Lookup(bearer); !ok {
+		t.Fatal("List destroyed the registry — the bearer no longer authenticates")
+	}
+	if got := s.PushTargets(); len(got) != 1 || got[0].Token != "apns-token-xyz" {
+		t.Errorf("List destroyed the push target: %v", got)
+	}
+}
+
+// A ceiling below one has no meaning, and the eviction arithmetic would slice past the end reaching
+// for it. Refusing beats panicking inside the registry on the way to a pairing screen.
+func TestCapJoins_IgnoresANonsenseCeiling(t *testing.T) {
+	t.Parallel()
+	s, _ := newStore(t)
+	id := s.Join("phone", "ios")
+
+	for _, n := range []int{0, -1} {
+		s.CapJoins(n) // must not panic
+	}
+	if got := s.PendingJoins(); len(got) != 1 || got[0].JoinID != id {
+		t.Errorf("pending joins = %v, want the one that was made", got)
+	}
 }

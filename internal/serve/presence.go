@@ -22,6 +22,10 @@ func (c *conn) presence(ctx context.Context, cmd string, data []byte) {
 			c.badRequest(ctx, "bad presence.set")
 			return
 		}
+		// Nil-tolerant on the receiver: a device that may not approve was handed no broker at all
+		// (serve.go, at accept), and its foreground state decides nothing, so there is nothing to
+		// record. See hitl.Broker — this used to be a guard here, and the day it was missing a single
+		// presence.set from the least-trusted class panicked the read loop.
 		c.broker.SetActive(ctx, c, m.Active)
 	default:
 		c.badRequest(ctx, "unknown action: "+cmd)

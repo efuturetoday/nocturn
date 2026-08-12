@@ -5,7 +5,7 @@ import {
   IonContent, IonList, IonListHeader, IonItem, IonLabel, IonBadge, NavController,
 } from '@ionic/angular/standalone';
 import {
-  LucideAlarmClock, LucideBot, LucideSettings, LucidePlus, LucideSparkles,
+  LucideAlarmClock, LucideBot, LucideSettings, LucidePlus, LucideSparkles, LucideStore,
 } from '@lucide/angular';
 import { ChatListService } from '../../core/services/chat-list.service';
 import { ReminderService } from '../../core/services/reminder.service';
@@ -34,7 +34,7 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
     RouterLink, RouterLinkActive, ChatRowComponent,
     IonSplitPane, IonMenu, IonMenuToggle, IonRouterOutlet, IonHeader, IonToolbar, IonTitle,
     IonContent, IonList, IonListHeader, IonItem, IonLabel, IonBadge,
-    LucideAlarmClock, LucideBot, LucideSettings, LucidePlus, LucideSparkles,
+    LucideAlarmClock, LucideBot, LucideSettings, LucidePlus, LucideSparkles, LucideStore,
   ],
   template: `
     <ion-split-pane contentId="main" when="lg">
@@ -76,6 +76,15 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
               </ion-item>
             </ion-menu-toggle>
 
+            <ion-menu-toggle [autoHide]="false">
+              <ion-item button detail="false" routerLink="/app/library" routerLinkActive="nav-on">
+                <svg lucideStore slot="start" [size]="21" />
+                <ion-label>Library</ion-label>
+              </ion-item>
+            </ion-menu-toggle>
+
+            <!-- Skills, MCP and Workspaces are tabs inside Settings: the list below this is the chat
+                 history, and every row here pushes it further down. -->
             <ion-menu-toggle [autoHide]="false">
               <ion-item button detail="false" routerLink="/app/settings" routerLinkActive="nav-on">
                 <svg lucideSettings slot="start" [size]="21" />

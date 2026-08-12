@@ -272,3 +272,71 @@ component tools from Wassette/wasmCloud won't run without a shim. **Why still ri
 **single binary** (trivial cross-compile), and **every host import = your Go function** → the
 boundary is maximally auditable, wrappable, revocable. Escape hatch: keep the host-import
 interfaces abstract enough for a later wasmtime-go/component backend.
+
+## ADR-15 — A workspace is cut in two by what may not exist twice, and the turn is where the halves meet
+Discovery ran once, in `workspace.Open`. Adding a skill or an MCP server meant restarting the daemon
+— acceptable while the only way to add one was `mkdir` on the host, untenable the moment a phone can.
+
+The obvious fix is to reopen the workspace, and it does not work in either order: **close then open**
+leaves a window of seconds with no workspace at all (MCP handshakes are bounded at thirty seconds
+each), and **open then close** puts two vaults on one `vault.enc`, two reminder sets on the same
+timers, two indexes on one corpus. That failure names the real question, which is not "what survives
+a reload" but **what may not exist twice**:
+
+- **Durable** — one vault handle, one timer per reminder and per wake, one chat store, one knowledge
+  index, one credential injector. Built once by `Open`, never rebuilt.
+- **Derived** — agents, skills, plugins, MCP servers, the toolset they add up to, the per-agent
+  runtimes. Two of these are harmless side by side, so they are a `snapshot`, built whole and
+  published with one atomic store.
+
+One pointer rather than a field per concern, because `Inventory` reads the tool list and the MCP list
+together: two guarded fields let a reader land between the writes and report a workspace that never
+existed. One swap makes that unrepresentable, and a failed rebuild leaves the previous snapshot
+standing for free.
+
+**The turn, not the session, is where the new one takes effect.** agentkit asks for tools, skills and
+the system prompt once at the top of a turn (`WithToolsFunc` and siblings; the value forms are sugar
+over them, so there is no "which wins" rule). A conversation already open sees a newly installed
+skill in its very next message, while a turn already running keeps the set it was handed — the model
+is given a tool list and plans against it, so a tool must not vanish between two calls it already
+decided to make together. Agent runs are the deliberate exception: a run keeps the cage it fired
+under, because a cage is an authority boundary and widening one mid-run, unattended, is the one place
+where "pick it up immediately" is the wrong answer.
+
+Rejected: **a filesystem watcher.** It would mean a dependency in a tree that keeps its list short,
+recursive watch management for every subdirectory that appears, and platform behaviour that drops
+events under load — after which a periodic reconcile is needed anyway as the backstop.
+`internal/knowledge` made this call first and says so. Also rejected: **a ticker**, which would re-run
+every MCP handshake against other people's servers on a schedule. So a reload is asked for:
+`workspace.reload` from a device, `nocturn reload` from the terminal.
+
+*Realized in `internal/workspace/{workspace,snapshot,lifecycle}.go`, `agentkit/session.go`.*
+
+## ADR-16 — A workspace's folder name is its identity; its title is a label over it
+A workspace shows a name on a screen and a person will want to change it. Renaming the folder is the
+obvious implementation and it destroys credentials silently.
+
+The folder name is the input to `Master.WorkspaceKey`, and to `Master.ShardKey` for every plugin and
+MCP secret shard, with the workspace-relative path bound in as AAD. Renaming the directory therefore
+does not move a workspace: it makes its vault and every shard undecryptable, with **no error at all**
+until something reaches for a credential — the failure appears later, somewhere else, as an absent
+token.
+
+So identity is the folder, permanently: the key input, the `ws` field on every wire command, the `ws=`
+on every log line, and the same rule `discovery.ResolveName` holds for plugins, MCP servers and
+agents. The title lives in `workspace.json`, changes freely because nothing depends on it, and clears
+back to the folder name.
+
+Rejected: **a stable id in `workspace.json` with keys derived from it.** It would make renaming
+trivial and correct, and it was still the wrong trade — key derivation would then depend on a mutable
+file *inside* the thing it protects, and the workspace would be the one identity in the tree that is
+not its folder, forever, in every log line and shard path. What renaming the folder buys is a prettier
+directory name.
+
+Deletion follows from the same reading: the folder is every conversation, every note and a vault, and
+it is being removed from a list on a phone — so it is **moved** to `.trash/<name>-<unix>`, not
+deleted. The trash is a dot-directory because the registry's scan skips those; without that skip the
+next start would open the trash as a workspace, with its own vault and its own schedulers.
+
+*Realized in `internal/workspace/{meta,registry}.go`.*
+

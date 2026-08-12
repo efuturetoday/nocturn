@@ -1,32 +1,42 @@
 // Package workspace is the composition root per workspace: it bundles the tools (the cage), the
 // permission gate (policy + durable grants + approver), the persona, and the chat store and manager
-// into one aggregate over a shared Host. cmd/nocturn opens one; multiplexing several is a later slice.
+// into one aggregate over a shared Host. The daemon opens every workspace under its root; the
+// terminal attaches to one.
+//
+// A workspace has two halves, and knowing which is which explains the file layout:
+//
+//   - DURABLE — built once by Open, never rebuilt, because there may only ever be one of it. One
+//     vault handle on vault.enc, one timer per reminder and per wake, one chat store, one knowledge
+//     index. workspace.go holds the type and Open; lifecycle.go holds what starts and stops around
+//     it; secrets.go, grantstore.go, notifier.go, voice.go, mcpauth.go hold the pieces.
+//   - DERIVED — everything discovery decides: agents, skills, plugins, MCP servers, the toolset they
+//     add up to and the runtimes over it. It lives in snapshot.go and is replaced WHOLE by Reload,
+//     which is why a workspace can gain a skill or an MCP server without a restart and without
+//     cancelling a running turn. tools.go, plugins.go, mcp.go and prompt.go are what it builds from.
+//
+// policy.go is deliberately its own file: it is the permission rule, and tightening it is a decision
+// rather than a bugfix.
 package workspace
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
-	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/knowledge"
 	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
-	"github.com/efuturetoday/nocturn/internal/mcp"
 	"github.com/efuturetoday/nocturn/internal/memory"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
-	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/tools"
 	"github.com/efuturetoday/nocturn/internal/voice"
@@ -57,33 +67,83 @@ type Host struct {
 }
 
 // Workspace is one isolated stack: its own tools, grants, persona, and chats over the Host.
+//
+// It has two halves, and the line between them is the one question that decides everything about
+// reloading: WHAT MAY NOT EXIST TWICE. The fields below are the durable half — one vault handle, one
+// reminder timer set, one chat store, one knowledge index — built once by Open and never rebuilt.
+// Everything discovery derives lives in `cur` and is replaced whole (see snapshot.go).
 type Workspace struct {
-	name          string
-	dir           string
-	llm           agentkit.LLM
-	tools         agentkit.ToolSet
-	grants        gate.Grants
-	approver      gate.Approver // the out-of-band human; handed to a guarded agent's firing, nil-safe
-	chats         *chat.Manager // user chats
-	agentChats    *chat.Manager // agent runs (agent-store counterpart of chats)
-	userStore     *chat.Store   // the user chat store (behind chats)
-	agentStore    *chat.Store   // agent run transcripts (SourceAgent, behind agentChats)
-	agents        agent.Set
-	agentRuntimes map[string]*runtime.Runtime // one per declared agent (cage+gate+autonomy), by name
-	readOnly      *runtime.Runtime            // orphaned-run runtime: no tools, view an old transcript only
-	sched         *agent.Scheduler
-	reminders     *tools.Reminders  // persistent reminder timers
-	notify        *notifier         // the seam every proactive message leaves through
-	waker         *tools.Waker      // self-continuation timers, bound to the chat manager
-	mem           *memory.Store     // the assistant's durable notes; its index is folded into every prompt
-	knowledge     *knowledge.Store  // the user's own documents; nil when no embedder is configured
-	voice         *voice.Manager    // live spoken sessions, one per device; nil when Host.Live is unset
-	voices        *speaker.Profiles // enrolled voices, for telling this household apart
-	vault         *secret.Vault     // this workspace's own encrypted credential vault; nil when locked
-	accounts      *MCPAuth          // MCP OAuth session orchestration; nil when the vault is locked
-	log           *slog.Logger
-	caps          capabilities // current discovery state; read by Inventory, see inventory.go
+	name       string
+	dir        string
+	llm        agentkit.LLM
+	grants     gate.Grants
+	approver   gate.Approver     // the out-of-band human; handed to a guarded agent's firing, nil-safe
+	chats      *chat.Manager     // user chats
+	agentChats *chat.Manager     // agent runs (agent-store counterpart of chats)
+	userStore  *chat.Store       // the user chat store (behind chats)
+	agentStore *chat.Store       // agent run transcripts (SourceAgent, behind agentChats)
+	reminders  *tools.Reminders  // persistent reminder timers
+	notify     *notifier         // the seam every proactive message leaves through
+	waker      *tools.Waker      // self-continuation timers, bound to the chat manager
+	mem        *memory.Store     // the assistant's durable notes; its index is folded into every prompt
+	knowledge  *knowledge.Store  // the user's own documents; nil when no embedder is configured
+	voice      *voice.Manager    // live spoken sessions, one per device; nil when Host.Live is unset
+	voices     *speaker.Profiles // enrolled voices, for telling this household apart
+	accounts   *MCPAuth          // MCP OAuth session orchestration; nil when the vault is locked
+	log        *slog.Logger
+
+	// title is the display name, separate from name because name is identity — see meta.go.
+	title title
+
+	// The credential stack. It is durable — one vault on one file — and internal/secret is built to
+	// be reconciled rather than rebuilt: the Injector's own doc says bindings and resolvers are
+	// mutated at runtime, and RemoveBindingsFor exists for exactly the uninstall case. So each discovery pass
+	// re-runs the discovery-dependent registrations into these, instead of replacing them.
+	sec workspaceSecrets
+
+	// baseTools is every base tool that discovery does NOT decide — the file/net/notify/wake set plus
+	// reminders, memory, knowledge and whoami, each belonging to a durable object above. Each pass
+	// clones it and appends the one tool discovery does decide, skill_read.
+	baseTools []agentkit.Tool
+
+	// cur is the derived half: agents, skills, plugins, MCP, the toolset and the runtimes. Published
+	// with one atomic store so a reader sees all of one snapshot or all of the other, never a mix —
+	// which is what an inventory read racing a reload used to be. reloadMu makes discover+publish
+	// single-flight, so two devices installing at once queue instead of interleaving.
+	cur      atomic.Pointer[snapshot]
+	reloadMu sync.Mutex
+
+	// The root chat runtime and the no-tools fallback. Both are durable: the root one reads the
+	// current snapshot per turn rather than being rebuilt with it, which is what lets a chat pick up a
+	// newly installed skill in its next message without reopening anything.
+	rt       *runtime.Runtime
+	readOnly *runtime.Runtime
+
+	// retired holds the plugins of assemblies this workspace has replaced, closed at Close.
+	//
+	// A KindWASM plugin compiles its own wazero guest LAZILY, on first call — so a fresh snapshot
+	// holds nothing, and only a plugin actually used under a superseded snapshot has anything to
+	// release. Closing those at reload time would mean guessing when the last call under the old set
+	// finished; keeping them until the workspace closes costs one compiled guest per (reload, plugin
+	// actually called) and needs no guess at all. KindJS plugins share the process-wide QuickJS
+	// engine and hold nothing either way.
+	retiredMu sync.Mutex
+	retired   []*plugin.Plugin
+
+	// stopBg cancels the background work StartAgents owns — the cron scheduler and the document
+	// reconcile — so Close can stop them. A cancel func rather than the context it came from: a
+	// context stored in a struct is the thing to avoid, a shutdown handle is not one. bgClosed
+	// latches so a StartAgents that has not registered yet does not outlive the Close that raced it.
+	// reloaded is closed and replaced by a reload, which is how the scheduler picks up a changed
+	// agent set without anybody holding a context to re-aim.
+	bgMu     sync.Mutex
+	bgClosed bool
+	stopBg   context.CancelFunc
+	reloaded chan struct{}
 }
+
+// path joins a control-plane path under the workspace root.
+func (w *Workspace) path(sub string) string { return filepath.Join(w.dir, sub) }
 
 // Open builds (creating its directory if needed) a workspace named name rooted at dir: it assembles
 // the toolset, the durable grant store, the persona, a gated runtime, and a chat store + manager.
@@ -111,28 +171,33 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// authorized in another workspace is under a different key, file, and injector. A locked vault
 	// (nil master) yields nil injector/scanner: the workspace runs without host-owned credentials.
 	// The old global dataDir/vault.enc is orphaned by this move (greenfield; re-provision per ws).
-	injector, scanner, vault, err := buildWorkspaceSecrets(h.Master, dir, name, wslog)
+	sec, err := buildWorkspaceSecrets(h.Master, dir, name, wslog)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: secrets: %w", name, err)
 	}
-
-	// One diagnostics collector drains every kind's discovery — agents, skills, plugins, MCP all feed
-	// their skipped/shadowed items here, and it is logged once below. A malformed item is skipped
-	// (fail-closed: its authority is simply absent), never fatal.
-	var diag agentkit.Diagnostics
-
-	agents := agent.Discover(filepath.Join(dir, "agents"), &diag)
+	injector, scanner := sec.injector, sec.scanner
 
 	// wake lets a chat schedule its own continuation. One Waker per workspace, folded into the base
 	// tools by Base; it is bound to the chat manager below (Bind) so a fired wake resolves the
-	// invoking chat by id.
-	waker := tools.NewWaker(tools.WithWakeLogger(h.Log))
+	// invoking chat by id. Its store is a control-plane file beside reminders.json — a pending
+	// continuation is state of the same kind, and losing it across a restart was invisible.
+	waker := tools.NewWaker(
+		tools.WithWakeLogger(h.Log),
+		tools.WithWakeStore(filepath.Join(dir, "wakes.json")),
+	)
 	// Every proactive message out of THIS workspace passes through here: it gets the workspace name
 	// stamped on, then routes by presence — the live connection when a device is watching, a push
 	// when none is.
 	notify := &notifier{ws: name, next: h.Notifier, active: h.Active}
 
-	baseTools, err := tools.Base(tools.Config{Secrets: injector, Scanner: scanner, Root: mnt, Notifier: notify, Waker: waker, Logger: wslog.With("component", "tool")})
+	baseTools, err := tools.Base(tools.Config{
+		Secrets:  injector,
+		Scanner:  scanner,
+		Root:     mnt,
+		Notifier: notify,
+		Waker:    waker,
+		Logger:   wslog.With("component", "tool"),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: tools: %w", name, err)
 	}
@@ -147,18 +212,6 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: reminders: %w", name, err)
 	}
 	baseTools = append(baseTools, remindTools...)
-	// Skills: load the workspace's skills/ folder into an agentkit.SkillSet. agentkit surfaces the
-	// catalog (system prompt) and skill_load per top-level session; skill_read (for a skill's bundled
-	// files) is a base tool, so it flows into the cages like the file tools. An invalid skill is
-	// skipped inside Load with a logged warning — never blocks the workspace.
-	skills, skillDirs := skill.Discover(filepath.Join(dir, "skills"), &diag)
-	if len(skillDirs) > 0 {
-		readTool, err := skill.ReadTool(skillDirs)
-		if err != nil {
-			return nil, fmt.Errorf("workspace %q: skill_read: %w", name, err)
-		}
-		baseTools = append(baseTools, readTool)
-	}
 	// Memory: the assistant's own durable notes. Its folder is a SIBLING of mnt, so the file tools
 	// cannot reach it — memory_write is the only writer and it asks the human. The tools join the base
 	// set, so they flow into the agent cages exactly like skill_read; the index is folded into the
@@ -226,11 +279,6 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		baseTools = append(baseTools, whoami)
 	}
 
-	base, err := agentkit.NewToolSet(baseTools...)
-	if err != nil {
-		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
-	}
-
 	// Control plane, beside the grants: a voiceprint is not something a file tool should reach.
 	voices, err := speaker.OpenProfiles(filepath.Join(dir, "voices.json"))
 	if err != nil {
@@ -242,37 +290,6 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: grants: %w", name, err)
 	}
 
-	toolset, err := buildTools(base, h.LLM, agents, mem)
-	if err != nil {
-		return nil, fmt.Errorf("workspace %q: toolset: %w", name, err)
-	}
-
-	// Discover + install plugins as top-level tools, each caged to a subset of the base tools and
-	// gated exactly like the model's own calls. Their credentials are bound host-side on the injector.
-	pluginNames, err := installPlugins(dir, base, toolset, injector, &diag)
-	if err != nil {
-		return nil, fmt.Errorf("workspace %q: plugins: %w", name, err)
-	}
-
-	// Discover + connect the remote MCP servers declared in <dir>/mcp/*.json and fold their tools in
-	// (as <server>_<tool>), each gated on the net host-allowlist like http_read/http_write (ADR-9).
-	mcpStatus := installMCP(dir, toolset, injector, scanner, &diag, wslog.With("component", "mcp"))
-
-	// The persona is resolved ONCE: the assistant's identity must not shift mid-run. Only the facts
-	// around it are live, which is why the prompt goes in as a function rather than a string.
-	persona := resolvePersona(dir, h.Log)
-	rt := runtime.New(h.LLM,
-		runtime.WithTools(toolset),
-		runtime.WithSkills(skills),
-		runtime.WithGate(policy(), gs, h.Approver),
-		runtime.WithGateLogger(agentkit.SlogLogger(wslog)), // trace gate allow/deny/ask with ws+chat
-		runtime.WithSession(
-			agentkit.WithSystemFunc(func() string { return composePrompt(persona, mem, hasTool(toolset)) }),
-			agentkit.WithTimeout(turnTimeout),
-			agentkit.WithLogger(agentkit.SlogLogger(wslog)),
-		),
-	)
-
 	userStore, err := chat.NewStore(filepath.Join(dir, "chats"))
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: chat store: %w", name, err)
@@ -283,124 +300,106 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	}
 
 	w := &Workspace{
-		voices:    voices,
-		knowledge: knowledgeStore,
-		name:      name,
-		dir:       dir,
-		llm:       h.LLM,
-		tools:     toolset,
-		grants:    gs,
-		approver:  h.Approver,
-		// User chats all spin under the one workspace root runtime — the resolver is a constant.
-		chats:      chat.NewManager(func(string) *runtime.Runtime { return rt }, userStore, wslog),
+		voices:     voices,
+		knowledge:  knowledgeStore,
+		name:       name,
+		dir:        dir,
+		llm:        h.LLM,
+		grants:     gs,
+		approver:   h.Approver,
 		userStore:  userStore,
 		agentStore: agentStore,
-		agents:     agents,
 		reminders:  reminders,
 		notify:     notify,
 		waker:      waker,
 		mem:        mem,
-		vault:      vault,
 		log:        wslog,
+		sec:        sec,
+		baseTools:  baseTools,
+		reloaded:   make(chan struct{}),
 	}
+
+	w.title.set(readMeta(dir).Title)
+
+	// The first snapshot: discovery, the toolset, the per-agent runtimes. Everything above is durable and stays
+	// for the life of the workspace; everything this builds can be rebuilt at any time. It comes
+	// before the consumers below because they read through w.snapshot() — a voice driver caging
+	// itself, for one, does so the moment it is built.
+	if err := w.Reload(); err != nil {
+		// This workspace is being thrown away, and nothing will ever call Close on it — so the wasm
+		// guests the failed pass compiled have to go here. It is the one error path in Open that a
+		// running daemon reaches more than once: Registry.Create lands on it whenever somebody adds a
+		// workspace whose folders do not assemble, and a leak per attempt would accumulate.
+		//
+		// Only the plugins. Everything built above holds no OS handle to give back — the vault and both
+		// chat stores read and write on demand rather than keeping a file open, the knowledge watch is
+		// started by the caller and not here, and the reminder and wake timers are not armed until
+		// Restore below.
+		w.closePlugins()
+		return nil, err
+	}
+
+	// The root runtime is DURABLE and asks the current snapshot for its tools, skills and persona once
+	// per turn. That is the whole reload story for a user chat: install a skill mid-conversation and
+	// the very next message has it, with no session to reopen and no turn interrupted — a turn is
+	// handed one set at its start and works with it throughout, so a tool can never vanish between two
+	// calls the model already planned together.
+	w.rt = runtime.New(h.LLM,
+		runtime.WithToolsFunc(func() agentkit.ToolSet { return w.snapshot().tools }),
+		runtime.WithSkillsFunc(func() agentkit.SkillSet { return w.snapshot().skills }),
+		runtime.WithGate(policy(), gs, h.Approver),
+		runtime.WithGateLogger(agentkit.SlogLogger(wslog)), // trace gate allow/deny/ask with ws+chat
+		runtime.WithSession(
+			agentkit.WithSystemFunc(func() string {
+				a := w.snapshot()
+				return composePrompt(a.persona, w.mem, hasTool(a.tools))
+			}),
+			agentkit.WithTimeout(turnTimeout),
+			agentkit.WithLogger(agentkit.SlogLogger(wslog)),
+		),
+	)
+	// The runtime a run whose agent was deleted falls back to: no tools, so its transcript still opens
+	// but it cannot act. Durable because it has nothing discovery could change.
+	w.readOnly = runtime.New(h.LLM, runtime.WithGate(policy(), gs, nil))
+
+	// User chats all spin under that one runtime — the resolver is a constant again.
+	w.chats = chat.NewManager(func(string) *runtime.Runtime { return w.rt }, userStore, wslog)
+	// An agent run spins under its OWNING agent's runtime, resolved from the persisted Meta.Agent at
+	// the moment the run opens — and unlike a chat it KEEPS that one. See snapshot.agentRuntimes.
+	w.agentChats = chat.NewManager(func(id string) *runtime.Runtime {
+		if art, ok := w.snapshot().agentRuntimes[w.agentStore.OwnerOf(id)]; ok {
+			return art
+		}
+		return w.readOnly
+	}, agentStore, wslog)
+
 	// The MCP OAuth orchestrator shares the master + this workspace's shard routing, so an account a
 	// device connects over the WebSocket lands in the same folder shard the daemon reads at boot. Only
 	// when unlocked — a locked vault cannot store a token, so there is nothing to orchestrate.
 	if h.Master != nil {
 		w.accounts = NewMCPAuth(h.Master, dir, name)
 	}
-	// One static runtime per declared agent (its cage + gate + autonomy), built once — Autonomy is a
-	// declaration property, so a run's authority never depends on when it fires. The agent manager's
-	// resolver maps a run to its owner's runtime via the persisted Meta.Agent; a run whose agent was
-	// deleted resolves to readOnly (no tools) so its transcript still opens but it cannot act.
-	w.agentRuntimes = make(map[string]*runtime.Runtime, len(agents))
-	for _, a := range agents.All() {
-		art, err := w.agentRuntime(base, a)
-		if err != nil {
-			return nil, fmt.Errorf("workspace %q: %w", name, err)
-		}
-		w.agentRuntimes[a.Name] = art
-	}
-	w.readOnly = runtime.New(h.LLM, runtime.WithGate(policy(), gs, nil))
-	w.agentChats = chat.NewManager(func(id string) *runtime.Runtime {
-		if art, ok := w.agentRuntimes[w.agentStore.OwnerOf(id)]; ok {
-			return art
-		}
-		return w.readOnly
-	}, agentStore, wslog)
 	// Bind wake to BOTH managers: a fired wake resumes its chat by id in the store that owns it — an
 	// agent run's continuation must re-open in the agent manager (its own runtime + store), not spawn
 	// a stray user chat under the same id.
 	waker.Bind(sessionRouter{user: w.chats, agent: w.agentChats, agentStore: agentStore})
 	w.startVoice(h.Live, h.Approver)
-	w.sched = agent.NewScheduler(agents, wslog, func(ctx context.Context, a agent.Agent) {
-		// A scheduled firing is fire-and-forget; the run streams + persists like any chat. Surface only
-		// a start-time rejection (unknown agent / shutting down) — the run's own errors land in its
-		// transcript.
-		if _, err := w.FireAgent(ctx, a.Name, "Run your scheduled task now."); err != nil {
-			wslog.With("component", "scheduler").Error("scheduled agent failed", "agent", a.Name, "err", err)
-		}
-	})
 	// Bound any existing agent-run backlog (a long-running cron agent accumulates thousands otherwise);
 	// FireAgent keeps each agent capped from here.
 	w.pruneAgentRuns()
-	// Re-arm persisted reminders (overdue ones fire promptly) now the workspace is wired.
+	// Re-arm persisted reminders and wakes (overdue ones fire promptly) now the workspace is wired.
+	// Both come AFTER waker.Bind above: an overdue wake fires the moment its timer is armed, and
+	// firing consumes it, so arming before the lookup seam exists would drop exactly what the store
+	// is there to keep.
 	reminders.Restore()
-	// Every kind's discovery skips (bad agent/skill/plugin/server) drained through the one collector,
-	// logged uniformly here — a single place an operator scans for what did NOT load and why.
-	for _, d := range diag.All() {
-		wslog.With("component", "discovery").Warn("skipped", "subject", d.Subject, "detail", d.Message)
-	}
-	// One readiness line stating what the workspace discovered — so an operator sees the assembled
-	// stack (agents/skills/plugins/tools) at a glance instead of inferring it from behavior.
-	wslog.With("component", "workspace").Info("workspace opened",
-		"agents", len(agents), "skills", len(skillDirs), "plugins", len(pluginNames),
-		"mcp", len(mcpStatus), "tools", len(toolset), "skipped", diag.Len())
-
-	// Record what discovery found. Inventory derives the rest on demand, so this is the only place
-	// that has to change when something starts re-discovering.
-	w.caps.set(mcpStatus, pluginNames, slices.Sorted(maps.Keys(skillDirs)))
+	waker.Restore()
 	return w, nil
 }
 
-// toolNames lists a toolset's tools, sorted — a map has no order, and a list that reshuffles itself
-// between two looks is unreadable.
-func toolNames(ts agentkit.ToolSet) []string {
-	out := make([]string, 0, len(ts))
-	for _, s := range ts.Specs() {
-		out = append(out, s.Name)
-	}
-	slices.Sort(out)
-	return out
-}
-
-// OpenAll opens every workspace under root (each subdirectory is one, by name), always including a
-// "main" so a fresh install and the terminal have a default. It is the daemon's workspace registry.
-func OpenAll(h Host, root string) (map[string]*Workspace, error) {
-	entries, err := os.ReadDir(root)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-	spaces := map[string]*Workspace{}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		ws, err := Open(h, e.Name(), filepath.Join(root, e.Name()))
-		if err != nil {
-			return nil, err
-		}
-		spaces[e.Name()] = ws
-	}
-	if _, ok := spaces[DefaultWorkspace]; !ok {
-		ws, err := Open(h, DefaultWorkspace, filepath.Join(root, DefaultWorkspace))
-		if err != nil {
-			return nil, err
-		}
-		spaces[DefaultWorkspace] = ws
-	}
-	return spaces, nil
-}
+// SkillsDir is where this workspace's skills live. Exported because managing them — listing, reading,
+// switching one off — is the consumer's job, the same way discovery is: internal/skill owns the
+// format and the rules, the workspace owns where they sit.
+func (w *Workspace) SkillsDir() string { return w.path("skills") }
 
 // Name returns the workspace name.
 func (w *Workspace) Name() string { return w.name }
@@ -445,265 +444,4 @@ func (w *Workspace) MarkRead(kind, id string) {
 		return
 	}
 	_ = w.userStore.MarkRead(id)
-}
-
-// buildTools assembles the workspace toolset: the base tools plus code_run (the root chat's cage),
-// and each declared agent exposed as a sub-agent tool scoped to its OWN cage — its filtered subset of
-// the base tools, plus code_run only if the agent declares it, dispatching over that same subset.
-// code_run is woven per cage (tools.Compose), so a script never reaches past the cage it runs in.
-func buildTools(base agentkit.ToolSet, llm agentkit.LLM, agents agent.Set, mem *memory.Store) (agentkit.ToolSet, error) {
-	// Root chat cage: every base tool + code_run dispatching over them.
-	rootSet, err := tools.Compose(base, true)
-	if err != nil {
-		return agentkit.ToolSet{}, err
-	}
-	all := make([]agentkit.Tool, 0, len(rootSet)+len(agents.All()))
-	for _, t := range rootSet {
-		all = append(all, t)
-	}
-
-	for _, a := range agents.All() {
-		cage, err := agentCage(base, a)
-		if err != nil {
-			return agentkit.ToolSet{}, err
-		}
-		// The sub-agent's prompt carries the memory index too, but only the part of it its own cage
-		// can maintain — AgentTool applies caller options after its own, so this wins over the
-		// WithSystem(a.Instructions) it sets internally.
-		sub := agentkit.AgentTool(
-			agentkit.Agent{Name: a.Name, Instructions: a.Instructions, Effort: a.Effort},
-			llm, cage,
-			agentkit.WithSystemFunc(func() string { return composePrompt(a.Instructions, mem, a.Matches) }),
-		)
-		all = append(all, sub)
-	}
-	return agentkit.NewToolSet(all...)
-}
-
-// agentCage is the toolset one declared agent may act through: its filtered subset of the base
-// tools, plus code_run only when it declares it, dispatching over exactly that subset.
-//
-// It is COMPOSED from base rather than selected out of an already-composed set, and that is the
-// whole authority story. Selecting by name from the workspace toolset would find the root code_run
-// — whose dispatch set is the full base, captured when it was built — so an agent declaring
-// [file_read, code_run] would list two tools and have a script that reaches file_write, http_write
-// and memory_write. Both the sub-agent tool and a fired run go through here, so the cage cannot
-// differ between the two ways of reaching the same agent.
-// The name goes on the error here rather than at either call site, so neither can forget it: a
-// workspace with five agents that fails to compose one of them has to say which.
-func agentCage(base agentkit.ToolSet, a agent.Agent) (agentkit.ToolSet, error) {
-	cage, err := tools.Compose(base.Select(a.Matches), a.Matches(tools.CodeRunTool))
-	if err != nil {
-		return agentkit.ToolSet{}, fmt.Errorf("agent %q: cage: %w", a.Name, err)
-	}
-	return cage, nil
-}
-
-// installPlugins discovers the plugins under <dir>/plugins and folds each one's tools into the
-// workspace toolset (as top-level <plugin>_<tool> tools, refusing a name collision), then binds its
-// declared credentials host-side on the injector under the plugin's owner. A plugin's guest can only
-// dispatch to the base tools its manifest lists — its cage — and every action it takes is gated the
-// same way the model's own calls are. A credential value lives in the vault under the (lowercased)
-// credential name; a missing value simply means the plugin runs unauthenticated.
-// It returns the names it installed, so the UI can name them rather than count them.
-func installPlugins(dir string, base, toolset agentkit.ToolSet, inj *secret.Injector, diag *agentkit.Diagnostics) ([]string, error) {
-	plugins := plugin.Discover(filepath.Join(dir, "plugins"), base, diag)
-	var names []string
-	for _, p := range plugins.All() {
-		pts, err := p.Tools()
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range pts {
-			n := t.Spec().Name
-			if _, dup := toolset[n]; dup {
-				return nil, fmt.Errorf("plugin %q tool %q collides with an existing tool", p.Name(), n)
-			}
-			toolset[n] = t
-		}
-		names = append(names, p.Name())
-		if inj != nil {
-			owner := plugin.Owner(p.Name())
-			for _, c := range p.Credentials() {
-				inj.AddBinding(owner, secret.Binding{
-					Secret: plugin.SecretName(p.Name(), c.Name), // owner-namespaced: no cross-plugin key collision
-					Host:   c.Host,
-					Header: c.Header,
-					Prefix: c.Prefix,
-				})
-			}
-		}
-	}
-	return names, nil
-}
-
-// mcpSetupTimeout bounds the startup handshake + tools/list for one MCP server.
-const mcpSetupTimeout = 30 * time.Second
-
-// installMCP connects the remote MCP servers declared in <dir>/mcp/*.json and folds each server's
-// tools into the workspace toolset (as <server>_<tool>, refusing a name collision). Discovery
-// (Connect + tools/list) runs on a bounded context with NO gate machinery installed — so the
-// startup handshake never prompts; the runtime chat turn installs the gate, so a later
-// model-invoked MCP call asks the human on the net axis exactly like http_read/http_write. A server
-// that fails to load/connect/list is logged and skipped, never bricking the workspace (like a flaky
-// plugin). Credentials are token (a bearer the operator seeded in the vault under mcp.SecretName)
-// or public; interactive credential entry and OAuth wiring are a later slice.
-// It reports one MCPStatus per DECLARED server, connected or not: a server that was configured and
-// did not come up is the single most useful thing this list can say, and a count cannot say it.
-func installMCP(dir string, toolset agentkit.ToolSet, inj *secret.Injector, scanner *secret.Scanner, diag *agentkit.Diagnostics, log *slog.Logger) []MCPStatus {
-	servers := mcp.Discover(filepath.Join(dir, "mcp"), diag)
-	var out []MCPStatus
-	for _, srv := range servers.All() {
-		st := MCPStatus{Name: srv.Name, URL: srv.URL, State: MCPFailed}
-		conn, err := mcp.NewConn(srv, inj, scanner)
-		if err != nil {
-			log.Warn("mcp server skipped (bad config)", "server", srv.Name, "err", err)
-			st.Note = "bad config: " + err.Error()
-			out = append(out, st)
-			continue
-		}
-		conn.SetLogger(log)
-		ctx, cancel := context.WithTimeout(context.Background(), mcpSetupTimeout)
-		mtools, err := connectMCP(ctx, conn)
-		cancel()
-		if err != nil {
-			var needAuth *mcp.AuthRequiredError
-			if errors.As(err, &needAuth) {
-				// The server wants OAuth and isn't authorized yet — not a failure, an action for the
-				// operator. The daemon cannot open a browser; the interactive flow is the CLI.
-				log.Info("mcp server needs authorization", "server", srv.Name, "action", "run: nocturn auth "+srv.Name)
-				st.State, st.Note = MCPNeedsAuth, "run: nocturn auth "+srv.Name
-			} else {
-				log.Warn("mcp server skipped", "server", srv.Name, "err", err)
-				st.Note = err.Error()
-			}
-			out = append(out, st)
-			continue
-		}
-		clash := false
-		for _, t := range mtools {
-			if _, dup := toolset[t.Spec().Name]; dup {
-				log.Warn("mcp tool name collides, skipping server", "server", srv.Name, "tool", t.Spec().Name)
-				st.Note = "tool name " + t.Spec().Name + " already taken"
-				clash = true
-				break
-			}
-		}
-		if clash {
-			out = append(out, st)
-			continue
-		}
-		for _, t := range mtools {
-			toolset[t.Spec().Name] = t
-		}
-		st.State, st.Tools = MCPConnected, len(mtools)
-		out = append(out, st)
-		log.Debug("mcp server connected", "server", srv.Name, "tools", len(mtools))
-	}
-	return out
-}
-
-// connectMCP performs one server's discovery (handshake + tools/list) on the setup ctx.
-func connectMCP(ctx context.Context, conn *mcp.Conn) ([]agentkit.Tool, error) {
-	if err := conn.Connect(ctx); err != nil {
-		return nil, err
-	}
-	return conn.Tools(ctx)
-}
-
-// policy is the workspace-root policy — the one a chat the human is watching runs under: the net and
-// file kinds ask; every other Kind runs free.
-//
-// The recall on an ask is a CEILING, not a decision — gate.Check takes min(ceiling, what the human
-// chose). RecallAlways here is therefore not "remember everything forever"; it is "the human may
-// choose forever, and the approver offers it". A lower ceiling would leave both approvers showing an
-// Always button that silently resolved to a session grant, which is worse than not offering it: the
-// person believes they answered a question once and for all, and is asked again tomorrow.
-//
-// memory is deliberately NOT asked here. A memory write is not an effect in the world; its risk is
-// that untrusted text becomes durable context nobody looks at again. In an interactive chat the
-// human already sees the call in the transcript as it happens, so an approval prompt buys "before"
-// instead of "after" and nothing else. Where nobody is watching it buys the whole thing — see
-// agentPolicy.
-func policy() gate.Policy {
-	return gate.PolicyFunc(func(a gate.Action) gate.Ruling {
-		switch a.Kind {
-		case tools.NetKind, tools.FileKind:
-			return gate.AskWith(gate.RecallAlways)
-		default:
-			return gate.Allowed()
-		}
-	})
-}
-
-// agentPolicy is the workspace policy plus the one kind an unattended run must not exercise
-// silently: memory. A cron agent firing at 6am writes into the store that is folded into EVERY
-// future prompt, in every chat, with no human reading its transcript — so it asks out of band, and
-// with no device wired the missing approver denies it fail-closed.
-//
-// The ceiling is the same as the root's, and for the same reason: a human answering "always" for
-// "this briefing agent may write briefings/*" is answering a standing question, and the whole point
-// of asking out of band is that a person is deciding. Capping it here would ask them again every
-// morning while showing a button that said otherwise.
-func agentPolicy() gate.Policy {
-	base := policy()
-	return gate.PolicyFunc(func(a gate.Action) gate.Ruling {
-		if a.Kind == memory.Kind {
-			return gate.AskWith(gate.RecallAlways)
-		}
-		return base.Decide(a)
-	})
-}
-
-// composePrompt builds a session's system prompt: the base identity (the workspace persona, or an
-// agent's instructions) plus the live memory index. has reports whether a name is in the runner's
-// cage, so the block is omitted for a runner that cannot touch memory at all — showing an agent
-// facts it has no tool to maintain would burn tokens and leak the user's notes into a cage that was
-// deliberately narrowed.
-//
-// An empty memory yields the base prompt unchanged: a fresh workspace pays nothing, and the model
-// still learns the capability exists from memory_write's description.
-func composePrompt(base string, mem *memory.Store, has func(name string) bool) string {
-	canUseMemory := has("memory_read") || has("memory_write")
-	if mem == nil || !canUseMemory {
-		return base
-	}
-	index := mem.Index()
-	if index == "" {
-		return base
-	}
-	return base + "\n\n<memory note=\"what you have chosen to remember about this user; the links are files you can memory_read\">\n" +
-		index + "\n</memory>"
-}
-
-// hasTool adapts a ToolSet to composePrompt's membership test.
-func hasTool(ts agentkit.ToolSet) func(string) bool {
-	return func(name string) bool {
-		_, ok := ts[name]
-		return ok
-	}
-}
-
-// defaultPersona is the built-in system prompt used when a workspace has no PERSONA.md.
-const defaultPersona = "You are nocturn, a concise, helpful assistant. Reach for a tool when it answers " +
-	"the question better than you can, and say what you did in one line rather than narrating a plan first."
-
-// resolvePersona returns the workspace system prompt: the PERSONA.md override in the workspace root
-// if present and non-empty, else defaultPersona. PERSONA.md lives in the ROOT — control-plane, never
-// a tool-reachable path — so the model can neither read nor rewrite its own identity; a self-writable
-// persona would be a prompt-injection vector onto the assistant itself.
-func resolvePersona(dir string, log *slog.Logger) string {
-	data, err := os.ReadFile(filepath.Join(dir, "PERSONA.md"))
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			// A real read error (permissions, I/O) on an existing PERSONA.md must not
-			// silently swap in the wrong identity — surface it rather than mask it.
-			log.Warn("workspace: reading PERSONA.md, using default", "dir", dir, "err", err)
-		}
-		return defaultPersona
-	}
-	if body := strings.TrimSpace(string(data)); body != "" {
-		return body
-	}
-	return defaultPersona
 }

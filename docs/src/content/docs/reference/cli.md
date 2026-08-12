@@ -30,8 +30,16 @@ the default workspace, not on all of them.
 | Command | What it does |
 |---|---|
 | `nocturn` | The terminal assistant, in the default workspace. Also starts that workspace's **cron agents** — scheduling lives in the process, not in the server. |
-| `nocturn serve [--addr :8080]` | The [WebSocket server](/nocturn/guides/remote-access/) the app and satellites connect to. `NOCTURN_ADDR` sets the default. This is what keeps agents running once you close the terminal. |
+| `nocturn serve [--host] [--port] [--no-web]` | The [WebSocket server](/nocturn/guides/remote-access/) the app, the browser UI and satellites connect to. `--host` picks the interface (empty = all, `127.0.0.1` = this machine only), `--port` the port; `NOCTURN_HOST` and `NOCTURN_PORT` set the defaults. `--no-web` serves the protocol without the browser UI. This is what keeps agents running once you close the terminal. |
+| `nocturn reload [-w ws] [--addr :8080]` | Re-read a workspace's agents, skills, plugins and MCP servers on the **running** server, and print what it holds afterwards. There is no watcher on those folders — a ticker would re-run every MCP handshake against other people's servers on a schedule, and a filesystem watcher means a dependency, recursive watch management and events dropped under load — so it is asked for. Conversations already open keep running; what changed is there from their next message. |
+| `nocturn pair [--open] [--addr :8080]` | Mint a pairing code on the **running** server and print it with a one-click link. Reads the server's own 0600 credential, so it works whenever the server is up — including over SSH on a headless box, long after the code printed at startup expired. `--open` launches a browser. |
 | `nocturn voice [--port 8788] [-w workspace]` | A **PoC harness**, in its own words: a browser page for testing the voice path on loopback, with no pairing. Not a way to use Nocturn. |
+
+`NOCTURN_CATALOG_URL` points the server at a curated catalog of skills and MCP servers, which the app
+then browses and installs from. It must be `https://`, unless it is loopback for local development.
+Unset — the default — the library is **absent**, not empty: nothing is fetched and no request leaves
+the machine for it. See [Skills](/nocturn/guides/skills/) and
+[Remote MCP servers](/nocturn/guides/remote-mcp/).
 
 ## Voice
 

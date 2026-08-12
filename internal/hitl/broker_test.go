@@ -731,3 +731,33 @@ func TestDetach_RemovesSink(t *testing.T) {
 		}
 	})
 }
+
+// A device whose class may not approve is handed NO broker at all, so its connection holds a nil
+// *Broker for its whole life and calls the bookkeeping methods on it. They must do nothing rather
+// than explode: this used to be a guard at every call site, and the one site that forgot —
+// presence.set — turned a single message from the least-trusted class into a panic that killed the
+// connection.
+//
+// Ask is deliberately absent here. What an absent approver ANSWERS is a permission decision, and
+// gate owns it; a nil-tolerant answer in the broker would be a second place deciding the same thing.
+func TestNilBroker_BookkeepingIsANoOp(t *testing.T) {
+	var b *hitl.Broker // exactly what serve hands a connection that may not approve
+
+	b.Attach(t.Context(), nopSink{})
+	b.SetActive(t.Context(), nopSink{}, true)
+	b.SetActive(t.Context(), nopSink{}, false)
+	b.Resolve("some-id", "allow")
+	b.Detach(nopSink{})
+
+	if b.AnyActive() {
+		t.Error("a nil broker reported somebody in the foreground")
+	}
+}
+
+// nopSink is a Sink that records nothing — a nil broker must never reach it.
+type nopSink struct{}
+
+var _ hitl.Sink = nopSink{}
+
+func (nopSink) Approval(context.Context, hitl.Approval) {}
+func (nopSink) Resolved(context.Context, string)        {}

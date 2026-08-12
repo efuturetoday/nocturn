@@ -149,6 +149,18 @@ type ChatListResult struct {
 	Chats []chat.Meta `json:"chats"`
 }
 
+// requireKind enforces that a store-addressed chat command names a valid store — "user" or "agent".
+// Kind is mandatory (never defaulted): the client holds it per conversation and sends it on every
+// chat.* command, so a missing or unknown kind is a client bug, rejected rather than silently treated
+// as user chats.
+func (c *conn) requireKind(ctx context.Context, kind string) bool {
+	if kind == "user" || kind == "agent" {
+		return true
+	}
+	c.badRequest(ctx, "missing or invalid kind (want \"user\" or \"agent\")")
+	return false
+}
+
 // chat dispatches a chat.* action.
 func (c *conn) chat(ctx context.Context, cmd string, data []byte) {
 	switch cmd {

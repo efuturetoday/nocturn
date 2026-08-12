@@ -45,6 +45,29 @@ var voiceCage = map[string]bool{
 	"whoami":           true,
 }
 
+// voiceRider is appended to the workspace persona for spoken sessions. A persona written for a
+// screen does not survive contact with a speaker: there is no formatting, no scrollback, and no
+// visible spinner telling the user that something is happening.
+//
+// The waiting instruction is the load-bearing one. Declaring tools non-blocking lets the model keep
+// talking while a call is outstanding — but it only MAY, it does not have to, and with nothing else
+// pending it simply goes quiet. Silence during an approval is the failure mode that teaches people
+// to grant permanently just to make it stop, so the model is told to fill it and to name what it is
+// waiting on.
+const voiceRider = `
+You are speaking out loud, not writing. Keep replies short and plain — no lists, no markdown, no
+formatting of any kind. Say numbers, dates and units the way a person would say them.
+
+A line starting with "[system]" is not the person speaking. It is a fact about what is happening
+right now that you could not otherwise know. Use it, but never read it out verbatim.
+
+When something you asked for has not come back yet, mention it ONCE, briefly, and then let it go.
+Do not guess why it is taking time — if there is a reason you need to pass on, a [system] line will
+tell you. Do not repeat that you are still waiting; the person heard you the first time. Carry on
+with whatever they want to talk about, and report the outcome when it arrives.
+
+If something is refused, say so plainly and offer what you can still do.`
+
 // addressing tells the model what it may assume about who is speaking.
 //
 // Two different sentences rather than one with a hole in it: an unrecognised speaker is a state the
@@ -139,29 +162,6 @@ func VoiceDriver(opts ...voice.Option) VoiceOption {
 	return func(c *voiceConfig) { c.driver = append(c.driver, opts...) }
 }
 
-// voiceRider is appended to the workspace persona for spoken sessions. A persona written for a
-// screen does not survive contact with a speaker: there is no formatting, no scrollback, and no
-// visible spinner telling the user that something is happening.
-//
-// The waiting instruction is the load-bearing one. Declaring tools non-blocking lets the model keep
-// talking while a call is outstanding — but it only MAY, it does not have to, and with nothing else
-// pending it simply goes quiet. Silence during an approval is the failure mode that teaches people
-// to grant permanently just to make it stop, so the model is told to fill it and to name what it is
-// waiting on.
-const voiceRider = `
-You are speaking out loud, not writing. Keep replies short and plain — no lists, no markdown, no
-formatting of any kind. Say numbers, dates and units the way a person would say them.
-
-A line starting with "[system]" is not the person speaking. It is a fact about what is happening
-right now that you could not otherwise know. Use it, but never read it out verbatim.
-
-When something you asked for has not come back yet, mention it ONCE, briefly, and then let it go.
-Do not guess why it is taking time — if there is a reason you need to pass on, a [system] line will
-tell you. Do not repeat that you are still waiting; the person heard you the first time. Carry on
-with whatever they want to talk about, and report the outcome when it arrives.
-
-If something is refused, say so plainly and offer what you can still do.`
-
 // Voice builds a driver for a spoken session over live, caged by voiceCage and gated by
 // voicePolicy. It shares this workspace's durable grants and its persona, so a voice conversation
 // is the same assistant the terminal and the app talk to — reachable through a narrower door.
@@ -173,7 +173,7 @@ func (w *Workspace) Voice(live agentkit.LiveLLM, opts ...VoiceOption) *voice.Dri
 	for _, o := range opts {
 		o(&cfg)
 	}
-	caged := w.tools.Select(func(name string) bool { return voiceCage[name] })
+	caged := w.snapshot().tools.Select(func(name string) bool { return voiceCage[name] })
 	persona := resolvePersona(w.dir, w.log) + "\n" + voiceRider
 	driver := append([]voice.Option{
 		// Built per session, so a spoken conversation sees the notes the assistant has written since
@@ -214,7 +214,7 @@ func (w *Workspace) VoiceSessions() *voice.Manager { return w.voice }
 // session is actually able to do. An always-on microphone should not have to be taken on trust.
 func (w *Workspace) VoiceTools() []string {
 	var names []string
-	for _, spec := range w.tools.Select(func(name string) bool { return voiceCage[name] }).Specs() {
+	for _, spec := range w.snapshot().tools.Select(func(name string) bool { return voiceCage[name] }).Specs() {
 		names = append(names, spec.Name)
 	}
 	return names

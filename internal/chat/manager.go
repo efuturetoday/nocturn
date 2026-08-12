@@ -63,7 +63,13 @@ type live struct {
 // by the run's Meta.Agent), which is what lets one agent run per its own cage/gate/persona. Call
 // CloseAll on shutdown to stop the reaper and close every live session.
 func NewManager(resolve func(id string) *runtime.Runtime, store *Store, log *slog.Logger) *Manager {
-	m := &Manager{resolve: resolve, store: store, log: log.With("component", "chat"), active: map[string]*live{}, stop: make(chan struct{})}
+	m := &Manager{
+		resolve: resolve,
+		store:   store,
+		log:     log.With("component", "chat"),
+		active:  map[string]*live{},
+		stop:    make(chan struct{}),
+	}
 	go m.reap()
 	return m
 }
@@ -89,6 +95,15 @@ func (m *Manager) openLocked(id string) *agentkit.Session {
 	if lv := m.active[id]; lv != nil {
 		return lv.sess
 	}
+	// Fail closed after CloseAll. Until a workspace could be deleted while the process ran on, the
+	// only caller of CloseAll was daemon shutdown and this could not be reached; now a connection that
+	// resolved the workspace pointer a moment before it was closed can still arrive here, and without
+	// this it would get a brand-new session whose pump runs forever and whose store writes land in a
+	// directory already renamed into the trash.
+	if m.closed {
+		m.log.Warn("session refused: this chat manager is closed", "chat", id)
+		return nil
+	}
 	// Background, not a request ctx: the session outlives any connection; only Close ends it. The
 	// chat id is stamped on the ctx so the wake tool can resume THIS chat by id — a plain tag, no
 	// resume logic here (the manager stays wake-agnostic).
@@ -113,6 +128,9 @@ func (m *Manager) Submit(id, text string) {
 		lv.input = text
 	}
 	m.mu.Unlock()
+	if sess == nil {
+		return // the manager is closed; openLocked said so
+	}
 	m.touch(id, text)
 	sess.Submit(text)
 }
@@ -124,16 +142,27 @@ func (m *Manager) Submit(id, text string) {
 // background ctx), so a scheduled or manually-triggered run is unaffected by a connection closing.
 // Intended for the agent manager; agentName must be the run's owning agent.
 func (m *Manager) Fire(id, agentName, task string) {
-	if err := m.store.SetOwner(id, agentName); err != nil {
-		m.log.Error("agent run: stamping owner failed", "chat", id, "agent", agentName, "err", err)
-		return
-	}
 	m.mu.Lock()
-	sess := m.openLocked(id) // resolver now sees the owner via OwnerOf
-	if lv := m.active[id]; lv != nil {
-		lv.input = task
+	// The owner is stamped INSIDE the critical section, and before openLocked because the resolver
+	// reads it back through OwnerOf. Outside it, a Fire racing CloseAll would write an owner record
+	// for a manager that is already shut — into a store whose directory a workspace delete may have
+	// moved to .trash — and only then discover there is no session to run it in.
+	var sess *agentkit.Session
+	if !m.closed {
+		if err := m.store.SetOwner(id, agentName); err != nil {
+			m.mu.Unlock()
+			m.log.Error("agent run: stamping owner failed", "chat", id, "agent", agentName, "err", err)
+			return
+		}
+		sess = m.openLocked(id)
+		if lv := m.active[id]; lv != nil {
+			lv.input = task
+		}
 	}
 	m.mu.Unlock()
+	if sess == nil {
+		return // the manager is closed; openLocked said so
+	}
 	m.log.Info("agent run fired", "chat", id, "agent", agentName)
 	m.touch(id, task)
 	sess.Submit(task)

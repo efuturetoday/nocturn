@@ -1,9 +1,10 @@
-import { Component, ChangeDetectionStrategy, inject, computed, DestroyRef } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, computed, signal, DestroyRef } from '@angular/core';
 import { Router } from '@angular/router';
 import { IonContent, IonSpinner, IonFooter, IonSkeletonText, AlertController, ModalController } from '@ionic/angular/standalone';
 import { PairPage } from '../pair/pair.page';
 import { LucideRadio } from '@lucide/angular';
 import { DiscoveryService } from '../../core/services/discovery.service';
+import { DaemonService } from '../../core/services/daemon.service';
 import { ConnectionService } from '../../core/services/connection.service';
 import { AuthService } from '../../core/services/auth.service';
 import { DEMO_BEARER, isDemoUrl } from '../../core/demo/is-demo';
@@ -24,7 +25,22 @@ const RESCAN_MS = 4000;
           <p>Your secure personal assistant</p>
         </div>
 
-        @if (connecting()) {
+        @if (sameOrigin()) {
+          <!-- Served by the daemon: there is exactly one host and we are already at it. -->
+          @if (pairingCancelled()) {
+            <!-- Cancelling used to leave a spinner with no control on it and no way back but a
+                 reload — the whole screen is hidden in same-origin mode, so there was nothing else
+                 to press. -->
+            <div class="results">
+              <button class="host" (click)="pairHere()">
+                <svg lucideRadio [size]="21" />
+                <span class="host-text"><b>Pair this browser</b><small>{{ daemonName() }}</small></span>
+              </button>
+            </div>
+          } @else {
+            <div class="searching"><ion-spinner name="crescent" /><span>Pairing this browser…</span></div>
+          }
+        } @else if (connecting()) {
           <div class="searching"><ion-spinner name="crescent" /><span>Connecting…</span></div>
         } @else {
           <div class="results">
@@ -48,9 +64,11 @@ const RESCAN_MS = 4000;
       </div>
     </ion-content>
 
-    <ion-footer class="manual-footer">
-      <button class="manual" (click)="manual()">Enter server manually</button>
-    </ion-footer>
+    @if (!sameOrigin()) {
+      <ion-footer class="manual-footer">
+        <button class="manual" (click)="manual()">Enter server manually</button>
+      </ion-footer>
+    }
   `,
   styles: `
     ion-content { --background: var(--ion-background-color); }
@@ -112,6 +130,7 @@ const RESCAN_MS = 4000;
 export class DiscoverPage {
   protected readonly discovery = inject(DiscoveryService);
   protected readonly connection = inject(ConnectionService);
+  private readonly daemon = inject(DaemonService);
   private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
   private readonly alerts = inject(AlertController);
@@ -121,12 +140,33 @@ export class DiscoverPage {
     () => this.connection.state() === 'connecting' || this.connection.state() === 'reconnecting',
   );
 
+  /** True once the probe has found a daemon behind this page's own origin (browser builds only). */
+  protected readonly sameOrigin = signal(false);
+
+  /** The pairing sheet was dismissed without pairing, so offer a way back into it. */
+  protected readonly pairingCancelled = signal(false);
+
+  /** The daemon's own name, shown on the retry button so it is clear what is being paired with. */
+  protected readonly daemonName = signal('');
+
   constructor() {
-    // Perpetual discovery: scan now, then re-scan on an interval so the spinner keeps listening
-    // and newly-appearing daemons show up. Cleaned up when the page is destroyed.
-    void this.discovery.scan();
-    const timer = setInterval(() => void this.discovery.scan(), RESCAN_MS);
-    inject(DestroyRef).onDestroy(() => clearInterval(timer));
+    const destroyRef = inject(DestroyRef);
+    void this.daemon.probeLocal().then((info) => {
+      if (info) {
+        // Served by a daemon: there is nothing to discover and nowhere else to go. Skip straight to
+        // pairing with the origin this page came from — scanning the LAN here would offer other
+        // daemons this page cannot be repointed at.
+        this.sameOrigin.set(true);
+        this.daemonName.set(info.name);
+        void this.pairHere();
+        return;
+      }
+      // Perpetual discovery: scan now, then re-scan on an interval so the spinner keeps listening
+      // and newly-appearing daemons show up. Cleaned up when the page is destroyed.
+      void this.discovery.scan();
+      const timer = setInterval(() => void this.discovery.scan(), RESCAN_MS);
+      destroyRef.onDestroy(() => clearInterval(timer));
+    });
   }
 
   protected async manual(): Promise<void> {
@@ -134,7 +174,9 @@ export class DiscoverPage {
       header: 'Enter server',
       inputs: [
         { name: 'host', type: 'text', placeholder: 'IP / host (e.g. 192.168.1.20)' },
-        { name: 'port', type: 'number', placeholder: 'Port', value: '8765' },
+        // The daemon's own default (cmd/nocturn/cli.go, --port). This said 8765 while `serve` bound
+        // 8080, so the one screen that exists for when discovery fails failed too, by default.
+        { name: 'port', type: 'number', placeholder: 'Port', value: '8080' },
       ],
       buttons: [
         { text: 'Cancel', role: 'cancel' },
@@ -143,7 +185,7 @@ export class DiscoverPage {
           handler: (v) => {
             const host = (v.host ?? '').trim();
             if (!host) return false;
-            void this.connect(this.discovery.manualUrl(host, +(v.port || 8765)));
+            void this.connect(this.discovery.manualUrl(host, +(v.port || 8080)));
             return true;
           },
         },
@@ -152,23 +194,40 @@ export class DiscoverPage {
     await alert.present();
   }
 
+  /** Pair with the daemon that served this page. Also the retry after a cancelled sheet. */
+  protected async pairHere(): Promise<void> {
+    this.pairingCancelled.set(false);
+    await this.connect(this.daemon.localUrl());
+  }
+
   protected async connect(url: string): Promise<void> {
-    await this.discovery.remember(url);
+    // A browser served by the daemon has one candidate host and cannot be repointed, so remembering
+    // it would only leave a stale entry to mislead a later LAN session.
+    if (!this.sameOrigin()) await this.discovery.remember(url);
     // The demo has nothing to pair with, so it skips the pairing sheet — but is remembered like any
     // host, which is what lets the connection guard re-enter it after a relaunch.
     let bearer = isDemoUrl(url) ? DEMO_BEARER : await this.auth.bearerFor(url);
     if (!bearer) {
+      // Ask the daemon which way in it has open before offering one. A code is armed only while
+      // nothing in the household can relay a join code, so guessing gets it wrong exactly once per
+      // household — and the wrong guess is a code field for a code that does not exist.
+      const info = await this.daemon.probe(url);
       // Not paired to this daemon yet → pairing overlay; it dismisses with the bearer.
       const modal = await this.modalCtrl.create({
         component: PairPage,
-        componentProps: { url },
+        componentProps: { url, bootstrap: info?.bootstrap ?? true, paired: info?.paired ?? true },
         breakpoints: [0, 0.5, 0.9],
         initialBreakpoint: 0.5,
         handle: true,
       });
       await modal.present();
       const { data } = await modal.onDidDismiss<string>();
-      if (!data) return; // cancelled
+      if (!data) {
+        // Cancelled. In same-origin mode the host list and the manual footer are both hidden, so
+        // without this the page is left as a spinner with nothing on it to press.
+        this.pairingCancelled.set(true);
+        return;
+      }
       bearer = data;
     }
     this.connection.connect(url, bearer);

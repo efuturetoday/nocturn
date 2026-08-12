@@ -6,11 +6,16 @@ description: The serve server, the companion app, pairing a device, and how a ba
 import { Badge } from '@astrojs/starlight/components';
 
 The terminal chat is one way in. The other is the **server**: one command turns a workspace into
-something your phone can talk to over your own network.
+something your phone — or a browser — can talk to over your own network.
 
 ```bash
-nocturn serve            # listens on :8080 by default, or $NOCTURN_ADDR
+nocturn serve                        # every interface, port 8080
+nocturn serve --host 127.0.0.1       # this machine only, nothing on the LAN
+nocturn serve --port 9000            # $NOCTURN_HOST and $NOCTURN_PORT set the defaults
 ```
+
+The same binary serves the browser UI at that address — the same app the phone runs, built into the
+binary. `--no-web` leaves it out and serves only the protocol.
 
 The server is not a cloud service and does not phone home. It listens on your LAN, announces itself
 over Bonjour/DNS-SD as `_nocturn._tcp` so the companion app can find it without you typing an IP,
@@ -21,8 +26,34 @@ and speaks a small tagged-JSON protocol over one WebSocket per device.
 Every connection is gated on a bearer token, and the server never stores the token itself — only its
 SHA-256 hash, compared in constant time. Getting a device its token happens in one of three ways.
 
-**The first device** redeems a bootstrap code that the server prints at startup (`POST /pair`). That
-is the only time a code comes from the machine itself.
+**The first device** redeems a bootstrap code that comes from the machine itself. The server prints
+one at startup while nothing is paired yet, and you can ask for another whenever you like:
+
+```bash
+nocturn pair
+```
+
+```
+pairing code: 481920
+valid for 5m0s, 5 attempts, single use
+
+  in a browser:  http://192.168.1.20:8080/#c=481920
+  in the app:    enter the code on the pairing screen
+```
+
+Open that link and the browser pairs itself — no typing, and the code is scrubbed out of the address
+bar the moment it is used. It rides in the URL *fragment*, which browsers never send to a server, so
+it appears in no log; it is single-use, five minutes and five attempts, so a spent one is worth
+nothing to whoever finds it in history later.
+
+The authority behind `nocturn pair` is the filesystem: it reads a credential the server leaves in its
+own data directory at mode 0600, so being able to open the household means being able to read its
+folder — and anyone who can do that could read the vault instead. Which is also why "the request came
+from localhost" is deliberately *not* the rule. That would be weaker than the file it imitates: 0600
+keeps a second user on the machine out, `127.0.0.1` does not.
+
+Run it as often as you want. The five-minute lifetime is there so a code left on a screen goes stale,
+not to give you a window to catch.
 
 **Every device after that** asks an already-paired one for permission:
 
@@ -41,21 +72,84 @@ already-paired device asks the server to mint a bearer on its behalf (`POST /dev
 over. Letting such a device enrol itself is not the alternative: anything that can enrol itself is
 not being authorised by anyone.
 
+### Taking access back
+
+Settings → Devices lists everything paired, marks which one you are holding, and forgets any of them.
+A forgotten device is disconnected there and then — its open connection is closed, not left to run
+until it next reconnects — and it has to pair again. Forgetting the device you are on is how you sign
+it out, and it drops your own connection with it.
+
+This is the answer to a lost or sold phone, and it needs no shell access to the server — which
+matters, because the moment you need it is rarely the moment you are sitting at that machine.
+
+### Only your own pages may talk to the server
+
+A browser tab on any website can send requests to `192.168.x.x` — the attacker's code runs in a
+browser that is already on your network, so "on the LAN" is not a property the network can check. The
+server therefore accepts browser requests only from its own pages and from the companion app's
+webview, and refuses the rest outright.
+
+Checking the page's origin is not enough on its own, because that check compares where the page came
+from against where it is talking to — and someone who owns a domain name owns both. They point
+`evil.example` at their own server, wait for you to open it, then repoint the name at `192.168.1.20`.
+Your browser now treats their page as belonging to your server. This is called DNS rebinding, and it
+is the usual way a page on the open web reaches something on a home network.
+
+So the server also insists on being addressed by a name nobody else can point at it: an **IP address**
+(there is nothing to resolve, so there is no answer to change), **localhost**, or its **`.local`**
+mDNS name (claiming one of those already requires being on your network). All three are how you reach
+it anyway.
+
+Two setups need naming, once:
+
+```bash
+# A real hostname in front of the server — a reverse proxy, or your own DNS
+NOCTURN_HOSTNAMES=nocturn.example.org nocturn serve
+
+# The app from `ng serve` against a server on another host: the origin carries
+# whatever address you typed, so it cannot be recognised automatically
+NOCTURN_DEV_ORIGINS=http://192.168.1.50:4200 nocturn serve
+```
+
 ## What a device is, and what that lets it do
 
 Every device carries a **class**, which is a fact about the device rather than a list of permissions.
 What a class may do is decided in one place, so the rules can change without rewriting what is
 already stored.
 
-| Class | May answer approvals | May enrol devices |
-|---|---|---|
-| `app` | yes | yes |
-| `appliance` | no | no |
+| Class | May answer approvals | May enrol devices | May record through an appliance | May mint a pairing code |
+|---|---|---|---|---|
+| `app` | yes | yes | yes | no |
+| `web` | yes | yes | no | no |
+| `appliance` | no | no | no | no |
+| `tool` | no | no | yes | yes |
 
 An **appliance** is anything with no authenticated input path — a voice satellite, a doorbell, a car.
 Whoever is present can operate it and none of them identified themselves, so nothing it reports is
 anybody's consent. It is not shown approvals at all: a connection that may not answer one is never
 attached to the approval broker, so there is nothing for it to answer *with*.
+
+A **web** device is a browser holding the page the server itself handed it. It arrived the same way
+the app did — the code on the server's console, or a join code relayed from a device you already
+trust — so there is a person at it and its answer is that person's answer. It stops short at the
+microphone: switching on a speaker in another room from a browser tab is a longer reach than a
+session in browser storage has earned, and nothing the UI does needs it.
+
+The one thing a browser cannot be is the device the *unattended* case rests on. No push service
+carries a web page, so it can only answer while its tab is open. That is why it is a class of its own
+rather than another word for `app` — and why the phone is still what [approvals when nobody is
+looking](#approvals-when-nobody-is-looking) depend on.
+
+The **tool** is the `nocturn` command talking to its own server. It consents to nothing and enrols
+nothing, and the one thing it alone may do is mint a pairing code — because its credential lives in
+the server's data directory at 0600, so holding it already means holding the workspace. Opening a
+door to a house you are standing inside adds no authority; it only makes the door openable again
+later. Deliberately not given to a phone or a browser: if it were, an app would *cover* a tool, and
+could mint one through `POST /devices` — turning a screen in your pocket into disk-equivalent access.
+
+You never pick a class. The server derives it from the platform the client reports, in the same
+single place that decides what a class may do — a device asking to be something more capable than it
+is would be a device authorising itself.
 
 Enrolment follows one rule rather than a list of exceptions: **a device may only enrol a class whose
 abilities its own class already covers.** An appliance therefore enrols nothing, so a stolen
@@ -74,6 +168,35 @@ Two consequences worth knowing:
 - **The first answer wins.** If two devices are shown an approval, whichever answers first resolves
   it; the other is told it was resolved. This is also why an appliance is never shown one — it would
   outrace the phone it exists to defer to.
+
+## In a browser
+
+The server hands out the app as well as the protocol. Open the address it is listening on and you
+get the same application the phone runs — not a cut-down web version of it, the same build, embedded
+in the binary. There is one Angular bundle in the repository, and the chat reducer, the approval
+overlay and the protocol types have exactly one implementation each, so a browser cannot drift from a
+phone.
+
+A page served by the server needs no discovery and no host to type: it came from there, so it
+connects back to where it came from and goes straight to pairing. From then on it is a device like
+any other, with the class and the limits described above.
+
+```bash
+nocturn serve --host 127.0.0.1   # the UI on this machine only
+nocturn serve --no-web           # the protocol, without the UI
+```
+
+Two things a browser cannot do, both for the same reason — it is a page, not an installed app:
+
+- **It is never woken.** No push service carries a web page, so approvals reach it only while the tab
+  is open.
+- **Connecting an MCP account** needs the OAuth redirect to come back to us, and that redirect is a
+  custom URL scheme the operating system routes to an installed app. Do it from the phone, or with
+  `nocturn auth <provider>` on the machine running the server.
+
+There is no TLS yet, so the connection — and the token the browser stores — is plaintext on your
+network. It is the same exposure the phone has had all along, but a browser makes it easier to reach
+from more places; on a network you do not control, prefer `--host 127.0.0.1`.
 
 ## Speaking, on the same connection <Badge text="WIP" variant="caution" />
 

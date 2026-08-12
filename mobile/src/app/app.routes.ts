@@ -28,6 +28,8 @@ export const routes: Routes = [
       { path: 'home', loadComponent: () => import('./features/home/home.page').then((m) => m.HomePage) },
       { path: 'reminders', loadComponent: () => import('./features/reminders/reminders.page').then((m) => m.RemindersPage) },
       { path: 'agents', loadComponent: () => import('./features/agents/agents.page').then((m) => m.AgentsPage) },
+      { path: 'library', loadComponent: () => import('./features/library/library.page').then((m) => m.LibraryPage) },
+      // One route: what a household configures lives behind a segment view, not behind five URLs.
       { path: 'settings', loadComponent: () => import('./features/settings/settings.page').then((m) => m.SettingsPage) },
       // The chat id is client-minted, so a fresh chat navigates straight here (no /chat/new step).
       { path: 'chat/:id', data: { kind: 'user' }, loadComponent: () => import('./features/chat/chat.page').then((m) => m.ChatPage) },

@@ -27,7 +27,8 @@ func TestBuildWorkspaceSecrets_Isolation(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 
 	dirA, dirB := t.TempDir(), t.TempDir()
-	_, _, vaultA, err := buildWorkspaceSecrets(m, dirA, "a", log)
+	secA, err := buildWorkspaceSecrets(m, dirA, "a", log)
+	vaultA := secA.vault
 	if err != nil || vaultA == nil {
 		t.Fatalf("workspace a: vault=%v err=%v", vaultA, err)
 	}
@@ -38,7 +39,8 @@ func TestBuildWorkspaceSecrets_Isolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, vaultB, err := buildWorkspaceSecrets(m, dirB, "b", log)
+	secB, err := buildWorkspaceSecrets(m, dirB, "b", log)
+	vaultB := secB.vault
 	if err != nil || vaultB == nil {
 		t.Fatalf("workspace b: vault=%v err=%v", vaultB, err)
 	}
@@ -52,8 +54,8 @@ func TestBuildWorkspaceSecrets_Isolation(t *testing.T) {
 	}
 
 	// A locked master (nil) runs the workspace without credentials.
-	inj, sc, v, err := buildWorkspaceSecrets(nil, t.TempDir(), "c", log)
-	if err != nil || inj != nil || sc != nil || v != nil {
-		t.Fatalf("nil master must yield (nil,nil,nil,nil); got inj=%v sc=%v v=%v err=%v", inj, sc, v, err)
+	locked, err := buildWorkspaceSecrets(nil, t.TempDir(), "c", log)
+	if err != nil || locked != (workspaceSecrets{}) {
+		t.Fatalf("nil master must yield a zero workspaceSecrets; got %+v err=%v", locked, err)
 	}
 }

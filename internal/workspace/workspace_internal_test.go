@@ -248,7 +248,7 @@ func TestInstallPlugins_NameCollision_Refused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := installPlugins(dir, base, toolset, nil, nil); err == nil {
+	if _, err := (pass{dir: dir}).installPlugins(base, toolset, nil); err == nil {
 		t.Fatal("installPlugins must refuse a plugin tool that collides with an existing tool")
 	}
 }
@@ -274,7 +274,7 @@ func TestInstallPlugins_BindsCredentialsUnderOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if names, err := installPlugins(dir, base, toolset, inj, nil); err != nil || len(names) != 1 {
+	if names, err := (pass{dir: dir, injector: inj}).installPlugins(base, toolset, nil); err != nil || len(names) != 1 {
 		t.Fatalf("installPlugins = %v, %v; want one plugin, nil", names, err)
 	}
 
@@ -375,7 +375,7 @@ func TestOpen_WhoAmIOnlyWithASpeakerModel(t *testing.T) {
 			t.Fatalf("Open: %v", err)
 		}
 		t.Cleanup(w.Close)
-		_, ok := w.tools["whoami"]
+		_, ok := w.snapshot().tools["whoami"]
 		return ok
 	}
 
@@ -399,7 +399,7 @@ func TestOpen_KnowledgeSearchOnlyWithAnEmbedder(t *testing.T) {
 			t.Fatalf("Open: %v", err)
 		}
 		t.Cleanup(w.Close)
-		_, ok := w.tools["knowledge_search"]
+		_, ok := w.snapshot().tools["knowledge_search"]
 		return ok
 	}
 

@@ -56,15 +56,26 @@ const (
 	// not a device anyone carries and nobody is identified at it, so it consents to nothing; what it
 	// may do it may do because whoever runs it already holds the workspace on disk.
 	ClassTool Class = "tool"
+	// ClassWeb is a browser holding the page the daemon itself served. Like ClassApp there is a
+	// screen and a person at it, and it arrives the same way — a bootstrap code printed on the
+	// daemon's own stderr, or a join code relayed by an already-paired device.
+	//
+	// What it is NOT is reachable out of band: no push provider carries a browser, so it can only
+	// answer while its tab is open. It therefore never fills the unattended role the companion app
+	// exists for, which is why it is a class of its own rather than another way of spelling ClassApp.
+	ClassWeb Class = "web"
 )
 
 // Device is one paired device. The bearer itself is never stored — only its hash.
 type Device struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Class      Class     `json:"class,omitempty"`     // what it is; decides whether it may approve
-	Platform   string    `json:"platform,omitempty"`  // ios|android|web, selects the push provider
-	BearerHash string    `json:"bearerHash"`          // hex sha256 of the bearer
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Class    Class  `json:"class,omitempty"`    // what it is; decides whether it may approve
+	Platform string `json:"platform,omitempty"` // ios|android|web, selects the push provider
+	// BearerHash is the hex sha256 of the bearer. omitempty so that a Device blanked by List drops the
+	// field entirely rather than carrying an empty one: an always-present field is one somebody
+	// eventually populates. Every real record has one, so nothing legitimate is ever omitted on disk.
+	BearerHash string    `json:"bearerHash,omitempty"`
 	PushToken  string    `json:"pushToken,omitempty"` // APNs/FCM token, for out-of-band wake
 	Added      time.Time `json:"added"`
 	LastUsed   time.Time `json:"lastUsed,omitzero"`
@@ -124,16 +135,95 @@ func (s *Store) Lookup(bearer string) (Device, bool) {
 	return Device{}, false
 }
 
-// Pair redeems the bootstrap code, registering a device named name (on platform, optional) and
-// returning its bearer (shown once, never stored). The code is single-use.
-func (s *Store) Pair(code, name, platform string) (string, error) {
+// Pair redeems the bootstrap code, registering a device named name (on platform, optional) as class
+// and returning its bearer (shown once, never stored). The code is single-use.
+//
+// The class is a parameter and not a decision made here: which class a holder is enrolled as depends
+// on what a class MEANS, and this package deliberately does not know. The caller computes it (see
+// serve.classFor) and this writes down the answer.
+func (s *Store) Pair(code, name, platform string, class Class) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.otp == nil || !s.otp.valid(code) {
+	if s.otp == nil {
+		return "", ErrPairing
+	}
+	if !s.otp.valid(code) {
+		// Count the guess and drop the code once they are spent, exactly as ConfirmJoin does. Without
+		// this the five-minute window is not a window at all — a million codes fall to a few thousand
+		// requests a second, which any HTTP handler on a LAN will happily serve.
+		s.otp.attempts++
+		if s.otp.attempts >= BootstrapMaxTries {
+			s.otp = nil
+		}
 		return "", ErrPairing
 	}
 	s.otp = nil // single-use: spend it whether or not persistence below succeeds
-	return s.addDevice(name, platform, ClassApp)
+	return s.addDevice(name, platform, class)
+}
+
+// List returns every enrolled device, in registry order, with the two fields nothing outside this
+// package should read blanked: BearerHash and PushToken.
+//
+// Blanked here rather than at each call site: the hash is a secret's shadow and the push token
+// addresses a specific handset, and a caller that has to remember to strip them will one day forget.
+// Neither is needed to show a device list, and Lookup does the only comparison the hash exists for.
+//
+// Note the loop ranges over VALUES. Blanking a copy is the whole point — taking the address of the
+// element instead would wipe the live registry, hand out bearers nobody can authenticate with, and
+// persist that on the next save.
+func (s *Store) List() []Device {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Device, len(s.devices))
+	for i, d := range s.devices {
+		d.BearerHash = ""
+		d.PushToken = ""
+		out[i] = d
+	}
+	return out
+}
+
+// Forget removes the device with this id and reports whether there was one.
+//
+// Without it a lost phone is permanent: its bearer stays valid for as long as the registry exists,
+// and the only remedy is editing devices.json by hand and restarting — which is not a remedy anyone
+// finds at the moment they need it. Revocation takes effect on the next connection; a socket already
+// open is not torn down, because the device is unreachable in the case this exists for and the next
+// reconnect is the same moment either way.
+func (s *Store) Forget(id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, d := range s.devices {
+		if d.ID != id {
+			continue
+		}
+		s.devices = append(s.devices[:i], s.devices[i+1:]...)
+		if err := s.save(); err != nil {
+			// Put it back. A device dropped from memory but still on disk comes back on restart, and in
+			// between it authenticates nobody — the confusing half of a half-done revocation.
+			s.devices = append(s.devices, Device{})
+			copy(s.devices[i+1:], s.devices[i:])
+			s.devices[i] = d
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// Classes returns the class of every enrolled device, in registry order.
+//
+// It exists so a caller can decide something about the household — "is anything here able to bring a
+// further device in?" — without this package having to learn what a class means. The answer to that
+// question is a capability, and capabilities live in exactly one place (see serve.capabilitiesOf).
+func (s *Store) Classes() []Class {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Class, len(s.devices))
+	for i, d := range s.devices {
+		out[i] = d.Class
+	}
+	return out
 }
 
 // Mint enrols a device of the given class outright, without a code exchange, and returns its bearer
@@ -171,8 +261,8 @@ func (s *Store) addDevice(name, platform string, class Class) (string, error) {
 	})
 	if err := s.save(); err != nil {
 		// Undo the append. A record whose bearer was never handed out authenticates nobody, yet it
-		// still counts as a device — enough to convince Bootstrap that the household is populated and
-		// suppress the only code that could pair the first phone.
+		// still counts as a device — enough to convince a caller reading Classes that the household is
+		// populated, and so suppress the only code that could pair the first phone.
 		s.devices = s.devices[:len(s.devices)-1]
 		return "", err
 	}

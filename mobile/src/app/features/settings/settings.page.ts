@@ -1,107 +1,65 @@
-import { Component, ChangeDetectionStrategy, computed, inject } from '@angular/core';
-import { Router } from '@angular/router';
+import { Component, ChangeDetectionStrategy } from '@angular/core';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonSpinner,
+  IonToolbar, IonSegment, IonSegmentButton, IonSegmentView, IonSegmentContent, IonLabel,
 } from '@ionic/angular/standalone';
-import { LucideLogOut } from '@lucide/angular';
-import { ConnectionService } from '../../core/services/connection.service';
-import { AuthService } from '../../core/services/auth.service';
-import { AccountsService } from '../../core/services/accounts.service';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
-import { isDemoUrl } from '../../core/demo/is-demo';
+import { SettingsGeneralPage } from './settings-general.page';
+import { SettingsDevicesPage } from './settings-devices.page';
+import { SkillsPage } from '../skills/skills.page';
+import { McpPage } from '../mcp/mcp.page';
+import { WorkspacesPage } from '../workspaces/workspaces.page';
 
+/**
+ * Settings holds what a household configures, as tabs.
+ *
+ * Tabs rather than five drawer rows: the drawer's lower half is the chat list, and every row above
+ * it pushes the chats down. The bar only exists on the screen that needs it.
+ *
+ * ion-segment-view rather than a child outlet: it swipes and it animates in the direction of travel
+ * on its own. The price is that all five panes live in one URL and are in the DOM together — which
+ * is cheap here, because each pane's data comes from a root service that lists on connect anyway.
+ */
 @Component({
   selector: 'app-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    WorkspaceHeaderComponent, LucideLogOut, IonContent, IonList, IonListHeader, IonItem, IonLabel,
-    IonNote, IonChip, IonSpinner,
+    WorkspaceHeaderComponent,
+    SettingsGeneralPage, SettingsDevicesPage, SkillsPage, McpPage, WorkspacesPage,
+    IonToolbar, IonSegment, IonSegmentButton, IonSegmentView, IonSegmentContent, IonLabel,
   ],
   template: `
     <app-workspace-header />
 
-    <ion-content>
-      <ion-list inset="true">
-        <ion-list-header><ion-label>Pairing requests</ion-label></ion-list-header>
-        @for (j of auth.joins(); track j.joinId) {
-          <ion-item>
-            <ion-label>
-              <h2>{{ j.name }}</h2>
-              <ion-note>Share this code with the new device</ion-note>
-            </ion-label>
-            <ion-chip slot="end" color="primary">{{ j.code }}</ion-chip>
-          </ion-item>
-        } @empty {
-          <ion-item lines="none"><ion-label color="medium">No pending requests.</ion-label></ion-item>
-        }
-      </ion-list>
+    <ion-toolbar class="tabs">
+      <!-- scrollable: five labels do not fit a phone, and Ionic scrolls the bar rather than
+           squeezing them. No breakpoint involved. -->
+      <ion-segment scrollable="true" value="general">
+        <ion-segment-button value="general" contentId="general"><ion-label>General</ion-label></ion-segment-button>
+        <ion-segment-button value="devices" contentId="devices"><ion-label>Devices</ion-label></ion-segment-button>
+        <ion-segment-button value="skills" contentId="skills"><ion-label>Skills</ion-label></ion-segment-button>
+        <ion-segment-button value="mcp" contentId="mcp"><ion-label>MCP</ion-label></ion-segment-button>
+        <ion-segment-button value="workspaces" contentId="workspaces"><ion-label>Workspaces</ion-label></ion-segment-button>
+      </ion-segment>
+    </ion-toolbar>
 
-      <ion-list inset="true">
-        <ion-list-header><ion-label>Accounts</ion-label></ion-list-header>
-        @for (a of accounts.accounts(); track a.server) {
-          <ion-item [button]="!a.connected" [disabled]="accounts.busy()" (click)="a.connected || connect(a.server)">
-            <ion-label>
-              <h2>{{ a.server }}</h2>
-              <ion-note>MCP account</ion-note>
-            </ion-label>
-            @if (a.connected) {
-              <ion-chip slot="end" color="success">Connected</ion-chip>
-            } @else if (accounts.connecting() === a.server) {
-              <ion-spinner slot="end" name="crescent" />
-            } @else {
-              <ion-note slot="end" color="primary">Connect</ion-note>
-            }
-          </ion-item>
-        } @empty {
-          <ion-item lines="none"><ion-label color="medium">No connectable accounts.</ion-label></ion-item>
-        }
-      </ion-list>
-
-      <ion-list inset="true">
-        <ion-list-header><ion-label>Connection</ion-label></ion-list-header>
-        @if (demo()) {
-          <ion-item>
-            <ion-label>
-              <h2>Demo mode</h2>
-              <ion-note>Sample data. No daemon is connected and nothing leaves this device.</ion-note>
-            </ion-label>
-          </ion-item>
-        }
-        <ion-item>
-          <ion-label>
-            <h2>{{ connection.currentUrl() ?? '—' }}</h2>
-            <ion-note>daemon</ion-note>
-          </ion-label>
-          <ion-chip slot="end" [color]="connection.connected() ? 'success' : 'warning'">
-            {{ connection.state() }}
-          </ion-chip>
-        </ion-item>
-        <ion-item button lines="none" (click)="disconnect()">
-          <svg lucideLogOut slot="start" [size]="21" class="danger" />
-          <ion-label color="danger">Disconnect</ion-label>
-        </ion-item>
-      </ion-list>
-    </ion-content>
+    <ion-segment-view>
+      <ion-segment-content id="general"><app-settings-general /></ion-segment-content>
+      <ion-segment-content id="devices"><app-settings-devices /></ion-segment-content>
+      <ion-segment-content id="skills"><app-skills /></ion-segment-content>
+      <ion-segment-content id="mcp"><app-mcp /></ion-segment-content>
+      <ion-segment-content id="workspaces"><app-workspaces /></ion-segment-content>
+    </ion-segment-view>
   `,
   styles: `
-    .danger { color: var(--ion-color-danger); }
+    .tabs { --background: transparent; --min-height: 0; }
+    ion-segment-view { flex: 1 1 auto; min-height: 0; }
+    /* Each pane holds a page whose root is an ion-content, and an ion-content needs a parent with a
+       height to scroll inside. */
+    ion-segment-content > * {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
   `,
 })
-export class SettingsPage {
-  protected readonly connection = inject(ConnectionService);
-  protected readonly auth = inject(AuthService);
-  protected readonly accounts = inject(AccountsService);
-  private readonly router = inject(Router);
-
-  /** Say so when the app is running against the in-app demo rather than a daemon. */
-  protected readonly demo = computed(() => isDemoUrl(this.connection.currentUrl()));
-
-  protected connect(server: string): void {
-    this.accounts.connect(server);
-  }
-
-  protected disconnect(): void {
-    this.connection.disconnect();
-    void this.router.navigate(['/discover'], { replaceUrl: true });
-  }
-}
+export class SettingsPage {}

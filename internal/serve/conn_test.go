@@ -10,11 +10,12 @@ import (
 )
 
 // testConn builds a connection wired only for the transport paths under test: a buffered out channel
-// (mirroring newConn's cap 64), a discard logger, and empty maps. Fields a given test needs (broker,
-// spaces) are set by the test itself.
+// (mirroring newConn's cap 64), a discard logger, and an empty registry. Fields a given test needs
+// (broker, spaces) are set by the test itself. A zero Registry resolves nothing, which is exactly
+// what a test that never names a workspace wants.
 func testConn() *conn {
 	return &conn{
-		spaces:  map[string]*workspace.Workspace{},
+		spaces:  &workspace.Registry{},
 		hub:     newHub(defaultHeartbeat),
 		log:     slog.New(slog.DiscardHandler),
 		control: make(chan any, 64),

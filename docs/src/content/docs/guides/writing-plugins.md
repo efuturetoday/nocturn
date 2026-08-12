@@ -180,8 +180,16 @@ That is the whole install. Two things follow from it:
 statement of what the plugin can reach — `"uses": ["http_read"]` here — and you can check it without
 running anything. The code cannot widen it.
 
-**A restart is required.** Plugins are discovered when a workspace opens, and there is no watcher on
-`plugins/`. A server that was already running does not see the new folder.
+**Tell the server to look again.** Plugins are discovered when a workspace opens, and there is no
+watcher on `plugins/` — a server that was already running does not see the new folder by itself:
+
+```sh
+nocturn reload            # or -w <workspace>
+```
+
+It re-reads agents, skills, plugins and MCP servers, and prints what the workspace holds afterwards.
+Conversations already open keep running; the new tools are there from their next message. Restarting
+works too and is the bigger hammer.
 
 :::danger[Installing is the decision — there is no review step]
 Dropping the folder in **is** the authorization. Nothing prompts you afterwards, and nothing asks

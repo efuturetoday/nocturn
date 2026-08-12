@@ -109,8 +109,22 @@ port, an `Embedder` port with a remote OpenAI-compatible adapter, hybrid cosine+
 reciprocal rank, an index OUTSIDE the mount that records its model and refuses to mix embedders, and
 a one-minute reconcile that costs a directory walk when nothing changed) ·
 `chat` (file-backed transcript store + Manager) · `agent` (declaration + cron only; execution is
-injected by the workspace) · `workspace` (the composition root) · `serve` (WebSocket surface,
-tagged JSON, one file per domain) ·
+injected by the workspace) ·
+`workspace` (the composition root, cut in two along ONE question — what may not exist twice. The
+durable half is built once by `Open`: one vault handle, one timer set per reminder and per wake, one
+chat store, one knowledge index. Everything discovery derives is a `snapshot`, swapped whole behind
+an atomic pointer by `Reload`, which is why a skill or an MCP server can arrive without a restart and
+without cutting a turn. `Registry` is the daemon's set of open workspaces and the only place one
+comes into or goes out of existence while the process runs; its `OnOpen` is where the daemon hangs
+the per-workspace wiring, so one created at runtime is not a second-class one) ·
+`serve` (WebSocket surface, tagged JSON, one file per domain) ·
+`library` (the curated catalog skills and MCP servers are installed from: daemon-wide, fetched lazily
+from ONE configured host over TLS with skill bodies INLINE, so installing never fetches from a second
+place. Absent — not empty — when `NOCTURN_CATALOG_URL` is unset) ·
+`webui` (the browser front-end, `go:embed`ded: the SAME Angular bundle `mobile/` ships, copied in by
+`generate.sh` and gitignored except a load-bearing `.gitkeep`. A file server and nothing else —
+it knows no classes, no capabilities, no bearers, because assets carry no authority. Absent bundle =
+a 503 page naming the build command, so a bare clone builds and runs) ·
 `tui` (+`/transcript`, `/logring`) (the terminal surface, `serve`'s sibling: a full-screen go-tui app
 over the same facade. `transcript` is the pure event→blocks fold — the Go port of the mobile
 `chat-model.ts`, pinned to it by a convergence test; `logring` is the in-memory log the pane shows.
@@ -177,6 +191,72 @@ Read this before touching anything security-shaped — it is easy to assume the 
   fresh ask is denied fail-closed; `Guarded` routes the ask out-of-band to the human. A missing or
   typo'd dial therefore never escalates authority. With no device wired, guarded collapses to
   strict.
+- **`manage` is a capability, not a gated action** — and that is a decision, because installing a
+  skill plainly grants something. The gate exists for the MODEL acting under instructions somebody
+  smuggled into its context, judged by a human on a device the injection cannot reach. A device
+  adding a workspace or an MCP server is the opposite shape: a human command from an authenticated
+  device, and routing it through the broker would ask the phone to confirm what the phone just
+  tapped. The precedent is `device.forget` — revoking a device is heavier and is a capability check.
+  Held by `ClassApp`, `ClassWeb` and `ClassTool` (the command line already holds the directory;
+  withholding it would only stop the running daemon NOTICING what the same person just wrote), never
+  by `ClassAppliance` — which is the whole point of having the bit.
+- **`library.install` names an entry, it never carries one.** A wire form with a skill body would be
+  a way to put arbitrary text into every system prompt of every turn — a different authority from
+  "install entry N of a catalog the daemon fetched itself". `internal/serve/invariant_test.go` walks
+  the declared type so the rule survives a convenience field added later, with a counter-check
+  proving the scanner can still see. Sideloading stays a file copy on the host.
+- **Signing is NOT built, and the catalog does not pretend it is.** Weight sits on one TLS source
+  with bodies inline, plus a sha256 per entry checked before anything is written — which
+  authenticates nothing (whoever serves the catalog serves the digest) but turns a truncated response
+  into a refusal, and is the field a signature would be computed over. What it deliberately does NOT
+  rest on is a person reading a body first: nobody spots a subtle instruction in four thousand tokens
+  on a phone. The controls that hold are ADR-10 (a skill carries zero authority) and the `NetKind`
+  gate on an installed server's first call.
+- **Removing an MCP server revokes the remembered grant for its host** (`Workspace.ForgetNetAccess`,
+  `gate.Grants.Forget`). A grant records what, never why, so once the server is gone the answer stands
+  alone and the next server on that host would inherit a yes nobody gave it. It cuts both ways — the
+  same grant may be the one given so `http_read` could reach that host — and being asked once more is
+  the cheap side of that trade.
+- **The catalog fetch is host egress, like the LLM and embedding endpoints and APNs**: no model
+  output flows into it, so it passes no gate. Lazy, never at startup.
+- **Device classes are interpreted in ONE function**, `serve.capabilitiesOf`, with `serve.classFor`
+  its neighbour deriving which class a holder gets from the platform it already sends. `internal/auth`
+  stores a class and never compares one — not even behind a `func(Class) bool`, which is the same
+  coupling wearing a hat. Pairing is mechanism: `/pair` and `/join/confirm` hand back a bearer and
+  never branch on a class, and **the class is never on the wire** — a value the client controls is not
+  a fact about the client. `capabilities` is unexported (the compiler holds half the rule) and
+  `internal/serve/invariant_test.go` walks the tree for class constants outside three allowlisted
+  files (it holds the other half, and has a companion test proving the scanner can still see).
+  `ClassWeb` = approve + enrol, **not** captureAudio — the one flag that keeps it from being a second
+  spelling of `ClassApp`, and what makes `covers()` refuse to let a browser mint a `ClassTool`.
+  `bootstrap` (arm a pairing code) belongs to **`ClassTool` alone**: its bearer is a 0600 file beside
+  the vault, so it already implies holding the workspace — and giving it to an app would make an app
+  *cover* a tool, i.e. mintable through `POST /devices`.
+- **Every credential with a TTL has a way to get another one.** The bootstrap code was armed once at
+  startup for 5 minutes; missing that window had no exit but restarting the daemon or deleting
+  `devices.json`. Now: `nocturn pair` (→ `POST /pair/code`) any time, `auth.BootstrapMaxTries = 5`
+  guesses mirroring `joinMaxTries`, and `daemon.json` carries **two** bits — `paired` and `bootstrap` —
+  because one could not tell "join is the way in" from "there is no way in", which is what walked the
+  user into an impossible flow. `householdCanEnrol` is the single predicate both `serveOn` and
+  `handleDaemon` ask, so they cannot disagree.
+- **Devices are revocable** (`device.list`/`device.forget`, gated on `enrol`; `auth.Store.Forget`).
+  Before this a lost phone meant hand-editing `devices.json` and restarting.
+- **Only our own pages may talk to the daemon from a browser** (`internal/serve/origin.go`, applied
+  in `cors` which wraps the whole mux, so it also gates the `/ws` upgrade). `Access-Control-Allow-Origin: *`
+  was not the usual harmless case: no cookies are involved, but the thing an attacker's page would
+  read is the RESPONSE, and the response to `/pair` is a bearer. Allowed: no `Origin` at all (curl,
+  the CLI, native clients), same-origin against `r.Host`, Capacitor's webview origins (defaults read
+  out of the pinned source — `capacitor://localhost`, `https://localhost`), and `NOCTURN_DEV_ORIGINS`
+  for `ng serve` against a remote daemon.
+- **`hostOK` runs BEFORE `originOK`, and that order is the point.** Comparing `Origin` to `r.Host` is
+  self-referential — whoever owns a DNS name owns both, which is DNS rebinding, and it was **measured
+  bypassing the origin gate** before this existed (foreign Host → 403; `Origin == Host == evil.example`
+  → through to the handler). So the Host must be un-rebindable: an IP literal (nothing resolves),
+  `localhost`, or `.local` (mDNS answers only on the segment). A real hostname is indistinguishable
+  from the attack, so it is named once via `NOCTURN_HOSTNAMES`.
+- **A browser is not a second device for the unattended case.** No push provider carries one, so
+  `ClassWeb` answers only while its tab is open. The phone is still what the out-of-band claim rests
+  on.
 - **Zero ambient authority:** the wazero guest gets nothing; every capability is an explicitly
   handed host window — unforgeable by absence.
 - **Secrets** never enter the guest: presence only, value injected host-side at the boundary.
@@ -275,6 +355,11 @@ Read this before touching anything security-shaped — it is easy to assume the 
   component (they mount against a receiver), and the generator's parser chokes on an unnamed
   `struct{}` parameter — which is one more reason the logic lives in `app.go` and the `.gsx` holds
   only the shape.
+- **`go test ./...` from the root does NOT test the agentkit modules.** `./...` is scoped to the
+  current module; `go.work` only makes the others RESOLVE, it does not fold them into the pattern. So
+  a change to an agentkit interface can be green here and red in CI, which runs each module
+  separately — that is exactly how a `gate.Grants` implementation added to the port shipped with a
+  test fake in `agentkit/gate` left unimplemented. Loop the modules before pushing (§8).
 - **A nested `go.mod` needs `GOWORK=off`.** `internal/onnx/reference/` is its own module so gomlx
   stays out of nocturn's graph. That works — the parent skips it — but `go.work` does not cover it
   either, so plain `go build ./...` inside it fails with "directory prefix . does not contain
@@ -304,9 +389,9 @@ Read this before touching anything security-shaped — it is easy to assume the 
 > right set. Don't style from memory when a skill knows the rule.
 
 ```bash
-go build ./...           # go.work spans nocturn + the agentkit modules
-go test ./...            # race-clean
-go test -race ./...
+# `./...` is scoped to the CURRENT module. go.work makes the agentkit modules RESOLVE from here; it
+# does not put them in `./...`. Run each one, which is what CI does:
+for m in . agentkit agentkit/{gate,openai,tools,runtime,gemini}; do (cd $m && go build ./... && go vet ./... && go test -race ./...); done
 
 wat2wasm internal/sandbox/testdata/echo.wat -o internal/sandbox/testdata/echo.wasm
 internal/script/qjs/build.sh          # CI rebuilds+commits this too; by hand is just faster
@@ -322,7 +407,14 @@ internal/speaker/reference/setup.sh   # torch venv, ONLY to regenerate the filte
 
 cp .env.example .env                  # OPENAI_BASE_URL / _MODEL / _API_KEY
 go run ./cmd/nocturn                  # the full-screen terminal chat (needs a TTY; exits 2 if piped)
-go run ./cmd/nocturn serve            # the WebSocket daemon the mobile app talks to
+go run ./cmd/nocturn serve            # the daemon: WebSocket + the browser UI at the same address
+#   --host picks the interface ("" = all, 127.0.0.1 = this machine only, which also suppresses the
+#   mDNS advert), --port the port, --no-web serves the protocol without the UI.
+
+# The browser UI is the SAME Angular bundle as the app, go:embed'd from internal/webui/dist — which
+# is gitignored but for a .gitkeep, so a bare clone builds and serves a "not built" page instead.
+cd mobile && npm ci && npm run build && cd ..
+go generate ./internal/webui/         # copies dist/mobile/browser in; no bundle = says so, exits 0
 #   keys: Ctrl+P the command palette (everything is in there) · Tab next region, named in the hint
 #         line · Enter open/send · Ctrl+C cancel the TURN · Ctrl+N new · Ctrl+K workspace ·
 #         Ctrl+L log pane · Ctrl+Q quit · j/k/PgUp/PgDn/g/G scroll · ←→ filter the conversation list

@@ -8,33 +8,48 @@ import (
 	"time"
 )
 
-// otp is the one-time bootstrap code that pairs the FIRST device: a short numeric code, single-use
-// and expiring. It never persists (in-memory only), so a restart mints a fresh one and an unpaired
-// daemon is never left with a stale code on disk.
+// BootstrapMaxTries is how many wrong guesses a bootstrap code survives before it is dropped.
+//
+// The same rule and the same number as joinMaxTries, for the same reason: six digits is a million
+// codes, the window is minutes, and an HTTP handler on a LAN answers thousands of requests a second —
+// so without a counter the code is not a secret, it is a formality. Five is chosen for the human, not
+// the attacker: someone reading a code off their own console does not need a sixth attempt, and a
+// burned code is not a lockout because `nocturn pair` mints another one.
+const BootstrapMaxTries = 5
+
+// otp is the one-time bootstrap code that pairs the FIRST device: a short numeric code, single-use,
+// expiring, and rate-limited. It never persists (in-memory only), so a restart mints a fresh one and
+// an unpaired daemon is never left with a stale code on disk.
 type otp struct {
-	code    string
-	expires time.Time
+	code     string
+	expires  time.Time
+	attempts int
 }
 
-// Bootstrap arms a fresh pairing code IF nothing in the registry can bring a phone in by itself,
-// valid for ttl, and returns it to show the operator. It returns "" once such a device exists.
+// ArmBootstrap mints a fresh pairing code valid for ttl and returns it to show the operator,
+// replacing any code already pending.
 //
-// The test is on ClassApp, not on the registry being empty, and the difference is the whole flow:
-// the daemon enrols its own command line (ClassTool) at startup, and an appliance may be enrolled on
-// someone's behalf. Neither can relay a join code — see serve.capabilitiesOf, where a class becomes
-// abilities — so counting them as "a device is paired" retires the bootstrap code while nothing is
-// left that could pair the first phone, and the household can never be entered at all.
-func (s *Store) Bootstrap(ttl time.Duration) string {
+// It asks nothing about the registry. WHETHER a household still needs a bootstrap code is the
+// question "can anything already here bring a device in by itself?", and that is a question about
+// what a class may DO — which this package deliberately does not know. The caller reads Classes,
+// decides, and calls this. See serve.serveOn, where the decision now lives.
+func (s *Store) ArmBootstrap(ttl time.Duration) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, d := range s.devices {
-		if d.Class == ClassApp {
-			return ""
-		}
-	}
 	code := otpCode()
 	s.otp = &otp{code: code, expires: time.Now().Add(ttl)}
 	return code
+}
+
+// BootstrapPending reports whether a pairing code is armed and still within its window.
+//
+// It is the fact behind "which screen should a fresh client show" — enter a bootstrap code, or ask an
+// existing device to relay a join code. Reporting that a code exists reveals nothing a caller could
+// not learn by attempting to redeem one, and the code itself never leaves this package.
+func (s *Store) BootstrapPending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.otp != nil && time.Now().Before(s.otp.expires)
 }
 
 // valid reports whether code matches and has not expired (constant-time compare).

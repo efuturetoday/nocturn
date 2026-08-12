@@ -55,12 +55,48 @@ cp -r examples/workspace/skills/summarize-url \
 nocturn serve        # start, or restart if it was already running
 ```
 
-Like plugins and MCP servers, skills are read when a workspace opens — there is no watcher on
-`skills/`, so a running server does not notice a new folder.
+There is no watcher on `skills/`, so a running daemon does not notice a folder you copied in — it
+reads them when the workspace opens. `nocturn reload` (`-w <workspace>` for another one) is how you
+tell it to look again; it prints what the workspace holds afterwards. Restarting works too.
 
-Unlike them, nothing else happens. No credential to connect, no manifest to review, no restart
-worth being careful about: from that point the assistant simply knows the skill's `description`, and
-reaches for the body when a request matches it.
+The other is the [companion app](/nocturn/guides/remote-access/), which manages skills over the same
+connection everything else uses: it lists them, shows a skill's `SKILL.md` before you act on it, and
+switches one off or removes it. A change made there takes effect **on the next message** — including
+inside a conversation that is already open, and without interrupting a turn that is running. There is
+nothing to restart.
+
+Nothing else happens either way. No credential to connect, no manifest to review: from that point the
+assistant simply knows the skill's `description`, and reaches for the body when a request matches it.
+
+### From the catalog
+
+If the server is pointed at a catalog (`NOCTURN_CATALOG_URL`), the app browses it and installs an
+entry with one tap. The catalog is fetched by the server, from one host, over TLS, and it carries each
+skill's **whole `SKILL.md` inline** — so installing never fetches from a second place, and the app can
+show you exactly what will go into the assistant's prompt before anything is written.
+
+The TLS is a requirement rather than a recommendation: a plain-HTTP catalog is refused, and so is a
+redirect that leaves the scheme or the host you configured. Nothing here is signed, so the channel is
+the whole of what says these bytes are the catalog — the digest beside each entry is served by the
+same host as the entry. Loopback is the one exemption, for running a catalog on your own machine.
+
+Worth being straight about what that showing is and is not. It is informed consent, not a control:
+nobody spots a subtle instruction buried in four thousand tokens on a phone. The controls that
+actually hold are the ones already in the architecture — a skill carries [no authority at
+all](/nocturn/architecture/threat-model/), and anything it talks the assistant into still meets the
+gate. Content signing is not built yet; when it is, it goes here.
+
+The install command names a catalog **entry**, and cannot carry a skill body. That distinction is the
+security of the whole feature: "install entry N of the catalog the server fetched" is a different act
+from "put this text into every prompt", and only the first exists on the wire. Sideloading stays what
+it always was — copying a folder on the host.
+
+### Off is not gone
+
+Switching a skill off moves its folder to `skills/.disabled/`, which the daemon skips — so it leaves
+the catalog while everything you assembled stays where it is, bundled files included. Switching it
+back on moves it back. Removing it deletes the folder; unlike a workspace there is no trash, because
+a skill is instructions that came from somewhere and can come from there again.
 
 ## How a skill gets used
 

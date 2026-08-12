@@ -98,7 +98,8 @@ type NoDynamicRegistrationError struct {
 }
 
 func (e *NoDynamicRegistrationError) Error() string {
-	return fmt.Sprintf("mcp server %q: its authorization server (%s) does not offer dynamic client registration", e.Server, e.Issuer)
+	return fmt.Sprintf("mcp server %q: its authorization server (%s) does not offer dynamic client registration",
+		e.Server, e.Issuer)
 }
 
 // Begin runs the spec-driven flow up to the consent URL for the named discover-mode server: probe →
@@ -106,7 +107,12 @@ func (e *NoDynamicRegistrationError) Error() string {
 // the PKCE authorization URL bound to redirectURI. It stashes the PKCE verifier and resolved config
 // under an opaque id and returns the URL; nothing is persisted and no token exists until Complete.
 // redirectURI is a loopback (CLI) or the app's fixed redirect. It performs network I/O.
-func (a *MCPAuth) Begin(ctx context.Context, serverName string, scopes []string, redirectURI string) (PendingAuth, error) {
+func (a *MCPAuth) Begin(
+	ctx context.Context,
+	serverName string,
+	scopes []string,
+	redirectURI string,
+) (PendingAuth, error) {
 	a.sweep()
 
 	srv, err := a.discoverServer(serverName)

@@ -24,11 +24,15 @@ import {
   DENY_OPTION,
   type ChatMeta,
   type ClientCommand,
+  type MCPInfo,
   type ServerEvent,
   type Source,
   type ToolNode,
 } from '../protocol/nocturn-protocol';
-import { DEMO_WORKSPACE, demoAccounts, demoAgents, demoChats, demoReminders, type DemoChat } from './demo-data';
+import {
+  DEMO_WORKSPACE, demoAccounts, demoAgents, demoCatalog, demoChats, demoReminders, demoServers,
+  demoSkillBody, demoSkills, demoWorkspaces, type DemoChat,
+} from './demo-data';
 import { openingSteps, resumeSteps, type Step } from './demo-script';
 
 /** What the daemon needs from its transport: a way out, a clock, and a way to defer. */
@@ -53,6 +57,10 @@ const WS = DEMO_WORKSPACE.name;
 export class DemoDaemon {
   private readonly chats: DemoChat[];
   private reminders;
+  private workspaces = demoWorkspaces();
+  private skills = demoSkills();
+  private servers = demoServers();
+  private readonly catalog = demoCatalog();
   private readonly agents = demoAgents();
   private readonly accounts = demoAccounts();
 
@@ -72,7 +80,47 @@ export class DemoDaemon {
   handle(cmd: ClientCommand): void {
     switch (cmd.cmd) {
       case 'workspace.list':
-        this.soon({ type: 'workspace.list', items: [DEMO_WORKSPACE] });
+        this.sendWorkspaces();
+        break;
+      case 'workspace.create':
+        this.createWorkspace(cmd.name, cmd.title);
+        break;
+      case 'workspace.rename':
+        this.renameWorkspace(cmd.name, cmd.title);
+        break;
+      case 'workspace.delete':
+        this.deleteWorkspace(cmd.name);
+        break;
+      case 'skill.list':
+        this.sendSkills();
+        break;
+      case 'skill.read':
+        this.soon({ type: 'skill.body', ws: WS, name: cmd.name, body: demoSkillBody(cmd.name) });
+        break;
+      case 'skill.enable':
+        this.enableSkill(cmd.name, cmd.on);
+        break;
+      case 'skill.remove':
+        this.removeSkill(cmd.name);
+        break;
+      case 'mcp.list':
+        this.sendServers();
+        break;
+      case 'mcp.add':
+        this.addServer(cmd.name, cmd.url, cmd.auth);
+        break;
+      case 'mcp.remove':
+        this.removeServer(cmd.name);
+        break;
+      case 'workspace.reload':
+        this.reload();
+        break;
+      case 'library.list':
+      case 'library.refresh':
+        this.soon({ type: 'library.catalog', ...this.catalog });
+        break;
+      case 'library.install':
+        this.install(cmd.kind, cmd.id);
         break;
       case 'chat.list':
         this.soon({ type: 'chat.list', ws: WS, kind: cmd.kind, chats: this.metasOf(cmd.kind) });
@@ -204,6 +252,141 @@ export class DemoDaemon {
   private cancelReminder(id: string): void {
     this.reminders = this.reminders.filter((r) => r.id !== id);
     this.soon({ type: 'reminder.changed', ws: WS });
+  }
+
+  // ── workspaces ─────────────────────────────────────────────────────────────
+
+  /**
+   * The set is real: create, rename and delete move it and the list is answered from it, so the
+   * management page works under review instead of looking broken. What is NOT modelled is a second
+   * workspace's CONTENTS — chats, agents and reminders stay bound to `main` — so a workspace created
+   * here reads as empty. That is the honest picture of a new workspace, and it keeps this daemon a
+   * script rather than a second implementation.
+   *
+   * Two refusals are worth reproducing, because they are the ones a reviewer will trip over and both
+   * come from the daemon's own rules: a duplicate name, and deleting the default.
+   */
+  private sendWorkspaces(): void {
+    this.soon({ type: 'workspace.list', items: this.workspaces.map((w) => ({ ...w })) });
+  }
+
+  private createWorkspace(name: string, title?: string): void {
+    if (this.workspaces.some((w) => w.name === name)) {
+      this.soon({ type: 'error', text: `workspace "${name}" already exists` });
+      return;
+    }
+    this.workspaces = [...this.workspaces, { name, title: title || name }]
+      .sort((a, b) => a.name.localeCompare(b.name)); // the daemon sorts by name; a reshuffling set is unreadable
+    this.sendWorkspaces();
+  }
+
+  private renameWorkspace(name: string, title: string): void {
+    // An empty title clears the override and the folder name shows again — the daemon's rule.
+    this.workspaces = this.workspaces.map((w) => (w.name === name ? { ...w, title: title || w.name } : w));
+    this.sendWorkspaces();
+  }
+
+  private deleteWorkspace(name: string): void {
+    if (name === DEMO_WORKSPACE.name) {
+      this.soon({
+        type: 'error',
+        text: `workspace "${name}" cannot be deleted — it is the default and is recreated at startup`,
+      });
+      return;
+    }
+    this.workspaces = this.workspaces.filter((w) => w.name !== name);
+    this.sendWorkspaces();
+  }
+
+  // ── skills, servers, catalog ───────────────────────────────────────────────
+
+  private sendSkills(): void {
+    this.soon({ type: 'skill.list', ws: WS, items: this.skills.map((s) => ({ ...s })) });
+  }
+
+  private enableSkill(name: string, on: boolean): void {
+    this.skills = this.skills.map((s) => (s.name === name ? { ...s, enabled: on } : s));
+    this.sendSkills();
+  }
+
+  private removeSkill(name: string): void {
+    this.skills = this.skills.filter((s) => s.name !== name);
+    this.sendSkills();
+  }
+
+  /**
+   * Answer an MCP mutation the way the daemon does: the set as it stands, carrying `connecting` for
+   * anything just declared, and the outcome a beat later. The delay is the whole reason this state
+   * exists on the wire, so a demo that collapsed it would show a screen the real app never has.
+   */
+  private sendServers(pending: MCPInfo[] = []): void {
+    const items = [...this.servers, ...pending].map((s) => ({ ...s }));
+    this.soon({ type: 'mcp.list', ws: WS, items });
+  }
+
+  private settle(server: MCPInfo): void {
+    this.host.schedule(1_200, () => {
+      this.servers = [...this.servers, server];
+      this.host.emit({ type: 'mcp.list', ws: WS, items: this.servers.map((s) => ({ ...s })) });
+    });
+  }
+
+  private addServer(name: string, url: string, auth?: string): void {
+    if (this.servers.some((s) => s.name === name)) {
+      this.soon({ type: 'error', text: `mcp server "${name}" already exists` });
+      return;
+    }
+    this.sendServers([{ name, url, state: 'connecting', tools: 0 }]);
+    // What a real handshake would find: an OAuth server nobody has signed into needs auth, and one
+    // without auth comes up with tools.
+    this.settle(
+      auth === 'oauth'
+        ? { name, url, state: 'needs auth', tools: 0, note: `run: nocturn auth ${name}` }
+        : { name, url, state: 'connected', tools: 3 },
+    );
+  }
+
+  private removeServer(name: string): void {
+    this.servers = this.servers.filter((s) => s.name !== name);
+    this.sendServers();
+  }
+
+  /** Re-read the workspace: both lists follow, because discovery decides both. */
+  private reload(): void {
+    this.sendSkills();
+    this.sendServers();
+    this.host.schedule(1_200, () => {
+      this.host.emit({ type: 'mcp.list', ws: WS, items: this.servers.map((s) => ({ ...s })) });
+    });
+  }
+
+  /** Install a catalog entry. Refuses a duplicate with words, as the daemon does — a silent no-op
+      would read as a broken button. */
+  private install(kind: 'skill' | 'mcp', id: string): void {
+    if (kind === 'skill') {
+      const item = this.catalog.skills.find((s) => s.id === id);
+      if (!item) {
+        this.soon({ type: 'error', text: `no catalog entry ${id}` });
+        return;
+      }
+      if (this.skills.some((s) => s.name === item.id)) {
+        this.soon({ type: 'error', text: `skill "${item.id}" is already installed` });
+        return;
+      }
+      this.skills = [
+        ...this.skills,
+        { name: item.id, folder: item.id, description: item.description, enabled: true, bytes: item.body.length },
+      ];
+      this.sendSkills();
+      return;
+    }
+
+    const item = this.catalog.mcp.find((m) => m.id === id);
+    if (!item) {
+      this.soon({ type: 'error', text: `no catalog entry ${id}` });
+      return;
+    }
+    this.addServer(item.name, item.url, item.auth);
   }
 
   // ── running a turn ─────────────────────────────────────────────────────────

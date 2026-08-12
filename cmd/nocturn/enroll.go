@@ -135,13 +135,23 @@ func cliBearer() (string, error) {
 	return token, nil
 }
 
-// ensureCLICredential gives the local command line a way in, and is called by the daemon at startup
-// because the daemon owns the registry.
+// ensureCLICredential gives the local command line a way in. The DAEMON calls it — at startup, and
+// again whenever the device registry is edited from the wire (serve.OnDevicesChanged) — because the
+// daemon owns the registry.
 //
-// The device is auth.ClassTool: it may ask for a recording and nothing else — notably it cannot
-// approve a gated action. That is not much of a concession, since whoever can run this binary can
-// already read the workspace off the disk; the point is that the credential lying in that directory
-// does not quietly become one that could answer an approval.
+// It is idempotent by design, and that is what makes the second caller safe: a credential still in
+// the registry is left exactly as it is, so the common case costs one lookup. When the row is gone —
+// someone forgot it from a phone or a browser — a fresh one is minted and the file rewritten, so
+// revoking the command line ROTATES it rather than disabling it until the next restart.
+//
+// Rotating is the honest meaning. The reason to revoke this credential is that the file leaked, and
+// the leaked copy is dead either way; whoever can read the replacement could have read the original,
+// because the authority it carries is exactly "can read this directory".
+//
+// The device is auth.ClassTool: it may ask for a recording and mint a pairing code, and nothing else —
+// notably it cannot approve a gated action. That is not much of a concession, since whoever can run
+// this binary can already read the workspace off the disk; the point is that the credential lying in
+// that directory does not quietly become one that could answer an approval.
 func ensureCLICredential(devices *auth.Store, log *slog.Logger) {
 	if b, err := os.ReadFile(cliBearerFile); err == nil {
 		if token := strings.TrimSpace(string(b)); token != "" {

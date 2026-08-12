@@ -43,6 +43,7 @@ nocturn-data/workspaces/main/
 ├─ vault.enc       ← the encrypted workspace vault
 ├─ grants.json     ← the permissions you chose to remember
 ├─ reminders.json  ← pending reminders
+├─ wakes.json      ← conversations waiting to resume themselves
 ├─ chats/          ← your conversations
 ├─ agent-runs/     ← transcripts of background agent runs
 ├─ agents/         ← one folder per agent, each with an agent.md
@@ -97,12 +98,38 @@ derived from the master for that workspace alone. One secret to remember, walls 
 ## Working with several at once
 
 - Every folder under `nocturn-data/workspaces/` is opened at startup, and each one's scheduled
-  agents run side by side.
+  agents run side by side. Folders beginning with a dot are skipped — that is where deleted
+  workspaces go, see below.
 - The **terminal chat always talks to `main`.** Other workspaces still run their agents; you just do
   not converse with them from the terminal.
 - Subcommands take `-w <name>` — `nocturn ls -w personal`, `nocturn secret ls -w client-x`.
-- The [companion app](/nocturn/guides/remote-access/) can list and switch workspaces (`workspace.list`), so
-  a second device is the way to talk to more than one.
+- The [companion app](/nocturn/guides/remote-access/) lists workspaces and can add, rename and remove
+  them (`workspace.list`, `workspace.create`, `workspace.rename`, `workspace.delete`) — so a second
+  device is the way to talk to more than one. A workspace added there is live immediately, with its
+  own agents running; no restart.
+
+### Its name is not its label
+
+A workspace has two names and they are not interchangeable:
+
+- The **folder name** is its identity. It is the input to this workspace's vault key and to every
+  plugin's and MCP server's secret shard key, it is the `ws` on every command a device sends, and it
+  is the `ws=` on every log line. Renaming the folder does not move a workspace — it makes its vault
+  and every shard undecryptable, with no error until something reaches for a credential.
+- The **title** in `workspace.json` is what a screen shows. It changes freely because nothing
+  depends on it, and clearing it shows the folder name again.
+
+So renaming from the app changes the label, never the folder.
+
+### Deleting one
+
+Removing a workspace **moves its folder** to `nocturn-data/workspaces/.trash/<name>-<timestamp>` —
+it is a `mv`, not a delete. What is in there is every conversation, every note the assistant kept,
+and a vault, and the person removing it is doing so from a list on a phone. Recovering is moving the
+folder back; emptying the trash is yours to do, whenever you are sure.
+
+`main` cannot be removed: it is recreated at the next start, so the operation would appear to work
+and then undo itself.
 
 ## A folder you own and move
 

@@ -26,6 +26,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/auth"
 	"github.com/efuturetoday/nocturn/internal/hitl"
 	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
+	"github.com/efuturetoday/nocturn/internal/library"
 	"github.com/efuturetoday/nocturn/internal/push"
 	"github.com/efuturetoday/nocturn/internal/serve"
 	"github.com/efuturetoday/nocturn/internal/speaker"
@@ -51,7 +52,9 @@ func main() {
 // runApp opens every workspace and runs either the interactive terminal assistant (serveAddr == "")
 // or the out-of-band WebSocket daemon (serveAddr set). It returns a Unix exit code. Only this path
 // needs the LLM endpoint — the light commands (auth, secret, ls) do not.
-func runApp(serveAddr string) int {
+//
+// serveOpts configure the daemon and are ignored by the terminal path, which has no socket to serve.
+func runApp(serveAddr string, serveOpts ...serve.Option) int {
 	baseURL := os.Getenv("OPENAI_BASE_URL")
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	model := os.Getenv("OPENAI_MODEL")
@@ -154,10 +157,10 @@ func runApp(serveAddr string) int {
 	master := buildMaster(logger)
 	// Proactive messages route by device presence, the same signal that routes approvals. The broker
 	// holds it; nil in terminal mode (no daemon), where every notification takes the print path.
-	var active func() bool
-	if broker != nil {
-		active = broker.AnyActive
-	}
+	// AnyActive is nil-tolerant, so this needs no guard: in terminal mode there is no broker and it
+	// reports nobody in the foreground, which is exactly right — every notification takes the print
+	// path.
+	active := broker.AnyActive
 	embedCfg, err := embedConfig()
 	if err != nil {
 		logger.Error("embedding config", "err", err)
@@ -182,16 +185,34 @@ func runApp(serveAddr string) int {
 		return runTUI(ctx, ui, host, model)
 	}
 
-	spaces, err := workspace.OpenAll(host, wsRoot)
+	spaces, err := workspace.NewRegistry(host, wsRoot)
 	if err != nil {
 		logger.Error("open workspaces", "err", err)
 		return 1
 	}
 	if serveAddr != "" {
-		logger.Info("nocturn daemon starting", "addr", serveAddr, "workspaces", len(spaces), "model", model)
+		logger.Info("nocturn daemon starting", "addr", serveAddr, "workspaces", spaces.Len(), "model", model)
 		// serve.Serve wires each workspace's chat subscriptions and only then starts its agent
 		// schedulers, so a scheduled firing can never race the subscription wiring.
-		if err := serve.Serve(ctx, serveAddr, spaces, devices, broker, embedder, logger); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// Keep the command line's own credential true after the registry is edited from a phone or a
+		// browser. Forgetting that row is a legitimate thing to want — it is how a leaked cli-bearer is
+		// revoked — but without this it would also disable `nocturn pair` until the next restart, which
+		// is the least convenient moment to discover a restart is needed. The daemon stays the only
+		// writer of that file; ensureCLICredential is idempotent, so this costs a lookup when nothing
+		// relevant changed.
+		serveOpts = append(serveOpts, serve.OnDevicesChanged(func() {
+			ensureCLICredential(devices, logger)
+		}))
+		// The curated catalog, if this build is pointed at one. Absent by default: a daemon nobody
+		// configured a catalog for never reaches out to one, and the library is then missing rather
+		// than empty.
+		if url := os.Getenv("NOCTURN_CATALOG_URL"); url != "" {
+			serveOpts = append(serveOpts, serve.WithLibrary(
+				library.New(library.Source{URL: url}, dataRoot, logger),
+			))
+			logger.Info("library enabled", "catalog", url)
+		}
+		if err := serve.Serve(ctx, serveAddr, spaces, devices, broker, embedder, logger, serveOpts...); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("serve", "err", err)
 			return 1
 		}
@@ -206,16 +227,19 @@ func runApp(serveAddr string) int {
 // first would stream into nothing.
 func runTUI(ctx context.Context, ui tui.Deps, host workspace.Host, model string) int {
 	err := tui.Run(ctx, ui, func(ctx context.Context) (*workspace.Workspace, error) {
-		spaces, err := workspace.OpenAll(host, wsRoot)
+		spaces, err := workspace.NewRegistry(host, wsRoot)
 		if err != nil {
 			return nil, err
 		}
-		ws := spaces[workspace.DefaultWorkspace]
+		ws, ok := spaces.Get(workspace.DefaultWorkspace)
+		if !ok {
+			return nil, fmt.Errorf("workspace %q is missing", workspace.DefaultWorkspace)
+		}
 		ui.Feed.Attach(ws)
-		for _, space := range spaces {
+		for _, space := range spaces.Snapshot() {
 			go space.StartAgents(ctx)
 		}
-		host.Log.Info("nocturn chat starting", "workspaces", len(spaces), "model", model)
+		host.Log.Info("nocturn chat starting", "workspaces", spaces.Len(), "model", model)
 		return ws, nil
 	})
 	if err == nil {
