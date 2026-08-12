@@ -333,13 +333,20 @@ func (w *Waker) save() {
 		list = append(list, wk)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].FireAt.Before(list[j].FireAt) })
+	// Every failure is logged rather than swallowed. What is being lost here is the record that
+	// survives a restart, so a silent failure means the model's self-continuation simply never
+	// happens — and that is precisely the failure mode this file was written to close.
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
+		w.log.Error("wake: encoding the pending wakes failed", "err", err)
 		return
 	}
 	tmp := w.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		w.log.Error("wake: writing the pending wakes failed", "path", tmp, "err", err)
 		return
 	}
-	_ = os.Rename(tmp, w.path)
+	if err := os.Rename(tmp, w.path); err != nil {
+		w.log.Error("wake: replacing the pending wakes failed", "path", w.path, "err", err)
+	}
 }

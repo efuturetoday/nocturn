@@ -326,6 +326,16 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	// before the consumers below because they read through w.snapshot() — a voice driver caging
 	// itself, for one, does so the moment it is built.
 	if err := w.Reload(); err != nil {
+		// This workspace is being thrown away, and nothing will ever call Close on it — so the wasm
+		// guests the failed pass compiled have to go here. It is the one error path in Open that a
+		// running daemon reaches more than once: Registry.Create lands on it whenever somebody adds a
+		// workspace whose folders do not assemble, and a leak per attempt would accumulate.
+		//
+		// Only the plugins. Everything built above holds no OS handle to give back — the vault and both
+		// chat stores read and write on demand rather than keeping a file open, the knowledge watch is
+		// started by the caller and not here, and the reminder and wake timers are not armed until
+		// Restore below.
+		w.closePlugins()
 		return nil, err
 	}
 

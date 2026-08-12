@@ -105,18 +105,26 @@ func (w *Workspace) Reload() error {
 
 // retire parks a superseded snapshot's plugins for Close to release. See Workspace.retired for why
 // they are not closed here.
-func (w *Workspace) retire(old *snapshot) {
-	if len(old.plugins) == 0 {
+func (w *Workspace) retire(old *snapshot) { w.retirePlugins(old.plugins) }
+
+// retirePlugins parks plugins for Close to release.
+//
+// A pass that fails AFTER installPlugins has already compiled its guests, and returns without ever
+// producing a snapshot for anything to retire — so those wazero engines would be held until the
+// process ended, one set per failed reload. Parking them here is what makes the failure path cost the
+// same as the success path: a reload that does not take publishes nothing and keeps nothing.
+func (w *Workspace) retirePlugins(ps []*plugin.Plugin) {
+	if len(ps) == 0 {
 		return
 	}
 	w.retiredMu.Lock()
-	w.retired = append(w.retired, old.plugins...)
+	w.retired = append(w.retired, ps...)
 	w.retiredMu.Unlock()
 }
 
 // assemble runs discovery and builds everything derived from it. It reads the workspace's durable
 // parts and mutates nothing on w — the caller publishes the result.
-func (w *Workspace) discover() (*snapshot, error) {
+func (w *Workspace) discover() (snap *snapshot, err error) {
 	// One diagnostics collector drains every kind's discovery — agents, skills, plugins, MCP all feed
 	// their skipped/shadowed items here, and it is logged once below. A malformed item is skipped
 	// (fail-closed: its authority is simply absent), never fatal.
@@ -164,6 +172,13 @@ func (w *Workspace) discover() (*snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: plugins: %w", w.name, err)
 	}
+	// The guests are compiled now. Everything below can still fail, and a pass that fails produces no
+	// snapshot — so nothing would ever retire them. Park them on the way out instead.
+	defer func() {
+		if snap == nil {
+			w.retirePlugins(plugins)
+		}
+	}()
 
 	// The credential wiring that DEPENDS ON DISCOVERY is re-run here, and it belongs here for a reason
 	// that only shows up on the second pass: a server added while the daemon runs has a shard nobody

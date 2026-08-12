@@ -68,6 +68,13 @@ func (c *conn) deviceCmd(ctx context.Context, cmd string, data []byte) {
 			c.badRequest(ctx, "no such device")
 			return
 		}
+		// Before anything else, and before the caller is told it worked: the row is gone, but the
+		// sockets that row admitted are still open and still carry the capabilities they resolved at
+		// accept. A revocation that leaves the stolen phone's connection alive has revoked nothing
+		// that matters.
+		if n := c.hub.closeDevice(m.ID); n > 0 {
+			c.log.Info("closed the revoked device's connections", "device", m.ID, "conns", n)
+		}
 		// Let the daemon repair what it owns before anyone is told the registry moved. Forgetting the
 		// command line's own row would otherwise leave `nocturn pair` answering 401 until a restart;
 		// this makes that a rotation instead — a fresh credential in the same 0600 file, with the

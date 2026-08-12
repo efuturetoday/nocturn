@@ -36,7 +36,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,6 +70,10 @@ const (
 	// cacheFile holds the last good catalog beside the other daemon-wide state, so the library is
 	// browsable with no network — on a phone at home that is the normal case, not the exception.
 	cacheFile = "catalog.json"
+
+	// maxRedirects bounds a redirect chain. Well below net/http's own default of 10, because a catalog
+	// that needs more than a couple of hops to reach is not a catalog anyone configured on purpose.
+	maxRedirects = 3
 )
 
 // Catalog is what the remote publishes.
@@ -129,10 +135,68 @@ func New(src Source, dataDir string, log *slog.Logger) *Store {
 	if src.Client == nil {
 		src.Client = &http.Client{Timeout: fetchTimeout}
 	}
+	if src.Client.CheckRedirect == nil {
+		// A copy, because the client belongs to whoever passed it — a test may hand the same one to
+		// two Stores, and reaching into it would be a side effect nobody asked for. Everything that
+		// makes it that client (its Transport, Jar and Timeout) comes along.
+		c := *src.Client
+		c.CheckRedirect = sameOrigin
+		src.Client = &c
+	}
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Store{src: src, cache: filepath.Join(dataDir, cacheFile), log: log.With("component", "library")}
+}
+
+// sameOrigin refuses a redirect that leaves the scheme or host the catalog was asked for.
+//
+// The transport is the whole of the catalog's authenticity — nothing is signed (§9 point 3), so TLS
+// to a named host is what says these bytes are the catalog. A redirect that walks https to http, or
+// to another host, hands that guarantee to whoever answered; and what they would be handing back is
+// an inline skill body with a digest computed over their own text, or an MCP declaration naming their
+// own server.
+func sameOrigin(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("library: stopped after %d redirects", maxRedirects)
+	}
+	first := via[0].URL
+	if req.URL.Scheme != first.Scheme || req.URL.Host != first.Host {
+		return fmt.Errorf("library: refusing redirect from %s://%s to %s://%s",
+			first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return nil
+}
+
+// checkSource refuses a catalog URL that is not HTTPS, unless it is loopback.
+//
+// Loopback is exempt because there is no network to attack: `go test` serves a catalog from httptest,
+// and a developer runs one from a file server on 127.0.0.1. Every other host must be HTTPS, for the
+// reason sameOrigin gives — an unsigned catalog is only as trustworthy as the channel it arrived on.
+func checkSource(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("library: bad catalog URL: %w", err)
+	}
+	if u.Scheme == "https" || isLoopback(u.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("library: catalog URL must be https (got %q)", u.Scheme)
+}
+
+// isLoopback reports whether host names this machine.
+//
+// A LITERAL only. A name that merely resolves to 127.0.0.1 is not exempt: what the exemption is for
+// is a developer typing an address they can see, and resolution is exactly the step an attacker gets
+// to influence.
+func isLoopback(host string) bool {
+	// url.Parse preserves the case it was given, and a host is case-insensitive — so http://LOCALHOST
+	// has to mean what http://localhost means, or the exemption depends on how somebody typed it.
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // ErrUnconfigured is returned when no catalog URL is set — the library is then simply absent, the
@@ -172,7 +236,10 @@ func (s *Store) Catalog(ctx context.Context, force bool) (*Catalog, error) {
 	if cached := s.load(); cached != nil {
 		s.log.Warn("catalog fetch failed — serving the cached copy", "err", err)
 		s.mu.Lock()
-		s.catalog = cached
+		// Stamp fetched as well, or the cached copy is born stale: every later call would see a zero
+		// time, decide it must refresh, and pay for another failed network round trip before handing
+		// back the same bytes. force=true stays the way to ask for a retry on purpose.
+		s.catalog, s.fetched = cached, time.Now()
 		s.mu.Unlock()
 		return cached, nil
 	}
@@ -209,6 +276,9 @@ func (s *Store) Server(ctx context.Context, id string) (MCPItem, error) {
 
 // fetch reads and validates the catalog.
 func (s *Store) fetch(ctx context.Context) (*Catalog, error) {
+	if err := checkSource(s.src.URL); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 

@@ -28,13 +28,6 @@ func Write(dir string, s Server) error {
 		return err
 	}
 
-	target := filepath.Join(dir, s.Name)
-	if _, err := os.Stat(target); err == nil {
-		return fmt.Errorf("mcp server %q already exists", s.Name)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-
 	// The name lives in the folder, so it is not repeated in the file — Discover overwrites a
 	// manifest name with the folder's anyway (discovery.ResolveName), and a second copy could only
 	// ever disagree with the first.
@@ -44,10 +37,46 @@ func Write(dir string, s Server) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(target, 0o700); err != nil {
+
+	// Creating the folder IS the claim on the name — os.Mkdir fails when the path exists, so two
+	// callers adding the same server cannot both get past here. A Stat first and MkdirAll after would
+	// let both through the check and both succeed at the create, and the second WriteFile would then
+	// quietly overwrite the first server's declaration.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(target, ConfigFile), data, 0o600)
+	target := filepath.Join(dir, s.Name)
+	if err := os.Mkdir(target, 0o700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("mcp server %q already exists", s.Name)
+		}
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(target, ConfigFile), data, 0o600); err != nil {
+		// The folder we just made is the reservation; without a declaration in it, Discover would
+		// report a server that does not exist and the name would stay taken.
+		_ = os.RemoveAll(target)
+		return err
+	}
+	return nil
+}
+
+// Read returns one server's declaration from disk, with its name filled in from the folder.
+//
+// It exists for the caller that must know something about a server it is about to delete — its URL,
+// so a remembered grant for that host can go with it. The live inventory cannot answer that: a server
+// declared a moment ago is on disk but not yet in any snapshot, and reading a zero URL there would
+// silently skip the revocation.
+func Read(dir, name string) (Server, error) {
+	if !discovery.ValidName(name) {
+		return Server{}, fmt.Errorf("mcp: invalid server name %q", name)
+	}
+	s, err := loadServer(filepath.Join(dir, name, ConfigFile))
+	if err != nil {
+		return Server{}, fmt.Errorf("mcp %s: %w", name, err)
+	}
+	s.Name = name
+	return s, nil
 }
 
 // Remove drops a server's folder — its declaration and its secret shard together.

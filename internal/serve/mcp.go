@@ -112,12 +112,18 @@ func (c *conn) mcpCmd(ctx context.Context, cmd string, data []byte) {
 		if !ok {
 			return
 		}
-		// The host BEFORE the folder goes, because that is the only place its URL is written down.
+		// The host BEFORE the folder goes, because that is the only place its URL is written down —
+		// and from the DECLARATION, not from the inventory. The inventory is the live snapshot, so a
+		// server added moments ago (by hand, by mcp.add, by a catalog install) is on disk while the
+		// reload that would publish it is still running. Reading the URL there would find nothing,
+		// leave host empty, and skip the revocation for exactly the server most likely to be removed
+		// again right away.
 		var host string
-		for _, s := range ws.Inventory().MCP {
-			if s.Name == m.Name {
-				host, _ = mcp.Host(s.URL)
-			}
+		if s, err := mcp.Read(ws.MCPDir(), m.Name); err == nil {
+			host, _ = mcp.Host(s.URL)
+		} else {
+			c.log.Warn("could not read the MCP server's declaration before removing it",
+				"ws", ws.Name(), "server", m.Name, "err", err)
 		}
 		if err := mcp.Remove(ws.MCPDir(), m.Name); err != nil {
 			c.badRequest(ctx, err.Error())

@@ -142,14 +142,22 @@ func (m *Manager) Submit(id, text string) {
 // background ctx), so a scheduled or manually-triggered run is unaffected by a connection closing.
 // Intended for the agent manager; agentName must be the run's owning agent.
 func (m *Manager) Fire(id, agentName, task string) {
-	if err := m.store.SetOwner(id, agentName); err != nil {
-		m.log.Error("agent run: stamping owner failed", "chat", id, "agent", agentName, "err", err)
-		return
-	}
 	m.mu.Lock()
-	sess := m.openLocked(id) // resolver now sees the owner via OwnerOf
-	if lv := m.active[id]; lv != nil {
-		lv.input = task
+	// The owner is stamped INSIDE the critical section, and before openLocked because the resolver
+	// reads it back through OwnerOf. Outside it, a Fire racing CloseAll would write an owner record
+	// for a manager that is already shut — into a store whose directory a workspace delete may have
+	// moved to .trash — and only then discover there is no session to run it in.
+	var sess *agentkit.Session
+	if !m.closed {
+		if err := m.store.SetOwner(id, agentName); err != nil {
+			m.mu.Unlock()
+			m.log.Error("agent run: stamping owner failed", "chat", id, "agent", agentName, "err", err)
+			return
+		}
+		sess = m.openLocked(id)
+		if lv := m.active[id]; lv != nil {
+			lv.input = task
+		}
 	}
 	m.mu.Unlock()
 	if sess == nil {

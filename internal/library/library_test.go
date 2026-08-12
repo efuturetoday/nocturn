@@ -169,3 +169,61 @@ func TestCatalog_UnconfiguredIsAbsent(t *testing.T) {
 		t.Fatal("an unconfigured library answered")
 	}
 }
+
+// Nothing in the catalog is signed, so the channel is the whole of what says these bytes are the
+// catalog: an inline skill body arrives with a digest computed by whoever served it. Plain HTTP to a
+// host on the network is therefore refused rather than merely discouraged.
+func TestCatalog_RefusesPlainHTTPToARemoteHost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(catalogJSON(t, []map[string]any{goodSkill()}, nil)))
+	}))
+	t.Cleanup(srv.Close)
+
+	// httptest serves on 127.0.0.1, which IS exempt — the exemption is what keeps `go test` and a
+	// developer's own file server working. So the refusal is checked against the same server named
+	// by a host that is not loopback, which resolves nowhere and must not even be attempted.
+	remote := strings.Replace(srv.URL, "127.0.0.1", "catalog.example", 1)
+	store := library.New(library.Source{URL: remote}, t.TempDir(), slog.New(slog.DiscardHandler))
+	_, err := store.Catalog(t.Context(), false)
+	if err == nil {
+		t.Fatal("a plain-HTTP catalog on a remote host was accepted")
+	}
+	if !strings.Contains(err.Error(), "https") {
+		t.Errorf("err = %v, want it to name the scheme it requires", err)
+	}
+}
+
+// Loopback is the deliberate exemption: there is no network to attack, and it is what a developer
+// running a catalog on their own machine is doing.
+func TestCatalog_AllowsPlainHTTPOnLoopback(t *testing.T) {
+	store, _ := serveCatalog(t, catalogJSON(t, []map[string]any{goodSkill()}, nil))
+	if _, err := store.Catalog(t.Context(), false); err != nil {
+		t.Fatalf("a loopback catalog was refused: %v", err)
+	}
+}
+
+// A redirect off the host that was configured hands the guarantee to whoever answered — which is the
+// same attack as plain HTTP, arriving one hop later.
+func TestCatalog_RefusesARedirectOffTheConfiguredHost(t *testing.T) {
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(catalogJSON(t, []map[string]any{goodSkill()}, nil)))
+	}))
+	t.Cleanup(elsewhere.Close)
+
+	var followed atomic.Bool
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/moved" {
+			followed.Store(true)
+		}
+		http.Redirect(w, r, elsewhere.URL, http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	store := library.New(library.Source{URL: origin.URL}, t.TempDir(), slog.New(slog.DiscardHandler))
+	if _, err := store.Catalog(t.Context(), false); err == nil {
+		t.Fatal("a catalog served from a redirect target was accepted")
+	}
+	if followed.Load() {
+		t.Error("the redirect was followed")
+	}
+}

@@ -158,6 +158,32 @@ func (h *hub) countOf(device string) int {
 	return n
 }
 
+// closeDevice tears down every connection a device holds, and reports how many it closed.
+//
+// Revoking a device has to reach the sockets it already has open, not only the registry. A
+// connection resolves its identity and its capabilities ONCE at accept (conn.can, conn.device) and
+// never asks the registry again — that is what makes every later command cheap, and it is exactly
+// what would let a revoked bearer keep sending commands and audio on the socket it was already
+// holding. Deleting the row alone therefore revokes nothing that is currently connected.
+//
+// CloseNow rather than a graceful close: the peer is being revoked, so there is nothing to negotiate
+// and no reason to wait out a handshake with a device that is no longer trusted. The read loop sees
+// the error and unwinds through hub.remove like any other disconnect.
+func (h *hub) closeDevice(device string) int {
+	h.mu.Lock()
+	conns := make([]*conn, 0, len(h.conns))
+	for c := range h.conns {
+		if c.device == device {
+			conns = append(conns, c)
+		}
+	}
+	h.mu.Unlock()
+	for _, c := range conns {
+		_ = c.ws.CloseNow()
+	}
+	return len(conns)
+}
+
 // broadcast sends msg to every connection without blocking (a slow one drops it and resyncs).
 func (h *hub) broadcast(msg any) { h.broadcastTo(func(*conn) bool { return true }, msg) }
 

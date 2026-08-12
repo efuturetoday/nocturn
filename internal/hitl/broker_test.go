@@ -757,5 +757,7 @@ func TestNilBroker_BookkeepingIsANoOp(t *testing.T) {
 // nopSink is a Sink that records nothing — a nil broker must never reach it.
 type nopSink struct{}
 
+var _ hitl.Sink = nopSink{}
+
 func (nopSink) Approval(context.Context, hitl.Approval) {}
 func (nopSink) Resolved(context.Context, string)        {}
