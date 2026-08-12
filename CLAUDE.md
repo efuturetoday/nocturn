@@ -317,6 +317,11 @@ Read this before touching anything security-shaped — it is easy to assume the 
   component (they mount against a receiver), and the generator's parser chokes on an unnamed
   `struct{}` parameter — which is one more reason the logic lives in `app.go` and the `.gsx` holds
   only the shape.
+- **`go test ./...` from the root does NOT test the agentkit modules.** `./...` is scoped to the
+  current module; `go.work` only makes the others RESOLVE, it does not fold them into the pattern. So
+  a change to an agentkit interface can be green here and red in CI, which runs each module
+  separately — that is exactly how a `gate.Grants` implementation added to the port shipped with a
+  test fake in `agentkit/gate` left unimplemented. Loop the modules before pushing (§8).
 - **A nested `go.mod` needs `GOWORK=off`.** `internal/onnx/reference/` is its own module so gomlx
   stays out of nocturn's graph. That works — the parent skips it — but `go.work` does not cover it
   either, so plain `go build ./...` inside it fails with "directory prefix . does not contain
@@ -346,9 +351,9 @@ Read this before touching anything security-shaped — it is easy to assume the 
 > right set. Don't style from memory when a skill knows the rule.
 
 ```bash
-go build ./...           # go.work spans nocturn + the agentkit modules
-go test ./...            # race-clean
-go test -race ./...
+# `./...` is scoped to the CURRENT module. go.work makes the agentkit modules RESOLVE from here; it
+# does not put them in `./...`. Run each one, which is what CI does:
+for m in . agentkit agentkit/{gate,openai,tools,runtime,gemini}; do (cd $m && go build ./... && go vet ./... && go test -race ./...); done
 
 wat2wasm internal/sandbox/testdata/echo.wat -o internal/sandbox/testdata/echo.wasm
 internal/script/qjs/build.sh          # CI rebuilds+commits this too; by hand is just faster

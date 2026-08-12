@@ -89,6 +89,10 @@ func (s *spyGrants) Remember(g gate.Grant, r gate.Recall) {
 	s.mu.Unlock()
 }
 
+// Forget completes the interface. Nothing in gate calls it — Check never revokes — so a spy that
+// recorded the call would be recording something no test can trigger.
+func (s *spyGrants) Forget(gate.Grant) bool { return false }
+
 func (s *spyGrants) allowCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
