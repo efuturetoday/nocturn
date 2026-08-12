@@ -149,16 +149,19 @@ func TestDeviceForget_RevokesTheBearerAndTheLiveSession(t *testing.T) {
 func TestDeviceForget_NotifiesTheDaemonBeforeAnnouncingTheRoster(t *testing.T) {
 	// The hook the daemon installs (cmd/nocturn passes ensureCLICredential). Recorded rather than
 	// re-implemented: what it does is main's business, that it RAN — and when — is this package's.
-	called := 0
-	rosterWhenCalled := -1
+	//
+	// Published over a channel rather than read straight out of the closure. The hook runs on the
+	// connection's read-loop goroutine and the roster that follows is written by a different one, so
+	// receiving that message orders nothing: a socket carries bytes, not a happens-before. The channel
+	// is the edge, and it is also what lets the test wait for the hook instead of assuming it already
+	// ran. Buffered so a second call cannot block the read loop — it would be a failure, not a
+	// deadlock.
+	type observation struct{ roster int }
+	ran := make(chan observation, 4)
 	var store *auth.Store
 
-	// The hook runs on the connection's own read-loop goroutine, and the assertions run after a
-	// message that goes out from that same goroutine, so the send-then-read is the ordering edge —
-	// no lock needed, and -race is what proves it.
 	admin, ctx, store, _, _ := twoDevices(t, OnDevicesChanged(func() {
-		called++
-		rosterWhenCalled = len(store.List())
+		ran <- observation{roster: len(store.List())}
 	}))
 
 	send(t, admin, ctx, map[string]any{"cmd": "device.list"})
@@ -167,8 +170,18 @@ func TestDeviceForget_NotifiesTheDaemonBeforeAnnouncingTheRoster(t *testing.T) {
 	send(t, admin, ctx, map[string]any{"cmd": "device.forget", "id": idOf(t, before, "target")})
 	awaitType(t, admin, ctx, "device.list")
 
-	if called != 1 {
-		t.Fatalf("the registry hook ran %d times, want 1", called)
+	var got observation
+	select {
+	case got = <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the registry hook never ran")
+	}
+	rosterWhenCalled := got.roster
+	// Exactly once. Nothing else may arrive, so a moment's grace is enough to catch a second call.
+	select {
+	case <-ran:
+		t.Fatal("the registry hook ran more than once")
+	case <-time.After(100 * time.Millisecond):
 	}
 	// Before the broadcast, not after: a roster that is missing a row and then grows one a moment
 	// later reads as a bug rather than as repair.

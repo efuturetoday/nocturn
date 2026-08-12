@@ -205,16 +205,16 @@ func TestCatalog_AllowsPlainHTTPOnLoopback(t *testing.T) {
 // A redirect off the host that was configured hands the guarantee to whoever answered — which is the
 // same attack as plain HTTP, arriving one hop later.
 func TestCatalog_RefusesARedirectOffTheConfiguredHost(t *testing.T) {
+	// The flag belongs to the REDIRECT TARGET: what must not happen is the off-host request, and the
+	// only place that is observable is the host that would have served it.
+	var followed atomic.Bool
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		followed.Store(true)
 		_, _ = w.Write([]byte(catalogJSON(t, []map[string]any{goodSkill()}, nil)))
 	}))
 	t.Cleanup(elsewhere.Close)
 
-	var followed atomic.Bool
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/moved" {
-			followed.Store(true)
-		}
 		http.Redirect(w, r, elsewhere.URL, http.StatusFound)
 	}))
 	t.Cleanup(origin.Close)
