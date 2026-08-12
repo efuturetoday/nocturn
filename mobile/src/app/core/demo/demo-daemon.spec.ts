@@ -139,6 +139,177 @@ describe('the state-sync commands', () => {
   });
 });
 
+/** The last event of a type, which after a mutation is the state everyone converged on. */
+function lastWorkspaces(events: ServerEvent[]) {
+  return events.filter((e) => e.type === 'workspace.list').at(-1)!.items;
+}
+
+describe('managing workspaces', () => {
+  it('answers a create with the whole new set, the way the daemon broadcasts it', () => {
+    const { host } = play({ cmd: 'workspace.create', name: 'work', title: 'Arbeit' });
+
+    expect(lastWorkspaces(host.events)).toEqual([
+      { name: 'main', title: 'main', default: true },
+      { name: 'work', title: 'Arbeit' },
+    ]);
+  });
+
+  it('falls a title-less workspace back to its name', () => {
+    const { host } = play({ cmd: 'workspace.create', name: 'work' });
+
+    expect(lastWorkspaces(host.events)).toContainEqual({ name: 'work', title: 'work' });
+  });
+
+  it('refuses a name that is already taken', () => {
+    const { host } = play({ cmd: 'workspace.create', name: 'main', title: 'Second main' });
+
+    expect(typesOf(host.events)).toEqual(['error']);
+  });
+
+  it('moves the title and leaves the name alone', () => {
+    const { host } = play(
+      { cmd: 'workspace.create', name: 'work', title: 'Arbeit' },
+      { cmd: 'workspace.rename', name: 'work', title: 'Büro' },
+    );
+
+    expect(lastWorkspaces(host.events)).toContainEqual({ name: 'work', title: 'Büro' });
+  });
+
+  it('resets the label to the folder name when the title is cleared', () => {
+    const { host } = play(
+      { cmd: 'workspace.create', name: 'work', title: 'Arbeit' },
+      { cmd: 'workspace.rename', name: 'work', title: '' },
+    );
+
+    expect(lastWorkspaces(host.events)).toContainEqual({ name: 'work', title: 'work' });
+  });
+
+  it('deletes a workspace out of the set', () => {
+    const { host } = play(
+      { cmd: 'workspace.create', name: 'work', title: 'Arbeit' },
+      { cmd: 'workspace.delete', name: 'work' },
+    );
+
+    expect(lastWorkspaces(host.events).map((w) => w.name)).toEqual(['main']);
+  });
+
+  it('refuses to delete the default, which the daemon would recreate anyway', () => {
+    const { host } = play({ cmd: 'workspace.delete', name: 'main' }, { cmd: 'workspace.list' });
+
+    expect(typesOf(host.events)).toEqual(['error', 'workspace.list']);
+    expect(lastWorkspaces(host.events).map((w) => w.name)).toEqual(['main']);
+  });
+});
+
+function lastSkills(events: ServerEvent[]) {
+  return events.filter((e) => e.type === 'skill.list').at(-1)!.items;
+}
+
+function lastServers(events: ServerEvent[]) {
+  return events.filter((e) => e.type === 'mcp.list').at(-1)!.items;
+}
+
+describe('managing skills', () => {
+  it('starts with one skill off, so "off is not gone" is visible at all', () => {
+    const { host } = play({ cmd: 'skill.list', ws: WS });
+
+    expect(lastSkills(host.events).some((s) => !s.enabled)).toBe(true);
+  });
+
+  it('keeps a skill in the list when it is switched off', () => {
+    const { host } = play({ cmd: 'skill.enable', ws: WS, name: 'release-notes', on: false });
+    const items = lastSkills(host.events);
+
+    expect(items.map((s) => s.name)).toContain('release-notes');
+    expect(items.find((s) => s.name === 'release-notes')!.enabled).toBe(false);
+  });
+
+  it('drops a skill on remove, which is the other command for a reason', () => {
+    const { host } = play({ cmd: 'skill.remove', ws: WS, name: 'release-notes' });
+
+    expect(lastSkills(host.events).map((s) => s.name)).not.toContain('release-notes');
+  });
+
+  it('answers a read with the body, frontmatter included', () => {
+    const { host } = play({ cmd: 'skill.read', ws: WS, name: 'standup' });
+    const [body] = host.events.filter((e) => e.type === 'skill.body');
+
+    expect(body.name).toBe('standup');
+    expect(body.body.startsWith('---\nname: standup')).toBe(true);
+  });
+});
+
+describe('managing MCP servers', () => {
+  it('reports a new server as connecting BEFORE it reports what happened', () => {
+    const { host } = play({ cmd: 'mcp.add', ws: WS, name: 'weather', url: 'https://weather.example/mcp' });
+    const lists = host.events.filter((e) => e.type === 'mcp.list');
+
+    expect(lists.length).toBe(2);
+    expect(lists[0].items.find((s) => s.name === 'weather')!.state).toBe('connecting');
+    expect(lists[1].items.find((s) => s.name === 'weather')!.state).toBe('connected');
+  });
+
+  it('lands an oauth server on needs auth rather than on failed', () => {
+    const { host } = play({ cmd: 'mcp.add', ws: WS, name: 'linear2', url: 'https://x.example/mcp', auth: 'oauth' });
+    const added = lastServers(host.events).find((s) => s.name === 'linear2')!;
+
+    expect(added.state).toBe('needs auth');
+    expect(added.note).toBeTruthy();
+  });
+
+  it('refuses a name that is already declared', () => {
+    const { host } = play({ cmd: 'mcp.add', ws: WS, name: 'github', url: 'https://github.example/mcp' });
+
+    expect(typesOf(host.events)).toEqual(['error']);
+  });
+
+  it('drops a server on remove', () => {
+    const { host } = play({ cmd: 'mcp.remove', ws: WS, name: 'github' });
+
+    expect(lastServers(host.events).map((s) => s.name)).not.toContain('github');
+  });
+});
+
+describe('the library', () => {
+  it('serves both kinds, and a skill arrives with its whole body', () => {
+    const { host } = play({ cmd: 'library.list' });
+    const [cat] = host.events.filter((e) => e.type === 'library.catalog');
+
+    expect(cat.skills.length).toBeGreaterThan(0);
+    expect(cat.mcp.length).toBeGreaterThan(0);
+    expect(cat.skills.every((s) => s.body.includes('---'))).toBe(true);
+  });
+
+  it('installs a skill into the workspace list', () => {
+    const { host } = play({ cmd: 'library.install', ws: WS, kind: 'skill', id: 'commit-messages' });
+
+    expect(lastSkills(host.events).map((s) => s.name)).toContain('commit-messages');
+  });
+
+  it('refuses a second install rather than doing nothing quietly', () => {
+    const { host } = play(
+      { cmd: 'library.install', ws: WS, kind: 'skill', id: 'commit-messages' },
+      { cmd: 'library.install', ws: WS, kind: 'skill', id: 'commit-messages' },
+    );
+
+    expect(typesOf(host.events)).toEqual(['skill.list', 'error']);
+  });
+
+  it('installs a server through the same connecting-then-outcome path as mcp.add', () => {
+    const { host } = play({ cmd: 'library.install', ws: WS, kind: 'mcp', id: 'weather' });
+    const lists = host.events.filter((e) => e.type === 'mcp.list');
+
+    expect(lists[0].items.find((s) => s.name === 'weather')!.state).toBe('connecting');
+    expect(lists.at(-1)!.items.find((s) => s.name === 'weather')!.state).toBe('connected');
+  });
+
+  it('refuses a server the workspace already declares — the catalog holds linear, so does the demo', () => {
+    const { host } = play({ cmd: 'library.install', ws: WS, kind: 'mcp', id: 'linear' });
+
+    expect(typesOf(host.events)).toEqual(['error']);
+  });
+});
+
 describe('the scripted turn', () => {
   const ID = 'aa11bb22cc33';
   const submit: ClientCommand = { cmd: 'chat.submit', ws: WS, kind: 'user', id: ID, text: 'File an issue about the flaky pairing test.' };

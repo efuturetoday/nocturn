@@ -5,7 +5,10 @@
   "compilerOptions": {
     "outDir": "./out-tsc/spec",
     "types": [
-      "vitest/globals"
+      "vitest/globals",
+      /* For import.meta.glob, which layout-invariant.spec.ts reads the tree with — the runner is a
+         browser environment, so there is no node:fs to walk it with instead. */
+      "vite/client"
     ]
   },
   "include": [

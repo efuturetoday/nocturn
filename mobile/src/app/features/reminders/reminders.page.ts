@@ -53,9 +53,14 @@ import { ReminderRowComponent } from './components/reminder-row';
   `,
   styles: `
     .due { color: var(--ion-color-primary); }
-    /* Sits with the inset card, not with the page edge, so it reads as a footnote to the list. */
+    /* Sits with the inset card, not with the page edge, so it reads as a footnote to the list. That
+       means the card's OWN box (styles.scss centres inset lists on the measure), not a 1rem gutter:
+       a fixed gutter is identical to it on a phone and drifts to the far left of a wide pane, where
+       the footnote no longer belongs to anything. */
     .hint {
-      margin: 0 1rem;
+      max-width: min(var(--nocturn-measure), calc(100% - 2rem));
+      margin-inline: auto;
+      margin-block: 0;
       color: var(--ion-color-medium);
       font-size: 0.85rem;
     }

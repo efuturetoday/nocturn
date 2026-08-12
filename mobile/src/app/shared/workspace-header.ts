@@ -1,4 +1,5 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
+import { Router } from '@angular/router';
 import {
   IonHeader, IonToolbar, IonButtons, IonButton, IonMenuButton, ActionSheetController,
 } from '@ionic/angular/standalone';
@@ -25,7 +26,7 @@ import { WorkspaceService } from '../core/services/workspace.service';
         </ion-buttons>
         <ion-buttons slot="end">
           <ion-button class="ws-switch" (click)="choose()" aria-label="Switch workspace">
-            <span class="ws-name">{{ ws.active() }}</span>
+            <span class="ws-name">{{ ws.activeTitle() }}</span>
             <svg lucideChevronDown [size]="16" class="caret" />
           </ion-button>
         </ion-buttons>
@@ -46,19 +47,25 @@ import { WorkspaceService } from '../core/services/workspace.service';
 export class WorkspaceHeaderComponent {
   protected readonly ws = inject(WorkspaceService);
   private readonly sheets = inject(ActionSheetController);
+  private readonly router = inject(Router);
 
   protected async choose(): Promise<void> {
     const current = this.ws.active();
     const sheet = await this.sheets.create({
       header: 'Workspace',
       // Tapping a name switches immediately — no separate confirm step. The active one is marked
-      // selected so it reads as the current choice.
+      // selected so it reads as the current choice. The sheet lists TITLES: it is the switcher, and
+      // the folder name belongs on the page where it can be explained.
+      //
+      // "Manage" sits at the bottom because this is where someone looking for it arrives: the moment
+      // you notice a workspace is missing is the moment you opened the switcher.
       buttons: [
         ...this.ws.workspaces().map((w) => ({
-          text: w.name,
+          text: w.title,
           role: w.name === current ? ('selected' as const) : undefined,
           handler: () => { void this.ws.setActive(w.name); },
         })),
+        { text: 'Manage workspaces…', handler: () => { void this.router.navigateByUrl('/app/workspaces'); } },
         { text: 'Cancel', role: 'cancel' as const },
       ],
     });

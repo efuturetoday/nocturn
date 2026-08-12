@@ -19,12 +19,34 @@
      One token so the surfaces cannot drift apart. */
   --nocturn-measure: 660px;
 
+  /* BREAKPOINTS ARE IONIC'S (0/576/768/992/1200). No width media query in src/app: columns come from
+     ion-col size-sm/md/lg/xl, showing and hiding from ion-hide-*-up|down, anything fluid from a
+     min()/clamp(). A shared token is impossible — a custom property cannot be read inside @media and
+     component styles are inline strings, not SCSS — so src/app/layout-invariant.spec.ts holds it.
+     Container widths beyond the measure are Ionic's too: <ion-grid fixed> reads --ion-grid-width-*,
+     so a surface wider than 660px is widened HERE, once. */
+
   /* How much of the bottom edge is occupied right now — by the home indicator, or by the keyboard
      once it is up. Anything anchored to the bottom sits on THIS instead of on the safe-area inset,
      and then rides the keyboard without needing to know anything about it. max(), so it needs no
      open/closed state: --kb-height is 0px while the keyboard is down, and larger than the inset
      whenever it is up. */
   --nocturn-bottom-inset: max(var(--ion-safe-area-bottom, 0px), var(--kb-height, 0px));
+
+  /* Spacing anchors on Ionic's: --ion-padding is what every .ion-padding* utility and every
+     component's default inset is built from. Ionic ships no scale, though — only this one value and
+     --ion-margin — so the steps are named here, once, derived from it. A rule says `var(--space-2)`
+     instead of doing arithmetic in place, and changing the anchor moves everything together. */
+  --ion-padding: 16px;
+  --ion-margin: 16px;
+
+  --space-1: calc(var(--ion-padding) / 4); /* 4px */
+  --space-2: calc(var(--ion-padding) / 2); /* 8px */
+  --space-3: calc(var(--ion-padding) * 0.75); /* 12px */
+  --space-4: var(--ion-padding); /* 16px */
+  --space-6: calc(var(--ion-padding) * 1.5); /* 24px */
+  --space-8: calc(var(--ion-padding) * 2); /* 32px */
+  --space-12: calc(var(--ion-padding) * 3); /* 48px */
 }
 
 /* Safe areas: ion-header/ion-toolbar (top) and ion-footer (bottom) apply their insets
@@ -34,6 +56,87 @@
 ion-content {
   margin-left: var(--ion-safe-area-left, 0);
   margin-right: var(--ion-safe-area-right, 0);
+}
+
+/* Segments are a switch between views, and the app has one look for "this one is selected": a solid
+   primary fill with contrast text, the same as the Library's filter chips. Ionic's default is a
+   tinted bar or an underline indicator, neither of which reads as selected on this background.
+   Styled globally so every segment matches instead of each page inventing one. */
+ion-segment {
+  --background: var(--ion-background-color-step-100);
+  max-width: min(var(--nocturn-measure), calc(100% - var(--space-8)));
+  margin: var(--space-2) auto 0;
+  padding: var(--space-1);
+  border-radius: 999px;
+  /* Ionic gives the bar a mode min-height of its own; the pills decide the height here. */
+  min-height: 0;
+}
+/* A scrollable bar sizes its buttons to their text. The host is the scroller, so padding on it
+   scrolls away at the end and the last pill collides with the rounded edge — the inset belongs on
+   the first and last button instead. */
+ion-segment.segment-scrollable {
+  padding-inline: 0;
+  /* The host IS the scroller, so it shows a scrollbar under the pills unless both engines are told
+     not to. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+ion-segment.segment-scrollable::-webkit-scrollbar {
+  display: none;
+}
+ion-segment.segment-scrollable ion-segment-button {
+  --padding-start: var(--space-3);
+  --padding-end: var(--space-3);
+  min-width: auto;
+}
+ion-segment.segment-scrollable ion-segment-button:first-of-type {
+  margin-inline-start: var(--space-1);
+}
+ion-segment.segment-scrollable ion-segment-button:last-of-type {
+  margin-inline-end: var(--space-1);
+}
+ion-segment-button {
+  --background: transparent;
+  --background-checked: var(--ion-color-primary);
+  --background-hover: transparent;
+  --color: var(--ion-color-medium);
+  --color-checked: var(--ion-color-primary-contrast);
+  /* The md indicator is a separate underline element; the fill above already says which is on. */
+  --indicator-color: transparent;
+  --indicator-box-shadow: none;
+  /* No tint or ripple on press and focus: they land ON the primary fill and read as a smear. The
+     keyboard still gets a ring below. */
+  --background-focused: transparent;
+  --background-focused-opacity: 0;
+  --background-hover-opacity: 0;
+  --ripple-color: transparent;
+  --border-radius: 999px;
+  --padding-top: 0;
+  --padding-bottom: 0;
+  /* A tab bar is chrome, not content: the pill is only as tall as its label needs. */
+  min-height: var(--space-6);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+/* What actually sets the pill's height: Ionic gives a label-only button
+   `::slotted(ion-label) { margin-top: 12px; margin-bottom: 12px }`. The label is ours, in the light
+   DOM, so a document rule reaches it and wins over the slotted one. */
+ion-segment-button ion-label {
+  margin-block: var(--space-1);
+}
+
+/* Ionic separates its buttons with a hairline ::before — a second way of saying what the fill
+   already says, and it cuts through the pills. !important because Ionic's own rule carries a mode
+   class and so outranks a plain element selector. */
+ion-segment-button::before {
+  display: none !important;
+}
+ion-segment-button:focus-visible {
+  outline: 2px solid var(--ion-color-primary-tint);
+  outline-offset: 1px;
+  border-radius: 999px;
 }
 
 /* ion-list-header ships a fixed light-mode --color (~#262626) on its host that the label inherits →
@@ -52,13 +155,13 @@ ion-list-header {
    card stays pinned to the left edge of a wide pane instead of centring. */
 ion-list.list-md.list-inset,
 ion-list.list-ios.list-inset {
-  /* The measure, but never at the cost of the 16px gutter: min() keeps the card inset from the
-     screen edge on a phone and centres it once there is room to spare. */
-  max-width: min(var(--nocturn-measure), calc(100% - 2rem));
+  /* The measure, but never at the cost of the gutter: min() keeps the card inset from the screen
+     edge on a phone and centres it once there is room to spare. */
+  max-width: min(var(--nocturn-measure), calc(100% - var(--space-8)));
   margin-inline: auto;
 }
 ion-list.list-inset {
-  padding-block: 0.75rem;
+  padding-block: var(--space-3);
   /* State the radius rather than inherit it: Ionic's md inset list rounds by 2px and its ios one by
      8px, so the same card reads as a rectangle on one platform and a card on the other. */
   border-radius: 0.5rem;
@@ -68,7 +171,7 @@ ion-list.list-inset ion-list-header {
 }
 ion-list.list-inset ion-list-header ion-label {
   margin-top: 0;
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--space-2);
 }
 
 /* Roomier rows: Ionic's 44px ios default packs a two-line row (name + sub) tight. Give items more
@@ -116,10 +219,10 @@ svg.lucide {
   flex-shrink: 0;
 }
 ion-item > svg.lucide[slot='start'] {
-  margin-inline-end: 1rem;
+  margin-inline-end: var(--space-4);
 }
 ion-item > svg.lucide[slot='end'] {
-  margin-inline-start: 1rem;
+  margin-inline-start: var(--space-4);
 }
 
 /* The composer's field must not set the pill's height — the SEND DISC should, so the disc looks
