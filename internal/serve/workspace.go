@@ -88,6 +88,19 @@ func (c *conn) workspaceCmd(ctx context.Context, cmd string, data []byte) {
 			c.badRequest(ctx, err.Error())
 			return
 		}
+	case "workspace.reload":
+		var m WorkspaceReload
+		if err := json.Unmarshal(data, &m); err != nil {
+			c.badRequest(ctx, "bad workspace.reload")
+			return
+		}
+		ws, ok := c.workspace(ctx, m.Ws)
+		if !ok {
+			return
+		}
+		c.reload(ws)
+		return // the lists come from the reload; the workspace set did not change
+
 	case "workspace.delete":
 		var m WorkspaceDelete
 		if err := json.Unmarshal(data, &m); err != nil {

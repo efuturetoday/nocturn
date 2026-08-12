@@ -312,6 +312,7 @@ func serveOn(
 	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) { handleJoin(w, r, devices, hub, log) })
 	mux.HandleFunc("/join/confirm", func(w http.ResponseWriter, r *http.Request) { handleJoinConfirm(w, r, devices, log) })
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) { handleRegister(w, r, devices, log) })
+	mux.HandleFunc("/reload", func(w http.ResponseWriter, r *http.Request) { handleReload(w, r, spaces, devices, log) })
 	mux.HandleFunc("POST /devices", func(w http.ResponseWriter, r *http.Request) { handleEnrol(w, r, devices, log) })
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{

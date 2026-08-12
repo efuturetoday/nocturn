@@ -69,6 +69,16 @@ func dispatch(args []string) int {
 			return code
 		}
 		return cmdPair(*addr, *open)
+	case "reload":
+		fs := flag.NewFlagSet("reload", flag.ContinueOnError)
+		addr := fs.String("addr", ":8080", "address of the running daemon")
+		wsName := workspaceFlag(fs)
+		fs.Usage = usage(fs, "reload [-w workspace] [--addr :8080]",
+			"Re-read a workspace's agents, skills, plugins and MCP servers on the running daemon.")
+		if code, done := parseFlags(fs, args[1:]); done {
+			return code
+		}
+		return cmdReload(*addr, *wsName)
 	case "voice":
 		fs := flag.NewFlagSet("voice", flag.ContinueOnError)
 		port := fs.Int("port", 8788, "loopback port for the voice PoC harness")
@@ -126,6 +136,7 @@ Usage:
   nocturn                      Open the interactive terminal assistant (default workspace)
   nocturn serve [--host --port] Run the WebSocket daemon and the browser UI
   nocturn pair [--open]        Mint a pairing code on the running daemon (any time, not just at start)
+  nocturn reload [-w ws]       Re-read a workspace's agents, skills, plugins and MCP servers
   nocturn voice [--port 8788]  Run the browser voice PoC harness (loopback only, no pairing)
   nocturn enroll --device <n>  Ask a satellite to record its microphone, for voice enrolment
   nocturn voices ls|add|rm     Manage the voices a workspace can recognise
