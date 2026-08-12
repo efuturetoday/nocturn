@@ -15,7 +15,12 @@ import { ConnectionService } from '../core/services/connection.service';
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (!connection.connected()) {
-      <div class="conn-pill" [class.warn]="connection.state() !== 'disconnected'">
+      <div
+        class="conn-pill"
+        [class.warn]="connection.state() !== 'disconnected'"
+        role="status"
+        aria-live="polite"
+      >
         {{ connection.state() === 'disconnected' ? 'Disconnected' : 'Reconnecting…' }}
       </div>
     }
@@ -42,7 +47,10 @@ import { ConnectionService } from '../core/services/connection.service';
       box-shadow: 0 0.25rem 0.875rem rgb(0 0 0 / 0.35);
       pointer-events: none;
     }
-    .conn-pill.warn { background: var(--ion-color-warning); color: var(--ion-color-warning-contrast); }
+    .conn-pill.warn {
+      background: var(--ion-color-warning);
+      color: var(--ion-color-warning-contrast);
+    }
   `,
 })
 export class ConnectionPillComponent {
