@@ -48,7 +48,7 @@ import { DaemonService } from '../../core/services/daemon.service';
         </ion-input-otp>
         <!-- Never a one-way door: whatever brought us here, there is always a way back to the other
              way in. This is the link whose absence turned an expired code into a trap. -->
-        <p class="alt"><a (click)="backToCode()">Enter a code from the server instead</a></p>
+        <p class="alt"><button type="button" class="link" (click)="backToCode()">Enter a code from the server instead</button></p>
       } @else if (!bootstrap && !paired) {
         <!-- The state that used to have no screen: no code armed, and nothing that could relay one.
              There is genuinely nothing to type here, so showing a form would be a lie. -->
@@ -57,7 +57,7 @@ import { DaemonService } from '../../core/services/daemon.service';
           <p>On the machine running Nocturn:</p>
           <pre><code>nocturn pair</code></pre>
           <p>It prints a fresh code and a link. You can run it any time.</p>
-          <p class="alt"><a (click)="retry()">I've run it — check again</a></p>
+          <p class="alt"><button type="button" class="link" (click)="retry()">I've run it — check again</button></p>
         </div>
       } @else {
         <ion-input-otp
@@ -76,7 +76,7 @@ import { DaemonService } from '../../core/services/daemon.service';
           }
         </ion-input-otp>
         @if (paired) {
-          <p class="alt">Already have a paired device? <a (click)="startJoin()">Ask it instead</a></p>
+          <p class="alt">Already have a paired device? <button type="button" class="link" (click)="startJoin()">Ask it instead</button></p>
         }
       }
 
@@ -90,7 +90,12 @@ import { DaemonService } from '../../core/services/daemon.service';
     .host { display: block; text-align: center; margin: 0.25rem 0 1rem; word-break: break-all; }
     .center, .err { text-align: center; }
     ion-input-otp { justify-content: center; }
-    ion-input-otp a, .alt a { color: var(--ion-color-primary); cursor: pointer; }
+    /* These read as links but they DO something rather than go somewhere, and an <a> with no href is
+       neither focusable nor operable by keyboard — so they are buttons wearing a link's clothes. */
+    ion-input-otp a, .alt .link {
+      color: var(--ion-color-primary); cursor: pointer;
+      background: none; border: 0; padding: 0; font: inherit;
+    }
     .alt { text-align: center; font-size: 0.85rem; color: var(--ion-color-medium); margin-top: 1rem; }
     .stuck { font-size: 0.9rem; color: var(--ion-color-medium); }
     .stuck pre {

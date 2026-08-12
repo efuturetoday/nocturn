@@ -66,8 +66,21 @@ const KINDS: { key: LibraryKind; label: string }[] = [
           <div class="filters">
             @for (k of kinds; track k.key) {
               <!-- outline stays ON in both states: toggling it changes the border and resizes the
-                   chip, which shifts the whole row on every selection. -->
-              <ion-chip outline="true" [class.on]="kind() === k.key" (click)="kind.set(k.key)">
+                   chip, which shifts the whole row on every selection.
+
+                   ion-chip renders a plain div, so the filter is spelled out as a toggle button:
+                   reachable by tab, operable by Enter and Space, and announced with its pressed
+                   state. The cards below are real buttons for the same reason. -->
+              <ion-chip
+                outline="true"
+                role="button"
+                tabindex="0"
+                [attr.aria-pressed]="kind() === k.key"
+                [class.on]="kind() === k.key"
+                (click)="kind.set(k.key)"
+                (keydown.enter)="kind.set(k.key)"
+                (keydown.space)="$event.preventDefault(); kind.set(k.key)"
+              >
                 <ion-label>{{ k.label }}</ion-label>
               </ion-chip>
             }

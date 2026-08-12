@@ -61,12 +61,19 @@ export class DaemonService {
   }
 
   /**
-   * Ask this page's own origin whether a daemon is behind it. Probed once per app lifetime — the
-   * answer is a property of how the app was loaded, and it cannot change without a reload.
+   * Ask this page's own origin whether a daemon is behind it. A daemon that answers is remembered for
+   * the app's lifetime — that answer is a property of how the app was loaded and cannot change
+   * without a reload.
+   *
+   * A failure is NOT remembered. `fetchInfo` reports every failure the same way, as null, so a page
+   * opened one second before its daemon finished binding is indistinguishable from a page nobody
+   * served — and caching that null would disable the same-origin path for as long as the app stayed
+   * open, with a reload the only way back. The cache holds the fact, not the absence of one.
    */
   probeLocal(): Promise<DaemonInfo | null> {
     this.localProbe ??= this.fetchInfo(location.origin).then((info) => {
       this._local.set(info);
+      if (!info) this.localProbe = null;
       return info;
     });
     return this.localProbe;
