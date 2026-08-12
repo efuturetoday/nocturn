@@ -96,10 +96,10 @@ jobs:
           ref: ${{ inputs.tag || github.ref_name }}
           persist-credentials: false
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
 
       # Restores mobile/dist/mobile/browser, which is exactly where generate.sh looks — so the
       # workflow does not carry a second copy of that path, and moving it is one edit in one file.
