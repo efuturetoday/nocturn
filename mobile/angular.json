@@ -38,6 +38,7 @@
               { "input": "node_modules/@ionic/angular/css/typography.css" },
               { "input": "node_modules/@ionic/angular/css/padding.css" },
               { "input": "node_modules/@ionic/angular/css/flex-utils.css" },
+              { "input": "node_modules/@ionic/angular/css/display.css" },
               { "input": "node_modules/@ionic/angular/css/text-alignment.css" },
               "src/theme/galaxy.css",
               "src/theme/variables.css"

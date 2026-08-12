@@ -15,8 +15,12 @@ import type {
   Account,
   AgentInfo,
   ChatMeta,
+  LibrarySkill,
+  LibraryServer,
+  MCPInfo,
   Message,
   ReminderInfo,
+  SkillInfo,
   ToolNode,
   WorkspaceInfo,
 } from '../protocol/nocturn-protocol';
@@ -29,7 +33,12 @@ export interface DemoChat {
   tools: ToolNode[][];
 }
 
-export const DEMO_WORKSPACE: WorkspaceInfo = { name: 'main' };
+export const DEMO_WORKSPACE: WorkspaceInfo = { name: 'main', title: 'main', default: true };
+
+/** The workspaces the demo starts with. A fresh array per call — `demo-daemon.ts` mutates its own. */
+export function demoWorkspaces(): WorkspaceInfo[] {
+  return [{ ...DEMO_WORKSPACE }];
+}
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -74,6 +83,138 @@ export function demoAccounts(): Account[] {
     { server: 'github', connected: true },
     { server: 'linear', connected: false },
   ];
+}
+
+/** One skill on and one off, because "off is not gone" is the thing the page has to teach and an
+    all-enabled list could not show it. `release-notes` also demonstrates the folder/name split. */
+export function demoSkills(): SkillInfo[] {
+  return [
+    {
+      name: 'release-notes',
+      folder: 'notes',
+      description: 'Turns a diff into notes a human would read.',
+      enabled: true,
+      bytes: 1_840,
+    },
+    {
+      name: 'standup',
+      folder: 'standup',
+      description: 'Writes the daily standup from yesterday’s chats.',
+      enabled: false,
+      bytes: 620,
+    },
+  ];
+}
+
+export function demoSkillBody(name: string): string {
+  if (name === 'standup') {
+    return [
+      '---',
+      'name: standup',
+      'description: Writes the daily standup from yesterday’s chats.',
+      '---',
+      '',
+      '# Standup',
+      '',
+      'Read yesterday’s conversations, then answer three things: what moved, what is next,',
+      'and what is blocked. One line each. Say "nothing blocked" rather than omitting the line.',
+    ].join('\n');
+  }
+  return [
+    '---',
+    'name: release-notes',
+    'description: Turns a diff into notes a human would read.',
+    '---',
+    '',
+    '# Release notes',
+    '',
+    'Group the changes by what a user would notice, not by which file moved. Lead each entry',
+    'with the effect, then the reason. Drop refactors nobody can see from the outside.',
+    '',
+    '## Tone',
+    '',
+    'Past tense, no adjectives, no "we are excited to". A fix says what was broken.',
+  ].join('\n');
+}
+
+/** One connected server and one waiting on a sign-in — `needs auth` is a state the page renders
+    differently from a failure, so the demo has to contain one. */
+export function demoServers(): MCPInfo[] {
+  return [
+    { name: 'github', url: 'https://api.githubcopilot.com/mcp/', state: 'connected', tools: 7 },
+    {
+      name: 'linear',
+      url: 'https://mcp.linear.app/sse',
+      state: 'needs auth',
+      tools: 0,
+      note: 'run: nocturn auth linear',
+    },
+  ];
+}
+
+/** A catalog with two of each. The skill bodies are whole, as the real catalog serves them: the
+    Library shows the entire body before installing, so a truncated one would misrepresent the page. */
+export function demoCatalog(): { version: string; skills: LibrarySkill[]; mcp: LibraryServer[] } {
+  return {
+    version: 'demo',
+    skills: [
+      {
+        id: 'commit-messages',
+        title: 'Commit messages',
+        description: 'Writes commit messages that say why, not what.',
+        tags: ['git', 'writing'],
+        body: [
+          '---',
+          'name: commit-messages',
+          'description: Writes commit messages that say why, not what.',
+          '---',
+          '',
+          '# Commit messages',
+          '',
+          'The subject line says what changed for someone reading `git log`, in the imperative.',
+          'The body says why it was worth changing. The diff already says what moved.',
+        ].join('\n'),
+      },
+      {
+        id: 'travel',
+        title: 'Travel planning',
+        description: 'Plans a trip and keeps the constraints straight.',
+        tags: ['life'],
+        body: [
+          '---',
+          'name: travel',
+          'description: Plans a trip and keeps the constraints straight.',
+          '---',
+          '',
+          '# Travel',
+          '',
+          'Ask for the fixed points first — dates that cannot move, people who must be there.',
+          'Everything else is negotiable and should be offered as options, with the cost of each.',
+        ].join('\n'),
+      },
+    ],
+    mcp: [
+      {
+        id: 'linear',
+        title: 'Linear',
+        description: 'Issues, projects and cycles.',
+        homepage: 'https://linear.app',
+        tags: ['work'],
+        name: 'linear',
+        url: 'https://mcp.linear.app/sse',
+        auth: 'oauth',
+        scopes: ['read', 'write:issue'],
+      },
+      {
+        id: 'weather',
+        title: 'Weather',
+        description: 'Forecasts, no account needed.',
+        tags: ['life'],
+        name: 'weather',
+        url: 'https://weather.example/mcp',
+      },
+    ],
+  };
 }
 
 // ── the transcripts ──────────────────────────────────────────────────────────

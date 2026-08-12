@@ -17,9 +17,18 @@ export type Source = "user" | "agent";
 /** A device platform, selecting the push provider (ios→APNs, android→FCM). */
 export type Platform = "ios" | "android" | "web";
 
-/** One workspace (an isolated stack of chats/tools/grants) the daemon serves. */
+/**
+ * One workspace (an isolated stack of chats/tools/grants) the daemon serves.
+ *
+ * The two names are not interchangeable. `name` is the IDENTITY: it is the directory on disk, an
+ * input to that workspace's vault key, and the `ws` field on every other command — so it never
+ * changes, and a screen that hides it teaches the wrong model of what renaming does. `title` is only
+ * what to show; the daemon falls it back to `name`, so it is never empty.
+ */
 export interface WorkspaceInfo {
   name: string;
+  title: string;
+  default?: boolean; // the workspace the daemon recreates at startup — it cannot be deleted
 }
 
 /** One chat's summary (chat.list). The name is derived from the first message. */
@@ -48,6 +57,78 @@ export interface AgentInfo {
   tools?: string[]; // the tool cage
   effort?: string; // reasoning effort
   budgetMs?: number; // per-run wall-clock; 0/absent = workspace default
+}
+
+/**
+ * One skill a workspace holds (skill.list).
+ *
+ * `name` is the ADDRESS — every skill command takes it — and `folder` is only where it happens to
+ * live. Skills are the one place in the tree where the folder is not the identity: the name in
+ * SKILL.md's frontmatter wins, so a skill called `deploy` may sit in a folder called anything.
+ * Showing both is what stops "rename the folder" from looking like it would work.
+ *
+ * `enabled: false` does not mean gone. The folder moves under skills/.disabled/, the assistant stops
+ * seeing it, and everything shipped alongside it stays — a switch, not a deletion.
+ *
+ * `bytes` is the size of SKILL.md. It is here because a skill costs context on every turn, which is
+ * the one cost of holding one that is otherwise invisible.
+ */
+export interface SkillInfo {
+  name: string;
+  folder: string;
+  description?: string;
+  enabled: boolean;
+  bytes: number;
+}
+
+/**
+ * What became of one declared MCP server (mcp.list).
+ *
+ * `connecting` is a real state, not a spinner: the daemon writes the declaration, says so at once,
+ * and runs the handshake afterwards — each server is allowed thirty seconds, and the connection
+ * could not carry a chat message while it waited. `needs auth` is an errand rather than a failure.
+ * `note` says why in the words of the log, for the two states that owe an explanation.
+ */
+export type MCPState = "connecting" | "connected" | "needs auth" | "failed";
+
+/** One declared MCP server and how it fared. Declared, not connected: a server that did not come up
+    is exactly what this list is opened to find, so it stays in it. */
+export interface MCPInfo {
+  name: string;
+  url: string;
+  state: MCPState;
+  tools: number;
+  note?: string;
+}
+
+/**
+ * One installable skill in the catalog (library.catalog).
+ *
+ * The whole `body` rides along with the listing rather than being fetched on demand. That is
+ * deliberate: the app shows it before installing, and a second round-trip for something the daemon
+ * already holds would only make that step skippable — and it is the step worth not skipping.
+ */
+export interface LibrarySkill {
+  id: string;
+  title: string;
+  description: string;
+  homepage?: string;
+  tags?: string[];
+  body: string;
+}
+
+/** One installable MCP server in the catalog. `scopes` is what a sign-in would ask for, shown before
+    the browser opens. The client id and secret are the daemon's and deliberately never on the wire. */
+export interface LibraryServer {
+  id: string;
+  title: string;
+  description: string;
+  homepage?: string;
+  tags?: string[];
+  name: string;
+  url: string;
+  auth?: string;
+  scopes?: string[];
 }
 
 /** One model-issued tool call inside a transcript message. */
@@ -269,6 +350,46 @@ export interface ApprovalResolved {
   id: string;
 }
 
+/** A workspace's skills, disabled ones included — a list that omitted them could not offer
+    switching one back on. Replies to skill.list, and broadcast after every change. */
+export interface SkillList {
+  type: "skill.list";
+  ws: string;
+  items: SkillInfo[];
+}
+
+/** One skill's SKILL.md, verbatim and WITH its frontmatter, replying to skill.read. Verbatim because
+    the point of reading one is to see exactly what the model is told. */
+export interface SkillBody {
+  type: "skill.body";
+  ws: string;
+  name: string;
+  body: string;
+}
+
+/**
+ * A workspace's MCP servers, replying to mcp.list and broadcast after every change.
+ *
+ * It arrives TWICE for one mutation: immediately, carrying `connecting` for a server nobody has
+ * tried yet, and again once the reload's handshakes are through. A client that renders only the
+ * second frame shows nothing for up to thirty seconds; one that renders only the first never
+ * learns the outcome.
+ */
+export interface MCPList {
+  type: "mcp.list";
+  ws: string;
+  items: MCPInfo[];
+}
+
+/** The installable catalog, replying to library.list / library.refresh. Not workspace-scoped: a
+    catalog is the same everywhere the daemon serves; only installing picks a target. */
+export interface LibraryCatalog {
+  type: "library.catalog";
+  version: string;
+  skills: LibrarySkill[];
+  mcp: LibraryServer[];
+}
+
 /**
  * One pending reminder. `fireAt` is RFC3339 WITH an offset, so it denotes the instant the daemon
  * intended — parse it, don't read the wall clock off the string.
@@ -372,6 +493,10 @@ export type ServerEvent =
   | ChatList
   | AgentListEvent
   | WorkspaceList
+  | SkillList
+  | SkillBody
+  | MCPList
+  | LibraryCatalog
   | ChatActivity
   | JoinList
   | DeviceList
@@ -449,6 +574,161 @@ export interface AgentFireCmd {
 /** Request the daemon's workspaces (→ WorkspaceList). */
 export interface WorkspaceListCmd {
   cmd: "workspace.list";
+}
+
+/**
+ * Add a workspace. None of the three mutations carries `ws`: the set is daemon-wide, not something
+ * one workspace holds. All three take the `manage` capability, which an appliance does not have, and
+ * none is answered directly — the daemon re-broadcasts the whole workspace.list to every connection,
+ * so a device that did not ask still converges. A rejection arrives as a bare `error`, uncorrelated.
+ *
+ * `name` must match ^[a-z0-9][a-z0-9_-]*$ — it becomes a directory and a key-derivation component,
+ * not a label. `title` is optional; without one the list shows the name.
+ */
+export interface WorkspaceCreateCmd {
+  cmd: "workspace.create";
+  name: string;
+  title?: string;
+}
+
+/**
+ * Change a workspace's DISPLAY title. The identity is untouched, and deliberately: the folder name
+ * is what its vault and every plugin/MCP shard are keyed from, so moving it would re-key them into
+ * unreadability. An empty title clears the override and the folder name shows again.
+ */
+export interface WorkspaceRenameCmd {
+  cmd: "workspace.rename";
+  name: string;
+  title: string;
+}
+
+/**
+ * Remove a workspace. The daemon closes it and MOVES its directory to a trash folder rather than
+ * deleting it — what is in there is every conversation, every note and a vault, and the person doing
+ * this is on a phone, on a list, possibly by accident. The default workspace refuses: it is
+ * recreated at startup, so removing it would appear to work and then undo itself.
+ */
+export interface WorkspaceDeleteCmd {
+  cmd: "workspace.delete";
+  name: string;
+}
+
+/**
+ * Re-run a workspace's discovery: its agents, skills, plugins and MCP servers, read from disk again.
+ *
+ * The answer for everything that changed WITHOUT a command — a skill folder copied in, an agent
+ * edited, a server that was down when the daemon last looked, an account just authorized. There is no
+ * watcher on those directories, deliberately: a ticker would re-run every MCP handshake against other
+ * people's servers on a schedule, and a filesystem watcher means a dependency, recursive watch
+ * management and events dropped under load.
+ *
+ * It is a WORKSPACE command rather than an MCP one because re-running discovery re-runs all of it;
+ * a command named for one part would promise a part and do the whole. Both `skill.list` and
+ * `mcp.list` follow when it lands, which is right for the command you reach for when you do not know
+ * which of them changed.
+ */
+export interface WorkspaceReloadCmd {
+  cmd: "workspace.reload";
+  ws: string;
+}
+
+/** Request a workspace's skills (→ SkillList). Ungated: a skill is CONTEXT, never authority — it
+    shapes how the model uses its gated tools and grants nothing itself — so any device may look. */
+export interface SkillListCmd {
+  cmd: "skill.list";
+  ws: string;
+}
+
+/** Read one skill's SKILL.md (→ SkillBody). Ungated for the same reason as the listing. */
+export interface SkillReadCmd {
+  cmd: "skill.read";
+  ws: string;
+  name: string;
+}
+
+/**
+ * Switch a skill on or off. Off moves its folder under skills/.disabled/ — the assistant stops
+ * seeing it and nothing is lost, which is why this is a switch and `skill.remove` is a separate,
+ * heavier command. Takes `manage`; the daemon broadcasts the new list.
+ *
+ * The change lands on the NEXT turn, never inside a running one: the model is handed its tool list
+ * when a turn starts and plans against it, so a tool may not vanish between two calls of the same
+ * turn.
+ */
+export interface SkillEnableCmd {
+  cmd: "skill.enable";
+  ws: string;
+  name: string;
+  on: boolean;
+}
+
+/** Delete a skill's directory. This one really deletes — there is no trash, unlike a workspace —
+    but anything from the catalog can be installed again. Takes `manage`. */
+export interface SkillRemoveCmd {
+  cmd: "skill.remove";
+  ws: string;
+  name: string;
+}
+
+/** Request a workspace's MCP servers (→ MCPList). Ungated: which servers are declared, and which of
+    them failed, is the same kind of fact as which workspaces exist. */
+export interface MCPListCmd {
+  cmd: "mcp.list";
+  ws: string;
+}
+
+/**
+ * Declare an MCP server. NO credential rides along, by design: a bearer token is seeded on the host
+ * with `nocturn secret set`, and OAuth runs through the auth.* domain this app already speaks. The
+ * form therefore asks for a name, a URL and an auth mode and nothing else.
+ *
+ * `name` must match ^[a-z0-9][a-z0-9_-]{0,31}$ and the URL must be https — it becomes a folder, a
+ * secret shard key and a tool-name prefix. Answered with mcp.list twice (see MCPList).
+ */
+export interface MCPAddCmd {
+  cmd: "mcp.add";
+  ws: string;
+  name: string;
+  url: string;
+  auth?: string;
+}
+
+/**
+ * Drop a server: its declaration, its secret shard, and the remembered network grant for its host.
+ * That last part is worth saying out loud before it happens — the grant may have been given for
+ * `http_read` on the same host, and dropping it means being asked once more.
+ */
+export interface MCPRemoveCmd {
+  cmd: "mcp.remove";
+  ws: string;
+  name: string;
+}
+
+/** Request the installable catalog (→ LibraryCatalog). Browsing grants nothing, so it is ungated.
+    Fetching is lazy and cached on the daemon; this is the cheap call. */
+export interface LibraryListCmd {
+  cmd: "library.list";
+}
+
+/** Re-fetch the catalog past the daemon's cache, then answer like library.list. Pull-to-refresh. */
+export interface LibraryRefreshCmd {
+  cmd: "library.refresh";
+}
+
+/**
+ * Install one catalog entry into a workspace. It carries an ID and nothing else, and that is the
+ * whole security shape of this domain: a command carrying a skill BODY would be a way to put
+ * arbitrary text into every system prompt of every turn. The content is looked up server-side. Do
+ * not add a body or a URL field here — the daemon has an invariant test that says so.
+ *
+ * Answered with the target domain's list (skill.list, or mcp.list twice). Installing something
+ * already held is REFUSED with a message rather than silently ignored.
+ */
+export interface LibraryInstallCmd {
+  cmd: "library.install";
+  ws: string;
+  kind: "skill" | "mcp";
+  id: string;
 }
 
 /** Request a workspace's pending reminders (→ ReminderList). */
@@ -546,6 +826,20 @@ export type ClientCommand =
   | AgentListCmd
   | AgentFireCmd
   | WorkspaceListCmd
+  | WorkspaceCreateCmd
+  | WorkspaceRenameCmd
+  | WorkspaceDeleteCmd
+  | WorkspaceReloadCmd
+  | SkillListCmd
+  | SkillReadCmd
+  | SkillEnableCmd
+  | SkillRemoveCmd
+  | MCPListCmd
+  | MCPAddCmd
+  | MCPRemoveCmd
+  | LibraryListCmd
+  | LibraryRefreshCmd
+  | LibraryInstallCmd
   | JoinListCmd
   | DeviceListCmd
   | DeviceForgetCmd
