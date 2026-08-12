@@ -36,8 +36,9 @@ the default workspace, not on all of them.
 | `nocturn voice [--port 8788] [-w workspace]` | A **PoC harness**, in its own words: a browser page for testing the voice path on loopback, with no pairing. Not a way to use Nocturn. |
 
 `NOCTURN_CATALOG_URL` points the server at a curated catalog of skills and MCP servers, which the app
-then browses and installs from. Unset — the default — the library is **absent**, not empty: nothing is
-fetched and no request leaves the machine for it. See [Skills](/nocturn/guides/skills/) and
+then browses and installs from. It must be `https://`, unless it is loopback for local development.
+Unset — the default — the library is **absent**, not empty: nothing is fetched and no request leaves
+the machine for it. See [Skills](/nocturn/guides/skills/) and
 [Remote MCP servers](/nocturn/guides/remote-mcp/).
 
 ## Voice

@@ -75,6 +75,11 @@ entry with one tap. The catalog is fetched by the server, from one host, over TL
 skill's **whole `SKILL.md` inline** — so installing never fetches from a second place, and the app can
 show you exactly what will go into the assistant's prompt before anything is written.
 
+The TLS is a requirement rather than a recommendation: a plain-HTTP catalog is refused, and so is a
+redirect that leaves the scheme or the host you configured. Nothing here is signed, so the channel is
+the whole of what says these bytes are the catalog — the digest beside each entry is served by the
+same host as the entry. Loopback is the one exemption, for running a catalog on your own machine.
+
 Worth being straight about what that showing is and is not. It is informed consent, not a control:
 nobody spots a subtle instruction buried in four thousand tokens on a phone. The controls that
 actually hold are the ones already in the architecture — a skill carries [no authority at
