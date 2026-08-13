@@ -56,7 +56,7 @@ const VALID_NAME = /^[a-z0-9][a-z0-9_-]*$/;
             @if (!w.default) {
               <!-- stopPropagation because the ROW is a button too: without it, Delete would also
                    open the rename dialog behind its own confirmation. -->
-              <ion-button slot="end" fill="clear" color="danger" (click)="$event.stopPropagation(); remove(w)">
+              <ion-button slot="end" fill="clear" color="danger" (click)="$event.stopPropagation(); remove(w)" [attr.aria-label]="'Delete ' + w.title">
                 Delete
               </ion-button>
             }

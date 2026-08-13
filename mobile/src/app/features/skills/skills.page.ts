@@ -52,7 +52,7 @@ import type { SkillInfo } from '../../core/protocol/nocturn-protocol';
               (ionChange)="toggle(s, $event)"
               [attr.aria-label]="'Enable ' + s.name"
             />
-            <ion-button slot="end" fill="clear" color="danger" (click)="$event.stopPropagation(); remove(s)">
+            <ion-button slot="end" fill="clear" color="danger" (click)="$event.stopPropagation(); remove(s)" [attr.aria-label]="'Delete ' + s.name">
               Delete
             </ion-button>
           </ion-item>
