@@ -44,7 +44,7 @@ import type { EnrolledDevice } from '../../core/protocol/nocturn-protocol';
             @if (d.id === auth.selfId()) {
               <ion-chip slot="end" color="medium">This device</ion-chip>
             }
-            <ion-button slot="end" fill="clear" color="danger" (click)="forget(d)">Forget</ion-button>
+            <ion-button slot="end" fill="clear" color="danger" (click)="forget(d)" [attr.aria-label]="'Forget ' + d.name">Forget</ion-button>
           </ion-item>
         } @empty {
           <ion-item lines="none"><ion-label color="medium">No devices.</ion-label></ion-item>

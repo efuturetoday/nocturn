@@ -58,13 +58,13 @@ const VALID_NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/;
             </ion-chip>
 
             @if (s.state === 'needs auth') {
-              <ion-button slot="end" fill="clear" [disabled]="accounts.busy()" (click)="signIn(s)">
+              <ion-button slot="end" fill="clear" [disabled]="accounts.busy()" (click)="signIn(s)" [attr.aria-label]="'Connect ' + s.name">
                 Connect
               </ion-button>
             } @else if (s.state === 'failed') {
-              <ion-button slot="end" fill="clear" (click)="mcp.reload()">Retry</ion-button>
+              <ion-button slot="end" fill="clear" (click)="mcp.reload()" [attr.aria-label]="'Retry ' + s.name">Retry</ion-button>
             }
-            <ion-button slot="end" fill="clear" color="danger" (click)="remove(s)">Remove</ion-button>
+            <ion-button slot="end" fill="clear" color="danger" (click)="remove(s)" [attr.aria-label]="'Remove ' + s.name">Remove</ion-button>
           </ion-item>
         } @empty {
           <ion-item lines="none">
