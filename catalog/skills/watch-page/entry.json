@@ -1,0 +1,5 @@
+{
+  "title": "Watch a page",
+  "description": "Snapshot a page into memory, compare on the next run, report what actually changed.",
+  "tags": ["web", "routine"]
+}

@@ -139,6 +139,18 @@ jobs:
           name: gsx
           hint: tui generate ./internal/tui/...
 
+      # The published catalog is generated from catalog/ and committed, because docs/public is what
+      # the docs workflow deploys. A body edited without its digest recomputed is an entry the daemon
+      # drops in silence, so the generator is the only writer and this is where that is enforced.
+      - name: Regenerate the catalog
+        run: go generate ./catalog/
+
+      - uses: ./.github/actions/drift
+        with:
+          paths: docs/public/catalog.json
+          name: catalog
+          hint: go generate ./catalog/
+
       # gofmt is drift like everything else here: a pull request that left a file unformatted fails,
       # a push to main is reformatted for you. Nobody has ever wanted to fix gofmt by hand, and the
       # heal commit is its own commit — so it cannot hide a change under a reformat, which is what a

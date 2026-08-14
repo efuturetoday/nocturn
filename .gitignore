@@ -43,6 +43,11 @@ internal/script/qjs/.buildcache/
 /internal/webui/dist/*
 !/internal/webui/dist/.gitkeep
 
+# what `go run import.go` writes: thousands of self-published registry entries, probed. A working
+# list for whoever is curating the shelf, never a source of what gets published — generate.go skips
+# underscore-prefixed files, and this keeps one out of a diff as well.
+/catalog/mcp/_candidates.json
+
 # the reference environment for internal/speaker (torch/torchaudio, dev-only)
 /internal/speaker/reference/.venv/
 
