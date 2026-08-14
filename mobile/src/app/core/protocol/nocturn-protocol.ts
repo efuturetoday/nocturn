@@ -414,6 +414,49 @@ export interface PluginList {
   items: PluginInfo[];
 }
 
+/**
+ * One standing approval: a permission this household gave and the gate no longer asks about.
+ *
+ * `durable` is what makes the list judgeable — a session grant lapses when the daemon stops, a
+ * durable one is written down and outlives everything, including the reason it was given for.
+ */
+export interface GrantInfo {
+  kind: string;
+  target: string;
+  durable: boolean;
+}
+
+/** A workspace's standing approvals (grant.list), broadcast again after a revocation. */
+export interface GrantList {
+  type: "grant.list";
+  ws: string;
+  items: GrantInfo[];
+}
+
+/** Request a workspace's standing approvals (→ GrantList). Needs `manage`: the set of hosts a
+    household approved says what it does. */
+export interface GrantListCmd {
+  cmd: "grant.list";
+  ws: string;
+}
+
+/** Revoke one standing approval. The next action of that shape asks again — which is the gate's
+    designed path, not a failure. Answered with the list. */
+export interface GrantForgetCmd {
+  cmd: "grant.forget";
+  ws: string;
+  kind: string;
+  target: string;
+}
+
+/** Delete a plugin, its folder and its stored token — and revoke the remembered permission for the
+    hosts its credential rode to. Answered with plugin.list. */
+export interface PluginRemoveCmd {
+  cmd: "plugin.remove";
+  ws: string;
+  name: string;
+}
+
 /** Request a workspace's installed plugins (→ PluginList). Listing grants nothing. */
 export interface PluginListCmd {
   cmd: "plugin.list";
@@ -559,6 +602,7 @@ export type ServerEvent =
   | SkillList
   | SkillBody
   | PluginList
+  | GrantList
   | MCPList
   | LibraryCatalog
   | ChatActivity
@@ -899,6 +943,9 @@ export type ClientCommand =
   | SkillEnableCmd
   | SkillRemoveCmd
   | PluginListCmd
+  | PluginRemoveCmd
+  | GrantListCmd
+  | GrantForgetCmd
   | MCPListCmd
   | MCPAddCmd
   | MCPRemoveCmd

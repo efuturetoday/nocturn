@@ -13,9 +13,8 @@ import type { PluginInfo } from '../protocol/nocturn-protocol';
  * their frontmatter name and MCP servers by their folder; a plugin's identity is its folder too, and
  * only the daemon knows what is in it.
  *
- * There is no install or remove here. Installing is `library.install`, which carries an id and never
- * code; removing is not on the wire yet, because it has to revoke the remembered permission for the
- * hosts the plugin's credential rode to before it can be offered as a button.
+ * Installing is not here: that is `library.install`, which carries an id and never code. Removing is,
+ * and it takes the plugin's standing permissions with it — see the daemon's removePlugin.
  */
 @Injectable({ providedIn: 'root' })
 export class PluginService {
@@ -41,6 +40,17 @@ export class PluginService {
       this._plugins.set([]);
       if (connected && ws) this.list(ws);
     });
+  }
+
+  /**
+   * Delete a plugin: its folder, the token in it, and the remembered permission for the hosts its
+   * credential rode to. Not optimistic — the daemon broadcasts to every device, and a local edit
+   * would race that broadcast.
+   */
+  remove(name: string): void {
+    const ws = this.workspaces.active();
+    if (!ws) return;
+    this.conn.send({ cmd: 'plugin.remove', ws, name });
   }
 
   /** Request the plugins for ws (default: the active workspace). */

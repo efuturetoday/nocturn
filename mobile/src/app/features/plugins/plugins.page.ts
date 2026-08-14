@@ -11,12 +11,10 @@ import type { PluginInfo } from '../../core/protocol/nocturn-protocol';
  * The active workspace's plugins: what is installed, and how many tools each one contributed.
  *
  * Deliberately thinner than the skills page, and the difference is the point. A skill can be switched
- * off, read in full and deleted from here because it is text this household owns. A plugin is code
- * with a manifest, and the two things you would want here — reading what it asks for, and removing it
- * — belong elsewhere for now: the manifest is shown by the Library before installing, where the
- * decision is actually made, and removing has to revoke the remembered permission for the hosts its
- * credential rode to before it can be a button. Until it does, this page says where the folder is
- * rather than offering half of it.
+ * off and read in full here because it is text this household owns; a plugin's manifest is shown by
+ * the Library BEFORE installing, which is where the decision is actually made. What is left for this
+ * page is the inventory and the one destructive act — and that act takes the plugin's standing
+ * permissions with it, which is what makes it safe to offer here at all.
  */
 @Component({
   selector: 'app-plugins',
@@ -35,7 +33,7 @@ import type { PluginInfo } from '../../core/protocol/nocturn-protocol';
               <h2>{{ p.name }}</h2>
               <ion-note>{{ toolCount(p) }}</ion-note>
             </ion-label>
-            <ion-button slot="end" fill="clear" color="medium" (click)="howToRemove(p)">
+            <ion-button slot="end" fill="clear" color="danger" (click)="remove(p)">
               Remove
             </ion-button>
           </ion-item>
@@ -83,16 +81,22 @@ export class PluginsPage {
     return p.tools === 1 ? '1 tool' : `${p.tools} tools`;
   }
 
-  /** Removing is a host-side gesture until the grant revocation goes with it — see the class doc. */
-  protected async howToRemove(p: PluginInfo): Promise<void> {
+  /**
+   * Delete the plugin, behind a confirmation that says what goes with it. The permission half is
+   * worth spelling out: a grant records what, never why, so one left standing for a program that is
+   * gone would be inherited by the next thing to reach that host.
+   */
+  protected async remove(p: PluginInfo): Promise<void> {
     const alert = await this.alerts.create({
       header: `Remove ${p.name}?`,
       message:
-        `Not from here yet: removing a plugin also has to take back the permission you gave for the ` +
-        `hosts its credential rode to, and half of that would leave a permission standing for a ` +
-        `program that is gone. On the machine running Nocturn, delete plugins/${p.name} and run ` +
-        `<code>nocturn reload</code>.`,
-      buttons: [{ text: 'OK', role: 'cancel' }],
+        `Its folder is deleted, and any account connected for it goes with it. The remembered ` +
+        `permission to reach its hosts is revoked too — if you had allowed one of them for something ` +
+        `else, Nocturn will ask about it once more. You can install it again from the Library.`,
+      buttons: [
+        { text: 'Cancel', role: 'cancel' },
+        { text: 'Remove', role: 'destructive', handler: () => this.plugins.remove(p.name) },
+      ],
     });
     await alert.present();
   }
