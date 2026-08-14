@@ -71,11 +71,11 @@ func run() error {
 	}
 	cat := library.Catalog{
 		SchemaVersion: 1,
-		Version:       revision(skills, servers, plugins),
 		Skills:        skills,
 		MCP:           servers,
 		Plugins:       plugins,
 	}
+	cat.Version = revision(cat)
 	data, err := json.MarshalIndent(cat, "", "  ")
 	if err != nil {
 		return err
@@ -300,16 +300,15 @@ func readJSON(path string, v any) error {
 // generated file would differ from the committed one every day and the CI drift check would cry wolf.
 // A content digest changes exactly when the catalog changes, which is what a client showing a version
 // wants to know anyway.
-func revision(skills []library.SkillItem, servers []library.MCPItem, plugins []library.PluginItem) string {
-	h := sha256.New()
-	for _, s := range skills {
-		fmt.Fprintf(h, "skill\x00%s\x00%s\x00", s.ID, s.SHA256)
+func revision(cat library.Catalog) string {
+	cat.Version = ""
+	// The whole document, not a hand-picked set of fields: the first version hashed ids and artifact
+	// digests, so renaming an entry changed what is published and left the version saying otherwise.
+	// A digest of everything cannot drift from what it describes.
+	data, err := json.Marshal(cat)
+	if err != nil {
+		panic("catalog: revision: " + err.Error()) // a catalog that will not marshal cannot be written either
 	}
-	for _, s := range servers {
-		fmt.Fprintf(h, "mcp\x00%s\x00%s\x00%s\x00", s.ID, s.URL, s.Auth)
-	}
-	for _, p := range plugins {
-		fmt.Fprintf(h, "plugin\x00%s\x00%s\x00%s\x00%s\x00", p.ID, p.ManifestSHA, p.ScriptSHA, p.SkillSHA)
-	}
-	return hex.EncodeToString(h.Sum(nil))[:12]
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])[:12]
 }

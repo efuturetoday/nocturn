@@ -3,6 +3,8 @@ package serve
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/efuturetoday/nocturn/internal/plugin"
@@ -204,11 +206,28 @@ func skillList(ws *workspace.Workspace) SkillListResult {
 }
 
 // bundledBody returns the SKILL.md of a plugin-bundled skill by NAME (which need not be its folder).
+//
+// It answers from the same list the wire shows, so the precedence holds here too: a bundled skill
+// whose name a hand-written one already holds is NOT in that list, and reading it would hand back a
+// body the model never sees.
 func bundledBody(ws *workspace.Workspace, name string) (string, bool) {
-	for folder, body := range plugin.SkillBodies(ws.PluginsDir()) {
-		if sk, err := skill.Parse(body, folder); err == nil && sk.Name == name {
-			return body, true
+	own, err := skill.List(ws.SkillsDir())
+	if err != nil {
+		own = nil
+	}
+	have := make([]SkillInfo, 0, len(own))
+	for _, e := range own {
+		have = append(have, SkillInfo{Name: e.Name})
+	}
+	for _, s := range bundledSkills(ws, have) {
+		if s.Name != name {
+			continue
 		}
+		body, err := os.ReadFile(filepath.Join(ws.PluginsDir(), s.Plugin, plugin.SkillFile))
+		if err != nil {
+			return "", false
+		}
+		return string(body), true
 	}
 	return "", false
 }

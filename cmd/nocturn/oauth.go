@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -138,6 +140,33 @@ func authDiscover(ctx context.Context, master *secret.Master, wsDir, wsName, nam
 	}
 	fmt.Printf("connected %q in workspace %q — the daemon will inject and refresh its token.\n", name, wsName)
 	return nil
+}
+
+// readClientSecret reads the OAuth client secret from stdin when asked for it.
+//
+// A flag would put it in the shell history and in every `ps` on the machine, which is the reason
+// `nocturn secret set` has taken its value on stdin from the start. A client secret is no less of a
+// secret for being called a client one — for a desktop client Google itself calls it
+// non-confidential, and that is a claim about ITS threat model, not about yours.
+//
+// A secret with no --client-id is refused rather than ignored: it would otherwise be read, dropped,
+// and the command would report success.
+func readClientSecret(fromStdin bool, clientID string) (string, error) {
+	if !fromStdin {
+		return "", nil
+	}
+	if clientID == "" {
+		return "", errors.New("-client-secret-stdin without -client-id: a secret alone identifies no client")
+	}
+	value, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("read the client secret from stdin: %w", err)
+	}
+	secret := strings.TrimRight(string(value), "\r\n")
+	if secret == "" {
+		return "", errors.New("empty client secret on stdin (pipe it in, e.g. `printf %s \"$SECRET\" | nocturn auth gmail -client-id … -client-secret-stdin`)")
+	}
+	return secret, nil
 }
 
 // ownedBy reports whether an owner-namespaced secret belongs to the plugin or server called name.

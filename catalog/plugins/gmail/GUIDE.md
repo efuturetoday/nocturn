@@ -35,7 +35,9 @@ account.
 2. **APIs & Services → Library →** enable the **Gmail API**.
 3. **APIs & Services → OAuth consent screen**: choose **External**, fill in an app name and your own
    address as support and developer contact.
-4. **Set the publishing status to "In production".** This is the step everybody skips and everybody
+4. **Set the publishing status to "In production".** (Verification and the CASA assessment are what
+   an app needs to serve OTHER people; your own client, used by your own account, needs neither —
+   what unverified costs you is the warning screen and a cap of 100 users.) This is the step everybody skips and everybody
    regrets: while the consent screen sits in *Testing*, Google revokes the refresh token after **7
    days** and the assistant loses access every week. In production it keeps working. Your own
    unverified app shows a "Google hasn't verified this app" screen the first time — click through it
@@ -49,9 +51,13 @@ account.
 On the machine running the daemon, once:
 
 ```sh
-nocturn auth gmail --client-id 123456.apps.googleusercontent.com \
-                   --client-secret GOCSPX-xxxxxxxx
+printf %s 'GOCSPX-xxxxxxxx' |
+  nocturn auth gmail -client-id 123456.apps.googleusercontent.com -client-secret-stdin
 ```
+
+The secret goes in on **stdin**, not as a flag: a flag lands in your shell history and in every `ps`
+on the machine. Google calls a desktop client's secret non-confidential, which is a claim about
+Google's threat model rather than about yours.
 
 It prints a URL. Open it, pick the account, click through the unverified-app screen. The token **and**
 the client land encrypted in that plugin's own folder

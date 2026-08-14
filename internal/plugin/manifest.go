@@ -226,10 +226,12 @@ func SkillBodies(root string) map[string]string {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		// Only for something that is actually a plugin: a stray directory holding a SKILL.md is not
-		// one, and folding its text into every prompt because it sits under plugins/ would be a way
-		// to get into the system prompt without being anything.
-		if !fileExists(filepath.Join(root, e.Name(), "plugin.json")) {
+		// Only for something that actually LOADS. A stray directory holding a SKILL.md is not a
+		// plugin, and folding its text into every prompt because it sits under plugins/ would be a
+		// way into the system prompt without being anything — but so is a plugin whose manifest is
+		// malformed: Discover skips it, so its tools are absent, and its instructions have no
+		// business being present without them.
+		if _, err := Load(filepath.Join(root, e.Name())); err != nil {
 			continue
 		}
 		if body, err := os.ReadFile(filepath.Join(root, e.Name(), SkillFile)); err == nil && len(body) > 0 {
