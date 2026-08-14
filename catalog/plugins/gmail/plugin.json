@@ -1,0 +1,51 @@
+{
+  "name": "gmail",
+  "version": "1",
+  "tools": [
+    {
+      "name": "search",
+      "description": "Search the user's Gmail and return matching messages as a compact list (id, from, subject, date, snippet). Use Gmail's own query syntax, e.g. \"is:unread\", \"from:anna newer_than:7d\", \"has:attachment invoice\".",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Gmail search query, e.g. is:unread from:anna" },
+          "limit": { "type": "integer", "description": "How many messages to return (default 10, at most 25)" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "read",
+      "description": "Read one Gmail message in full: headers and the plain-text body. Takes an id from gmail_search.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "The message id returned by gmail_search" }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "labels",
+      "description": "List the names of the user's Gmail labels and mailboxes, so a search can be scoped to one with label:<name>.",
+      "parameters": { "type": "object", "properties": {} }
+    }
+  ],
+  "uses": ["http_read"],
+  "credentials": [
+    {
+      "name": "account",
+      "host": "gmail.googleapis.com",
+      "header": "Authorization",
+      "prefix": "Bearer "
+    }
+  ],
+  "oauth": [
+    {
+      "name": "account",
+      "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+      "token_url": "https://oauth2.googleapis.com/token",
+      "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+    }
+  ]
+}

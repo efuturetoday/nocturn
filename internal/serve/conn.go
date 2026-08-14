@@ -339,6 +339,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.skillCmd(ctx, env.Cmd, data)
 	case "mcp":
 		c.mcpCmd(ctx, env.Cmd, data)
+	case "plugin":
+		c.pluginCmd(ctx, env.Cmd, data)
 	case "library":
 		c.libraryCmd(ctx, env.Cmd, data)
 	case "reminder":

@@ -401,6 +401,9 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 // format and the rules, the workspace owns where they sit.
 func (w *Workspace) SkillsDir() string { return w.path("skills") }
 
+// PluginsDir is where this workspace's plugins live, exported for the same reason SkillsDir is.
+func (w *Workspace) PluginsDir() string { return w.path("plugins") }
+
 // Name returns the workspace name.
 func (w *Workspace) Name() string { return w.name }
 
