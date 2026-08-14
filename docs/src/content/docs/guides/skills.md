@@ -70,26 +70,45 @@ assistant simply knows the skill's `description`, and reaches for the body when 
 
 ### From the catalog
 
-If the server is pointed at a catalog (`NOCTURN_CATALOG_URL`), the app browses it and installs an
-entry with one tap. The catalog is fetched by the server, from one host, over TLS, and it carries each
-skill's **whole `SKILL.md` inline** — so installing never fetches from a second place, and the app can
-show you exactly what will go into the assistant's prompt before anything is written.
+Every daemon has a library: the app browses the catalog and installs an entry with one tap. Out of the
+box that is the curated catalog this project publishes, built from `catalog/` in the repository —
+`NOCTURN_CATALOG_URL` points the server at a different one, or at `off` for none. Nothing is fetched
+until somebody opens the library, so a daemon whose owner never does talks to nobody about it.
 
-The TLS is a requirement rather than a recommendation: a plain-HTTP catalog is refused, and so is a
-redirect that leaves the scheme or the host you configured. Nothing here is signed, so the channel is
-the whole of what says these bytes are the catalog — the digest beside each entry is served by the
-same host as the entry. Loopback is the one exemption, for running a catalog on your own machine.
+The catalog is fetched by the server, from one host, over TLS, and it carries each skill's **whole
+`SKILL.md` inline** — so installing never fetches from a second place, and the app can show you
+exactly what will go into the assistant's prompt before anything is written.
+
+The TLS is a requirement rather than a recommendation: a plain-HTTP catalog on a remote host is
+refused, and so is a redirect that leaves the scheme or the host you configured. For a skill the
+channel is the whole of what says these bytes are the catalog — the digest beside each entry is served
+by the same host as the entry. A catalog on **this machine** is the exemption, and it is a path rather
+than a URL: `NOCTURN_CATALOG_URL=./my-catalog.json` needs no web server and no TLS, because there is
+no transport to secure.
 
 Worth being straight about what that showing is and is not. It is informed consent, not a control:
 nobody spots a subtle instruction buried in four thousand tokens on a phone. The controls that
 actually hold are the ones already in the architecture — a skill carries [no authority at
 all](/nocturn/architecture/threat-model/), and anything it talks the assistant into still meets the
-gate. Content signing is not built yet; when it is, it goes here.
+gate. A skill is not signed, and that is the same judgement in another form: signing authenticates a
+publisher, and a publisher's identity is worth paying for when what arrives is CODE. A catalog
+[plugin](/nocturn/catalog/) is signed for exactly that reason.
 
 The install command names a catalog **entry**, and cannot carry a skill body. That distinction is the
 security of the whole feature: "install entry N of the catalog the server fetched" is a different act
 from "put this text into every prompt", and only the first exists on the wire. Sideloading stays what
 it always was — copying a folder on the host.
+
+### A plugin may bring one
+
+A [plugin](/nocturn/guides/writing-plugins/) can ship a `SKILL.md` beside its code, saying when to
+reach for the tools it adds and what their arguments really take. It joins this same catalog and is
+loaded the same way — the difference is that it has no folder of its own under `skills/`, so it
+cannot be switched off or deleted: it arrives and leaves with its plugin. The Skills list shows it
+anyway, marked with the plugin it came from, because it is in front of the model either way.
+
+A skill you wrote or installed **wins** a name collision. A skill under `skills/` is something this
+household chose on purpose, and an installed plugin must not be able to take its name over.
 
 ### Off is not gone
 
