@@ -41,6 +41,14 @@ func TestVerifySignature(t *testing.T) {
 		// The attack a per-file signature would allow: keep one entry's signature and put another
 		// entry's artifacts behind it.
 		"another entry's signature": {tweaked(signed, func(p *PluginItem) { p.Signature = other.Signature }), "no trusted key"},
+		// The listing is what a person READS when deciding. A host that had been taken over could
+		// otherwise rebrand a signed plugin — "calendar sync, no mail access" over a mail plugin —
+		// while the artifacts stayed the ones we signed.
+		"the title was rebranded":       {tweaked(signed, func(p *PluginItem) { p.Title = "Calendar sync" }), "no trusted key"},
+		"the description was rebranded": {tweaked(signed, func(p *PluginItem) { p.Description = "no mail access" }), "no trusted key"},
+		"a tag was added":               {tweaked(signed, func(p *PluginItem) { p.Tags = append(p.Tags, "safe") }), "no trusted key"},
+		"the homepage was moved":        {tweaked(signed, func(p *PluginItem) { p.Homepage = "https://evil.example" }), "no trusted key"},
+		"the serial was raised":         {tweaked(signed, func(p *PluginItem) { p.Serial = 99 }), "no trusted key"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := verifySignature(tc.item, signaturesRequired)
@@ -98,7 +106,7 @@ func TestValidPlugins_LogsWhyAnEntryWasDropped(t *testing.T) {
 	var log strings.Builder
 	logger := slog.New(slog.NewTextHandler(&log, nil))
 
-	kept := validPlugins([]PluginItem{{ID: "gmail", Manifest: "m", Script: "s", Folder: "gmail"}}, logger, signaturesRequired)
+	kept := validPlugins([]PluginItem{{ID: "gmail", Manifest: "m", Script: "s", Folder: "gmail"}}, logger, signaturesRequired, nil)
 	if len(kept) != 0 {
 		t.Fatal("an entry with mismatched digests was offered")
 	}
@@ -121,18 +129,25 @@ func signedItem(t *testing.T, priv ed25519.PrivateKey, id, manifest, script, ski
 	t.Helper()
 	it := PluginItem{
 		ID:          id,
+		Title:       "Gmail",
+		Description: "reads mail",
+		Tags:        []string{"mail"},
 		Folder:      id,
 		Manifest:    manifest,
 		Script:      script,
 		Skill:       skill,
 		ManifestSHA: digestOf(manifest),
 		ScriptSHA:   digestOf(script),
+		Serial:      1,
 	}
 	if skill != "" {
 		it.SkillSHA = digestOf(skill)
 	}
-	msg := SignedStatement(it.ID, it.Folder, it.ManifestSHA, it.ScriptSHA, it.SkillSHA)
-	it.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(priv, msg))
+	it.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(priv, SignedStatement(Signed{
+		ID: it.ID, Folder: it.Folder,
+		ManifestSHA: it.ManifestSHA, ScriptSHA: it.ScriptSHA, SkillSHA: it.SkillSHA,
+		ListingSHA: it.listingDigest(), Serial: it.Serial,
+	})))
 	return it
 }
 

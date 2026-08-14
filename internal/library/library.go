@@ -133,10 +133,21 @@ type PluginItem struct {
 	ManifestSHA string   `json:"manifest_sha256"`        // of Manifest
 	ScriptSHA   string   `json:"script_sha256"`          // of Script
 	SkillSHA    string   `json:"skill_sha256,omitempty"` // of Skill, when there is one
-	// Signature is Ed25519 over SignedStatement(id, folder, manifest_sha256, script_sha256), base64.
-	// Required: an entry this build cannot verify is not offered. See signature.go for why code is
-	// held to a key while text is held to TLS.
+	// Serial is this entry's revision, and it only ever goes up. A signature says "we published these
+	// bytes", never "this is current" — without something monotonic a host can serve an old, correctly
+	// signed entry forever, including one withdrawn because it turned out to be wrong. The daemon
+	// remembers the highest it has seen per plugin and refuses to go back. See freshness.go.
+	Serial int `json:"serial"`
+	// Signature is Ed25519 over SignedStatement, base64. Required: an entry this build cannot verify
+	// is not offered. See signature.go for why code is held to a key while text is held to TLS.
 	Signature string `json:"signature"`
+}
+
+// listingDigest is the digest of this entry's own listing fields — what a person reads when deciding
+// to install. It is recomputed rather than carried, so a catalog cannot sign one listing and show
+// another.
+func (it PluginItem) listingDigest() string {
+	return ListingDigest(it.Title, it.Description, it.Homepage, it.Tags)
 }
 
 // MCPItem is one installable MCP server: a declaration, never code and never a credential.
@@ -165,6 +176,8 @@ type Store struct {
 	cache string // path of the on-disk copy
 	log   *slog.Logger
 
+	seen *freshness // the highest serial accepted per plugin, so a signed entry cannot go backwards
+
 	mu      sync.Mutex
 	catalog *Catalog
 	fetched time.Time
@@ -188,7 +201,12 @@ func New(src Source, dataDir string, log *slog.Logger) *Store {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Store{src: src, cache: filepath.Join(dataDir, cacheFile), log: log.With("component", "library")}
+	return &Store{
+		src:   src,
+		cache: filepath.Join(dataDir, cacheFile),
+		seen:  openFreshness(filepath.Join(dataDir, serialFile), log),
+		log:   log.With("component", "library"),
+	}
 }
 
 // sameOrigin refuses a redirect that leaves the scheme or host the catalog was asked for.
@@ -366,7 +384,7 @@ func (s *Store) fetch(ctx context.Context) (*Catalog, error) {
 	if len(data) > maxCatalogBytes {
 		return nil, fmt.Errorf("library: catalog exceeds %d bytes", maxCatalogBytes)
 	}
-	return parse(data, s.log, s.signaturePolicy())
+	return parse(data, s.log, s.signaturePolicy(), s.seen)
 }
 
 // readFile reads a catalog off this machine's disk.
@@ -387,7 +405,7 @@ func (s *Store) readFile(path string) (*Catalog, error) {
 	if err != nil {
 		return nil, fmt.Errorf("library: catalog file: %w", err)
 	}
-	return parse(data, s.log, s.signaturePolicy())
+	return parse(data, s.log, s.signaturePolicy(), s.seen)
 }
 
 // parse decodes and validates a catalog. Unknown fields are an error, the same strictness a plugin
@@ -396,7 +414,7 @@ func (s *Store) readFile(path string) (*Catalog, error) {
 // log is where dropped entries are named. Dropping is right — one bad row must not take a catalog
 // down — but doing it in silence is not: the entry is simply absent from the shelf, with nothing
 // anywhere saying why, and "my skill is not in the library" is then a question nobody can answer.
-func parse(data []byte, log *slog.Logger, signing signaturePolicy) (*Catalog, error) {
+func parse(data []byte, log *slog.Logger, signing signaturePolicy, seen *freshness) (*Catalog, error) {
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	dec.DisallowUnknownFields()
 	var cat Catalog
@@ -408,7 +426,7 @@ func parse(data []byte, log *slog.Logger, signing signaturePolicy) (*Catalog, er
 	}
 	cat.Skills = validSkills(cat.Skills, log)
 	cat.MCP = validServers(cat.MCP, log)
-	cat.Plugins = validPlugins(cat.Plugins, log, signing)
+	cat.Plugins = validPlugins(cat.Plugins, log, signing, seen)
 	return &cat, nil
 }
 
@@ -416,7 +434,7 @@ func parse(data []byte, log *slog.Logger, signing signaturePolicy) (*Catalog, er
 // parser the loader uses — so the catalog cannot offer a plugin that would be skipped the moment it
 // landed on disk, and a client can trust that what it renders as "this is what it may reach" is what
 // the daemon will read back.
-func validPlugins(items []PluginItem, log *slog.Logger, signing signaturePolicy) []PluginItem {
+func validPlugins(items []PluginItem, log *slog.Logger, signing signaturePolicy, seen *freshness) []PluginItem {
 	out := make([]PluginItem, 0, len(items))
 	for _, it := range items {
 		switch {
@@ -434,6 +452,8 @@ func validPlugins(items []PluginItem, log *slog.Logger, signing signaturePolicy)
 			log.Warn("catalog plugin dropped", "id", it.ID, "reason", "skill_sha256 does not match")
 		case it.Skill == "" && it.SkillSHA != "":
 			log.Warn("catalog plugin dropped", "id", it.ID, "reason", "skill_sha256 without a skill")
+		case it.Serial < 0:
+			log.Warn("catalog plugin dropped", "id", it.ID, "reason", "negative serial")
 		default:
 			// The signature first, and only then the manifest: refusing an unsigned entry before
 			// parsing what it declares keeps the parser off bytes nobody vouched for.
@@ -441,10 +461,17 @@ func validPlugins(items []PluginItem, log *slog.Logger, signing signaturePolicy)
 				log.Warn("catalog plugin dropped", "id", it.ID, "reason", err)
 				continue
 			}
+			// Then freshness, which a signature cannot answer: this one is genuine and may still be
+			// yesterday's.
+			if err := seen.check(it); err != nil {
+				log.Warn("catalog plugin dropped", "id", it.ID, "reason", err)
+				continue
+			}
 			if err := checkManifest(it); err != nil {
 				log.Warn("catalog plugin dropped", "id", it.ID, "reason", err)
 				continue
 			}
+			seen.accept(it)
 			out = append(out, it)
 		}
 	}
@@ -548,7 +575,7 @@ func (s *Store) load() *Catalog {
 	}
 	// The cached copy came from the source this Store is pointed at, so it is held to that source's
 	// rule — a catalog cached from a remote host may not shed its signatures by going through disk.
-	cat, err := parse(data, s.log, s.signaturePolicy())
+	cat, err := parse(data, s.log, s.signaturePolicy(), s.seen)
 	if err != nil {
 		return nil
 	}

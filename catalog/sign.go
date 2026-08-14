@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -133,7 +134,29 @@ func sign(key ed25519.PrivateKey, name string) error {
 	if len(bundled) > 0 {
 		skillSHA = digest(bundled)
 	}
-	msg := library.SignedStatement(name, name, digest(manifest), digest(script), skillSHA)
+	var e struct {
+		Title       string   `json:"title"`
+		Description string   `json:"description"`
+		Homepage    string   `json:"homepage"`
+		Tags        []string `json:"tags"`
+		Serial      int      `json:"serial"`
+	}
+	entry, err := os.ReadFile(filepath.Join(dir, "entry.json"))
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(entry, &e); err != nil {
+		return fmt.Errorf("entry.json: %w", err)
+	}
+	if e.Serial < 1 {
+		return errors.New("entry.json: serial must be at least 1, and must be bumped when you publish a change")
+	}
+	msg := library.SignedStatement(library.Signed{
+		ID: name, Folder: name,
+		ManifestSHA: digest(manifest), ScriptSHA: digest(script), SkillSHA: skillSHA,
+		ListingSHA: library.ListingDigest(e.Title, e.Description, e.Homepage, e.Tags),
+		Serial:     e.Serial,
+	})
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(key, msg))
 	if err := os.WriteFile(filepath.Join(dir, sigFile), []byte(sig+"\n"), 0o644); err != nil {
 		return err

@@ -2,5 +2,6 @@
   "title": "Gmail (read-only)",
   "description": "Search, read and list labels in your Gmail. Read-only. Connect it once with your own Google OAuth client — Gmail scopes are restricted, so no shared client can be shipped.",
   "homepage": "https://developers.google.com/gmail/api/guides",
-  "tags": ["mail", "work"]
+  "tags": ["mail", "work"],
+  "serial": 1
 }

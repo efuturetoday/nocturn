@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "c210801c7b93",
+  "version": "b6692d270032",
   "skills": [
     {
       "id": "daily-brief",
@@ -252,7 +252,8 @@
       "manifest_sha256": "1919773da865d8a2c5a7d3c97d65cc7aa678c853632b67a3add4351774958dac",
       "script_sha256": "de81e1c97f78c611e384a7121a0259df61e1e63b22799cc15ff5673b1399aca5",
       "skill_sha256": "7abbcee0cc76dd52ac24d028735148a19d56f3f150046a9692beda91a9132ca7",
-      "signature": "6UqyO7R0lUQsHzJ5vpRLNiuXQoHbXHOWoQwkey3DDxpdGKkAZeoR/Er/8EpGc3xs1YfLIwU1SFbPA9q5UFZIAw=="
+      "serial": 1,
+      "signature": "9yKVP6ghTeWJKE4rhPIebSzNckyg8WCEG5nffx5KOyq1PwWtG3W1Bg7NAyweEqFbwJ9aCmtlThng8SXTfGxLCw=="
     }
   ]
 }

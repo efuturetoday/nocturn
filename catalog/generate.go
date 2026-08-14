@@ -35,6 +35,10 @@ type entry struct {
 	Description string   `json:"description,omitempty"` // defaults to the frontmatter description
 	Homepage    string   `json:"homepage,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
+	// Serial is a plugin's revision, and only a plugin's: it is inside the signed statement, so it
+	// only goes up and it is re-signed when it moves. Bump it when publishing a change — a daemon
+	// that has seen a higher one refuses to go back to this.
+	Serial int `json:"serial,omitempty"`
 }
 
 // server is one remote MCP declaration plus how it is listed. The declaration half is the same shape
@@ -149,6 +153,9 @@ func readPlugins(dir string) ([]library.PluginItem, error) {
 		if err != nil {
 			return nil, fmt.Errorf("plugins/%s: no signature (run `go run sign.go %s`): %w", d.Name(), d.Name(), err)
 		}
+		if e.Serial < 1 {
+			return nil, fmt.Errorf("plugins/%s/entry.json: serial must be at least 1, and must be bumped when you publish a change", d.Name())
+		}
 		out = append(out, library.PluginItem{
 			ID:          d.Name(),
 			Title:       e.Title,
@@ -162,6 +169,7 @@ func readPlugins(dir string) ([]library.PluginItem, error) {
 			ManifestSHA: digest(manifest),
 			ScriptSHA:   digest(script),
 			SkillSHA:    skillDigest(bundled),
+			Serial:      e.Serial,
 			Signature:   strings.TrimSpace(string(sig)),
 		})
 	}

@@ -2,11 +2,13 @@ package library
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -25,16 +27,11 @@ import (
 //
 // # What it does NOT cover, on purpose
 //
-// The LISTING is unsigned: title, description, tags and homepage are the catalog's to write, so a
-// host that has been taken over can rebrand a signed plugin ("calendar sync, no mail access") while
-// the artifacts underneath stay the ones we signed. What a person tapping install sees of the actual
-// grant — tools, cage, credential hosts, scopes — is rendered from the SIGNED manifest, which is the
-// half that decides anything. Folding the listing into the statement is a small change and worth
-// making the day a second publisher exists.
-//
-// There is also no freshness: nothing signed is monotonic, so a host can serve yesterday's signed
-// catalog forever. Rollback matters once a plugin has been withdrawn for a reason, which is the point
-// at which a signed date belongs in the statement.
+// A plugin REMOVED from the catalog cannot be detected. An old document still containing it presents
+// every entry at a serial this daemon already accepted, and nothing signed says how many entries
+// there should be. Catching that needs a signature over the SET — the whole catalog, re-signed on
+// every publish including one that only edits a skill — which puts the key in the path of every
+// change or into CI. That is a release-process decision, and it is not made here.
 
 // signingKeys are the Ed25519 public keys a plugin entry may be signed with, base64 (std, padded).
 //
@@ -54,21 +51,58 @@ var signingKeys = []string{
 // of the daemon can already replace its binary.
 const devKeyEnv = "NOCTURN_CATALOG_DEV_KEY"
 
+// Signed is everything one plugin entry's signature covers.
+//
+// Identity, every artifact digest, the LISTING and a serial — together, in one statement. Signing the
+// artifacts separately would let somebody keep a signed script and put a different manifest in front
+// of it (the manifest being the half that asks for the credential), or swap the bundled skill, which
+// is text that lands in the system prompt. Leaving the listing out let a host that had been taken
+// over rebrand a signed plugin — "calendar sync, no mail access" over a mail plugin — while the
+// artifacts stayed the ones we signed, and a person picks by that text.
+//
+// Serial is what makes an OLD signature insufficient. A signature says "we published these bytes",
+// never "this is current": without something monotonic, a host can serve yesterday's correctly signed
+// entry forever, including one withdrawn because it was found to be wrong. See Freshness.
+type Signed struct {
+	ID          string
+	Folder      string
+	ManifestSHA string
+	ScriptSHA   string
+	SkillSHA    string
+	ListingSHA  string
+	Serial      int
+}
+
 // SignedStatement is the exact byte string a plugin signature covers.
 //
-// Identity and every digest together, because signing the artifacts separately would let somebody
-// keep a signed script and put a different manifest in front of it — the manifest being the half that
-// asks for the credential — or swap the bundled skill, which is text that lands in the system prompt.
-// A plugin with no skill signs skillSHA as "", so "no skill" is itself signed rather than a gap
-// something could be dropped into. The form is newline-separated and field-labelled, so no two
-// distinct entries can ever produce the same bytes.
-func SignedStatement(id, folder, manifestSHA, scriptSHA, skillSHA string) []byte {
-	return []byte("nocturn-plugin-v1\n" +
-		"id=" + id + "\n" +
-		"folder=" + folder + "\n" +
-		"manifest=" + strings.ToLower(manifestSHA) + "\n" +
-		"script=" + strings.ToLower(scriptSHA) + "\n" +
-		"skill=" + strings.ToLower(skillSHA) + "\n")
+// A plugin with no bundled skill signs the empty digest, so "no skill" is itself signed rather than a
+// gap something could be dropped into. The form is newline-separated and field-labelled, so no two
+// distinct entries can produce the same bytes.
+func SignedStatement(s Signed) []byte {
+	return []byte("nocturn-plugin-v2\n" +
+		"id=" + s.ID + "\n" +
+		"folder=" + s.Folder + "\n" +
+		"manifest=" + strings.ToLower(s.ManifestSHA) + "\n" +
+		"script=" + strings.ToLower(s.ScriptSHA) + "\n" +
+		"skill=" + strings.ToLower(s.SkillSHA) + "\n" +
+		"listing=" + strings.ToLower(s.ListingSHA) + "\n" +
+		"serial=" + strconv.Itoa(s.Serial) + "\n")
+}
+
+// ListingDigest is the digest of what a person READS when deciding to install: the title, the
+// description, the homepage and the tags, in a fixed order.
+//
+// Computed from the entry itself rather than carried beside it, so a catalog cannot declare one
+// listing and show another.
+func ListingDigest(title, description, homepage string, tags []string) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "title\x00%s\x00", title)
+	fmt.Fprintf(h, "description\x00%s\x00", description)
+	fmt.Fprintf(h, "homepage\x00%s\x00", homepage)
+	for _, t := range tags {
+		fmt.Fprintf(h, "tag\x00%s\x00", t)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // signaturePolicy says whether a plugin entry must be signed, which depends on WHERE the catalog came
@@ -112,7 +146,11 @@ func verifySignature(it PluginItem, signing signaturePolicy) error {
 	if _, err := hex.DecodeString(it.SkillSHA); err != nil {
 		return fmt.Errorf("skill_sha256 is not hex: %w", err)
 	}
-	msg := SignedStatement(it.ID, it.Folder, it.ManifestSHA, it.ScriptSHA, it.SkillSHA)
+	msg := SignedStatement(Signed{
+		ID: it.ID, Folder: it.Folder,
+		ManifestSHA: it.ManifestSHA, ScriptSHA: it.ScriptSHA, SkillSHA: it.SkillSHA,
+		ListingSHA: it.listingDigest(), Serial: it.Serial,
+	})
 
 	keys, err := trustedKeys()
 	if err != nil {

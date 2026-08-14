@@ -228,6 +228,12 @@ skill is text, and TLS to one host is a proportionate control for text; a plugin
 held to a key. The signature covers the identity and every artifact digest together, so a signed
 script cannot be re-fronted with a manifest that asks for a credential.
 
+The signature covers the listing and a serial as well as the artifacts. The listing, because you pick
+by the title and description, and a host that had been taken over could otherwise rebrand a signed
+plugin while its code stayed the one we signed. The serial, because a signature says "we published
+these bytes" and never "this is current" — your daemon remembers the highest serial it has accepted
+per plugin and refuses to go back, so an old signed entry cannot be served to you forever.
+
 What signing does not do is read the manifest for you. It says who published these bytes, not that
 what they ask for is what you meant to grant — the danger note above still applies, and the entry
 shows the manifest for exactly that reason.

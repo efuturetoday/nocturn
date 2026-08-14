@@ -233,9 +233,18 @@ Read this before touching anything security-shaped — it is easy to assume the 
   either way.
 - **Text needs TLS, code needs a key.** A catalog plugin entry carries its manifest and its plugin.js
   inline, and is REFUSED unless an Ed25519 signature over `id·folder·sha256(manifest)·sha256(script)·
-  sha256(skill)` verifies against a key in `library.signingKeys` (private half outside this repo; the
+  sha256(skill)·sha256(listing)·serial` verifies against a key in `library.signingKeys` (private half outside this repo; the
   signature is committed beside the plugin, so CI never holds the key). Identity and every digest sign
   TOGETHER — otherwise a signed script could be re-fronted with a manifest that asks for a credential.
+  The LISTING is in there because a person picks by it — a taken-over host could otherwise rebrand a
+  signed mail plugin as "calendar sync, no mail access" while the artifacts stayed ours. The SERIAL is
+  in there because a signature says "we published these bytes", never "this is current": without
+  something monotonic, an old and perfectly signed entry can be served forever, including one
+  withdrawn for a reason. `internal/library/freshness.go` remembers the highest serial accepted per
+  plugin (`catalog-serials.json`) and refuses to go back — with two limits stated there rather than
+  discovered: the first sight of a plugin has nothing to compare against (trust on first use), and a
+  plugin REMOVED from the catalog needs a signature over the SET to detect, which would put the key in
+  the path of every publish.
   What signing does NOT cover is what the manifest asks for: `uses` is the guest's cage (a toolset
   subset, NO static host list — a host stays the human's per-request decision), `credentials` binds a
   token to a host, `oauth` names the account. That triple is the review surface a client must show.
