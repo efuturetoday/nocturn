@@ -6,6 +6,7 @@ import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
 import { SettingsGeneralPage } from './settings-general.page';
 import { SettingsDevicesPage } from './settings-devices.page';
 import { SkillsPage } from '../skills/skills.page';
+import { PluginsPage } from '../plugins/plugins.page';
 import { McpPage } from '../mcp/mcp.page';
 import { WorkspacesPage } from '../workspaces/workspaces.page';
 
@@ -24,7 +25,7 @@ import { WorkspacesPage } from '../workspaces/workspaces.page';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     WorkspaceHeaderComponent,
-    SettingsGeneralPage, SettingsDevicesPage, SkillsPage, McpPage, WorkspacesPage,
+    SettingsGeneralPage, SettingsDevicesPage, SkillsPage, PluginsPage, McpPage, WorkspacesPage,
     IonToolbar, IonSegment, IonSegmentButton, IonSegmentView, IonSegmentContent, IonLabel,
   ],
   template: `
@@ -37,6 +38,7 @@ import { WorkspacesPage } from '../workspaces/workspaces.page';
         <ion-segment-button value="general" contentId="general"><ion-label>General</ion-label></ion-segment-button>
         <ion-segment-button value="devices" contentId="devices"><ion-label>Devices</ion-label></ion-segment-button>
         <ion-segment-button value="skills" contentId="skills"><ion-label>Skills</ion-label></ion-segment-button>
+        <ion-segment-button value="plugins" contentId="plugins"><ion-label>Plugins</ion-label></ion-segment-button>
         <ion-segment-button value="mcp" contentId="mcp"><ion-label>MCP</ion-label></ion-segment-button>
         <ion-segment-button value="workspaces" contentId="workspaces"><ion-label>Workspaces</ion-label></ion-segment-button>
       </ion-segment>
@@ -46,6 +48,7 @@ import { WorkspacesPage } from '../workspaces/workspaces.page';
       <ion-segment-content id="general"><app-settings-general /></ion-segment-content>
       <ion-segment-content id="devices"><app-settings-devices /></ion-segment-content>
       <ion-segment-content id="skills"><app-skills /></ion-segment-content>
+      <ion-segment-content id="plugins"><app-plugins /></ion-segment-content>
       <ion-segment-content id="mcp"><app-mcp /></ion-segment-content>
       <ion-segment-content id="workspaces"><app-workspaces /></ion-segment-content>
     </ion-segment-view>

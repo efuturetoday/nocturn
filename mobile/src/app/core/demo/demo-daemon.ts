@@ -25,6 +25,7 @@ import {
   type ChatMeta,
   type ClientCommand,
   type MCPInfo,
+  type PluginInfo,
   type ServerEvent,
   type Source,
   type ToolNode,
@@ -93,6 +94,9 @@ export class DemoDaemon {
         break;
       case 'skill.list':
         this.sendSkills();
+        break;
+      case 'plugin.list':
+        this.sendPlugins();
         break;
       case 'skill.read':
         this.soon({ type: 'skill.body', ws: WS, name: cmd.name, body: demoSkillBody(cmd.name) });
@@ -360,9 +364,38 @@ export class DemoDaemon {
     });
   }
 
+  /** The installed plugins, as plugin.list reports them. */
+  private plugins: PluginInfo[] = [];
+
+  private sendPlugins(): void {
+    this.soon({ type: 'plugin.list', ws: WS, items: this.plugins.map((p) => ({ ...p })) });
+  }
+
+  /**
+   * Install a catalog plugin. The real daemon writes the folder, reloads, and only then can list it
+   * — so the list goes out after, not before, and a duplicate is refused in words.
+   */
+  private installPlugin(id: string): void {
+    const item = this.catalog.plugins.find((p) => p.id === id);
+    if (!item) {
+      this.soon({ type: 'error', text: `no catalog entry ${id}` });
+      return;
+    }
+    if (this.plugins.some((p) => p.name === item.name)) {
+      this.soon({ type: 'error', text: `plugins/${item.name} already exists` });
+      return;
+    }
+    this.plugins = [...this.plugins, { name: item.name, tools: item.tools.length }];
+    this.sendPlugins();
+  }
+
   /** Install a catalog entry. Refuses a duplicate with words, as the daemon does — a silent no-op
       would read as a broken button. */
-  private install(kind: 'skill' | 'mcp', id: string): void {
+  private install(kind: 'skill' | 'mcp' | 'plugin', id: string): void {
+    if (kind === 'plugin') {
+      this.installPlugin(id);
+      return;
+    }
     if (kind === 'skill') {
       const item = this.catalog.skills.find((s) => s.id === id);
       if (!item) {

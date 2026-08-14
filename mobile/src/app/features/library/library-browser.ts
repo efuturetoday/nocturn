@@ -9,16 +9,18 @@ import {
 import { LucideX } from '@lucide/angular';
 import { LibraryService } from '../../core/services/library.service';
 import { SkillService } from '../../core/services/skill.service';
+import { PluginService } from '../../core/services/plugin.service';
 import { McpService } from '../../core/services/mcp.service';
 import { WorkspaceService } from '../../core/services/workspace.service';
 import { MarkdownComponent } from '../../shared/markdown';
 import { filterCatalog, type LibraryEntry, type LibraryKind } from './library-filter';
-import type { LibrarySkill, LibraryServer } from '../../core/protocol/nocturn-protocol';
+import type { LibrarySkill, LibraryServer, LibraryPlugin } from '../../core/protocol/nocturn-protocol';
 
 /** The filters, in the order they are offered. */
 const KINDS: { key: LibraryKind; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'skill', label: 'Skills' },
+  { key: 'plugin', label: 'Plugins' },
   { key: 'mcp', label: 'MCP' },
 ];
 
@@ -47,12 +49,13 @@ const KINDS: { key: LibraryKind; label: string }[] = [
       </ion-refresher>
 
       @if (library.unavailable(); as why) {
-        <!-- Absent, not empty. A daemon that was never pointed at a catalog URL has no library at
-             all; saying "nothing found" would blame the catalog for a setting. -->
+        <!-- Absent, not empty. A daemon serves a catalog by default, so getting here means somebody
+             switched it off or pointed it somewhere unreachable; saying "nothing found" would blame
+             the catalog for a setting. -->
         <div class="state">
           <h2>No catalog</h2>
           <p>{{ why }}</p>
-          <p class="dim">Set <code>NOCTURN_CATALOG_URL</code> on the daemon and pull to refresh.</p>
+          <p class="dim">The daemon could not read its catalog. Pull to refresh, or check <code>NOCTURN_CATALOG_URL</code> if you set one.</p>
         </div>
       } @else if (library.loading() && !library.catalog()) {
         <div class="state"><ion-spinner name="dots" /></div>
@@ -94,8 +97,8 @@ const KINDS: { key: LibraryKind; label: string }[] = [
                 <button type="button" class="card" [class.have]="isInstalled(e)" (click)="viewing.set(e)">
                   <span class="top">
                     <span class="title">{{ e.title }}</span>
-                    <!-- Load-bearing under "All", where both kinds share one grid. -->
-                    <span class="kind">{{ e.kind === 'skill' ? 'skill' : 'mcp' }}</span>
+                    <!-- Load-bearing under "All", where all three kinds share one grid. -->
+                    <span class="kind">{{ e.kind }}</span>
                   </span>
                   <span class="desc">{{ e.description }}</span>
                   @if (e.sub) {
@@ -150,6 +153,63 @@ const KINDS: { key: LibraryKind; label: string }[] = [
                 <p class="dim consent">
                   This is what the assistant will be told. A skill grants no permissions — anything
                   it asks for still needs your approval.
+                </p>
+              } @else if (plugin(); as p) {
+                <!-- What installing GRANTS, before the button. The sandbox contains what the code
+                     can do; this table is what the code ASKS for, and it is the half a person can
+                     actually judge. -->
+                <ion-list inset="true">
+                  <ion-item lines="full">
+                    <ion-label class="ion-text-wrap">
+                      <h3>Tools it adds</h3>
+                      @for (t of p.tools; track t) {
+                        <ion-chip color="medium" outline="true">{{ t }}</ion-chip>
+                      }
+                    </ion-label>
+                  </ion-item>
+                  <ion-item [lines]="(p.hosts ?? []).length || (p.scopes ?? []).length ? 'full' : 'none'">
+                    <ion-label class="ion-text-wrap">
+                      <h3>What its code may call</h3>
+                      @if (p.uses.length) {
+                        @for (u of p.uses; track u) {
+                          <ion-chip color="medium" outline="true">{{ u }}</ion-chip>
+                        }
+                      } @else {
+                        <ion-note>nothing — it computes and reaches nowhere</ion-note>
+                      }
+                    </ion-label>
+                  </ion-item>
+                  @if ((p.hosts ?? []).length) {
+                    <ion-item [lines]="(p.scopes ?? []).length ? 'full' : 'none'">
+                      <ion-label class="ion-text-wrap">
+                        <h3>A credential would ride to</h3>
+                        @for (h of p.hosts ?? []; track h) {
+                          <ion-chip color="medium" outline="true">{{ h }}</ion-chip>
+                        }
+                      </ion-label>
+                    </ion-item>
+                  }
+                  @if ((p.scopes ?? []).length) {
+                    <ion-item lines="none">
+                      <ion-label class="ion-text-wrap">
+                        <h3>Signing in would ask for</h3>
+                        @for (s of p.scopes ?? []; track s) {
+                          <ion-chip color="medium" outline="true">{{ s }}</ion-chip>
+                        }
+                      </ion-label>
+                    </ion-item>
+                  }
+                </ion-list>
+                @if (p.skill; as body) {
+                  <!-- A bundled skill is text that joins the prompt catalog, so it is shown for the
+                       same reason a catalog skill's body is: it is what the assistant will be told. -->
+                  <p class="dim">It also brings instructions for the assistant:</p>
+                  <div class="body"><app-markdown [text]="body" /></div>
+                }
+                <p class="dim consent">
+                  Its code runs in the sandbox — no ambient authority, and every effect still meets
+                  the gate. Installing writes the folder; connecting an account, if it needs one,
+                  happens afterwards on the host.
                 </p>
               } @else if (server(); as m) {
                 <ion-list inset="true">
@@ -323,6 +383,7 @@ const KINDS: { key: LibraryKind; label: string }[] = [
 export class LibraryBrowserComponent {
   protected readonly library = inject(LibraryService);
   private readonly skillsSvc = inject(SkillService);
+  private readonly pluginsSvc = inject(PluginService);
   private readonly mcpSvc = inject(McpService);
   private readonly workspaces = inject(WorkspaceService);
   private readonly alerts = inject(AlertController);
@@ -348,6 +409,10 @@ export class LibraryBrowserComponent {
   protected readonly skill = computed<LibrarySkill | null>(() => {
     const v = this.viewing();
     return v?.kind === 'skill' ? (v.item as LibrarySkill) : null;
+  });
+  protected readonly plugin = computed<LibraryPlugin | null>(() => {
+    const v = this.viewing();
+    return v?.kind === 'plugin' ? (v.item as LibraryPlugin) : null;
   });
   protected readonly server = computed<LibraryServer | null>(() => {
     const v = this.viewing();
@@ -378,6 +443,8 @@ export class LibraryBrowserComponent {
 
   protected isInstalled(e: LibraryEntry): boolean {
     if (e.kind === 'mcp') return this.mcpSvc.servers().some((x) => x.name === (e.item as LibraryServer).name);
+    // A plugin's identity is its folder, and only the daemon knows which folders are there.
+    if (e.kind === 'plugin') return this.pluginsSvc.plugins().some((x) => x.name === (e.item as LibraryPlugin).name);
     // The frontmatter name is what the daemon files a skill under; the catalog id need not match it.
     const name = frontmatterName((e.item as LibrarySkill).body) ?? e.id;
     return this.skillsSvc.skills().some((x) => x.name === name);
@@ -403,6 +470,21 @@ export class LibraryBrowserComponent {
   protected async uninstall(): Promise<void> {
     const v = this.viewing();
     if (!v) return;
+
+    if (v.kind === 'plugin') {
+      // Not a button yet: removing a plugin has to revoke the remembered permission for the hosts
+      // its credential rode to, the way removing an MCP server does. Half of that would leave a
+      // grant standing for a program that is gone.
+      const alert = await this.alerts.create({
+        header: `Remove ${(v.item as LibraryPlugin).name}?`,
+        message:
+          `Not from here yet. On the machine running Nocturn, delete the folder ` +
+          `plugins/${(v.item as LibraryPlugin).name} and run \`nocturn reload\`.`,
+        buttons: [{ text: 'OK', role: 'cancel' }],
+      });
+      await alert.present();
+      return;
+    }
 
     if (v.kind === 'mcp') {
       const name = (v.item as LibraryServer).name;
