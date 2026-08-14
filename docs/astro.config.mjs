@@ -100,6 +100,13 @@ export default defineConfig({
 					],
 				},
 				{
+					// Generated from catalog/ by scripts/catalog-pages.mjs — the pages describe the
+					// entries a daemon actually offers, read out of the same tree the published
+					// catalog.json is built from.
+					label: 'Catalog',
+					items: [{ autogenerate: { directory: 'catalog' } }],
+				},
+				{
 					label: 'Extending',
 					items: [
 						{ label: 'Plugins', slug: 'guides/writing-plugins' },

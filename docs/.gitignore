@@ -19,3 +19,6 @@ pnpm-debug.log*
 
 # macOS-specific files
 .DS_Store
+
+# Generated from ../catalog by scripts/catalog-pages.mjs — derived, never edited by hand.
+/src/content/docs/catalog/

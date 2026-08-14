@@ -32,6 +32,10 @@ code and docs disagree, the code wins and the doc is wrong.
 ## Structure
 
 - `src/content/docs/**` — Markdown/MDX pages (guides, architecture, the gate overview).
+- `src/content/docs/catalog/**` — **generated** by `scripts/catalog-pages.mjs` from `../catalog`, and
+  gitignored. Never edit a page there; edit the entry it was read from (a plugin's `GUIDE.md`,
+  `entry.json` or `plugin.json`). `npm run build` runs the generator first — a bare `astro build`
+  publishes the site without the Catalog section.
 - `src/data/tools/*.yaml`, `src/data/kinds/*.yaml` — the reference, data-driven. **Read
   `CONVENTIONS.md` before touching these**: the file name is the tool name, `gated` is required, and
   the render order is fixed.

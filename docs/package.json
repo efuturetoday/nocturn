@@ -3,9 +3,9 @@
   "type": "module",
   "version": "0.0.1",
   "scripts": {
-    "dev": "astro dev",
+    "dev": "node scripts/catalog-pages.mjs && astro dev",
     "start": "astro dev",
-    "build": "astro build",
+    "build": "node scripts/catalog-pages.mjs && astro build",
     "preview": "astro preview",
     "astro": "astro"
   },
