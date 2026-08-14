@@ -45,16 +45,23 @@ import type { SkillInfo } from '../../core/protocol/nocturn-protocol';
             </ion-label>
             <!-- Both controls stop the click: the row itself opens the skill, and a toggle that also
                  opened it would leave a sheet in front of the switch you just flipped. -->
-            <ion-toggle
-              slot="end"
-              [checked]="s.enabled"
-              (click)="$event.stopPropagation()"
-              (ionChange)="toggle(s, $event)"
-              [attr.aria-label]="'Enable ' + s.name"
-            />
-            <ion-button slot="end" fill="clear" color="danger" (click)="$event.stopPropagation(); remove(s)">
-              Delete
-            </ion-button>
+            @if (s.plugin) {
+              <!-- A bundled skill has no folder of its own, so there is nothing here to switch off or
+                   delete: it arrives and leaves with its plugin. Shown anyway, because it is in front
+                   of the model. -->
+              <ion-note slot="end">from {{ s.plugin }}</ion-note>
+            } @else {
+              <ion-toggle
+                slot="end"
+                [checked]="s.enabled"
+                (click)="$event.stopPropagation()"
+                (ionChange)="toggle(s, $event)"
+                [attr.aria-label]="'Enable ' + s.name"
+              />
+              <ion-button slot="end" fill="clear" color="danger" (click)="$event.stopPropagation(); remove(s)">
+                Delete
+              </ion-button>
+            }
           </ion-item>
         } @empty {
           <ion-item lines="none">

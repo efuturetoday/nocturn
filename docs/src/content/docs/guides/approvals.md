@@ -140,3 +140,25 @@ The server listens on your LAN. On the same network, answering is instant. Answe
 needs a relay, which does not exist yet — until then an approval away from home waits for you to be
 reachable, and a two-minute silence is a no.
 :::
+
+## Reviewing what you allowed
+
+Every "always" is authority that outlives the moment it was given. A grant records what — a kind and
+a target — and never *why*, so once whatever prompted the question is gone, the answer stands on its
+own and the next thing of that shape inherits it.
+
+**Settings → Permissions** lists them: the target, the kind, and whether it survives a restart. A
+session grant lapses when the daemon stops; a durable one is written to `grants.json` and outlives
+everything, including the reason. Only the second accumulates, which is why the two are told apart
+rather than shown as one list.
+
+Revoking one is safe in a specific way: the next action of that shape asks you again. That is the
+gate's ordinary path, not a failure — the cost of a revocation is one more question, once.
+
+Two things revoke on their own, because leaving them would leave a permission standing for something
+that no longer exists: removing an MCP server takes the remembered permission for its host, and
+removing a plugin takes the ones for every host its credential rode to.
+
+There is no expiry. A grant lasts until it is revoked or the daemon restarts, and that is a
+deliberate gap rather than an oversight — a permission that lapsed on a timer would be re-asked at
+whatever moment the timer chose, which is exactly when nobody is watching.

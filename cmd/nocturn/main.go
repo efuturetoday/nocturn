@@ -44,6 +44,10 @@ const (
 	devicePath = dataRoot + "/devices.json"
 )
 
+// catalogOff is the NOCTURN_CATALOG_URL value that switches the library off entirely. A word, because
+// the empty value is now "use the default" and a person who wants no catalog has to be able to say so.
+const catalogOff = "off"
+
 func main() {
 	_ = godotenv.Load()
 	os.Exit(dispatch(os.Args[1:]))
@@ -203,10 +207,15 @@ func runApp(serveAddr string, serveOpts ...serve.Option) int {
 		serveOpts = append(serveOpts, serve.OnDevicesChanged(func() {
 			ensureCLICredential(devices, logger)
 		}))
-		// The curated catalog, if this build is pointed at one. Absent by default: a daemon nobody
-		// configured a catalog for never reaches out to one, and the library is then missing rather
-		// than empty.
-		if url := os.Getenv("NOCTURN_CATALOG_URL"); url != "" {
+		// The curated catalog. On by default, pointed at the one this project publishes, because a
+		// library that is empty until the user hosts a JSON file is a library nobody opens twice.
+		// Nothing is fetched here — the first request leaves the machine when a device asks for the
+		// list — so a daemon whose owner never opens the library still talks to nobody about it.
+		//
+		// catalogOff is what makes the default overridable in both directions: an empty variable now
+		// means "the default", so "no catalog at all" needs a word of its own rather than the absence
+		// of one.
+		if url := cmp.Or(os.Getenv("NOCTURN_CATALOG_URL"), library.DefaultURL); url != catalogOff {
 			serveOpts = append(serveOpts, serve.WithLibrary(
 				library.New(library.Source{URL: url}, dataRoot, logger),
 			))

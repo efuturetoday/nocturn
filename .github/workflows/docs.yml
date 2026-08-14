@@ -12,10 +12,12 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'catalog/**'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
       - 'docs/**'
+      - 'catalog/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -54,10 +56,12 @@ jobs:
       - run: npm ci --ignore-scripts
         working-directory: docs
 
-      # Also validates every tool and gate-kind YAML against the Zod schema, so a reference page
-      # that describes a tool wrongly fails here rather than being published wrong.
+      # `npm run build`, not `astro build`: the Catalog section is generated from catalog/ first
+      # (scripts/catalog-pages.mjs), and a bare astro build would publish the site without it.
+      # The build also validates every tool and gate-kind YAML against the Zod schema, so a reference
+      # page that describes a tool wrongly fails here rather than being published wrong.
       - name: Build the site
-        run: npx astro build
+        run: npm run build
         working-directory: docs
 
       - uses: actions/upload-pages-artifact@v5

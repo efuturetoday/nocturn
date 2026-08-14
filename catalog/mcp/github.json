@@ -1,0 +1,8 @@
+{
+  "title": "GitHub",
+  "description": "GitHub's own MCP server: repositories, issues, pull requests, code search. Signs in with OAuth.",
+  "homepage": "https://github.com/github/github-mcp-server",
+  "tags": ["dev"],
+  "url": "https://api.githubcopilot.com/mcp/",
+  "auth": "oauth"
+}

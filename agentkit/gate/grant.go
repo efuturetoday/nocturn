@@ -1,6 +1,10 @@
 package gate
 
-import "sync"
+import (
+	"slices"
+	"strings"
+	"sync"
+)
 
 // Grant is a remembered approval — a (Kind, Target) pattern a human has allowed. What a Target
 // pattern MEANS is decided by a Matcher supplied at Check time, not by this library; "*" for any is
@@ -83,6 +87,28 @@ func (m *MemGrants) Remember(g Grant, _ Recall) {
 	m.mu.Lock()
 	m.set[g] = struct{}{}
 	m.mu.Unlock()
+}
+
+// All returns the standing grants, sorted, so a consumer can SHOW them.
+//
+// A remembered approval is authority that outlives the moment it was given, and one nobody can see is
+// one nobody revokes. Forget already exists for the consumer that knows a grant has become stale;
+// this is for the consumer that wants to ask a human, which cannot be done without a list.
+func (m *MemGrants) All() []Grant {
+	m.mu.Lock()
+	out := make([]Grant, 0, len(m.set))
+	for g := range m.set {
+		out = append(out, g)
+	}
+	m.mu.Unlock()
+
+	slices.SortFunc(out, func(a, b Grant) int {
+		if c := strings.Compare(a.Kind, b.Kind); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Target, b.Target)
+	})
+	return out
 }
 
 // Forget drops a grant, reporting whether it was there.

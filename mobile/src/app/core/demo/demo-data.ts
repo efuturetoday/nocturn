@@ -15,6 +15,7 @@ import type {
   Account,
   AgentInfo,
   ChatMeta,
+  LibraryPlugin,
   LibrarySkill,
   LibraryServer,
   MCPInfo,
@@ -154,7 +155,12 @@ export function demoServers(): MCPInfo[] {
 
 /** A catalog with two of each. The skill bodies are whole, as the real catalog serves them: the
     Library shows the entire body before installing, so a truncated one would misrepresent the page. */
-export function demoCatalog(): { version: string; skills: LibrarySkill[]; mcp: LibraryServer[] } {
+export function demoCatalog(): {
+  version: string;
+  skills: LibrarySkill[];
+  mcp: LibraryServer[];
+  plugins: LibraryPlugin[];
+} {
   return {
     version: 'demo',
     skills: [
@@ -190,6 +196,32 @@ export function demoCatalog(): { version: string; skills: LibrarySkill[]; mcp: L
           '',
           'Ask for the fixed points first — dates that cannot move, people who must be there.',
           'Everything else is negotiable and should be offered as options, with the cost of each.',
+        ].join('\n'),
+      },
+    ],
+    plugins: [
+      {
+        id: 'gmail',
+        title: 'Gmail (read-only)',
+        description: 'Search and read your mail. Needs your own Google OAuth client, connected once on the host.',
+        homepage: 'https://developers.google.com/gmail/api/guides',
+        tags: ['mail', 'work'],
+        name: 'gmail',
+        tools: ['gmail_search', 'gmail_read', 'gmail_labels'],
+        uses: ['http_read'],
+        hosts: ['gmail.googleapis.com'],
+        scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+        manifest: '{ "name": "gmail", "version": "1", "uses": ["http_read"] }',
+        script: '// the plugin source, shown whole in the real catalog',
+        skill: [
+          '---',
+          'name: gmail',
+          'description: How to search and read the user\'s mail with the gmail_* tools.',
+          '---',
+          '',
+          '# Gmail',
+          '',
+          '`gmail_search` takes Gmail\'s own query syntax: `is:unread`, `from:anna newer_than:7d`.',
         ].join('\n'),
       },
     ],

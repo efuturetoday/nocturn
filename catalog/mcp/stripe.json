@@ -1,0 +1,8 @@
+{
+  "title": "Stripe",
+  "description": "Stripe's own MCP server: customers, payments, invoices and the docs. Signs in with OAuth.",
+  "homepage": "https://docs.stripe.com/mcp",
+  "tags": ["work"],
+  "url": "https://mcp.stripe.com",
+  "auth": "oauth"
+}

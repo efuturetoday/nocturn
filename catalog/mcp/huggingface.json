@@ -1,0 +1,7 @@
+{
+  "title": "Hugging Face",
+  "description": "Search models, datasets, papers and Spaces on the Hugging Face Hub. Works without an account.",
+  "homepage": "https://huggingface.co/settings/mcp",
+  "tags": ["dev", "research"],
+  "url": "https://huggingface.co/mcp"
+}

@@ -101,7 +101,7 @@ export class LibraryService {
    * content up in the catalog it fetched itself, which is why there is no wire form that could carry
    * an edited body — see LibraryInstallCmd.
    */
-  install(kind: 'skill' | 'mcp', id: string): void {
+  install(kind: 'skill' | 'mcp' | 'plugin', id: string): void {
     const ws = this.workspaces.active();
     if (!ws) return;
     this._installing.set(id);

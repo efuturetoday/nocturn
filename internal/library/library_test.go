@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -225,5 +227,56 @@ func TestCatalog_RefusesARedirectOffTheConfiguredHost(t *testing.T) {
 	}
 	if followed.Load() {
 		t.Error("the redirect was followed")
+	}
+}
+
+// The default is what a daemon nobody configured fetches, which makes its scheme the whole of the
+// catalog's authenticity — checkSource would refuse it at fetch time, but a shipped constant that
+// cannot be fetched is a bug nobody discovers until the library is opened.
+func TestDefaultURLIsAnHTTPSCatalog(t *testing.T) {
+	u, err := url.Parse(library.DefaultURL)
+	if err != nil {
+		t.Fatalf("DefaultURL does not parse: %v", err)
+	}
+	if u.Scheme != "https" {
+		t.Errorf("DefaultURL scheme = %q, want https", u.Scheme)
+	}
+	if path.Base(u.Path) != "catalog.json" {
+		t.Errorf("DefaultURL = %q, want it to name the catalog document", library.DefaultURL)
+	}
+}
+
+// A household with its own skills should not have to run a web server to install them. The catalog
+// is then a path, the daemon reads it off disk, and the entries are the same ones a remote catalog
+// would offer — minus the requirement to be signed, because there is no channel to authenticate.
+func TestCatalog_ReadsAFileOnThisMachine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "catalog.json")
+	if err := os.WriteFile(path, []byte(catalogJSON(t, []map[string]any{goodSkill()}, nil)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, source := range map[string]string{
+		"a bare path": path,
+		"a file URL":  "file://" + path,
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := library.New(library.Source{URL: source}, t.TempDir(), slog.New(slog.DiscardHandler))
+			cat, err := store.Catalog(t.Context(), false)
+			if err != nil {
+				t.Fatalf("Catalog() = %v, want the file to be read", err)
+			}
+			if len(cat.Skills) != 1 {
+				t.Errorf("got %d skills, want the one in the file", len(cat.Skills))
+			}
+		})
+	}
+}
+
+// A path that is not there says so, rather than being reported as a network problem.
+func TestCatalog_MissingFileSaysSo(t *testing.T) {
+	store := library.New(library.Source{URL: filepath.Join(t.TempDir(), "nope.json")}, t.TempDir(), slog.New(slog.DiscardHandler))
+	if _, err := store.Catalog(t.Context(), false); err == nil {
+		t.Fatal("a missing catalog file was accepted")
 	}
 }

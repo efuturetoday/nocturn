@@ -1,0 +1,8 @@
+{
+  "title": "Cloudflare",
+  "description": "Cloudflare's own MCP server: DNS, Workers, and account data. Signs in with OAuth.",
+  "homepage": "https://developers.cloudflare.com/agents/model-context-protocol/",
+  "tags": ["infra"],
+  "url": "https://mcp.cloudflare.com/mcp",
+  "auth": "oauth"
+}

@@ -1,0 +1,6 @@
+{
+  "title": "Weather",
+  "description": "Current conditions and a short forecast, from Open-Meteo. No account, no API key.",
+  "homepage": "https://open-meteo.com/",
+  "tags": ["everyday", "web"]
+}

@@ -74,6 +74,9 @@ export interface AgentInfo {
  * the one cost of holding one that is otherwise invisible.
  */
 export interface SkillInfo {
+  /** The plugin that BUNDLED this skill, absent for a skill of its own in skills/. A bundled one can
+      be neither switched off nor deleted: it belongs to the plugin and goes when the plugin does. */
+  plugin?: string;
   name: string;
   folder: string;
   description?: string;
@@ -129,6 +132,40 @@ export interface LibraryServer {
   url: string;
   auth?: string;
   scopes?: string[];
+}
+
+/**
+ * One installable plugin in the catalog.
+ *
+ * A plugin is CODE, so this entry carries more than a listing: `tools`, `uses`, `hosts` and `scopes`
+ * are pulled out of its manifest by the daemon so a client can show what installing GRANTS without
+ * parsing JSON. That triple is the review surface — the sandbox contains what the code can do, but
+ * the manifest is what it asks for. Render it before offering the button.
+ *
+ * `manifest`, `script` and `skill` ride along whole, the way a skill's body does. The signature is
+ * checked by the daemon before an entry is ever offered, so anything listed here verified against a
+ * key compiled into it — the client neither sees nor checks one.
+ */
+export interface LibraryPlugin {
+  id: string;
+  title: string;
+  description: string;
+  homepage?: string;
+  tags?: string[];
+  /** The folder it installs under, and the prefix on every tool it exposes. */
+  name: string;
+  /** Tool names, already namespaced by the daemon. */
+  tools: string[];
+  /** The base tools its guest may call — its cage. Empty means it reaches nothing. */
+  uses: string[];
+  /** Where a declared credential would ride. */
+  hosts?: string[];
+  /** What a sign-in would ask for. */
+  scopes?: string[];
+  manifest: string;
+  script: string;
+  /** Instructions it bundles, which join the prompt catalog on install. */
+  skill?: string;
 }
 
 /** One model-issued tool call inside a transcript message. */
@@ -358,6 +395,74 @@ export interface SkillList {
   items: SkillInfo[];
 }
 
+/**
+ * One installed plugin, replying to plugin.list and broadcast after an install.
+ *
+ * The name it was filed under and how many tools it contributed. What it may REACH is not here on
+ * purpose: that is decided by its manifest and asked about at the gate, and the catalog entry — which
+ * carries the manifest — is where a person reads it before agreeing.
+ */
+export interface PluginInfo {
+  name: string;
+  tools: number;
+}
+
+/** A workspace's installed plugins (plugin.list). */
+export interface PluginList {
+  type: "plugin.list";
+  ws: string;
+  items: PluginInfo[];
+}
+
+/**
+ * One standing approval: a permission this household gave and the gate no longer asks about.
+ *
+ * `durable` is what makes the list judgeable — a session grant lapses when the daemon stops, a
+ * durable one is written down and outlives everything, including the reason it was given for.
+ */
+export interface GrantInfo {
+  kind: string;
+  target: string;
+  durable: boolean;
+}
+
+/** A workspace's standing approvals (grant.list), broadcast again after a revocation. */
+export interface GrantList {
+  type: "grant.list";
+  ws: string;
+  items: GrantInfo[];
+}
+
+/** Request a workspace's standing approvals (→ GrantList). Needs `manage`: the set of hosts a
+    household approved says what it does. */
+export interface GrantListCmd {
+  cmd: "grant.list";
+  ws: string;
+}
+
+/** Revoke one standing approval. The next action of that shape asks again — which is the gate's
+    designed path, not a failure. Answered with the list. */
+export interface GrantForgetCmd {
+  cmd: "grant.forget";
+  ws: string;
+  kind: string;
+  target: string;
+}
+
+/** Delete a plugin, its folder and its stored token — and revoke the remembered permission for the
+    hosts its credential rode to. Answered with plugin.list. */
+export interface PluginRemoveCmd {
+  cmd: "plugin.remove";
+  ws: string;
+  name: string;
+}
+
+/** Request a workspace's installed plugins (→ PluginList). Listing grants nothing. */
+export interface PluginListCmd {
+  cmd: "plugin.list";
+  ws: string;
+}
+
 /** One skill's SKILL.md, verbatim and WITH its frontmatter, replying to skill.read. Verbatim because
     the point of reading one is to see exactly what the model is told. */
 export interface SkillBody {
@@ -388,6 +493,7 @@ export interface LibraryCatalog {
   version: string;
   skills: LibrarySkill[];
   mcp: LibraryServer[];
+  plugins: LibraryPlugin[];
 }
 
 /**
@@ -495,6 +601,8 @@ export type ServerEvent =
   | WorkspaceList
   | SkillList
   | SkillBody
+  | PluginList
+  | GrantList
   | MCPList
   | LibraryCatalog
   | ChatActivity
@@ -727,7 +835,7 @@ export interface LibraryRefreshCmd {
 export interface LibraryInstallCmd {
   cmd: "library.install";
   ws: string;
-  kind: "skill" | "mcp";
+  kind: "skill" | "mcp" | "plugin";
   id: string;
 }
 
@@ -834,6 +942,10 @@ export type ClientCommand =
   | SkillReadCmd
   | SkillEnableCmd
   | SkillRemoveCmd
+  | PluginListCmd
+  | PluginRemoveCmd
+  | GrantListCmd
+  | GrantForgetCmd
   | MCPListCmd
   | MCPAddCmd
   | MCPRemoveCmd

@@ -2,13 +2,47 @@ package workspace
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/internal/discovery"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/skill"
 )
+
+// foldPluginSkills adds the SKILL.md a plugin bundles to the workspace's skill catalog.
+//
+// A plugin brings tools; a skill says when to reach for them and what its arguments really take. The
+// two travel together and are read in two different places — the tool spec on every turn, the skill
+// body only once the model decides it is relevant — so bundling one is how a plugin explains itself
+// without paying for the explanation in every prompt.
+//
+// A hand-written skill WINS a name collision. The precedence is deliberate: a skill under skills/ is
+// something this household wrote or installed on purpose, and an installed plugin must not be able to
+// take over the name of one by shipping a SKILL.md that claims it. The shadowed one is reported, the
+// way every other discovery collision is.
+func foldPluginSkills(into agentkit.SkillSet, root string, diag *agentkit.Diagnostics) {
+	bodies := plugin.SkillBodies(root)
+	// Sorted, because two plugins bundling one skill name would otherwise pick a different winner on
+	// every reload — a workspace that answers differently after a restart, for no visible reason.
+	for _, folder := range slices.Sorted(maps.Keys(bodies)) {
+		body := bodies[folder]
+		sk, err := skill.Parse(body, folder)
+		if err != nil {
+			discovery.Diagnose(diag, "plugin:"+folder, err.Error())
+			continue
+		}
+		if _, taken := into[sk.Name]; taken {
+			discovery.Diagnose(diag, "plugin:"+folder,
+				fmt.Sprintf("bundled skill %q skipped (a skill of that name is already installed)", sk.Name))
+			continue
+		}
+		into[sk.Name] = sk
+	}
+}
 
 // installPlugins discovers the plugins under <dir>/plugins and folds each one's tools into the
 // workspace toolset (as top-level <plugin>_<tool> tools, refusing a name collision), then binds its

@@ -7,6 +7,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/internal/library"
 	"github.com/efuturetoday/nocturn/internal/mcp"
+	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
@@ -31,7 +32,7 @@ type LibraryRefresh struct {
 type LibraryInstall struct {
 	Cmd  string `json:"cmd"`
 	Ws   string `json:"ws"`
-	Kind string `json:"kind"` // "skill" | "mcp"
+	Kind string `json:"kind"` // "skill" | "mcp" | "plugin"
 	ID   string `json:"id"`
 }
 
@@ -58,12 +59,36 @@ type LibraryServer struct {
 	Scopes      []string `json:"scopes,omitempty"`
 }
 
+// LibraryPlugin is one installable plugin, as the catalog offers it.
+//
+// The manifest goes out whole, and beside it the three things that decide what installing grants,
+// already pulled apart so a client does not have to parse JSON to render them: the tools it will
+// expose, the base tools its guest may call, and the hosts a credential would be attached to. The
+// script goes out too — showing it is right even though nobody audits four hundred lines on a phone,
+// and it is the manifest above that is the honest review surface.
+type LibraryPlugin struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Homepage    string   `json:"homepage,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Name        string   `json:"name"`
+	Tools       []string `json:"tools"`
+	Uses        []string `json:"uses"`
+	Hosts       []string `json:"hosts,omitempty"`  // where a declared credential would ride
+	Scopes      []string `json:"scopes,omitempty"` // what a sign-in would ask for
+	Manifest    string   `json:"manifest"`
+	Script      string   `json:"script"`
+	Skill       string   `json:"skill,omitempty"` // instructions it bundles, which land in the prompt catalog
+}
+
 // LibraryCatalog carries the catalog (server → client).
 type LibraryCatalog struct {
 	Type    string          `json:"type"`
 	Version string          `json:"version"`
 	Skills  []LibrarySkill  `json:"skills"`
 	MCP     []LibraryServer `json:"mcp"`
+	Plugins []LibraryPlugin `json:"plugins"`
 }
 
 // libraryCmd dispatches a library.* action.
@@ -148,9 +173,40 @@ func (c *conn) install(ctx context.Context, ws *workspace.Workspace, kind, id st
 		c.applyMCP(ws, "install", item.Name, first)
 		return nil
 
+	case "plugin":
+		item, err := c.library.Plugin(ctx, id)
+		if err != nil {
+			return err
+		}
+		m, err := plugin.Write(ws.PluginsDir(), item.Folder, item.Manifest, item.Script, item.Skill)
+		if err != nil {
+			return err
+		}
+		c.log.Info("installed a plugin from the catalog", "ws", ws.Name(), "id", id,
+			"plugin", m.Name, "uses", m.Uses, "tools", len(m.Tools))
+		c.applyPlugins(ws, m.Name)
+		return nil
+
 	default:
-		return fmt.Errorf("unknown kind %q (want \"skill\" or \"mcp\")", kind)
+		return fmt.Errorf("unknown kind %q (want \"skill\", \"mcp\" or \"plugin\")", kind)
 	}
+}
+
+// applyPlugins makes an installed plugin take effect and tells every device what is installed now.
+//
+// The reload is detached for the reason applySkills gives — it re-runs the whole of discovery, MCP
+// handshakes included, on a goroutine so this connection keeps reading. The list goes out AFTER it
+// here, unlike a skill's: a plugin's tools exist only once discovery has built them, so a list sent
+// first would name a plugin whose tools are not there yet.
+func (c *conn) applyPlugins(ws *workspace.Workspace, name string) {
+	log := c.log.With("ws", ws.Name(), "plugin", name)
+	go func() {
+		if err := ws.Reload(); err != nil {
+			log.Error("reloading the workspace after a plugin was installed", "err", err)
+			return
+		}
+		c.hub.broadcast(pluginList(ws))
+	}()
 }
 
 // catalogFrame renders the catalog for the wire.
@@ -195,5 +251,48 @@ func catalogFrame(cat *library.Catalog) LibraryCatalog {
 		}
 		out.MCP = append(out.MCP, e)
 	}
+	for _, it := range cat.Plugins {
+		out.Plugins = append(out.Plugins, pluginEntry(it))
+	}
 	return out
+}
+
+// pluginEntry renders one catalog plugin, summarising its manifest so the grant is legible.
+//
+// A manifest that will not parse is summarised as nothing rather than dropped: library.parse already
+// refused those, so reaching here with one would be a bug, and a listing that silently omitted an
+// entry the daemon does offer would be worse than one showing an empty cage.
+func pluginEntry(it library.PluginItem) LibraryPlugin {
+	e := LibraryPlugin{
+		ID:          it.ID,
+		Title:       it.Title,
+		Description: it.Description,
+		Homepage:    it.Homepage,
+		Tags:        it.Tags,
+		Name:        it.Folder,
+		Tools:       []string{},
+		Uses:        []string{},
+		Manifest:    it.Manifest,
+		Script:      it.Script,
+		Skill:       it.Skill,
+	}
+	var m plugin.Manifest
+	if err := json.Unmarshal([]byte(it.Manifest), &m); err != nil {
+		return e
+	}
+	for _, t := range m.Tools {
+		// As the model will see them. A bare "search" in a list of things a plugin adds says nothing
+		// about which search, and the namespaced name is also what an error message will name.
+		e.Tools = append(e.Tools, m.Name+"_"+t.Name)
+	}
+	e.Uses = append(e.Uses, m.Uses...)
+	for _, c := range m.Credentials {
+		e.Hosts = append(e.Hosts, c.Host)
+	}
+	// The client id and secret stay here, as with an MCP server: what a person needs before agreeing
+	// is which access is about to be requested in their name.
+	for _, o := range m.OAuth {
+		e.Scopes = append(e.Scopes, o.Scopes...)
+	}
+	return e
 }

@@ -35,10 +35,11 @@ the default workspace, not on all of them.
 | `nocturn pair [--open] [--addr :8080]` | Mint a pairing code on the **running** server and print it with a one-click link. Reads the server's own 0600 credential, so it works whenever the server is up — including over SSH on a headless box, long after the code printed at startup expired. `--open` launches a browser. |
 | `nocturn voice [--port 8788] [-w workspace]` | A **PoC harness**, in its own words: a browser page for testing the voice path on loopback, with no pairing. Not a way to use Nocturn. |
 
-`NOCTURN_CATALOG_URL` points the server at a curated catalog of skills and MCP servers, which the app
-then browses and installs from. It must be `https://`, unless it is loopback for local development.
-Unset — the default — the library is **absent**, not empty: nothing is fetched and no request leaves
-the machine for it. See [Skills](/nocturn/guides/skills/) and
+`NOCTURN_CATALOG_URL` points the server at the catalog of skills and MCP servers the app browses and
+installs from. Unset — the default — that is the curated one this project publishes at
+`https://efuturetoday.github.io/nocturn/catalog.json`; set it to your own — `https://`, a path to a file
+on this machine (`./my-catalog.json`, no web server needed), or `off` for no library at all. Either way nothing is fetched
+until somebody opens the library. See [Skills](/nocturn/guides/skills/) and
 [Remote MCP servers](/nocturn/guides/remote-mcp/).
 
 ## Voice
@@ -69,13 +70,24 @@ Indexing **sends your documents to the configured embedding provider**, so it ne
 
 | Command | What it does |
 |---|---|
-| `nocturn auth <provider> [-w ws] [-scope "a b"]` | Runs an OAuth flow and stores the token. Prints a consent URL — it opens no browser. `<provider>` is an MCP server or a plugin's declared provider. `-scope` applies to discovery-mode MCP servers only. |
+| `nocturn auth <provider> [-w ws] [-scope "a b"] [-client-id ID [-client-secret S]]` | Runs an OAuth flow, stores the token, and asks a running daemon to pick it up. Prints a consent URL — it opens no browser. `<provider>` is an MCP server or a **plugin** (name it by the plugin, not by its oauth block). `-scope` applies to discovery-mode MCP servers only. `-client-id` supplies your own OAuth client for a plugin whose manifest ships none, and is stored beside the token — a second run needs it only to replace one. `-client-secret-stdin` reads the matching secret from **stdin**, never argv, for the reason `secret set` does. |
 | `nocturn secret set <target> [-w workspace]` | Seeds a static credential, **value on stdin** so it stays out of your shell history and the process list. |
 | `nocturn secret ls [-w workspace]` | The credential names this workspace holds — names only, never values. |
 
+```sh
+printf %s "$SECRET" | nocturn auth gmail -client-id 123.apps.googleusercontent.com -client-secret-stdin
+```
+
 A target is owner-namespaced: `plugin:<name>/<credential>` or `mcp:<name>`. All three need the vault
-open (`NOCTURN_MASTER_PASSPHRASE`), and none of them needs a running server — they read the workspace
-folder directly. Where the value then lives is on [the vault](/nocturn/guides/vault/).
+open (`NOCTURN_MASTER_PASSPHRASE`), and none of them REQUIRES a running server — they read the
+workspace folder directly. `auth` does nudge one if it finds it, because a token stored in this
+process is invisible to a daemon until its next discovery pass; without a daemon it simply says so,
+which is the ordinary case when setting an account up before the first start.
+
+Why a plugin may need `-client-id` at all: a provider with restricted scopes (Gmail is one) will not
+have a client shipped for it — Google requires an annual third-party security assessment for that,
+and it would route every household's mail through a single project. See
+[Connecting Gmail](/nocturn/catalog/gmail/). Where the value then lives is on [the vault](/nocturn/guides/vault/).
 
 ## Looking around
 

@@ -71,5 +71,23 @@ func (w *Workspace) ForgetNetAccess(host string) bool {
 	return w.grants.Forget(gate.Grant{Kind: tools.NetKind, Target: host})
 }
 
+// Grants lists the standing approvals, durable ones marked — what this workspace will allow without
+// asking again.
+//
+// It exists because a remembered approval is authority that outlives the moment it was given, and one
+// nobody can see is one nobody revokes. The gate's model is ask-on-new and remember, which is right
+// for the asking and says nothing about the years after: without a list, a household accumulates
+// standing permissions it has no way to review.
+func (w *Workspace) Grants() []Standing { return w.grants.List() }
+
+// ForgetGrant revokes one standing approval by kind and target, reporting whether there was one.
+//
+// The counterpart to Grants: a list a person cannot act on is a report, not a control. Revoking is
+// safe in the way ForgetNetAccess describes — the next action of that shape asks again, which is the
+// designed path, not a failure.
+func (w *Workspace) ForgetGrant(kind, target string) bool {
+	return w.grants.Forget(gate.Grant{Kind: kind, Target: target})
+}
+
 // MCPDir is where this workspace's MCP server declarations live.
 func (w *Workspace) MCPDir() string { return w.path("mcp") }

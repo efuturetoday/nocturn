@@ -205,7 +205,16 @@ func cmdAuth(args []string) int {
 	fs := flag.NewFlagSet("auth", flag.ContinueOnError)
 	ws := workspaceFlag(fs)
 	scope := fs.String("scope", "", "space- or comma-separated OAuth scopes to request (discover mode)")
-	fs.Usage = usage(fs, "auth <provider> [-w workspace] [-scope \"a b\"]", "Connect an OAuth account. Prints a URL for you to open; <provider> is a plugin or MCP server name.")
+	// A plugin from the catalog ships its provider's ENDPOINTS but not an OAuth client: a shared one
+	// would need Google's annual security assessment for a restricted scope like Gmail, and every
+	// household's mail would then run through one project. So the client is yours, given once here and
+	// kept in the plugin's own shard beside its token.
+	clientID := fs.String("client-id", "", "OAuth client id, for a provider whose manifest ships none (kept in the credential's shard)")
+	// The SECRET is not a flag. `nocturn secret set` already takes its value on stdin so it stays out
+	// of the shell history and the process list, and a client secret is no less of a secret for being
+	// called a client one.
+	clientSecret := fs.Bool("client-secret-stdin", false, "read the OAuth client secret from stdin (never argv)")
+	fs.Usage = usage(fs, "auth <provider> [-w workspace] [-scope \"a b\"] [-client-id ID [-client-secret-stdin]]", "Connect an OAuth account. Prints a URL for you to open; <provider> is a plugin or MCP server name.")
 	pos, code, done := parseArgs(fs, args)
 	if done {
 		return code
@@ -216,7 +225,12 @@ func cmdAuth(args []string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if err := runAuth(ctx, pos[0], *ws, splitScopes(*scope)); err != nil {
+	secret, err := readClientSecret(*clientSecret, *clientID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "auth:", err)
+		return 2
+	}
+	if err := runAuth(ctx, pos[0], *ws, splitScopes(*scope), *clientID, secret); err != nil {
 		fmt.Fprintln(os.Stderr, "auth:", err)
 		return 1
 	}

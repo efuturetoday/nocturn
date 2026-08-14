@@ -81,6 +81,28 @@ func listIn(dir string, enabled bool) ([]Entry, error) {
 // nameOf applies the same identity rule Discover does: the frontmatter name wins, the folder is the
 // fallback. Skills are the deliberate exception to folder-is-identity in this tree — a skill carries
 // no credential owner and no shard key, so nothing is pinned to where it sits.
+// Parse turns a SKILL.md body into a validated skill, naming it from its frontmatter and falling
+// back to fallbackName (a folder, usually) when the frontmatter does not.
+//
+// It exists because a skill body no longer arrives only as a directory under skills/: a plugin may
+// bundle one, saying WHEN to reach for the tools it brings. Both paths must agree on what a skill is,
+// down to the error text, so both call this.
+func Parse(body, fallbackName string) (agentkit.Skill, error) {
+	m, _, err := frontmatter.Parse([]byte(body))
+	if err != nil {
+		return agentkit.Skill{}, fmt.Errorf("skill %q: unparseable SKILL.md: %w", fallbackName, err)
+	}
+	sk := agentkit.Skill{
+		Name:        nameOf(m, fallbackName),
+		Description: strings.TrimSpace(m.Description),
+		Body:        body,
+	}
+	if err := sk.Validate(); err != nil {
+		return agentkit.Skill{}, fmt.Errorf("skill %q: %w", fallbackName, err)
+	}
+	return sk, nil
+}
+
 func nameOf(m frontmatter.Meta, folder string) string {
 	if n := strings.TrimSpace(m.Name); n != "" {
 		return n
@@ -150,17 +172,9 @@ func SetEnabled(dir, name string, on bool) error {
 // silently (first wins), so installing into a shadow would look like it worked and change nothing —
 // which is the worst of the three possible outcomes.
 func Write(dir, folder, body string) (Entry, error) {
-	m, _, err := frontmatter.Parse([]byte(body))
+	sk, err := Parse(body, folder)
 	if err != nil {
-		return Entry{}, fmt.Errorf("skill %q: unparseable SKILL.md: %w", folder, err)
-	}
-	sk := agentkit.Skill{
-		Name:        nameOf(m, folder),
-		Description: strings.TrimSpace(m.Description),
-		Body:        body,
-	}
-	if err := sk.Validate(); err != nil {
-		return Entry{}, fmt.Errorf("skill %q: %w", folder, err)
+		return Entry{}, err
 	}
 	if existing, err := find(dir, sk.Name); err == nil {
 		return Entry{}, fmt.Errorf("skill %q already exists in %q", sk.Name, existing.Folder)

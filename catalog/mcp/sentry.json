@@ -1,0 +1,8 @@
+{
+  "title": "Sentry",
+  "description": "Errors, issues and releases from Sentry, including Seer's root-cause analysis. Signs in with OAuth.",
+  "homepage": "https://docs.sentry.io/product/sentry-mcp/",
+  "tags": ["dev"],
+  "url": "https://mcp.sentry.dev/mcp",
+  "auth": "oauth"
+}

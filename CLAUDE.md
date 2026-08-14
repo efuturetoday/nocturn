@@ -48,6 +48,9 @@ internal/…         see §3
 agentkit/…         the engine + gate/runtime/openai/tools
 mobile/            the companion app (Angular + Capacitor, iOS) — the second device
 docs/              the docs site (Astro/Starlight); tool/capability data is schema-validated
+catalog/           the published library catalog's SOURCE — real SKILL.md files, plugin folders and
+                   MCP declarations, generated into docs/public/catalog.json (committed,
+                   CI-drift-checked) which is DefaultURL, and into the docs site's Catalog section
 sdk/_template/     the starting point for a plugin (manifest + JS + TS source)
 ```
 
@@ -117,10 +120,15 @@ an atomic pointer by `Reload`, which is why a skill or an MCP server can arrive 
 without cutting a turn. `Registry` is the daemon's set of open workspaces and the only place one
 comes into or goes out of existence while the process runs; its `OnOpen` is where the daemon hangs
 the per-workspace wiring, so one created at runtime is not a second-class one) ·
-`serve` (WebSocket surface, tagged JSON, one file per domain) ·
+`serve` (WebSocket surface, tagged JSON, one file per domain — `plugin.list` is listing only:
+removing one has to revoke the grant for its credential's hosts first, the way an MCP server's
+removal does, and half of that is worse than none) ·
 `library` (the curated catalog skills and MCP servers are installed from: daemon-wide, fetched lazily
 from ONE configured host over TLS with skill bodies INLINE, so installing never fetches from a second
-place. Absent — not empty — when `NOCTURN_CATALOG_URL` is unset) ·
+place. `DefaultURL` — the catalog this repo publishes — is what an unset `NOCTURN_CATALOG_URL` means;
+`off` is how a person says no library at all, since empty can no longer mean it. Three kinds: skills,
+MCP declarations, and PLUGINS — the last signed with a key compiled into the binary, so a compromised
+catalog host can offer text nobody vouched for and never code) ·
 `webui` (the browser front-end, `go:embed`ded: the SAME Angular bundle `mobile/` ships, copied in by
 `generate.sh` and gitignored except a load-bearing `.gitkeep`. A file server and nothing else —
 it knows no classes, no capabilities, no bearers, because assets carry no authority. Absent bundle =
@@ -217,8 +225,54 @@ Read this before touching anything security-shaped — it is easy to assume the 
   alone and the next server on that host would inherit a yes nobody gave it. It cuts both ways — the
   same grant may be the one given so `http_read` could reach that host — and being asked once more is
   the cheap side of that trade.
+- **A catalog may be a FILE.** `NOCTURN_CATALOG_URL=./my-catalog.json` (or `file://…`) is read off
+  disk: a household with its own skills should not run a web server for them, and whoever can write
+  that file can already drop a folder into `skills/`. It is also why the signature rule below is tied
+  to the SOURCE — `Store.signaturePolicy`: remote requires one, a file or loopback does not, because a
+  signature substitutes for a channel and there is none. A signature that IS present must verify
+  either way.
+- **Text needs TLS, code needs a key.** A catalog plugin entry carries its manifest and its plugin.js
+  inline, and is REFUSED unless an Ed25519 signature over `id·folder·sha256(manifest)·sha256(script)·
+  sha256(skill)·sha256(listing)·serial` verifies against a key in `library.signingKeys` (private half outside this repo; the
+  signature is committed beside the plugin, so CI never holds the key). Identity and every digest sign
+  TOGETHER — otherwise a signed script could be re-fronted with a manifest that asks for a credential.
+  The LISTING is in there because a person picks by it — a taken-over host could otherwise rebrand a
+  signed mail plugin as "calendar sync, no mail access" while the artifacts stayed ours. The SERIAL is
+  in there because a signature says "we published these bytes", never "this is current": without
+  something monotonic, an old and perfectly signed entry can be served forever, including one
+  withdrawn for a reason. `internal/library/freshness.go` remembers the highest serial accepted per
+  plugin (`catalog-serials.json`) and refuses to go back — with two limits stated there rather than
+  discovered: the first sight of a plugin has nothing to compare against (trust on first use), and a
+  plugin REMOVED from the catalog needs a signature over the SET to detect, which would put the key in
+  the path of every publish.
+  What signing does NOT cover is what the manifest asks for: `uses` is the guest's cage (a toolset
+  subset, NO static host list — a host stays the human's per-request decision), `credentials` binds a
+  token to a host, `oauth` names the account. That triple is the review surface a client must show.
+- **The library shows plugins with what they ASK for**, not just what they are: `catalogFrame` pulls
+  tools, `uses`, credential hosts and OAuth scopes out of the signed manifest so the app renders the
+  grant without parsing JSON, and `plugin.list` tells it which are already installed. That table is
+  the review surface — the sandbox decides what the code CAN do, the manifest what it wants.
+- **A plugin may bundle a SKILL.md**, folded into the workspace skill catalog by `foldPluginSkills`.
+  Manifest = what it may do, artifact = how, skill = when to reach for it and what the arguments
+  really take. A hand-written skill of the same name WINS: an installed plugin must not be able to
+  take over a name the household chose.
+- **A plugin's tools are exposed before its account is connected**, and the failure names the fix
+  (`Plugin.explain`). Hiding them would mean the assistant answers "I cannot read mail" with no hint
+  that one command fixes it — and the tool set is built by a discovery pass, so an authorization that
+  happened afterwards would be invisible until the next one anyway.
+- **A catalog plugin ships NO OAuth client id.** Gmail's scopes are restricted, so a shared client
+  would need Google's annual third-party security assessment and would route every household's mail
+  through one project. The manifest carries the endpoints, the person supplies the client once with
+  `nocturn auth <plugin> --client-id …`, and it is stored beside the token in the plugin's shard
+  (`pluginRecord` prefers it). The ENDPOINTS still come from the signed manifest — a stored record may
+  move the client, never where the credential is sent.
 - **The catalog fetch is host egress, like the LLM and embedding endpoints and APNs**: no model
-  output flows into it, so it passes no gate. Lazy, never at startup.
+  output flows into it, so it passes no gate. Lazy, never at startup — which is what lets it be ON by
+  default (`library.DefaultURL`) without a fresh daemon phoning anywhere: the first request goes out
+  when a device opens the library, and never if nobody does. What is published there is generated
+  from `catalog/`, never hand-edited JSON, because a body whose digest was not recomputed is dropped
+  in silence — the drop is now logged, and `catalog/catalog_test.go` rehearses every install so an
+  entry that could not land on disk cannot be published.
 - **Device classes are interpreted in ONE function**, `serve.capabilitiesOf`, with `serve.classFor`
   its neighbour deriving which class a holder gets from the platform it already sends. `internal/auth`
   stores a class and never compares one — not even behind a `func(Class) bool`, which is the same
@@ -429,7 +483,17 @@ go install github.com/grindlemire/go-tui/cmd/tui@v0.18.2
 tui generate ./internal/tui/...
 #   subcommands: auth <provider> · secret set|ls · ls · version · help (most take -w)
 
-cd docs && npx astro build            # the schema validates every tool/capability entry
+cd docs && npm run build              # generates the Catalog section from catalog/, THEN astro build
+#   (a bare `npx astro build` skips the generator and publishes the site without that section)
+
+# The published library catalog: sources in catalog/, generated into docs/public/catalog.json, which
+# is committed and CI-drift-checked. `go test ./catalog/` installs every entry into a temp dir, so a
+# skill that could not be installed fails before it ships.
+go generate ./catalog/
+(cd catalog && go run sign.go -keygen)        # mint a signing keypair (public half → library.signingKeys)
+(cd catalog && go run sign.go -key ~/key.txt) # sign every plugin; the .sig is committed, CI never signs
+(cd catalog && go run import.go notion.com)   # optional: list/probe MCP-registry candidates to curate
+#   NOCTURN_CATALOG_DEV_KEY adds a trusted public key to one daemon, for a locally signed plugin.
 ```
 
 ---

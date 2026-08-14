@@ -191,6 +191,11 @@ It re-reads agents, skills, plugins and MCP servers, and prints what the workspa
 Conversations already open keep running; the new tools are there from their next message. Restarting
 works too and is the bigger hammer.
 
+Removing one is the reverse gesture, from **Settings → Plugins**: the folder goes, any account
+connected for it goes with it, and the remembered permission to reach its hosts is revoked — a
+permission left standing for a program that is gone would be inherited by the next thing to reach
+that host.
+
 :::danger[Installing is the decision — there is no review step]
 Dropping the folder in **is** the authorization. Nothing prompts you afterwards, and nothing asks
 whether you meant it.
@@ -208,6 +213,35 @@ it wants, exactly as if the model had called `http_read` itself.
 `sdk/_template/` is the skeleton: manifest, JavaScript entry point, and a TypeScript source with a
 `tsconfig.json` if you prefer to build.
 :::
+
+## Installing one from the catalog
+
+The [library](/nocturn/catalog/) offers plugins too, and installing one from the app writes the same
+folder this page has been describing — manifest, `plugin.js`, and the `SKILL.md` it bundles if it
+brought one. The entry shows what the manifest asks for before the button: the tools it adds, the
+base tools its guest may call, the hosts a credential would ride to, and the scopes a sign-in would
+request.
+
+A plugin entry from a **remote** catalog must carry an Ed25519 signature by a key compiled into the
+daemon, or it is not offered at all. That is the line between the two things a catalog carries: a
+skill is text, and TLS to one host is a proportionate control for text; a plugin is code, and code is
+held to a key. The signature covers the identity and every artifact digest together, so a signed
+script cannot be re-fronted with a manifest that asks for a credential.
+
+The signature covers the listing and a serial as well as the artifacts. The listing, because you pick
+by the title and description, and a host that had been taken over could otherwise rebrand a signed
+plugin while its code stayed the one we signed. The serial, because a signature says "we published
+these bytes" and never "this is current" — your daemon remembers the highest serial it has accepted
+per plugin and refuses to go back, so an old signed entry cannot be served to you forever.
+
+What signing does not do is read the manifest for you. It says who published these bytes, not that
+what they ask for is what you meant to grant — the danger note above still applies, and the entry
+shows the manifest for exactly that reason.
+
+A catalog read from a **file on this machine** needs no signature: there is no channel to
+authenticate, and you could have copied the folder in by hand. That is also how you serve your own
+plugins — see [`examples/catalog/README.md`](https://github.com/efuturetoday/nocturn/blob/main/examples/catalog/README.md),
+or sign with your own key and trust it with `NOCTURN_CATALOG_DEV_KEY`.
 
 ## When to reach for one
 

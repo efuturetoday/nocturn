@@ -73,10 +73,13 @@ type Host struct {
 // reminder timer set, one chat store, one knowledge index — built once by Open and never rebuilt.
 // Everything discovery derives lives in `cur` and is replaced whole (see snapshot.go).
 type Workspace struct {
-	name       string
-	dir        string
-	llm        agentkit.LLM
-	grants     gate.Grants
+	name string
+	dir  string
+	llm  agentkit.LLM
+	// The concrete store, not the gate.Grants port: this workspace both HANDS it to the gate and asks
+	// it what it holds, and the port deliberately has no listing — a set that can be shown is a
+	// consumer concern, which is what this is.
+	grants     *grantStore
 	approver   gate.Approver     // the out-of-band human; handed to a guarded agent's firing, nil-safe
 	chats      *chat.Manager     // user chats
 	agentChats *chat.Manager     // agent runs (agent-store counterpart of chats)
@@ -400,6 +403,9 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 // switching one off — is the consumer's job, the same way discovery is: internal/skill owns the
 // format and the rules, the workspace owns where they sit.
 func (w *Workspace) SkillsDir() string { return w.path("skills") }
+
+// PluginsDir is where this workspace's plugins live, exported for the same reason SkillsDir is.
+func (w *Workspace) PluginsDir() string { return w.path("plugins") }
 
 // Name returns the workspace name.
 func (w *Workspace) Name() string { return w.name }

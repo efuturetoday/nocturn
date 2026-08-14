@@ -1,0 +1,5 @@
+{
+  "title": "Summarize a URL",
+  "description": "Fetch a web page and summarize it faithfully.",
+  "tags": ["web", "reading"]
+}

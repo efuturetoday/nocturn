@@ -15,6 +15,21 @@ const CATALOG: LibraryCatalog = {
     },
     { id: 'travel', title: 'Travel planning', description: 'Plans a trip.', body: '# Travel' },
   ],
+  plugins: [
+    {
+      id: 'gmail',
+      title: 'Gmail (read-only)',
+      description: 'Search and read your mail.',
+      tags: ['mail'],
+      name: 'gmail',
+      tools: ['gmail_search', 'gmail_read'],
+      uses: ['http_read'],
+      hosts: ['gmail.googleapis.com'],
+      scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+      manifest: '{"name":"gmail"}',
+      script: '// a script mentioning Linear, which no query should reach',
+    },
+  ],
   mcp: [
     {
       id: 'linear',
@@ -30,16 +45,26 @@ const CATALOG: LibraryCatalog = {
   ],
 };
 
-const ids = (kind: 'all' | 'skill' | 'mcp', q = ''): string[] => filterCatalog(CATALOG, q, kind).map((e) => e.id);
+const ids = (kind: 'all' | 'skill' | 'plugin' | 'mcp', q = ''): string[] =>
+  filterCatalog(CATALOG, q, kind).map((e) => e.id);
 
 describe('filterCatalog', () => {
-  it('shows both kinds under all, skills first', () => {
-    expect(ids('all')).toEqual(['commit-messages', 'travel', 'linear', 'weather']);
+  it('shows every kind under all, in catalog order', () => {
+    expect(ids('all')).toEqual(['commit-messages', 'travel', 'gmail', 'linear', 'weather']);
   });
 
-  it('narrows to one kind, and the other is gone rather than dimmed', () => {
+  it('narrows to one kind, and the others are gone rather than dimmed', () => {
     expect(ids('skill')).toEqual(['commit-messages', 'travel']);
+    expect(ids('plugin')).toEqual(['gmail']);
     expect(ids('mcp')).toEqual(['linear', 'weather']);
+  });
+
+  // A daemon older than the plugin channel sends no `plugins` at all, and so does a catalog that
+  // offers none. Both mean "no plugins"; neither may throw on a screen somebody just opened.
+  it('survives a catalog with no plugins field', () => {
+    const old = { ...CATALOG, plugins: undefined } as unknown as LibraryCatalog;
+    expect(filterCatalog(old, '', 'all').map((e) => e.id)).toEqual(['commit-messages', 'travel', 'linear', 'weather']);
+    expect(filterCatalog(old, '', 'plugin')).toEqual([]);
   });
 
   it('matches the title regardless of case', () => {
@@ -51,8 +76,9 @@ describe('filterCatalog', () => {
     expect(ids('all', 'git')).toEqual(['commit-messages']);
   });
 
-  it('never matches a skill body — thousands of tokens would match everything', () => {
-    // "Linear" appears in the commit-messages BODY and in the Linear server's title.
+  it('never matches a skill body or a plugin script — both would match everything', () => {
+    // "Linear" appears in the commit-messages BODY, in the gmail plugin's SCRIPT, and in the Linear
+    // server's title. Only the title is a match.
     expect(ids('all', 'linear')).toEqual(['linear']);
   });
 
@@ -64,11 +90,13 @@ describe('filterCatalog', () => {
     expect(filterCatalog(null, 'anything', 'all')).toEqual([]);
   });
 
-  it('carries a server host as the card subtitle and leaves a skill without one', () => {
+  it('gives each kind the subtitle that identifies it', () => {
     const [skill] = filterCatalog(CATALOG, 'travel', 'all');
+    const [plugin] = filterCatalog(CATALOG, 'gmail', 'all');
     const [server] = filterCatalog(CATALOG, 'linear', 'all');
 
     expect(skill.sub).toBe('');
+    expect(plugin.sub).toBe('2 tools');
     expect(server.sub).toBe('mcp.linear.app');
   });
 });
