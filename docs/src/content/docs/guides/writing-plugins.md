@@ -209,6 +209,29 @@ it wants, exactly as if the model had called `http_read` itself.
 `tsconfig.json` if you prefer to build.
 :::
 
+## Installing one from the catalog
+
+The [library](/nocturn/catalog/) offers plugins too, and installing one from the app writes the same
+folder this page has been describing — manifest, `plugin.js`, and the `SKILL.md` it bundles if it
+brought one. The entry shows what the manifest asks for before the button: the tools it adds, the
+base tools its guest may call, the hosts a credential would ride to, and the scopes a sign-in would
+request.
+
+A plugin entry from a **remote** catalog must carry an Ed25519 signature by a key compiled into the
+daemon, or it is not offered at all. That is the line between the two things a catalog carries: a
+skill is text, and TLS to one host is a proportionate control for text; a plugin is code, and code is
+held to a key. The signature covers the identity and every artifact digest together, so a signed
+script cannot be re-fronted with a manifest that asks for a credential.
+
+What signing does not do is read the manifest for you. It says who published these bytes, not that
+what they ask for is what you meant to grant — the danger note above still applies, and the entry
+shows the manifest for exactly that reason.
+
+A catalog read from a **file on this machine** needs no signature: there is no channel to
+authenticate, and you could have copied the folder in by hand. That is also how you serve your own
+plugins — see [`examples/catalog/README.md`](https://github.com/efuturetoday/nocturn/blob/main/examples/catalog/README.md),
+or sign with your own key and trust it with `NOCTURN_CATALOG_DEV_KEY`.
+
 ## When to reach for one
 
 Use a plugin when you would otherwise wish the assistant had a CLI for some service. You get the
