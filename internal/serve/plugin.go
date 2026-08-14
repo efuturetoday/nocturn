@@ -3,7 +3,9 @@ package serve
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 
+	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
@@ -30,12 +32,18 @@ type PluginListResult struct {
 	Items []PluginInfo `json:"items"`
 }
 
+// PluginRemove deletes a plugin from a workspace (client → server).
+type PluginRemove struct {
+	Cmd  string `json:"cmd"`
+	Ws   string `json:"ws"`
+	Name string `json:"name"`
+}
+
 // pluginCmd dispatches a plugin.* action.
 //
-// Listing only, and deliberately so for now: installing goes through library.install, which carries
-// an id rather than code, and removing is not built until it can also revoke the remembered
-// permission for the hosts its credential rode to — the rule an MCP server's removal already keeps.
-// A half-uninstall that left a grant standing would be worse than none.
+// Listing is ungated inventory; removing takes `manage`, like every other change to what a workspace
+// is made of. Installing is not here at all — it goes through library.install, which carries an id
+// and never code.
 func (c *conn) pluginCmd(ctx context.Context, cmd string, data []byte) {
 	switch cmd {
 	case "plugin.list":
@@ -49,9 +57,65 @@ func (c *conn) pluginCmd(ctx context.Context, cmd string, data []byte) {
 			return
 		}
 		c.send(ctx, pluginList(ws))
+
+	case "plugin.remove":
+		if !c.can.manage {
+			c.badRequest(ctx, "this device may not change the household's workspaces")
+			return
+		}
+		var m PluginRemove
+		if err := json.Unmarshal(data, &m); err != nil || m.Name == "" {
+			c.badRequest(ctx, "bad plugin.remove")
+			return
+		}
+		ws, ok := c.workspace(ctx, m.Ws)
+		if !ok {
+			return
+		}
+		c.removePlugin(ctx, ws, m.Name)
+
 	default:
 		c.badRequest(ctx, "unknown action: "+cmd)
 	}
+}
+
+// removePlugin deletes a plugin and takes its standing permissions with it.
+//
+// The hosts come from the MANIFEST and are read BEFORE the folder goes, because the folder is the
+// only place they are written down — and from the declaration on disk rather than from the live
+// inventory, so a plugin installed moments ago (whose reload may still be running) is not the one
+// case that silently skips the revocation.
+//
+// Why revoke at all: a grant records (Kind, Target) and nothing about WHY it was given. Once the
+// program that prompted the question is gone, the answer stands on its own, and the next thing to
+// reach that host inherits a permission nobody gave for it. The trade cuts both ways — the same
+// grant may be the one given so http_read could reach that host — and being asked once more is the
+// cheap side of it. This is the rule mcp.remove already keeps; a plugin is no different.
+//
+// The token goes too: plugin.Remove deletes the folder, and the secret shard lives in it.
+func (c *conn) removePlugin(ctx context.Context, ws *workspace.Workspace, name string) {
+	var hosts []string
+	if loaded, err := plugin.Load(filepath.Join(ws.PluginsDir(), name)); err == nil {
+		for _, cred := range loaded.Manifest.Credentials {
+			hosts = append(hosts, cred.Host)
+		}
+	} else {
+		c.log.Warn("could not read the plugin's manifest before removing it",
+			"ws", ws.Name(), "plugin", name, "err", err)
+	}
+
+	if err := plugin.Remove(ws.PluginsDir(), name); err != nil {
+		c.badRequest(ctx, err.Error())
+		return
+	}
+	for _, host := range hosts {
+		if ws.ForgetNetAccess(host) {
+			c.log.Info("revoked the remembered network grant of a removed plugin",
+				"ws", ws.Name(), "plugin", name, "host", host)
+		}
+	}
+	c.log.Info("removed a plugin", "ws", ws.Name(), "plugin", name, "hosts", hosts)
+	c.applyPlugins(ws, name)
 }
 
 // pluginList renders a workspace's installed plugins.

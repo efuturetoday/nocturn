@@ -191,6 +191,11 @@ It re-reads agents, skills, plugins and MCP servers, and prints what the workspa
 Conversations already open keep running; the new tools are there from their next message. Restarting
 works too and is the bigger hammer.
 
+Removing one is the reverse gesture, from **Settings → Plugins**: the folder goes, any account
+connected for it goes with it, and the remembered permission to reach its hosts is revoked — a
+permission left standing for a program that is gone would be inherited by the next thing to reach
+that host.
+
 :::danger[Installing is the decision — there is no review step]
 Dropping the folder in **is** the authorization. Nothing prompts you afterwards, and nothing asks
 whether you meant it.
