@@ -141,6 +141,7 @@ func (w *Workspace) discover() (snap *snapshot, err error) {
 	// This is the only base tool discovery decides, which is why baseTools is durable and only this is
 	// appended: everything else in it belongs to an object that must not exist twice.
 	skills, skillDirs := skill.Discover(w.path("skills"), &diag)
+	foldPluginSkills(skills, w.path("plugins"), &diag)
 	baseTools := slices.Clone(w.baseTools)
 	if len(skillDirs) > 0 {
 		readTool, err := skill.ReadTool(skillDirs)
@@ -214,7 +215,10 @@ func (w *Workspace) discover() (snap *snapshot, err error) {
 		agentRuntimes[a.Name] = art
 	}
 
-	names := inventoryNames{plugins: pluginNames(plugins), skills: slices.Sorted(maps.Keys(skillDirs))}
+	// The names come from the SKILL SET, not from skillDirs: a skill a plugin bundled is in the set
+	// and therefore in front of the model, but has no directory under skills/ — reporting the folders
+	// would show a workspace with fewer skills than the prompt actually carries.
+	names := inventoryNames{plugins: pluginNames(plugins), skills: slices.Sorted(maps.Keys(skills))}
 
 	// Every kind's discovery skips (bad agent/skill/plugin/server) drained through the one collector,
 	// logged uniformly here — a single place an operator scans for what did NOT load and why.

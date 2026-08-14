@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // Manifest is a plugin's static declaration (sidecar plugin.json).
@@ -100,8 +101,15 @@ func (m Manifest) Validate() error {
 		credentialNames[c.Name] = true
 	}
 	for _, o := range m.OAuth {
-		if o.Name == "" || o.ClientID == "" || len(o.Scopes) == 0 {
-			return fmt.Errorf("plugin: oauth %q needs a name, client_id and at least one scope", o.Name)
+		// client_id may be empty, and that is not laxness: a plugin for a provider whose scopes are
+		// restricted (Gmail is one) CANNOT ship a shared client — Google requires an annual
+		// third-party security assessment for one, and every household's mail would run through a
+		// single project. Such a plugin declares the endpoints and the scopes, and the person supplies
+		// their own client once with `nocturn auth <plugin> --client-id …`, which stores it in the
+		// plugin's shard beside the token. Everything else stays required: without a name, scopes and
+		// https endpoints there is no flow to run at all.
+		if o.Name == "" || len(o.Scopes) == 0 {
+			return fmt.Errorf("plugin: oauth %q needs a name and at least one scope", o.Name)
 		}
 		if !isHTTPSURL(o.AuthURL) || !isHTTPSURL(o.TokenURL) {
 			return fmt.Errorf("plugin: oauth %q auth_url and token_url must be https URLs", o.Name)
@@ -141,11 +149,19 @@ const (
 	KindWASM             // plugin.wasm, a wasm32-wasi guest run directly
 )
 
-// Loaded is a validated plugin package: manifest + artifact + kind.
+// Loaded is a validated plugin package: manifest + artifact + kind, and the skill it bundles if it
+// brought one.
+//
+// A plugin answers two different questions and they belong in two different files. The manifest says
+// what it MAY do and the artifact says HOW; neither says WHEN the assistant should reach for it, or
+// which query syntax its search takes, or that reading a body costs context nobody asked to spend.
+// That is skill material — instructions, no authority — so a plugin may ship a SKILL.md beside its
+// code, and the workspace folds it into the same skill catalog a hand-written one lands in.
 type Loaded struct {
 	Manifest Manifest
 	Artifact []byte
 	Kind     Kind
+	Skill    string // the bundled SKILL.md, verbatim; empty when there is none
 }
 
 // Load reads dir/plugin.json (validated) and the artifact (plugin.wasm XOR plugin.js) WITHOUT
@@ -170,7 +186,12 @@ func Load(dir string) (Loaded, error) {
 		return Loaded{}, err
 	}
 
-	wasm, js := filepath.Join(dir, "plugin.wasm"), filepath.Join(dir, "plugin.js")
+	// A bundled skill is optional and is NOT parsed here: this package owns the manifest format, and
+	// the skill format belongs to internal/skill. An unreadable one is left empty rather than failing
+	// the load — the tools are the plugin, the skill is advice about them.
+	bundled, _ := os.ReadFile(filepath.Join(dir, SkillFile))
+
+	wasm, js := filepath.Join(dir, "plugin.wasm"), filepath.Join(dir, ScriptFile)
 	hasWASM, hasJS := fileExists(wasm), fileExists(js)
 	switch {
 	case hasWASM && hasJS:
@@ -180,16 +201,42 @@ func Load(dir string) (Loaded, error) {
 		if err != nil {
 			return Loaded{}, fmt.Errorf("plugin: read artifact: %w", err)
 		}
-		return Loaded{Manifest: m, Artifact: b, Kind: KindWASM}, nil
+		return Loaded{Manifest: m, Artifact: b, Kind: KindWASM, Skill: string(bundled)}, nil
 	case hasJS:
 		b, err := os.ReadFile(js)
 		if err != nil {
 			return Loaded{}, fmt.Errorf("plugin: read artifact: %w", err)
 		}
-		return Loaded{Manifest: m, Artifact: b, Kind: KindJS}, nil
+		return Loaded{Manifest: m, Artifact: b, Kind: KindJS, Skill: string(bundled)}, nil
 	default:
 		return Loaded{}, errors.New("plugin: no plugin.wasm or plugin.js in " + dir)
 	}
+}
+
+// SkillBodies returns the SKILL.md of every plugin under root, keyed by folder.
+//
+// A file scan, deliberately separate from Discover: the workspace needs these BEFORE it builds the
+// tool set (the skill catalog is assembled first, and a plugin's guest is compiled with the base
+// tools that come out of it), and reading two files is cheaper than reordering that assembly around
+// a dependency that does not really exist.
+func SkillBodies(root string) map[string]string {
+	entries, _ := os.ReadDir(root)
+	out := map[string]string{}
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		// Only for something that is actually a plugin: a stray directory holding a SKILL.md is not
+		// one, and folding its text into every prompt because it sits under plugins/ would be a way
+		// to get into the system prompt without being anything.
+		if !fileExists(filepath.Join(root, e.Name(), "plugin.json")) {
+			continue
+		}
+		if body, err := os.ReadFile(filepath.Join(root, e.Name(), SkillFile)); err == nil && len(body) > 0 {
+			out[e.Name()] = string(body)
+		}
+	}
+	return out
 }
 
 func fileExists(p string) bool {

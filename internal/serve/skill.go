@@ -3,7 +3,9 @@ package serve
 import (
 	"context"
 	"encoding/json"
+	"sort"
 
+	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
@@ -43,6 +45,11 @@ type SkillInfo struct {
 	Description string `json:"description,omitempty"`
 	Enabled     bool   `json:"enabled"`
 	Bytes       int    `json:"bytes"`
+	// Plugin names the plugin that BUNDLED this skill, empty for a skill of its own in skills/. Such
+	// a skill can be neither switched off nor deleted here: it belongs to the plugin and goes when it
+	// does. It is listed anyway, because it is in front of the model — a page that said "no skills"
+	// while the prompt carried one would be lying about the only thing it exists to show.
+	Plugin string `json:"plugin,omitempty"`
 }
 
 // SkillListResult carries a workspace's skills (server → client).
@@ -92,8 +99,14 @@ func (c *conn) skillCmd(ctx context.Context, cmd string, data []byte) {
 		}
 		body, err := skill.Read(ws.SkillsDir(), m.Name)
 		if err != nil {
-			c.badRequest(ctx, err.Error())
-			return
+			// A skill a plugin bundled has no folder under skills/, and reading it is the whole point
+			// of listing it: what the model is told is exactly what a person opens this to see.
+			bundled, ok := bundledBody(ws, m.Name)
+			if !ok {
+				c.badRequest(ctx, err.Error())
+				return
+			}
+			body = bundled
 		}
 		c.send(ctx, SkillBody{Type: "skill.body", Ws: ws.Name(), Name: m.Name, Body: body})
 		return
@@ -186,5 +199,43 @@ func skillList(ws *workspace.Workspace) SkillListResult {
 			Bytes:       e.Bytes,
 		})
 	}
+	items = append(items, bundledSkills(ws, items)...)
 	return SkillListResult{Type: "skill.list", Ws: ws.Name(), Items: items}
+}
+
+// bundledBody returns the SKILL.md of a plugin-bundled skill by NAME (which need not be its folder).
+func bundledBody(ws *workspace.Workspace, name string) (string, bool) {
+	for folder, body := range plugin.SkillBodies(ws.PluginsDir()) {
+		if sk, err := skill.Parse(body, folder); err == nil && sk.Name == name {
+			return body, true
+		}
+	}
+	return "", false
+}
+
+// bundledSkills lists the skills installed plugins brought with them, skipping any whose name a
+// hand-written skill already holds — the same precedence the workspace applies when it folds them
+// into the set, so this list says what the model actually got.
+func bundledSkills(ws *workspace.Workspace, have []SkillInfo) []SkillInfo {
+	taken := make(map[string]bool, len(have))
+	for _, s := range have {
+		taken[s.Name] = true
+	}
+	var out []SkillInfo
+	for folder, body := range plugin.SkillBodies(ws.PluginsDir()) {
+		sk, err := skill.Parse(body, folder)
+		if err != nil || taken[sk.Name] {
+			continue
+		}
+		out = append(out, SkillInfo{
+			Name:        sk.Name,
+			Folder:      "plugins/" + folder,
+			Description: sk.Description,
+			Enabled:     true,
+			Bytes:       len(body),
+			Plugin:      folder,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
