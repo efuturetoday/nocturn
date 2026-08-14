@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -182,9 +183,36 @@ func (p *Plugin) dispatchCall(ctx context.Context, req []byte) ([]byte, error) {
 	}
 	out, err := p.dispatch.Call(ctx, c.Tool, args)
 	if err != nil {
-		return nil, err
+		return nil, p.explain(err)
 	}
 	return []byte(out), nil
+}
+
+// explain turns "secret not found" into the one sentence that resolves it.
+//
+// A plugin's tools are exposed whether or not its account is connected, and that is the right way
+// round: hiding them would have the assistant answer "I cannot read mail" with no hint that one
+// command fixes it, and the tool set is built by a discovery pass — an authorization that happened
+// afterwards would not be visible until the next one anyway. What the exposure costs is a failure at
+// the boundary the first time, so that failure has to say what to do rather than name a vault key.
+func (p *Plugin) explain(err error) error {
+	if !errors.Is(err, secret.ErrNotFound) {
+		return err
+	}
+	// The first declaration of each is the one to name: a plugin reaching here has exactly one
+	// credential in all but contrived cases, and naming one command beats listing every possibility
+	// in a message somebody reads once, in a hurry, inside a chat transcript.
+	if len(p.manifest.OAuth) > 0 {
+		// The PLUGIN's name, not the oauth block's: the block is called "account" or "token" because
+		// it has to match a credential, and nobody installed a thing called "account".
+		return fmt.Errorf("%w — the %s account is not connected yet; run: nocturn auth %s",
+			err, p.manifest.Name, p.manifest.Name)
+	}
+	if len(p.manifest.Credentials) > 0 {
+		return fmt.Errorf("%w — %s has no credential; seed it with: nocturn secret set %s",
+			err, p.manifest.Name, SecretName(p.manifest.Name, p.manifest.Credentials[0].Name))
+	}
+	return err
 }
 
 // wasmStdin is the {"tool","args"} request fed on stdin to a wasm guest.

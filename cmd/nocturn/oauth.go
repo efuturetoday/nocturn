@@ -24,7 +24,7 @@ import (
 //
 // scopes (from -scope) request specific access; empty lets the authorization server decide. A name
 // matching more than one manual provider is ambiguous and refused; qualify with its secretName.
-func runAuth(ctx context.Context, name, wsName string, scopes []string) error {
+func runAuth(ctx context.Context, name, wsName string, scopes []string, clientID, clientSecret string) error {
 	master, err := openMaster()
 	if err != nil {
 		return fmt.Errorf("unlock vault: %w", err)
@@ -45,7 +45,7 @@ func runAuth(ctx context.Context, name, wsName string, scopes []string) error {
 	// Otherwise a manual provider (plugin or mcp oauth block).
 	var matches []workspace.OAuthProvider
 	for _, p := range workspace.DiscoverOAuth(wsDir) {
-		if p.Name == name || p.SecretName == name {
+		if p.Name == name || p.SecretName == name || ownedBy(p.SecretName, name) {
 			matches = append(matches, p)
 		}
 	}
@@ -62,7 +62,11 @@ func runAuth(ctx context.Context, name, wsName string, scopes []string) error {
 	}
 
 	p := matches[0]
-	cfg := oauth.Provider(p.AuthURL, p.TokenURL, p.ClientID, p.ClientSecret, p.Scopes...)
+	rec, err := resolveClient(tokens, p, clientID, clientSecret)
+	if err != nil {
+		return err
+	}
+	cfg := oauth.Provider(rec.AuthURL, rec.TokenURL, rec.ClientID, rec.ClientSecret, rec.Scopes...)
 	tok, err := oauth.Authorize(ctx, cfg, "", consentPrompt(name, wsName))
 	if err != nil {
 		return err
@@ -70,8 +74,28 @@ func runAuth(ctx context.Context, name, wsName string, scopes []string) error {
 	if err := workspace.StoreToken(tokens, p.SecretName, tok); err != nil {
 		return fmt.Errorf("store token: %w", err)
 	}
-	fmt.Printf("connected %q in workspace %q — the daemon will inject and refresh its token.\n", name, wsName)
+	// The client goes beside the token, in the same shard, so the daemon can refresh without the
+	// manifest carrying an OAuth client it cannot have. Written AFTER the token: a record without a
+	// token is a provider that looks configured and is not, which is the confusing half of the pair.
+	if err := workspace.StoreOAuthRecord(tokens, p.SecretName, rec); err != nil {
+		return fmt.Errorf("store client: %w", err)
+	}
+	fmt.Printf("connected %q in workspace %q.\n", name, wsName)
+	// A running daemon registered its token sources during its last discovery pass, and this ran in a
+	// different process: without a reload it keeps failing with "not connected", the person re-runs
+	// this command, sees success, and fails again — a loop with no exit visible from either side.
+	nudgeDaemon(wsName)
 	return nil
+}
+
+// nudgeDaemon asks a running daemon to re-read the workspace, so a token stored a second ago is
+// actually usable. Best-effort by design: authorizing an account with no daemon running is a normal
+// thing to do (it is how one is set up before the first start), so a daemon that is not there is not
+// an error — it will read the shard when it opens the workspace.
+func nudgeDaemon(wsName string) {
+	if code := cmdReload(":8080", wsName); code != 0 {
+		fmt.Println("the daemon did not pick it up; it will on the next start, or run: nocturn reload")
+	}
 }
 
 // authDiscover runs the spec-driven MCP OAuth flow for a discover-mode server through the SAME
@@ -114,6 +138,61 @@ func authDiscover(ctx context.Context, master *secret.Master, wsDir, wsName, nam
 	}
 	fmt.Printf("connected %q in workspace %q — the daemon will inject and refresh its token.\n", name, wsName)
 	return nil
+}
+
+// ownedBy reports whether an owner-namespaced secret belongs to the plugin or server called name.
+//
+// It exists because a provider's own Name is the name of its OAUTH BLOCK, not of the thing that
+// declared it — a plugin's block is called "account" or "token", because it has to match a credential
+// of the same name. So `nocturn auth gmail` matched nothing while every document, the plugin's own
+// error message and its guide all say to type exactly that. Matching the owner is what a person means:
+// they name the plugin they installed, not a field inside its manifest.
+func ownedBy(secretName, name string) bool {
+	rest, ok := strings.CutPrefix(secretName, "plugin:")
+	if !ok {
+		return false
+	}
+	owner, _, _ := strings.Cut(rest, "/")
+	return owner == name
+}
+
+// resolveClient decides which OAuth client this authorization runs with, in one place.
+//
+// Three sources, in the order that matches how a person arrives here. The FLAGS win, because typing
+// one is how somebody replaces a client that was rotated or wrong. Then a client stored by an earlier
+// `nocturn auth` — re-authorizing must not demand the id again. Then the manifest, which is where a
+// plugin for a provider with an ordinary public client carries its own.
+//
+// Nothing left means a refusal with the flag named, and that refusal is the whole reason this
+// function exists: a catalog plugin for Gmail cannot ship a client id (a shared one would need
+// Google's annual third-party security assessment for a restricted scope), so the shipped manifest
+// leaves it empty and the person supplies theirs once.
+func resolveClient(tokens workspace.TokenStore, p workspace.OAuthProvider, clientID, clientSecret string) (workspace.OAuthRecord, error) {
+	rec := workspace.OAuthRecord{
+		AuthURL:      p.AuthURL,
+		TokenURL:     p.TokenURL,
+		ClientID:     p.ClientID,
+		ClientSecret: p.ClientSecret,
+		Scopes:       p.Scopes,
+	}
+	if stored, ok := workspace.LoadOAuthRecord(tokens, p.SecretName); ok && stored.ClientID != "" {
+		rec.ClientID, rec.ClientSecret = stored.ClientID, stored.ClientSecret
+	}
+	if clientID != "" {
+		// The secret follows the id: replacing the client means replacing both, and carrying the old
+		// secret under a new id would authenticate as neither. Passing the SAME id again with no
+		// secret is somebody re-running the command, so what was stored survives.
+		if clientID != rec.ClientID || clientSecret != "" {
+			rec.ClientSecret = clientSecret
+		}
+		rec.ClientID = clientID
+	}
+	if rec.ClientID == "" {
+		return workspace.OAuthRecord{}, fmt.Errorf(
+			"%q ships no OAuth client — register one with the provider and pass it once:\n"+
+				"    nocturn auth %s --client-id <id> [--client-secret <secret>]", p.Name, p.Name)
+	}
+	return rec, nil
 }
 
 // consentPrompt prints the authorization URL for the operator to open (no browser exec).

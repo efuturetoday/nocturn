@@ -142,15 +142,13 @@ func (s ShardTokens) Set(secretName string, value []byte) error {
 // not yet authorized are left alone — their requests fail closed until `nocturn auth <name>` runs.
 func registerOAuth(injector *secret.Injector, tokens TokenStore, wsDir string, log *slog.Logger) {
 	reg := registrar{injector: injector, tokens: tokens, log: log.With("component", "oauth")}
-	// Plugin OAuth: endpoints from the manifest, no resource indicator (not an MCP resource).
+	// Plugin OAuth: endpoints from the manifest, no resource indicator (not an MCP resource). A client
+	// stored at `nocturn auth` time WINS over the manifest's, because a plugin from the catalog cannot
+	// carry one — a shared OAuth client for a restricted scope like Gmail needs an annual third-party
+	// security assessment, so the shipped manifest leaves the client empty and the person supplies
+	// theirs once. Same shard, same sidecar record a discover-mode MCP server uses.
 	for _, p := range plugin.DiscoverOAuth(wsDir) {
-		reg.wire(p.SecretName, p.Name, OAuthRecord{
-			AuthURL:      p.AuthURL,
-			TokenURL:     p.TokenURL,
-			ClientID:     p.ClientID,
-			ClientSecret: p.ClientSecret,
-			Scopes:       p.Scopes,
-		})
+		reg.wire(p.SecretName, p.Name, pluginRecord(p, tokens))
 	}
 	// MCP OAuth: a manual block's endpoints from config, or a persisted record from discovery. Both
 	// carry the RFC 8707 resource (the server's canonical URI) so refresh stays audience-bound.
@@ -176,6 +174,29 @@ func registerOAuth(injector *secret.Injector, tokens TokenStore, wsDir string, l
 			}
 		}
 	}
+}
+
+// pluginRecord resolves which OAuth client a plugin refreshes with.
+//
+// The ENDPOINTS always come from the manifest, which is signed: where a credential is sent is not
+// something a stored blob should be able to move. The CLIENT may come from the shard, because a
+// plugin from the catalog often cannot ship one — a shared OAuth client for a restricted scope like
+// Gmail needs an annual third-party security assessment, so the manifest leaves it empty and the
+// person supplies theirs once with `nocturn auth <plugin> --client-id …`, which stores it beside the
+// token. A stored record without a client id changes nothing, so a half-written one cannot blank out
+// a manifest that does carry one.
+func pluginRecord(p plugin.OAuthProvider, tokens TokenStore) OAuthRecord {
+	rec := OAuthRecord{
+		AuthURL:      p.AuthURL,
+		TokenURL:     p.TokenURL,
+		ClientID:     p.ClientID,
+		ClientSecret: p.ClientSecret,
+		Scopes:       p.Scopes,
+	}
+	if stored, ok := LoadOAuthRecord(tokens, p.SecretName); ok && stored.ClientID != "" {
+		rec.ClientID, rec.ClientSecret = stored.ClientID, stored.ClientSecret
+	}
+	return rec
 }
 
 // registrar carries the three things every provider in one registration run shares — where to install

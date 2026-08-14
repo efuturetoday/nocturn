@@ -126,7 +126,6 @@ func TestManifest_Validate_RejectsMalformed(t *testing.T) {
 	}
 
 	oauth := map[string]func(*plugin.Manifest){
-		"oauth no client_id": func(m *plugin.Manifest) { m.OAuth[0].ClientID = "" },
 		"oauth no scopes":    func(m *plugin.Manifest) { m.OAuth[0].Scopes = nil },
 		"oauth http auth":    func(m *plugin.Manifest) { m.OAuth[0].AuthURL = "http://auth.example.com/a" },
 		"oauth empty token":  func(m *plugin.Manifest) { m.OAuth[0].TokenURL = "" },
@@ -484,4 +483,26 @@ func TestPlugin_Close_NoOpForJS_ClosesWasmEngine(t *testing.T) {
 			t.Fatalf("second Close (wasm): %v", err)
 		}
 	})
+}
+
+// An empty client_id is ALLOWED, and the reason is not leniency: a plugin for a provider with
+// restricted scopes cannot ship a shared OAuth client at all (Google charges an annual third-party
+// security assessment for one), so it declares the endpoints and the person supplies the client once
+// with `nocturn auth <plugin> --client-id …`. Everything else about the block stays required.
+func TestManifest_Validate_AllowsAnOAuthBlockWithoutAClient(t *testing.T) {
+	m := plugin.Manifest{
+		Name:        "gmail",
+		Version:     "1",
+		Tools:       []plugin.ToolDecl{{Name: "search", Parameters: []byte(`{"type":"object"}`)}},
+		Credentials: []plugin.CredentialDecl{{Name: "account", Host: "gmail.googleapis.com", Header: "Authorization"}},
+		OAuth: []plugin.OAuthDecl{{
+			Name:     "account",
+			AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL: "https://oauth2.googleapis.com/token",
+			Scopes:   []string{"https://www.googleapis.com/auth/gmail.readonly"},
+		}},
+	}
+	if err := m.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want a manifest without a client id to be valid", err)
+	}
 }
