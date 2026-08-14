@@ -73,10 +73,13 @@ type Host struct {
 // reminder timer set, one chat store, one knowledge index — built once by Open and never rebuilt.
 // Everything discovery derives lives in `cur` and is replaced whole (see snapshot.go).
 type Workspace struct {
-	name       string
-	dir        string
-	llm        agentkit.LLM
-	grants     gate.Grants
+	name string
+	dir  string
+	llm  agentkit.LLM
+	// The concrete store, not the gate.Grants port: this workspace both HANDS it to the gate and asks
+	// it what it holds, and the port deliberately has no listing — a set that can be shown is a
+	// consumer concern, which is what this is.
+	grants     *grantStore
 	approver   gate.Approver     // the out-of-band human; handed to a guarded agent's firing, nil-safe
 	chats      *chat.Manager     // user chats
 	agentChats *chat.Manager     // agent runs (agent-store counterpart of chats)

@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"sync"
 
@@ -66,6 +67,33 @@ func (s *grantStore) Forget(g gate.Grant) bool {
 	// restart. Logging it is the caller's, which is why Forget reports what it did.
 	_ = s.write()
 	return true
+}
+
+// Standing is one remembered approval as a consumer shows it: the grant, plus whether it survives a
+// restart. The distinction is the whole of what a person needs to judge one — "until this daemon
+// stops" and "forever" are different answers to the same question, and only the second accumulates.
+type Standing struct {
+	Grant   gate.Grant
+	Durable bool
+}
+
+// List returns every standing grant, durable ones marked.
+//
+// The in-memory set is the truth about what will be allowed right now — it holds the durable ones
+// too, seeded at open — so it is the source, and the file only says which of them outlive a restart.
+func (s *grantStore) List() []Standing {
+	s.mu.Lock()
+	durable := make(map[gate.Grant]struct{}, len(s.durable))
+	maps.Copy(durable, s.durable)
+	s.mu.Unlock()
+
+	all := s.mem.All()
+	out := make([]Standing, 0, len(all))
+	for _, g := range all {
+		_, isDurable := durable[g]
+		out = append(out, Standing{Grant: g, Durable: isDurable})
+	}
+	return out
 }
 
 // write persists the durable set atomically (write then rename). Callers hold s.mu.

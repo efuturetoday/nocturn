@@ -341,6 +341,8 @@ func (c *conn) dispatch(ctx context.Context, data []byte) {
 		c.mcpCmd(ctx, env.Cmd, data)
 	case "plugin":
 		c.pluginCmd(ctx, env.Cmd, data)
+	case "grant":
+		c.grantCmd(ctx, env.Cmd, data)
 	case "library":
 		c.libraryCmd(ctx, env.Cmd, data)
 	case "reminder":
