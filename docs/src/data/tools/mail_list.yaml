@@ -35,7 +35,9 @@ js:
     const inbox = nocturn.call("mail_list", { folder: "INBOX", limit: 10 });
 
 notes: >-
-  The fetch **peeks**: listing and reading never set the `\Seen` flag, so an agent skimming the inbox
+  A mail session is bounded at two minutes when the caller sets no deadline of its own — the dial,
+  the handshake and every command after it — so a server that stops answering ends the call rather
+  than the turn. The fetch **peeks**: listing and reading never set the `\Seen` flag, so an agent skimming the inbox
   at six in the morning does not empty your unread list before you wake up. The tools exist only in a
   workspace that has a `mail.json` — no mailbox configured means no mail tools at all, rather than
   tools that fail on every call.

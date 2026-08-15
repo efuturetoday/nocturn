@@ -58,6 +58,11 @@ limits:
     **Plain text only**, and no attachments. The subject goes out RFC 2047-encoded, the body
     quoted-printable.
   - >-
+    **The session is bounded**, whether or not the caller set a deadline: two minutes covering the
+    dial, the handshake and every command after it. Neither IMAP nor SMTP takes a context per
+    command, so without it a server that accepts a connection and then says nothing would hold the
+    turn open indefinitely.
+  - >-
     **TLS is not negotiable.** Implicit TLS on port 465; anywhere else STARTTLS must be offered or
     the send is refused rather than falling back to the clear.
 
