@@ -1,0 +1,49 @@
+title: mail_search
+description: Search the mailbox on the server — text, sender and a date floor, matched by IMAP itself.
+
+kind: null
+gated: false
+axis: read
+
+intro: >-
+  Finds messages without moving them: the query becomes IMAP `SEARCH` criteria and the **server**
+  does the matching. That is the whole point — a mailbox is unbounded and not ours, so pulling it
+  down to filter locally would move a decade of mail over the wire, and indexing it into the
+  knowledge corpus would let anyone who knows the address write into the assistant's retrieval. It is
+  a substring search, not a semantic one: *roof* will not find *Dachdecker*.
+
+input:
+  - field: text
+    type: string
+    required: false
+    notes: "Text to find anywhere in headers or body."
+  - field: from
+    type: string
+    required: false
+    notes: "Only messages whose `From` header contains this."
+  - field: since
+    type: string
+    required: false
+    notes: "Only messages on or after this date, `YYYY-MM-DD`. Only the date is used; the server ignores time and zone."
+  - field: folder
+    type: string
+    required: false
+    notes: "Folder to search; defaults to `INBOX`."
+  - field: limit
+    type: integer
+    required: false
+    notes: "How many messages — default **10**, capped at **50**."
+
+output: >-
+  The same shape as [`mail_list`](/nocturn/reference/tools/mail_list/): `{"messages": [...]}` with
+  `uid`, `from`, `subject`, `date` and `unread`, newest first. A limit cuts to the **newest** matches,
+  so a search for a common word does not answer with the oldest mail in the mailbox.
+
+js:
+  wrapper: null
+  call: |
+    const hits = nocturn.call("mail_search", { text: "Rechnung", since: "2026-01-01", limit: 20 });
+
+notes: >-
+  Every field narrows together — an "and", not an "or". Fields left out simply do not constrain, so a
+  query with only `limit` is the same as a listing.

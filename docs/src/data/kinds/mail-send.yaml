@@ -1,0 +1,86 @@
+title: The mail.send kind
+description: mail.send — a message leaving the household, checked once per recipient, with the address as the target.
+
+kind: mail.send
+constant: mail.SendKind
+
+intro: >-
+  One tool sits behind this kind: [`mail_send`](/nocturn/reference/tools/mail_send/). Reading a
+  mailbox is ungated — context, never authority — and sending is the exact opposite: an effect on
+  someone else that nobody can take back.
+
+  The `Target` is the **recipient address**, deliberately not the mail server. A network target would
+  mean one "yes" for `smtp.provider.de` stands for every future message to everyone, since the host
+  says nothing about who receives. The recipient is what a person is actually deciding about, so the
+  recipient is what they are asked about.
+
+glance:
+  target: "the recipient address — one check per address, never one for the batch"
+  policy: "**asked** by the workspace root policy, in a watched chat as well as in an unattended run"
+  matcher: "`mail.AddressMatch` — an exact address, a `*@domain` wildcard, or `*`"
+
+tools:
+  - name: mail_send
+    href: /nocturn/reference/tools/mail_send/
+    axis: write
+    gated: true
+    desc: send a plain-text message from the household's own address
+
+grants:
+  intro: >-
+    A grant is the address itself, or the one widening the tool offers: everyone at that domain.
+    A bare `*` is never suggested — allowing every recipient in the world is a sentence somebody has
+    to write out themselves.
+  lang: json
+  examples: |
+    { "kind": "mail.send", "target": "chef@firma.de" }
+    { "kind": "mail.send", "target": "*@firma.de" }
+  notes:
+    - >-
+      The domain is split on `@`, never matched as a suffix — so `*@firma.de` does **not** cover
+      `chef@evilfirma.de`. It is the same guard the net axis needs for `*.example.com`.
+    - >-
+      Comparison folds case, including the local part. RFC 5321 leaves that to the receiving host,
+      but a grant is a sentence a human typed: somebody who allowed `Chef@firma.de` has not made a
+      statement about `chef@firma.de`, and asking again for what they believe they answered is the
+      worse failure.
+
+limits:
+  - >-
+    **Asked in both policies.** Memory writes are allowed in a watched chat because the transcript
+    shows them as they happen, so an approval would buy "before" instead of "after". For mail there
+    is no after: the message has already reached a third party.
+  - >-
+    **One denial stops everything.** A declined recipient does not mean the rest of the list goes out
+    without them — nothing is submitted at all.
+  - >-
+    **Plain text only**, and no attachments. The subject goes out RFC 2047-encoded, the body
+    quoted-printable.
+  - >-
+    **TLS is not negotiable.** Implicit TLS on port 465; anywhere else STARTTLS must be offered or
+    the send is refused rather than falling back to the clear.
+
+credentials:
+  - >-
+    The password lives in the workspace vault under `mail.smtp.password` (and
+    `mail.imap.password` for reading) — names that are constants in the code, so whoever edits
+    `mail.json` cannot point the credential at a different server. It does **not** ride the HTTP
+    credential injector: that is a cookie jar for outgoing requests, stamping one secret into one
+    header, and mail is neither.
+  - >-
+    The **username is deliberately not in the vault.** It is the household's own address, appears
+    legitimately in half of what leaves, and as a registered secret the leak scanner would redact it
+    everywhere.
+
+leakScanning:
+  points:
+    - >-
+      **Egress, before submission.** Subject, body and recipients are scanned; a known vault value
+      anywhere in them blocks the send. The body is model output going to a third party — the
+      shortest exfiltration path in the tree.
+    - >-
+      **Ingress, on the way back.** A vault value echoed inside a message read from the mailbox is
+      redacted before it reaches the model.
+    - >-
+      The refusal handed back to the model is generic on purpose. It names neither the value nor the
+      reason, because the reason would confirm which text is a stored secret.

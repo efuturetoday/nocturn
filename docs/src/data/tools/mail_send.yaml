@@ -1,0 +1,47 @@
+title: mail_send
+description: Send a plain-text message from the household's own address — gated once per recipient.
+
+kind:
+  name: mail.send
+  href: /nocturn/reference/gate/mail-send/
+  target: the recipient address
+gated: true
+axis: write
+
+intro: >-
+  The one mail tool that leaves the household, and the only one that asks. Every recipient is checked
+  on its own, because *"send to these three?"* is not a question a person can answer on a phone — and
+  a grant remembered from one ask would otherwise carry an approval for each of them. Plain text
+  only: an assistant writing HTML mail is a formatting problem nobody asked for, and every feature
+  here is another way for generated content to leave.
+
+input:
+  - field: to
+    type: array of string
+    required: true
+    notes: "Recipient addresses. Each is checked separately; one denial stops the whole send."
+  - field: subject
+    type: string
+    required: true
+    notes: "Subject line. Sent as an RFC 2047 encoded word, so non-ASCII survives."
+  - field: body
+    type: string
+    required: true
+    notes: "Message text. Sent as quoted-printable, UTF-8."
+
+output: >-
+  `{"sent": true, "to": [...]}` once the submission server has accepted the message. There is no
+  later confirmation and no way back — that asymmetry is why this asks and the reading tools do not.
+
+js:
+  wrapper: null
+  call: |
+    nocturn.call("mail_send", { to: ["chef@firma.de"], subject: "Freitag", body: "Bis dann." });
+
+notes: >-
+  The gate is checked **before** anything is composed, and the leak scanner runs between the gate and
+  the wire: a message carrying a known vault value never leaves. What comes back to the model then
+  says only that the send was refused — unlike a rejected `http_write` there is nothing for it to
+  correct, and naming the reason would tell it which text is a stored secret. TLS is not optional on
+  either path: port 465 is encrypted from the first byte, anything else must offer STARTTLS or the
+  send is refused rather than downgraded.

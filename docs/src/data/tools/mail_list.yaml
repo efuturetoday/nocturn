@@ -1,0 +1,41 @@
+title: mail_list
+description: List the newest messages in a mail folder — sender, subject, date, and whether they are unread.
+
+kind: null
+gated: false
+axis: read
+
+intro: >-
+  The way in to a mailbox: the newest messages of a folder, most recent first, with the UID
+  [`mail_read`](/nocturn/reference/tools/mail_read/) needs. Ungated, because reading your own mail is
+  context and never reach — the same argument that leaves
+  [`memory_read`](/nocturn/reference/tools/memory_read/) and
+  [`knowledge_search`](/nocturn/reference/tools/knowledge_search/) open. Newest-first is not a
+  preference: a mailbox has no upper bound, and a listing that began at the start would spend the
+  whole context on mail from years ago.
+
+input:
+  - field: folder
+    type: string
+    required: false
+    notes: "Folder to list; defaults to `INBOX`."
+  - field: limit
+    type: integer
+    required: false
+    notes: "How many messages — default **10**, capped at **50**."
+
+output: >-
+  A JSON object `{"messages": [...]}`, each with `uid`, `from`, `subject`, `date` (RFC 3339) and
+  `unread`. Any known vault secret a message echoes back is redacted before the text reaches the
+  model.
+
+js:
+  wrapper: null
+  call: |
+    const inbox = nocturn.call("mail_list", { folder: "INBOX", limit: 10 });
+
+notes: >-
+  The fetch **peeks**: listing and reading never set the `\Seen` flag, so an agent skimming the inbox
+  at six in the morning does not empty your unread list before you wake up. The tools exist only in a
+  workspace that has a `mail.json` — no mailbox configured means no mail tools at all, rather than
+  tools that fail on every call.

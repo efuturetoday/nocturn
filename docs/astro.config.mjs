@@ -164,6 +164,17 @@ export default defineConfig({
 							],
 						},
 						{
+							// The same split as Memory, and for the same reason: reading a mailbox carries
+							// no authority, sending is an effect on somebody else that cannot be undone.
+							label: 'Mail',
+							items: [
+								{ label: 'mail_list', link: '/reference/tools/mail_list/' },
+								{ label: 'mail_search', link: '/reference/tools/mail_search/' },
+								{ label: 'mail_read', link: '/reference/tools/mail_read/' },
+								{ label: 'mail_send', link: '/reference/tools/mail_send/' },
+							],
+						},
+						{
 							label: 'Zero Authority',
 							items: [
 								{ label: 'time_now', link: '/reference/tools/time_now/' },
@@ -186,6 +197,7 @@ export default defineConfig({
 						{ label: 'notify', link: '/reference/gate/notify/' },
 						{ label: 'remind', link: '/reference/gate/remind/' },
 						{ label: 'memory', link: '/reference/gate/memory/' },
+						{ label: 'mail.send', link: '/reference/gate/mail-send/' },
 					],
 				},
 				{

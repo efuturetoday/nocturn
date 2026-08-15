@@ -19,10 +19,11 @@ Two separate questions, and the docs must never blur them:
   `tools`). Not a rule that is evaluated: an absent tool is absent.
 - **Gate** — what a call may do, checked per call as `gate.Check(Action{Kind, Target})`.
 
-**Kinds today** — exactly five, and no page may invent a sixth: `net` (`tools.NetKind`), `file`
+**Kinds today** — exactly six, and no page may invent a seventh: `net` (`tools.NetKind`), `file`
 (`tools.FileKind`), `notify` (`tools.NotifyKind`), `remind` (`tools.RemindKind`), `memory`
-(`memory.Kind` — it lives in `internal/memory`, which is why it is easy to miss).
-Verify with `grep -rn 'Kind = "' internal/tools internal/memory`.
+(`memory.Kind`) and `mail.send` (`mail.SendKind`). The last two live outside `internal/tools` — in
+`internal/memory` and `internal/mail` — which is why they are easy to miss.
+Verify with `grep -rn 'Kind = "' internal/tools internal/memory internal/mail`.
 
 **Gated is not derivable from the tool's name or its axis.** `http_read` is a read and asks;
 `file_read` is a read and never calls the gate. Every tool entry states `gated` explicitly.
@@ -113,6 +114,7 @@ Wrapper coverage as of today — verify with
 | `wake` | `nocturn.wake(seconds, note)` |
 | `skill_read` | `nocturn.skillFile(skill, path)` |
 | `remind_list` / `remind_cancel` / `code_run` | none — `wrapper: null` |
+| `mail_list` / `mail_search` / `mail_read` / `mail_send` | none — `wrapper: null` |
 
 The prelude's tool names are covered by `TestPrelude_WrappersDispatchToRegisteredNames`
 (`internal/script/script_test.go`). If you add a wrapper, add its case there — the whole point is

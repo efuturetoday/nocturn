@@ -1,0 +1,39 @@
+title: mail_read
+description: Read one message by UID, as plain text.
+
+kind: null
+gated: false
+axis: read
+
+intro: >-
+  Fetches one message and flattens it to what a language model can use: the header plus the
+  `text/plain` body, with transfer encoding and charset already decoded. Ungated for the same reason
+  the listing is — reading is context, never authority. The defence against what a mail *says* is the
+  gate on every action the assistant takes afterwards, not a prompt in front of the reading.
+
+input:
+  - field: uid
+    type: integer
+    required: true
+    notes: "The message UID, as returned by [`mail_list`](/nocturn/reference/tools/mail_list/) or [`mail_search`](/nocturn/reference/tools/mail_search/)."
+  - field: folder
+    type: string
+    required: false
+    notes: "Folder the message is in; defaults to `INBOX`."
+
+output: >-
+  A JSON object with `uid`, `from`, `to`, `subject`, `date` and `body`. The body is capped at
+  **16 KiB** and truncation is marked. A message with no plain-text part comes back with an empty
+  body rather than a page of markup, and attachments are not carried at all.
+
+js:
+  wrapper: null
+  call: |
+    const mail = nocturn.call("mail_read", { uid: 4711 });
+
+notes: >-
+  The fetch uses `BODY.PEEK[]`, so reading through the assistant never marks a message as seen. A UID
+  the server no longer has is an ordinary not-found error — a message moved or deleted between a
+  listing and a read is normal, not exceptional. Mail is **foreign text**: everything it contains is
+  written by whoever sent it, which makes it the plainest prompt-injection channel in the tree.
+  Vault values echoed back inside a message are redacted before the model sees them.
