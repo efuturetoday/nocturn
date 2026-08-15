@@ -63,6 +63,27 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Formatting is drift like everything else here, and for the same reason gofmt is in ci.yml: a
+      # pull request that left a file unformatted fails, a push to main is reformatted for you, and
+      # the heal commit is its own commit — so a reformat cannot hide a change under it.
+      #
+      # src only, and that scope is the whole design. Everything else under mobile/ already has a
+      # writer — android/ and ios/ belong to the trapeze check below, CHANGELOG.md to release-please,
+      # package-lock.json to npm, dist/ to the build — and a second writer over any of them means two
+      # drift patches carrying the same lines, after which heal's second `git apply` fails. Pointing
+      # Prettier at what people type instead of at everything makes that impossible rather than
+      # forbidden, and there is no ignore file to keep in step with it.
+      - name: Format
+        if: inputs.check-drift
+        run: npm run format
+
+      - uses: ./.github/actions/drift
+        if: inputs.check-drift
+        with:
+          paths: 'mobile/src/**'
+          name: prettier
+          hint: npm run format
+
       # package.json is the only place `version` and `config.buildNumber` are written; re-applying
       # and diffing is what makes that true rather than merely intended. Trapeze is idempotent.
       - name: Re-apply the native configuration
