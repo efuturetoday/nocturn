@@ -13,6 +13,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/internal/agent"
 	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
+	"github.com/efuturetoday/nocturn/internal/mail"
 	"github.com/efuturetoday/nocturn/internal/memory"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -171,6 +172,9 @@ func TestPolicy_NetAndFileAsk_ElseAllowed(t *testing.T) {
 	}{
 		{"net asks", tools.NetKind, ask},
 		{"file asks", tools.FileKind, ask},
+		// Sending mail asks even in a watched chat, unlike memory: the transcript shows it, but a
+		// message that has reached a third party cannot be taken back afterwards.
+		{"sending mail asks", mail.SendKind, ask},
 		{"time allowed", "time_now", allow},
 		{"notify allowed", tools.NotifyKind, allow},
 		{"unknown allowed", "whatever", allow},

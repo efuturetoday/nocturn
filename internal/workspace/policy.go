@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"github.com/efuturetoday/nocturn/agentkit/gate"
+	"github.com/efuturetoday/nocturn/internal/mail"
 	"github.com/efuturetoday/nocturn/internal/memory"
 	"github.com/efuturetoday/nocturn/internal/tools"
 )
@@ -20,6 +21,12 @@ import (
 // Always button that silently resolved to a session grant, which is worse than not offering it: the
 // person believes they answered a question once and for all, and is asked again tomorrow.
 //
+// mail.SendKind IS asked here, unlike memory, and the difference is that there is no afterwards. The
+// argument below — the human sees the call in the transcript, so asking buys "before" instead of
+// "after" — holds for a note on disk and collapses for a message that has already reached a third
+// party. Its Target is the recipient, one check per address, so the answer a person gives is about
+// who receives something and not about which server it went through.
+//
 // memory is deliberately NOT asked here. A memory write is not an effect in the world; its risk is
 // that untrusted text becomes durable context nobody looks at again. In an interactive chat the
 // human already sees the call in the transcript as it happens, so an approval prompt buys "before"
@@ -28,7 +35,7 @@ import (
 func policy() gate.Policy {
 	return gate.PolicyFunc(func(a gate.Action) gate.Ruling {
 		switch a.Kind {
-		case tools.NetKind, tools.FileKind:
+		case tools.NetKind, tools.FileKind, mail.SendKind:
 			return gate.AskWith(gate.RecallAlways)
 		default:
 			return gate.Allowed()
