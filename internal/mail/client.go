@@ -70,13 +70,16 @@ type Client struct {
 // second half a server that accepts a connection and then says nothing would hold a tool call — and
 // with it a turn — open forever.
 func Dial(ctx context.Context, acct Account, password string) (*Client, error) {
+	ctx, cancel := withSessionDeadline(ctx)
+	defer cancel()
+
 	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{MinVersion: tls.VersionTLS12}}
 	conn, err := d.DialContext(ctx, "tcp", acct.IMAPAddr)
 	if err != nil {
 		return nil, fmt.Errorf("mail: dial %s: %w", acct.IMAPAddr, err)
 	}
 	if err := boundSession(ctx, conn); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("mail: %s: %w", acct.IMAPAddr, err)
 	}
 	return NewClient(conn, acct.User, password)
@@ -87,7 +90,20 @@ func Dial(ctx context.Context, acct Account, password string) (*Client, error) {
 // enough for the failure it exists to stop — a server that answers nothing.
 const sessionTimeout = 2 * time.Minute
 
-// boundSession stamps the caller's deadline onto the connection, falling back to sessionTimeout.
+// withSessionDeadline bounds ctx BEFORE anything is dialled, and leaves a caller's own deadline
+// alone. It has to come first: tls.Dialer.DialContext completes the handshake before it returns, so
+// a deadline applied to the connection afterwards is a deadline applied to a call that may never get
+// there — a server that accepts TCP and then never finishes the handshake hangs on the dial itself.
+func withSessionDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, sessionTimeout)
+}
+
+// boundSession stamps the deadline onto the connection, so every command after the handshake is
+// covered too. The deadline is absolute, so it outlives the context it was read from — cancelling
+// that context does not shorten a session already under way.
 func boundSession(ctx context.Context, conn net.Conn) error {
 	deadline, ok := ctx.Deadline()
 	if !ok {
@@ -107,7 +123,7 @@ func NewClient(conn net.Conn, user, password string) (*Client, error) {
 		WordDecoder: &mime.WordDecoder{CharsetReader: charset.Reader},
 	})
 	if err := c.Login(user, password).Wait(); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, fmt.Errorf("mail: login as %s: %w", user, err)
 	}
 	return &Client{c: c}, nil
@@ -116,7 +132,7 @@ func NewClient(conn net.Conn, user, password string) (*Client, error) {
 // Close logs out and closes the connection.
 func (c *Client) Close() error {
 	if err := c.c.Logout().Wait(); err != nil {
-		c.c.Close() // log out failed; the socket still has to go
+		_ = c.c.Close() // log out failed; the socket still has to go
 		return fmt.Errorf("mail: logout: %w", err)
 	}
 	return c.c.Close()

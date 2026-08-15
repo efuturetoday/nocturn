@@ -72,7 +72,7 @@ func Send(ctx context.Context, acct Account, password string, msg Outgoing) erro
 		return fmt.Errorf("mail: data: %w", err)
 	}
 	if _, err := w.Write(raw); err != nil {
-		w.Close()
+		_ = w.Close()
 		return fmt.Errorf("mail: write message: %w", err)
 	}
 	if err := w.Close(); err != nil {
@@ -91,21 +91,21 @@ func connectSMTP(ctx context.Context, acct Account, password, host, port string)
 	}
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("mail: smtp %s: %w", acct.SMTPAddr, err)
 	}
 	if port != submissionTLSPort {
 		if ok, _ := c.Extension("STARTTLS"); !ok {
-			c.Close()
+			_ = c.Close()
 			return nil, fmt.Errorf("mail: %s offers no STARTTLS — refusing to send credentials in the clear", acct.SMTPAddr)
 		}
 		if err := c.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
-			c.Close()
+			_ = c.Close()
 			return nil, fmt.Errorf("mail: starttls with %s: %w", host, err)
 		}
 	}
 	if err := c.Auth(smtp.PlainAuth("", acct.User, password, host)); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, fmt.Errorf("mail: authenticate as %s: %w", acct.User, err)
 	}
 	return c, nil
@@ -120,6 +120,11 @@ const submissionTLSPort = "465"
 // are all covered — net/smtp takes no context, so the deadline is the only thing standing between a
 // silent server and a turn that never ends.
 func dialSMTP(ctx context.Context, addr, host, port string) (net.Conn, error) {
+	// Bound the context before dialling, not after: the connection deadline set below never gets
+	// applied if the handshake itself is where the server stalls.
+	ctx, cancel := withSessionDeadline(ctx)
+	defer cancel()
+
 	var conn net.Conn
 	var err error
 	if port == submissionTLSPort {
@@ -132,7 +137,7 @@ func dialSMTP(ctx context.Context, addr, host, port string) (net.Conn, error) {
 		return nil, fmt.Errorf("mail: dial %s: %w", addr, err)
 	}
 	if err := boundSession(ctx, conn); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("mail: %s: %w", addr, err)
 	}
 	return conn, nil

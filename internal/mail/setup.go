@@ -64,7 +64,7 @@ func Verify(ctx context.Context, acct Account, imapPassword, smtpPassword string
 		if _, err := c.List("INBOX", 1); err != nil {
 			imapErr = err
 		}
-		c.Close()
+		_ = c.Close()
 	}
 	return errors.Join(imapErr, verifySubmission(ctx, acct, smtpPassword))
 }
@@ -99,11 +99,11 @@ func SaveAccount(path string, acct Account) error {
 	}
 	defer os.Remove(tmp.Name()) // a no-op once the rename succeeded
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	// Flush before the rename: the rename is atomic in the directory, which says nothing about the
@@ -112,7 +112,7 @@ func SaveAccount(path string, acct Account) error {
 	// that is the difference between "the previous account survives" and "the new one survives", and
 	// the recovery for the second is running setup again.
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {

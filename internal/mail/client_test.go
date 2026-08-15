@@ -156,7 +156,7 @@ func dial(t *testing.T) (*mail.Client, *fakeServer) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	t.Cleanup(func() { c.Close() })
+	t.Cleanup(func() { _ = c.Close() })
 	return c, s
 }
 
