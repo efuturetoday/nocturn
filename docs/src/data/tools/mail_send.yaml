@@ -19,7 +19,7 @@ input:
   - field: to
     type: array of string
     required: true
-    notes: "Recipient addresses. Each is checked separately; one denial stops the whole send."
+    notes: "Recipient addresses. Each is parsed with `net/mail` and continues in its canonical form, so what the gate asks about, what a grant records and what the `To` header carries are the same string — a value with a second header behind a newline is refused before anything is asked. Each is checked separately; one denial stops the whole send."
   - field: subject
     type: string
     required: true

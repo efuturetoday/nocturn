@@ -40,10 +40,11 @@ grants:
       The domain is split on `@`, never matched as a suffix — so `*@firma.de` does **not** cover
       `chef@evilfirma.de`. It is the same guard the net axis needs for `*.example.com`.
     - >-
-      Comparison folds case, including the local part. RFC 5321 leaves that to the receiving host,
-      but a grant is a sentence a human typed: somebody who allowed `Chef@firma.de` has not made a
-      statement about `chef@firma.de`, and asking again for what they believe they answered is the
-      worse failure.
+      Comparison folds case, including the local part — a grant for `Chef@firma.de` covers
+      `chef@firma.de` and the other way round. RFC 5321 leaves the local part to the receiving host
+      and permits it to be case-sensitive, but a grant is a sentence a human typed, and to a person
+      those are one address. Comparing exactly would ask them again for what they believe they
+      already answered.
 
 limits:
   - >-

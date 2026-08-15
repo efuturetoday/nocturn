@@ -65,16 +65,35 @@ type Client struct {
 
 // Dial opens a TLS connection to the account's IMAP server and logs in.
 //
-// ctx bounds the DIAL only. go-imap's commands do not take a context, so a server that accepts the
-// connection and then stalls is bounded by the deadline set on the connection, not by cancellation —
-// the honest version of "ctx-aware" here is to say which half it covers.
+// ctx bounds the handshake through DialContext, and everything after it through a deadline stamped
+// onto the connection. Neither go-imap nor net/smtp takes a context per command, so without that
+// second half a server that accepts a connection and then says nothing would hold a tool call — and
+// with it a turn — open forever.
 func Dial(ctx context.Context, acct Account, password string) (*Client, error) {
 	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{MinVersion: tls.VersionTLS12}}
 	conn, err := d.DialContext(ctx, "tcp", acct.IMAPAddr)
 	if err != nil {
 		return nil, fmt.Errorf("mail: dial %s: %w", acct.IMAPAddr, err)
 	}
+	if err := boundSession(ctx, conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("mail: %s: %w", acct.IMAPAddr, err)
+	}
 	return NewClient(conn, acct.User, password)
+}
+
+// sessionTimeout bounds a whole mail conversation when the caller set no deadline of its own. Not a
+// per-command budget: it is one absolute time for the session, which is the shape net.Conn offers and
+// enough for the failure it exists to stop — a server that answers nothing.
+const sessionTimeout = 2 * time.Minute
+
+// boundSession stamps the caller's deadline onto the connection, falling back to sessionTimeout.
+func boundSession(ctx context.Context, conn net.Conn) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(sessionTimeout)
+	}
+	return conn.SetDeadline(deadline)
 }
 
 // NewClient logs in over an already-established connection and takes ownership of it — the transport seam,

@@ -106,6 +106,15 @@ func SaveAccount(path string, acct Account) error {
 		tmp.Close()
 		return err
 	}
+	// Flush before the rename: the rename is atomic in the directory, which says nothing about the
+	// bytes having reached the disk first. Without this a power loss can persist the new name over
+	// the old file with nothing behind it. The containing directory is deliberately NOT synced —
+	// that is the difference between "the previous account survives" and "the new one survives", and
+	// the recovery for the second is running setup again.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}

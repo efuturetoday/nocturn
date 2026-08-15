@@ -217,3 +217,43 @@ func TestLimitClamping(t *testing.T) {
 		}
 	}
 }
+
+// TestSendRejectsHeaderInjection is the case a split on "@" alone lets through: the value ends in a
+// domain, so it looks like an address, while carrying a second header behind a newline. It must not
+// become the sentence the human is asked about, nor a remembered grant, nor a line in the message.
+func TestSendRejectsHeaderInjection(t *testing.T) {
+	for _, to := range []string{
+		"chef@firma.de\r\nBcc: x@evil.de",
+		"chef@firma.de\nBcc: x@evil.de",
+		"chef@firma.de, x@evil.de",
+		"<chef@firma.de>, <x@evil.de>",
+	} {
+		m, ap, sent, ctx := harness(t, true)
+		if _, err := m.sendTool(ctx, `{"to":["`+strings.ReplaceAll(strings.ReplaceAll(to, "\r", `\r`), "\n", `\n`)+`"],"subject":"x","body":"y"}`); err == nil {
+			t.Errorf("%q was accepted as a recipient", to)
+		}
+		if asked := ap.actions(); len(asked) != 0 {
+			t.Errorf("%q reached the gate as %v", to, asked)
+		}
+		if len(*sent) != 0 {
+			t.Errorf("%q produced a send", to)
+		}
+	}
+}
+
+// TestSendCanonicalisesTheRecipient pins that what the human is asked about is the address itself,
+// not the display name wrapped around it — the ask, the grant and the To header must all say the
+// same thing.
+func TestSendCanonicalisesTheRecipient(t *testing.T) {
+	m, ap, sent, ctx := harness(t, true)
+	if _, err := m.sendTool(ctx, `{"to":["Chef Mueller <chef@firma.de>"],"subject":"x","body":"y"}`); err != nil {
+		t.Fatalf("sendTool: %v", err)
+	}
+	asked := ap.actions()
+	if len(asked) != 1 || asked[0].Target != "chef@firma.de" {
+		t.Fatalf("the gate was asked about %v, want chef@firma.de", asked)
+	}
+	if len(*sent) != 1 || (*sent)[0].msg.To[0] != "chef@firma.de" {
+		t.Errorf("the message went to %v, want the canonical address", (*sent)[0].msg.To)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	netmail "net/mail"
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
@@ -251,10 +252,18 @@ func (m *Mailbox) sendTool(ctx context.Context, args string) (string, error) {
 	if len(a.To) == 0 {
 		return "", errors.New("missing required field: to")
 	}
-	for _, to := range a.To {
-		if domainOf(to) == "" {
+	// A recipient becomes three things: the sentence a human is asked about, the grant remembered
+	// from that answer, and a To header line written verbatim. So it has to be an address and nothing
+	// else — "chef@firma.de\r\nBcc: x@evil.de" ends in a domain and would pass a split on "@", while
+	// framing the approval question around an address that is not the one being written down.
+	// net/mail rejects the trailing header block, the newline in a display name and the missing
+	// domain in one pass; what continues is its canonical form, never the raw argument.
+	for i, to := range a.To {
+		addr, err := netmail.ParseAddress(to)
+		if err != nil || domainOf(addr.Address) == "" {
 			return "", fmt.Errorf("invalid recipient %q", to)
 		}
+		a.To[i] = addr.Address
 	}
 
 	// One Check per recipient. A single ask covering three addresses is a question a person cannot
@@ -283,7 +292,14 @@ func (m *Mailbox) sendTool(ctx context.Context, args string) (string, error) {
 	if err := m.send(ctx, m.acct, password, Outgoing{To: a.To, Subject: a.Subject, Body: a.Body}); err != nil {
 		return "", err
 	}
-	m.log.Info("mail sent", "recipients", a.To, "subject", a.Subject)
+	// Count and domains, never the addresses and never the subject. A log line is not the
+	// vault-protected surface, and who the household writes to — with what in the subject — is the
+	// content of the message, not a fact about the effect.
+	domains := make([]string, 0, len(a.To))
+	for _, to := range a.To {
+		domains = append(domains, domainOf(to))
+	}
+	m.log.Info("mail sent", "recipients", len(a.To), "domains", domains)
 	return m.marshalRedacted(map[string]any{"sent": true, "to": a.To})
 }
 

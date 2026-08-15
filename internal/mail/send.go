@@ -116,18 +116,24 @@ func connectSMTP(ctx context.Context, acct Account, password, host, port string)
 // clear and STARTTLS is required before the credential moves.
 const submissionTLSPort = "465"
 
+// dialSMTP opens the transport and bounds the whole session on it, so STARTTLS, AUTH, RCPT and DATA
+// are all covered — net/smtp takes no context, so the deadline is the only thing standing between a
+// silent server and a turn that never ends.
 func dialSMTP(ctx context.Context, addr, host, port string) (net.Conn, error) {
+	var conn net.Conn
+	var err error
 	if port == submissionTLSPort {
 		d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}}
-		conn, err := d.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			return nil, fmt.Errorf("mail: dial %s: %w", addr, err)
-		}
-		return conn, nil
+		conn, err = d.DialContext(ctx, "tcp", addr)
+	} else {
+		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	}
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("mail: dial %s: %w", addr, err)
+	}
+	if err := boundSession(ctx, conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("mail: %s: %w", addr, err)
 	}
 	return conn, nil
 }

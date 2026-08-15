@@ -23,10 +23,11 @@ const SendKind = "mail.send"
 // AddressMatch reports whether a granted pattern covers a recipient address: "*" any, an exact
 // address, or a "*@domain" wildcard over one domain. It is the gate.Matcher for SendKind targets.
 //
-// Comparison folds case, including the local part. That is not what RFC 5321 says — a local part is
-// the destination host's business and may be case-sensitive — but a grant is a sentence a human
-// typed, and someone who allowed "Chef@firma.de" has not made a statement about "chef@firma.de".
-// Erring the other way would ask them again for an address they believe they answered for.
+// Comparison folds case, including the local part: a grant for "Chef@firma.de" covers
+// "chef@firma.de" and the other way round. That is not what RFC 5321 says — a local part is the
+// destination host's business and may be case-sensitive — but a grant is a sentence a human typed,
+// and to a person those are one address. Comparing exactly would ask them again for something they
+// believe they already answered.
 //
 // An empty address matches nothing, and so does an empty pattern: a permission must never follow from
 // something being absent.
