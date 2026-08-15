@@ -39,7 +39,10 @@ export function seed(snap: ChatSnapshot, now: number): ChatView {
   for (const e of snap.inflightEvents ?? []) view = applyEvent(view, e, now);
   const last = view.messages[view.messages.length - 1];
   if (!last || last.role !== 'assistant' || !last.pending) {
-    view = { ...view, messages: [...view.messages, { role: 'assistant', content: '', thinking: '', tools: [], pending: true }] };
+    view = {
+      ...view,
+      messages: [...view.messages, { role: 'assistant', content: '', thinking: '', tools: [], pending: true }],
+    };
   }
   return { ...view, running: true };
 }

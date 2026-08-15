@@ -1,6 +1,14 @@
 import { Component, ChangeDetectionStrategy, input, inject, computed, signal } from '@angular/core';
 import {
-  IonNote, IonSpinner, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,
+  IonNote,
+  IonSpinner,
+  IonModal,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonButtons,
+  IonButton,
+  IonContent,
 } from '@ionic/angular/standalone';
 import { LucideWrench, LucideChevronRight, LucideX } from '@lucide/angular';
 import { ToolFrameComponent } from './tool-frame';
@@ -13,8 +21,20 @@ import type { ChatMessageView } from '../../../core/services/chat-view';
   selector: 'app-message-bubble',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    IonNote, IonSpinner, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,
-    ToolFrameComponent, MarkdownComponent, LucideWrench, LucideChevronRight, LucideX,
+    IonNote,
+    IonSpinner,
+    IonModal,
+    IonHeader,
+    IonToolbar,
+    IonTitle,
+    IonButtons,
+    IonButton,
+    IonContent,
+    ToolFrameComponent,
+    MarkdownComponent,
+    LucideWrench,
+    LucideChevronRight,
+    LucideX,
   ],
   host: {
     class: 'message-bubble',
@@ -143,6 +163,5 @@ export class MessageBubbleComponent {
     return names.length > 3 ? `${head} +${names.length - 3}` : head;
   });
 
-  constructor() {
-  }
+  constructor() {}
 }

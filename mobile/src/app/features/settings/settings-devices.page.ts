@@ -1,6 +1,13 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonButton,
+  IonContent,
+  IonList,
+  IonListHeader,
+  IonItem,
+  IonLabel,
+  IonNote,
+  IonChip,
+  IonButton,
   AlertController,
 } from '@ionic/angular/standalone';
 import { AuthService } from '../../core/services/auth.service';
@@ -59,7 +66,8 @@ export class SettingsDevicesPage {
 
   /** What a device is, in one line: its class and when it last connected. */
   protected deviceSubtitle(d: EnrolledDevice): string {
-    const kind = { app: 'phone', web: 'browser', appliance: 'appliance', tool: 'command line' }[d.class ?? ''] ?? 'device';
+    const kind =
+      { app: 'phone', web: 'browser', appliance: 'appliance', tool: 'command line' }[d.class ?? ''] ?? 'device';
     if (!d.lastUsed) return `${kind} · never connected`;
     return `${kind} · last seen ${new Date(d.lastUsed).toLocaleDateString()}`;
   }
@@ -78,10 +86,10 @@ export class SettingsDevicesPage {
       message: self
         ? 'This device will be signed out and will have to pair again.'
         : d.class === 'tool'
-          // The command line is the one row that heals: the daemon writes it a fresh credential
-          // straight away, so this rotates rather than revokes. Which is what you want from it — the
-          // reason to do this is that the file leaked, and the copy that leaked stops working.
-          ? 'The command line will be issued a new credential. Any copy of the old one stops working.'
+          ? // The command line is the one row that heals: the daemon writes it a fresh credential
+            // straight away, so this rotates rather than revokes. Which is what you want from it — the
+            // reason to do this is that the file leaked, and the copy that leaked stops working.
+            'The command line will be issued a new credential. Any copy of the old one stops working.'
           : `${d.name} will lose access immediately and will have to pair again.`,
       buttons: [
         { text: 'Cancel', role: 'cancel' },

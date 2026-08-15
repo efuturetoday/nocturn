@@ -12,10 +12,10 @@
 // ── shared value types ───────────────────────────────────────────────────────
 
 /** Who a chat belongs to — a person or a fired agent (which store holds it). */
-export type Source = "user" | "agent";
+export type Source = 'user' | 'agent';
 
 /** A device platform, selecting the push provider (ios→APNs, android→FCM). */
-export type Platform = "ios" | "android" | "web";
+export type Platform = 'ios' | 'android' | 'web';
 
 /**
  * One workspace (an isolated stack of chats/tools/grants) the daemon serves.
@@ -46,7 +46,7 @@ export interface ChatMeta {
 
 /** How a declared agent's SCHEDULED firing resolves an Ask: strict denies unattended, guarded asks
     the human out of band (the phone). */
-export type Autonomy = "strict" | "guarded";
+export type Autonomy = 'strict' | 'guarded';
 
 /** One declared agent (agent.list) — its identity, schedule, autonomy and tool cage. NOT a run. */
 export interface AgentInfo {
@@ -92,7 +92,7 @@ export interface SkillInfo {
  * could not carry a chat message while it waited. `needs auth` is an errand rather than a failure.
  * `note` says why in the words of the log, for the two states that owe an explanation.
  */
-export type MCPState = "connecting" | "connected" | "needs auth" | "failed";
+export type MCPState = 'connecting' | 'connected' | 'needs auth' | 'failed';
 
 /** One declared MCP server and how it fared. Declared, not connected: a server that did not come up
     is exactly what this list is opened to find, so it stays in it. */
@@ -181,7 +181,7 @@ export interface ToolCall {
  * whose `toolCallID` links it to the call it answers.
  */
 export interface Message {
-  role: "system" | "user" | "assistant" | "tool";
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content?: string;
   toolCalls?: ToolCall[];
   toolCallID?: string;
@@ -203,7 +203,7 @@ export interface PendingJoin {
 
 /** One streamed chunk of the assistant's answer. `frame` is the enclosing call (0 = top-level). */
 export interface ChatToken {
-  type: "chat.token";
+  type: 'chat.token';
   chatId: string;
   frame: number;
   text: string;
@@ -211,7 +211,7 @@ export interface ChatToken {
 
 /** One streamed chunk of the model's reasoning (render dim). */
 export interface ChatThinking {
-  type: "chat.thinking";
+  type: 'chat.thinking';
   chatId: string;
   frame: number;
   text: string;
@@ -219,9 +219,9 @@ export interface ChatThinking {
 
 /** A tool call's start or end. Group by `frame` to nest sub-agent activity; `id` is the call instance. */
 export interface ChatTool {
-  type: "chat.tool";
+  type: 'chat.tool';
   chatId: string;
-  phase: "start" | "end";
+  phase: 'start' | 'end';
   frame: number;
   id: number;
   tool: string;
@@ -234,20 +234,19 @@ export interface ChatTool {
 /** A turn starting: the client opens a fresh assistant bubble from it, so the answer bubble comes
     deterministically from the stream (a local turn and a backend-initiated one render identically). */
 export interface ChatTurnStart {
-  type: "chat.turnStart";
+  type: 'chat.turnStart';
   chatId: string;
   frame: number;
 }
 
 /** A turn finishing, with its stop reason (if any) and the turn's total tokens. */
 export interface ChatTurnEnd {
-  type: "chat.turnEnd";
+  type: 'chat.turnEnd';
   chatId: string;
   frame: number;
   err?: string;
   tokens: number;
 }
-
 
 /**
  * One captured tool call in a turn's forest (observability, not part of the transcript). `parent` is
@@ -277,7 +276,7 @@ export interface ToolNode {
  * its input recorded before the first event streams).
  */
 export interface ChatSnapshot {
-  type: "chat.snapshot";
+  type: 'chat.snapshot';
   id: string;
   messages: Message[];
   tools?: ToolNode[][];
@@ -289,7 +288,7 @@ export interface ChatSnapshot {
 /** A workspace's chat list, replying to chat.list. `kind` echoes the requested store so a client that
     lists both routes each result to the right view. */
 export interface ChatList {
-  type: "chat.list";
+  type: 'chat.list';
   ws: string;
   kind: Source;
   chats: ChatMeta[];
@@ -297,14 +296,14 @@ export interface ChatList {
 
 /** A workspace's declared-agent roster, replying to agent.list. */
 export interface AgentListEvent {
-  type: "agent.list";
+  type: 'agent.list';
   ws: string;
   agents: AgentInfo[];
 }
 
 /** The daemon's workspaces, replying to workspace.list. */
 export interface WorkspaceList {
-  type: "workspace.list";
+  type: 'workspace.list';
   items: WorkspaceInfo[];
 }
 
@@ -313,14 +312,14 @@ export interface WorkspaceList {
  * unread dot raises or clears without the device streaming that chat.
  */
 export interface ChatActivity {
-  type: "chat.activity";
+  type: 'chat.activity';
   ws: string;
   chat: ChatMeta;
 }
 
 /** The pending second-device joins with their codes, replying to join.list (paired devices only). */
 export interface JoinList {
-  type: "join.list";
+  type: 'join.list';
   joins: PendingJoin[];
 }
 
@@ -340,7 +339,7 @@ export interface EnrolledDevice {
  * whenever one is forgotten — two admin screens must not show two different answers.
  */
 export interface DeviceList {
-  type: "device.list";
+  type: 'device.list';
   devices: EnrolledDevice[];
   /** The id of the device this connection belongs to, so "this device" needs no guessing by name. */
   self?: string;
@@ -353,7 +352,7 @@ export interface DeviceList {
  * data. Answer with an `approval.resolve` echoing an option's `id`.
  */
 export interface ApprovalRequest {
-  type: "approval.request";
+  type: 'approval.request';
   id: string;
   frame?: number; // the tool call this approval is for (freeze that tool's timer); absent = not tool-scoped
   chatId?: string; // the chat/agent run whose turn raised this — for provenance; absent = not chat-scoped
@@ -371,7 +370,7 @@ export interface ApprovalRequest {
  */
 export interface ApprovalOption {
   id: string;
-  recall: "never" | "session" | "always";
+  recall: 'never' | 'session' | 'always';
   widen?: ApprovalGrant;
 }
 
@@ -383,14 +382,14 @@ export interface ApprovalGrant {
 
 /** A pending approval concluded (answered here or elsewhere, timed out, or cancelled) — clear the prompt. */
 export interface ApprovalResolved {
-  type: "approval.resolved";
+  type: 'approval.resolved';
   id: string;
 }
 
 /** A workspace's skills, disabled ones included — a list that omitted them could not offer
     switching one back on. Replies to skill.list, and broadcast after every change. */
 export interface SkillList {
-  type: "skill.list";
+  type: 'skill.list';
   ws: string;
   items: SkillInfo[];
 }
@@ -409,7 +408,7 @@ export interface PluginInfo {
 
 /** A workspace's installed plugins (plugin.list). */
 export interface PluginList {
-  type: "plugin.list";
+  type: 'plugin.list';
   ws: string;
   items: PluginInfo[];
 }
@@ -428,7 +427,7 @@ export interface GrantInfo {
 
 /** A workspace's standing approvals (grant.list), broadcast again after a revocation. */
 export interface GrantList {
-  type: "grant.list";
+  type: 'grant.list';
   ws: string;
   items: GrantInfo[];
 }
@@ -436,14 +435,14 @@ export interface GrantList {
 /** Request a workspace's standing approvals (→ GrantList). Needs `manage`: the set of hosts a
     household approved says what it does. */
 export interface GrantListCmd {
-  cmd: "grant.list";
+  cmd: 'grant.list';
   ws: string;
 }
 
 /** Revoke one standing approval. The next action of that shape asks again — which is the gate's
     designed path, not a failure. Answered with the list. */
 export interface GrantForgetCmd {
-  cmd: "grant.forget";
+  cmd: 'grant.forget';
   ws: string;
   kind: string;
   target: string;
@@ -452,21 +451,21 @@ export interface GrantForgetCmd {
 /** Delete a plugin, its folder and its stored token — and revoke the remembered permission for the
     hosts its credential rode to. Answered with plugin.list. */
 export interface PluginRemoveCmd {
-  cmd: "plugin.remove";
+  cmd: 'plugin.remove';
   ws: string;
   name: string;
 }
 
 /** Request a workspace's installed plugins (→ PluginList). Listing grants nothing. */
 export interface PluginListCmd {
-  cmd: "plugin.list";
+  cmd: 'plugin.list';
   ws: string;
 }
 
 /** One skill's SKILL.md, verbatim and WITH its frontmatter, replying to skill.read. Verbatim because
     the point of reading one is to see exactly what the model is told. */
 export interface SkillBody {
-  type: "skill.body";
+  type: 'skill.body';
   ws: string;
   name: string;
   body: string;
@@ -481,7 +480,7 @@ export interface SkillBody {
  * learns the outcome.
  */
 export interface MCPList {
-  type: "mcp.list";
+  type: 'mcp.list';
   ws: string;
   items: MCPInfo[];
 }
@@ -489,7 +488,7 @@ export interface MCPList {
 /** The installable catalog, replying to library.list / library.refresh. Not workspace-scoped: a
     catalog is the same everywhere the daemon serves; only installing picks a target. */
 export interface LibraryCatalog {
-  type: "library.catalog";
+  type: 'library.catalog';
   version: string;
   skills: LibrarySkill[];
   mcp: LibraryServer[];
@@ -512,7 +511,7 @@ export interface ReminderInfo {
  * gone from this set (it arrives as a push instead) — this is never a history.
  */
 export interface ReminderList {
-  type: "reminder.list";
+  type: 'reminder.list';
   ws: string;
   reminders: ReminderInfo[];
 }
@@ -523,7 +522,7 @@ export interface ReminderList {
  * daemon's set rather than on their own optimistic guesses.
  */
 export interface ReminderChanged {
-  type: "reminder.changed";
+  type: 'reminder.changed';
   ws: string;
 }
 
@@ -537,9 +536,9 @@ export interface ReminderChanged {
  * `chatId`, when set, is the chat or agent run it came from: what a tap should open.
  */
 export interface Notification {
-  type: "notification";
+  type: 'notification';
   ws: string;
-  kind: "remind" | "notify";
+  kind: 'remind' | 'notify';
   chatId?: string;
   title?: string;
   message: string;
@@ -553,7 +552,7 @@ export interface Account {
 
 /** A workspace's connectable MCP accounts and their status (reply to auth.list). */
 export interface AuthAccounts {
-  type: "auth.accounts";
+  type: 'auth.accounts';
   ws: string;
   accounts: Account[];
 }
@@ -565,7 +564,7 @@ export interface AuthAccounts {
  * single-use, PKCE-bound code ever travels back.
  */
 export interface AuthOpen {
-  type: "auth.open";
+  type: 'auth.open';
   id: string;
   server: string;
   url: string;
@@ -575,7 +574,7 @@ export interface AuthOpen {
 /** The outcome of a connect attempt: connected, or an error to show. Correlated by `id` once a
     session exists; a failure during auth.begin carries only `server` (no id minted yet). */
 export interface AuthDone {
-  type: "auth.done";
+  type: 'auth.done';
   id?: string;
   server?: string;
   ok: boolean;
@@ -584,7 +583,7 @@ export interface AuthDone {
 
 /** A control error (e.g. an unknown command). */
 export interface ErrorEvent {
-  type: "error";
+  type: 'error';
   text: string;
 }
 
@@ -626,7 +625,7 @@ export type ServerEvent =
 
 /** Send a message to chat `id` (client-minted). An unknown id starts that chat, a known one appends. */
 export interface ChatSubmit {
-  cmd: "chat.submit";
+  cmd: 'chat.submit';
   ws: string;
   kind: Source;
   text: string;
@@ -635,7 +634,7 @@ export interface ChatSubmit {
 
 /** Resume a chat in workspace `ws`: the server replies with a ChatSnapshot, then streams its turns. */
 export interface ChatOpen {
-  cmd: "chat.open";
+  cmd: 'chat.open';
   ws: string;
   kind: Source;
   id: string;
@@ -643,14 +642,14 @@ export interface ChatOpen {
 
 /** Request a workspace's chat list (→ ChatList). `kind` selects the store: user chats or agent runs. */
 export interface ChatListCmd {
-  cmd: "chat.list";
+  cmd: 'chat.list';
   ws: string;
   kind: Source;
 }
 
 /** Abort a chat's running turn (id-addressed; the chat and session stay open). */
 export interface ChatCancel {
-  cmd: "chat.cancel";
+  cmd: 'chat.cancel';
   ws: string;
   kind: Source;
   id: string;
@@ -658,7 +657,7 @@ export interface ChatCancel {
 
 /** Mark a chat read up to its latest turn — the daemon advances a shared cursor for every device. */
 export interface ChatMarkRead {
-  cmd: "chat.markRead";
+  cmd: 'chat.markRead';
   ws: string;
   kind: Source;
   id: string;
@@ -666,14 +665,14 @@ export interface ChatMarkRead {
 
 /** Request a workspace's declared-agent roster (→ AgentListEvent). */
 export interface AgentListCmd {
-  cmd: "agent.list";
+  cmd: 'agent.list';
   ws: string;
 }
 
 /** Trigger an agent run now. `task` defaults to the scheduled prompt when omitted. Fire-and-forget:
     no direct reply — the run appears via chat.activity and streams over the agent-kind chat events. */
 export interface AgentFireCmd {
-  cmd: "agent.fire";
+  cmd: 'agent.fire';
   ws: string;
   name: string;
   task?: string;
@@ -681,7 +680,7 @@ export interface AgentFireCmd {
 
 /** Request the daemon's workspaces (→ WorkspaceList). */
 export interface WorkspaceListCmd {
-  cmd: "workspace.list";
+  cmd: 'workspace.list';
 }
 
 /**
@@ -694,7 +693,7 @@ export interface WorkspaceListCmd {
  * not a label. `title` is optional; without one the list shows the name.
  */
 export interface WorkspaceCreateCmd {
-  cmd: "workspace.create";
+  cmd: 'workspace.create';
   name: string;
   title?: string;
 }
@@ -705,7 +704,7 @@ export interface WorkspaceCreateCmd {
  * unreadability. An empty title clears the override and the folder name shows again.
  */
 export interface WorkspaceRenameCmd {
-  cmd: "workspace.rename";
+  cmd: 'workspace.rename';
   name: string;
   title: string;
 }
@@ -717,7 +716,7 @@ export interface WorkspaceRenameCmd {
  * recreated at startup, so removing it would appear to work and then undo itself.
  */
 export interface WorkspaceDeleteCmd {
-  cmd: "workspace.delete";
+  cmd: 'workspace.delete';
   name: string;
 }
 
@@ -736,20 +735,20 @@ export interface WorkspaceDeleteCmd {
  * which of them changed.
  */
 export interface WorkspaceReloadCmd {
-  cmd: "workspace.reload";
+  cmd: 'workspace.reload';
   ws: string;
 }
 
 /** Request a workspace's skills (→ SkillList). Ungated: a skill is CONTEXT, never authority — it
     shapes how the model uses its gated tools and grants nothing itself — so any device may look. */
 export interface SkillListCmd {
-  cmd: "skill.list";
+  cmd: 'skill.list';
   ws: string;
 }
 
 /** Read one skill's SKILL.md (→ SkillBody). Ungated for the same reason as the listing. */
 export interface SkillReadCmd {
-  cmd: "skill.read";
+  cmd: 'skill.read';
   ws: string;
   name: string;
 }
@@ -764,7 +763,7 @@ export interface SkillReadCmd {
  * turn.
  */
 export interface SkillEnableCmd {
-  cmd: "skill.enable";
+  cmd: 'skill.enable';
   ws: string;
   name: string;
   on: boolean;
@@ -773,7 +772,7 @@ export interface SkillEnableCmd {
 /** Delete a skill's directory. This one really deletes — there is no trash, unlike a workspace —
     but anything from the catalog can be installed again. Takes `manage`. */
 export interface SkillRemoveCmd {
-  cmd: "skill.remove";
+  cmd: 'skill.remove';
   ws: string;
   name: string;
 }
@@ -781,7 +780,7 @@ export interface SkillRemoveCmd {
 /** Request a workspace's MCP servers (→ MCPList). Ungated: which servers are declared, and which of
     them failed, is the same kind of fact as which workspaces exist. */
 export interface MCPListCmd {
-  cmd: "mcp.list";
+  cmd: 'mcp.list';
   ws: string;
 }
 
@@ -794,7 +793,7 @@ export interface MCPListCmd {
  * secret shard key and a tool-name prefix. Answered with mcp.list twice (see MCPList).
  */
 export interface MCPAddCmd {
-  cmd: "mcp.add";
+  cmd: 'mcp.add';
   ws: string;
   name: string;
   url: string;
@@ -807,7 +806,7 @@ export interface MCPAddCmd {
  * `http_read` on the same host, and dropping it means being asked once more.
  */
 export interface MCPRemoveCmd {
-  cmd: "mcp.remove";
+  cmd: 'mcp.remove';
   ws: string;
   name: string;
 }
@@ -815,12 +814,12 @@ export interface MCPRemoveCmd {
 /** Request the installable catalog (→ LibraryCatalog). Browsing grants nothing, so it is ungated.
     Fetching is lazy and cached on the daemon; this is the cheap call. */
 export interface LibraryListCmd {
-  cmd: "library.list";
+  cmd: 'library.list';
 }
 
 /** Re-fetch the catalog past the daemon's cache, then answer like library.list. Pull-to-refresh. */
 export interface LibraryRefreshCmd {
-  cmd: "library.refresh";
+  cmd: 'library.refresh';
 }
 
 /**
@@ -833,15 +832,15 @@ export interface LibraryRefreshCmd {
  * already held is REFUSED with a message rather than silently ignored.
  */
 export interface LibraryInstallCmd {
-  cmd: "library.install";
+  cmd: 'library.install';
   ws: string;
-  kind: "skill" | "mcp" | "plugin";
+  kind: 'skill' | 'mcp' | 'plugin';
   id: string;
 }
 
 /** Request a workspace's pending reminders (→ ReminderList). */
 export interface ReminderListCmd {
-  cmd: "reminder.list";
+  cmd: 'reminder.list';
   ws: string;
 }
 
@@ -851,19 +850,19 @@ export interface ReminderListCmd {
  * answers with a reminder.changed broadcast, not a direct reply.
  */
 export interface ReminderCancelCmd {
-  cmd: "reminder.cancel";
+  cmd: 'reminder.cancel';
   ws: string;
   id: string;
 }
 
 /** Request the pending second-device joins with codes (→ JoinList). */
 export interface JoinListCmd {
-  cmd: "join.list";
+  cmd: 'join.list';
 }
 
 /** Request the household's enrolled devices (→ DeviceList). Devices that may enrol only. */
 export interface DeviceListCmd {
-  cmd: "device.list";
+  cmd: 'device.list';
 }
 
 /**
@@ -872,7 +871,7 @@ export interface DeviceListCmd {
  * connection.
  */
 export interface DeviceForgetCmd {
-  cmd: "device.forget";
+  cmd: 'device.forget';
   id: string;
 }
 
@@ -882,13 +881,13 @@ export interface DeviceForgetCmd {
  * accident.
  */
 export interface ApprovalResolve {
-  cmd: "approval.resolve";
+  cmd: 'approval.resolve';
   id: string;
   option: string;
 }
 
 /** The reserved option id that refuses. Never one of an ApprovalRequest's own options. */
-export const DENY_OPTION = "deny";
+export const DENY_OPTION = 'deny';
 
 /**
  * Report the app's foreground/background state. While any connection is active the daemon answers
@@ -896,20 +895,20 @@ export const DENY_OPTION = "deny";
  * active until it says otherwise.
  */
 export interface PresenceSet {
-  cmd: "presence.set";
+  cmd: 'presence.set';
   active: boolean;
 }
 
 /** Request a workspace's connectable MCP accounts and their status (→ AuthAccounts). */
 export interface AuthListCmd {
-  cmd: "auth.list";
+  cmd: 'auth.list';
   ws: string;
 }
 
 /** Start connecting a discover-mode MCP account: the server by name, with optional scopes (→ AuthOpen,
     or an error). The daemon runs discovery + dynamic registration and returns a consent URL. */
 export interface AuthBeginCmd {
-  cmd: "auth.begin";
+  cmd: 'auth.begin';
   ws: string;
   server: string;
   scopes?: string[];
@@ -917,7 +916,7 @@ export interface AuthBeginCmd {
 
 /** Relay the intercepted authorization code back to finish the session begun by auth.begin (→ AuthDone). */
 export interface AuthCallbackCmd {
-  cmd: "auth.callback";
+  cmd: 'auth.callback';
   ws: string;
   id: string;
   code: string;

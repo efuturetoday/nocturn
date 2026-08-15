@@ -1,10 +1,35 @@
 import {
-  Component, ChangeDetectionStrategy, inject, signal, computed, effect, input, linkedSignal,
+  Component,
+  ChangeDetectionStrategy,
+  inject,
+  signal,
+  computed,
+  effect,
+  input,
+  linkedSignal,
 } from '@angular/core';
 import {
-  IonContent, IonSearchbar, IonChip, IonLabel, IonList, IonItem, IonNote, IonButton, IonSpinner,
-  IonModal, IonHeader, IonFooter, IonToolbar, IonTitle, IonButtons, IonRefresher, IonRefresherContent,
-  IonGrid, IonRow, IonCol, AlertController,
+  IonContent,
+  IonSearchbar,
+  IonChip,
+  IonLabel,
+  IonList,
+  IonItem,
+  IonNote,
+  IonButton,
+  IonSpinner,
+  IonModal,
+  IonHeader,
+  IonFooter,
+  IonToolbar,
+  IonTitle,
+  IonButtons,
+  IonRefresher,
+  IonRefresherContent,
+  IonGrid,
+  IonRow,
+  IonCol,
+  AlertController,
 } from '@ionic/angular/standalone';
 import { LucideX } from '@lucide/angular';
 import { LibraryService } from '../../core/services/library.service';
@@ -37,10 +62,28 @@ const KINDS: { key: LibraryKind; label: string }[] = [
   selector: 'app-library-browser',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    MarkdownComponent, LucideX,
-    IonContent, IonSearchbar, IonChip, IonLabel, IonList, IonItem, IonNote, IonButton, IonSpinner,
-    IonModal, IonHeader, IonFooter, IonToolbar, IonTitle, IonButtons, IonRefresher, IonRefresherContent,
-    IonGrid, IonRow, IonCol,
+    MarkdownComponent,
+    LucideX,
+    IonContent,
+    IonSearchbar,
+    IonChip,
+    IonLabel,
+    IonList,
+    IonItem,
+    IonNote,
+    IonButton,
+    IonSpinner,
+    IonModal,
+    IonHeader,
+    IonFooter,
+    IonToolbar,
+    IonTitle,
+    IonButtons,
+    IonRefresher,
+    IonRefresherContent,
+    IonGrid,
+    IonRow,
+    IonCol,
   ],
   template: `
     <ion-content>
@@ -533,6 +576,14 @@ export class LibraryBrowserComponent {
 function frontmatterName(body: string): string | null {
   const end = body.startsWith('---\n') ? body.indexOf('\n---', 4) : -1;
   if (end < 0) return null;
-  const line = body.slice(4, end).split('\n').find((l) => l.startsWith('name:'));
-  return line ? line.slice(5).trim().replace(/^["']|["']$/g, '') || null : null;
+  const line = body
+    .slice(4, end)
+    .split('\n')
+    .find((l) => l.startsWith('name:'));
+  return line
+    ? line
+        .slice(5)
+        .trim()
+        .replace(/^["']|["']$/g, '') || null
+    : null;
 }

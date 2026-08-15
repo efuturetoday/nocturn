@@ -1,7 +1,14 @@
 import { Component, ChangeDetectionStrategy, inject, computed } from '@angular/core';
 import { Router } from '@angular/router';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonBadge, IonButton,
+  IonContent,
+  IonList,
+  IonListHeader,
+  IonItem,
+  IonLabel,
+  IonNote,
+  IonBadge,
+  IonButton,
 } from '@ionic/angular/standalone';
 import { LucidePlay } from '@lucide/angular';
 import { AgentService } from '../../core/services/agent.service';
@@ -21,8 +28,17 @@ import type { AgentInfo, ChatMeta } from '../../core/protocol/nocturn-protocol';
   selector: 'app-agents',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    WorkspaceHeaderComponent, ChatRowComponent, LucidePlay,
-    IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonBadge, IonButton,
+    WorkspaceHeaderComponent,
+    ChatRowComponent,
+    LucidePlay,
+    IonContent,
+    IonList,
+    IonListHeader,
+    IonItem,
+    IonLabel,
+    IonNote,
+    IonBadge,
+    IonButton,
   ],
   template: `
     <app-workspace-header />

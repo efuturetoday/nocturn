@@ -46,9 +46,25 @@
   background-repeat: no-repeat;
   animation: nocturn-twinkle 5.5s ease-in-out infinite;
 }
-.galaxy .stars-1 { background-size: 105% auto; background-position: 12% 8%;  opacity: 0.9; }
-.galaxy .stars-2 { background-size: 128% auto; background-position: 68% 34%; opacity: 0.7; animation-duration: 8s;  animation-delay: -2.4s; }
-.galaxy .stars-3 { background-size: 158% auto; background-position: 30% 72%; opacity: 0.5; animation-duration: 11s; animation-delay: -5.1s; }
+.galaxy .stars-1 {
+  background-size: 105% auto;
+  background-position: 12% 8%;
+  opacity: 0.9;
+}
+.galaxy .stars-2 {
+  background-size: 128% auto;
+  background-position: 68% 34%;
+  opacity: 0.7;
+  animation-duration: 8s;
+  animation-delay: -2.4s;
+}
+.galaxy .stars-3 {
+  background-size: 158% auto;
+  background-position: 30% 72%;
+  opacity: 0.5;
+  animation-duration: 11s;
+  animation-delay: -5.1s;
+}
 
 /* The accent bloom sits behind the input, not behind the whole screen — it is what makes the pill
    look lit rather than pasted on, and it is the page's one loud use of the brand purple. */
@@ -87,18 +103,34 @@
 }
 
 @keyframes nocturn-drift {
-  from { transform: scale(1) translate3d(0, 0, 0); }
-  to   { transform: scale(1.1) translate3d(-2.5%, 1.5%, 0); }
+  from {
+    transform: scale(1) translate3d(0, 0, 0);
+  }
+  to {
+    transform: scale(1.1) translate3d(-2.5%, 1.5%, 0);
+  }
 }
 
 @keyframes nocturn-twinkle {
-  0%, 100% { opacity: 0.28; }
-  50%      { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.28;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 @keyframes nocturn-breathe {
-  0%, 100% { opacity: 0.78; transform: translate(-50%, -50%) scale(1); }
-  50%      { opacity: 1;    transform: translate(-50%, -50%) scale(1.07); }
+  0%,
+  100% {
+    opacity: 0.78;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.07);
+  }
 }
 
 /* The sky still reads as a sky when it holds still; only the motion is optional. */
@@ -108,5 +140,7 @@
   .galaxy .bloom {
     animation: none;
   }
-  .galaxy .stars { opacity: 0.8; }
+  .galaxy .stars {
+    opacity: 0.8;
+  }
 }

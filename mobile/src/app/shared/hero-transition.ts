@@ -115,9 +115,7 @@ function cameraMove(
   // opacity, so they never notice; this one animates transform only, so without it the page travels
   // the whole way invisible and snaps in at the end — the animation runs perfectly and looks like no
   // animation at all.
-  const parts: Animation[] = [
-    createAnimation().addElement(enteringEl).beforeRemoveClass('ion-page-invisible'),
-  ];
+  const parts: Animation[] = [createAnimation().addElement(enteringEl).beforeRemoveClass('ion-page-invisible')];
 
   // Guarded like the hero below it. Ionic omits leavingEl when there is nothing to leave — a cold
   // start straight onto a route, or a replaced history entry — and substituting the entering page
@@ -143,7 +141,11 @@ function cameraMove(
       parts.push(
         createAnimation()
           .addElement(el)
-          .fromTo('transform', direction === 'down' ? 'translateY(0)' : away, direction === 'down' ? away : 'translateY(0)'),
+          .fromTo(
+            'transform',
+            direction === 'down' ? 'translateY(0)' : away,
+            direction === 'down' ? away : 'translateY(0)',
+          ),
       );
     }
   }

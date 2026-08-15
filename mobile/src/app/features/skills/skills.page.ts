@@ -1,7 +1,20 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonToggle, IonButton,
-  IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonSpinner, AlertController,
+  IonContent,
+  IonList,
+  IonListHeader,
+  IonItem,
+  IonLabel,
+  IonNote,
+  IonToggle,
+  IonButton,
+  IonModal,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonButtons,
+  IonSpinner,
+  AlertController,
 } from '@ionic/angular/standalone';
 import { LucideX, LucideStore } from '@lucide/angular';
 import { SkillService } from '../../core/services/skill.service';
@@ -26,9 +39,24 @@ import type { SkillInfo } from '../../core/protocol/nocturn-protocol';
   selector: 'app-skills',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    MarkdownComponent, LibraryModalComponent, LucideX, LucideStore,
-    IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonToggle, IonButton,
-    IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonSpinner,
+    MarkdownComponent,
+    LibraryModalComponent,
+    LucideX,
+    LucideStore,
+    IonContent,
+    IonList,
+    IonListHeader,
+    IonItem,
+    IonLabel,
+    IonNote,
+    IonToggle,
+    IonButton,
+    IonModal,
+    IonHeader,
+    IonToolbar,
+    IonTitle,
+    IonButtons,
+    IonSpinner,
   ],
   template: `
     <ion-content>

@@ -77,7 +77,10 @@ export class DiscoveryService {
 
   /** Build a ws:// URL from a manual host + port (no scheme/path needed from the user). */
   manualUrl(host: string, port: number): string {
-    const h = host.trim().replace(/^wss?:\/\//, '').replace(/\/.*$/, '');
+    const h = host
+      .trim()
+      .replace(/^wss?:\/\//, '')
+      .replace(/\/.*$/, '');
     return `ws://${h}:${port}${DEFAULT_PATH}`;
   }
 

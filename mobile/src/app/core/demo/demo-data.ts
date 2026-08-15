@@ -74,8 +74,17 @@ export function demoAgents(): AgentInfo[] {
 
 export function demoReminders(now: number): ReminderInfo[] {
   return [
-    { id: 'r-dentist', fireAt: iso(now + 2 * HOUR + 20 * MINUTE), message: 'Call the dentist back about the appointment.' },
-    { id: 'r-domain', fireAt: iso(now + 3 * DAY), title: 'Domain', message: 'The nocturn.app domain renews — check the card on file.' },
+    {
+      id: 'r-dentist',
+      fireAt: iso(now + 2 * HOUR + 20 * MINUTE),
+      message: 'Call the dentist back about the appointment.',
+    },
+    {
+      id: 'r-domain',
+      fireAt: iso(now + 3 * DAY),
+      title: 'Domain',
+      message: 'The nocturn.app domain renews — check the card on file.',
+    },
   ];
 }
 
@@ -216,12 +225,12 @@ export function demoCatalog(): {
         skill: [
           '---',
           'name: gmail',
-          'description: How to search and read the user\'s mail with the gmail_* tools.',
+          "description: How to search and read the user's mail with the gmail_* tools.",
           '---',
           '',
           '# Gmail',
           '',
-          '`gmail_search` takes Gmail\'s own query syntax: `is:unread`, `from:anna newer_than:7d`.',
+          "`gmail_search` takes Gmail's own query syntax: `is:unread`, `from:anna newer_than:7d`.",
         ].join('\n'),
       },
     ],
@@ -259,7 +268,13 @@ function releaseNotes(now: number): DemoChat {
     {
       role: 'assistant',
       content: '',
-      toolCalls: [{ id: 't1', tool: 'http_read', args: '{"url":"https://api.github.com/repos/nocturn/nocturn/compare/v0.3...v0.4"}' }],
+      toolCalls: [
+        {
+          id: 't1',
+          tool: 'http_read',
+          args: '{"url":"https://api.github.com/repos/nocturn/nocturn/compare/v0.3...v0.4"}',
+        },
+      ],
     },
     { role: 'tool', content: '{"total_commits":37,"files_changed":112}', toolCallID: 't1', durationMs: 412 },
     {
@@ -322,7 +337,9 @@ function flights(now: number): DemoChat {
     {
       role: 'assistant',
       content: '',
-      toolCalls: [{ id: 't1', tool: 'http_read', args: '{"url":"https://api.example-flights.com/fares?to=LIS&month=10"}' }],
+      toolCalls: [
+        { id: 't1', tool: 'http_read', args: '{"url":"https://api.example-flights.com/fares?to=LIS&month=10"}' },
+      ],
     },
     { role: 'tool', content: '{"cheapest_week":"2026-10-13","median_eur":146}', toolCallID: 't1', durationMs: 733 },
     {
@@ -380,9 +397,30 @@ function briefingRun(now: number): DemoChat {
   ];
   const tools: ToolNode[][] = [
     [
-      { id: 1, parent: 0, tool: 'http_read', args: '{"url":"https://api.example-news.com/top?n=5"}', result: '{"items":5}', durationMs: 289 },
-      { id: 2, parent: 0, tool: 'memory_write', args: '{"path":"briefings/today.md"}', result: 'written', durationMs: 21 },
-      { id: 3, parent: 0, tool: 'notify', args: '{"message":"Your briefing is ready."}', result: 'sent', durationMs: 7 },
+      {
+        id: 1,
+        parent: 0,
+        tool: 'http_read',
+        args: '{"url":"https://api.example-news.com/top?n=5"}',
+        result: '{"items":5}',
+        durationMs: 289,
+      },
+      {
+        id: 2,
+        parent: 0,
+        tool: 'memory_write',
+        args: '{"path":"briefings/today.md"}',
+        result: 'written',
+        durationMs: 21,
+      },
+      {
+        id: 3,
+        parent: 0,
+        tool: 'notify',
+        args: '{"message":"Your briefing is ready."}',
+        result: 'sent',
+        durationMs: 7,
+      },
     ],
   ];
   return {

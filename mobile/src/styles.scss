@@ -294,13 +294,49 @@ ion-footer.composer-bar.footer-toolbar-padding ion-toolbar:last-of-type {
 /* Syntax highlighting: highlight.js emits `.hljs-*` class spans (see shared/highlight.ts); colour
    them from the theme here (global — the highlighted HTML is bound via [innerHTML], so scoped
    component styles can't reach it). A minimal token set, no imported hljs theme. */
-.hljs-comment, .hljs-quote { color: var(--ion-color-medium); font-style: italic; }
-.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-literal { color: #c586c0; }
-.hljs-string, .hljs-attr, .hljs-template-tag { color: #6a9955; }
-.hljs-number, .hljs-symbol, .hljs-bullet { color: #b5cea8; }
-.hljs-title, .hljs-section, .hljs-function .hljs-title, .hljs-name { color: #4ec9b0; }
-.hljs-attribute, .hljs-variable, .hljs-property { color: #9cdcfe; }
-.hljs-type, .hljs-class .hljs-title { color: #4fc1ff; }
-.hljs-meta, .hljs-tag { color: var(--ion-color-medium); }
-.hljs-emphasis { font-style: italic; }
-.hljs-strong { font-weight: 700; }
+.hljs-comment,
+.hljs-quote {
+  color: var(--ion-color-medium);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-literal {
+  color: #c586c0;
+}
+.hljs-string,
+.hljs-attr,
+.hljs-template-tag {
+  color: #6a9955;
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet {
+  color: #b5cea8;
+}
+.hljs-title,
+.hljs-section,
+.hljs-function .hljs-title,
+.hljs-name {
+  color: #4ec9b0;
+}
+.hljs-attribute,
+.hljs-variable,
+.hljs-property {
+  color: #9cdcfe;
+}
+.hljs-type,
+.hljs-class .hljs-title {
+  color: #4fc1ff;
+}
+.hljs-meta,
+.hljs-tag {
+  color: var(--ion-color-medium);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 700;
+}

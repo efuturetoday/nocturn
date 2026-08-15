@@ -1,7 +1,16 @@
 import { Component, ChangeDetectionStrategy, inject, signal, Input, OnInit } from '@angular/core';
 import {
-  IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonButton, IonText, IonNote,
-  IonSpinner, IonInputOtp, ModalController,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonContent,
+  IonButtons,
+  IonButton,
+  IonText,
+  IonNote,
+  IonSpinner,
+  IonInputOtp,
+  ModalController,
 } from '@ionic/angular/standalone';
 import { AuthService } from '../../core/services/auth.service';
 import { DaemonService } from '../../core/services/daemon.service';
@@ -15,8 +24,16 @@ import { DaemonService } from '../../core/services/daemon.service';
   selector: 'app-pair',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonButton, IonText, IonNote,
-    IonSpinner, IonInputOtp,
+    IonHeader,
+    IonToolbar,
+    IonTitle,
+    IonContent,
+    IonButtons,
+    IonButton,
+    IonText,
+    IonNote,
+    IonSpinner,
+    IonInputOtp,
   ],
   template: `
     <ion-header>

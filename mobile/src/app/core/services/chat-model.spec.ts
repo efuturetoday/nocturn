@@ -169,7 +169,17 @@ describe('applyEvent (live fold)', () => {
       { type: 'chat.turnStart', chatId: 'c', frame: 0 },
       { type: 'chat.tool', chatId: 'c', phase: 'start', frame: 0, id: 1, tool: 'code_run', args: '{}' },
       { type: 'chat.tool', chatId: 'c', phase: 'start', frame: 1, id: 2, tool: 'http_read', args: '{}' },
-      { type: 'chat.tool', chatId: 'c', phase: 'end', frame: 1, id: 2, tool: 'http_read', args: '{}', result: 'ok', durationMs: 12 },
+      {
+        type: 'chat.tool',
+        chatId: 'c',
+        phase: 'end',
+        frame: 1,
+        id: 2,
+        tool: 'http_read',
+        args: '{}',
+        result: 'ok',
+        durationMs: 12,
+      },
     ]);
     const tools = v.messages[0].tools;
     expect(tools.map((t) => [t.key, t.depth, t.parentId])).toEqual([
@@ -199,7 +209,17 @@ describe('convergence: live fold vs snapshot seed', () => {
       [
         { type: 'chat.turnStart', chatId: 'c', frame: 0 },
         { type: 'chat.tool', chatId: 'c', phase: 'start', frame: 0, id: 1, tool: 'http_read', args: '{}' },
-        { type: 'chat.tool', chatId: 'c', phase: 'end', frame: 0, id: 1, tool: 'http_read', args: '{}', result: 'ok', durationMs: 7 },
+        {
+          type: 'chat.tool',
+          chatId: 'c',
+          phase: 'end',
+          frame: 0,
+          id: 1,
+          tool: 'http_read',
+          args: '{}',
+          result: 'ok',
+          durationMs: 7,
+        },
         { type: 'chat.token', chatId: 'c', frame: 0, text: 'answer' },
         { type: 'chat.turnEnd', chatId: 'c', frame: 0, tokens: 2 },
       ],
@@ -227,7 +247,13 @@ describe('convergence: live fold vs snapshot seed', () => {
         role: m.role,
         content: m.content,
         pending: m.pending,
-        tools: m.tools.map((t) => ({ tool: t.tool, depth: t.depth, parentId: t.parentId, durationMs: t.durationMs, running: t.running })),
+        tools: m.tools.map((t) => ({
+          tool: t.tool,
+          depth: t.depth,
+          parentId: t.parentId,
+          durationMs: t.durationMs,
+          running: t.running,
+        })),
       }));
 
     expect(norm(streamed)).toEqual(norm(seeded));

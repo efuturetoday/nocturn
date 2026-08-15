@@ -12,12 +12,11 @@
 //   then paste the output over the step block in theme/variables.css.
 
 const HUE = 255; // matches the tint of --ion-background-color (#12101a)
-const L0 = 9.5, L1 = 92; // lightness: just above the base (8) → near text
-const S0 = 17, S1 = 6; // saturation tapers dark → light
-const STEPS = [
-  50, 100, 150, 200, 250, 300, 350, 400, 450, 500,
-  550, 600, 650, 700, 750, 800, 850, 900, 950,
-];
+const L0 = 9.5,
+  L1 = 92; // lightness: just above the base (8) → near text
+const S0 = 17,
+  S1 = 6; // saturation tapers dark → light
+const STEPS = [50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950];
 
 function hslToHex(h, s, l) {
   s /= 100;
@@ -25,7 +24,10 @@ function hslToHex(h, s, l) {
   const k = (n) => (n + h / 30) % 12;
   const a = s * Math.min(l, 1 - l);
   const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-  const to = (x) => Math.round(x * 255).toString(16).padStart(2, '0');
+  const to = (x) =>
+    Math.round(x * 255)
+      .toString(16)
+      .padStart(2, '0');
   return `#${to(f(0))}${to(f(8))}${to(f(4))}`;
 }
 

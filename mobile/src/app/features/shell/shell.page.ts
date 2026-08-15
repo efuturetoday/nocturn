@@ -1,12 +1,22 @@
 import { Component, ChangeDetectionStrategy, inject, effect, computed } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import {
-  IonSplitPane, IonMenu, IonMenuToggle, IonRouterOutlet, IonHeader, IonToolbar, IonTitle,
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonBadge, NavController,
+  IonSplitPane,
+  IonMenu,
+  IonMenuToggle,
+  IonRouterOutlet,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonContent,
+  IonList,
+  IonListHeader,
+  IonItem,
+  IonLabel,
+  IonBadge,
+  NavController,
 } from '@ionic/angular/standalone';
-import {
-  LucideAlarmClock, LucideBot, LucideSettings, LucidePlus, LucideSparkles, LucideStore,
-} from '@lucide/angular';
+import { LucideAlarmClock, LucideBot, LucideSettings, LucidePlus, LucideSparkles, LucideStore } from '@lucide/angular';
 import { ChatListService } from '../../core/services/chat-list.service';
 import { ReminderService } from '../../core/services/reminder.service';
 import { WorkspaceService } from '../../core/services/workspace.service';
@@ -31,10 +41,28 @@ import type { ChatMeta } from '../../core/protocol/nocturn-protocol';
   selector: 'app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink, RouterLinkActive, ChatRowComponent,
-    IonSplitPane, IonMenu, IonMenuToggle, IonRouterOutlet, IonHeader, IonToolbar, IonTitle,
-    IonContent, IonList, IonListHeader, IonItem, IonLabel, IonBadge,
-    LucideAlarmClock, LucideBot, LucideSettings, LucidePlus, LucideSparkles, LucideStore,
+    RouterLink,
+    RouterLinkActive,
+    ChatRowComponent,
+    IonSplitPane,
+    IonMenu,
+    IonMenuToggle,
+    IonRouterOutlet,
+    IonHeader,
+    IonToolbar,
+    IonTitle,
+    IonContent,
+    IonList,
+    IonListHeader,
+    IonItem,
+    IonLabel,
+    IonBadge,
+    LucideAlarmClock,
+    LucideBot,
+    LucideSettings,
+    LucidePlus,
+    LucideSparkles,
+    LucideStore,
   ],
   template: `
     <ion-split-pane contentId="main" when="lg">

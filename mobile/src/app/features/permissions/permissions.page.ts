@@ -1,6 +1,13 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonButton, IonChip,
+  IonContent,
+  IonList,
+  IonListHeader,
+  IonItem,
+  IonLabel,
+  IonNote,
+  IonButton,
+  IonChip,
   AlertController,
 } from '@ionic/angular/standalone';
 import { GrantService } from '../../core/services/grant.service';
