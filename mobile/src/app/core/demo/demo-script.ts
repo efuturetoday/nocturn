@@ -40,7 +40,15 @@ export function openingSteps(chatId: string, input: string, approvalId: string):
 
   steps.push({
     after: 140,
-    event: { type: 'chat.tool', chatId, phase: 'start', frame: 0, id: CODE_RUN, tool: 'code_run', args: JSON.stringify({ language: 'js' }) },
+    event: {
+      type: 'chat.tool',
+      chatId,
+      phase: 'start',
+      frame: 0,
+      id: CODE_RUN,
+      tool: 'code_run',
+      args: JSON.stringify({ language: 'js' }),
+    },
   });
   steps.push({
     after: 90,
@@ -156,7 +164,12 @@ export function resumeSteps(chatId: string, approved: boolean): Step[] {
     },
   ];
 
-  push(steps, TOKEN_MS, chunks(approved ? ALLOWED_TEXT : DENIED_TEXT), (text) => ({ type: 'chat.token', chatId, frame: 0, text }));
+  push(steps, TOKEN_MS, chunks(approved ? ALLOWED_TEXT : DENIED_TEXT), (text) => ({
+    type: 'chat.token',
+    chatId,
+    frame: 0,
+    text,
+  }));
   steps.push({ after: 120, event: { type: 'chat.turnEnd', chatId, frame: 0, tokens: approved ? 1284 : 1131 } });
   return steps;
 }

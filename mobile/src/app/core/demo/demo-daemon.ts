@@ -31,8 +31,17 @@ import {
   type ToolNode,
 } from '../protocol/nocturn-protocol';
 import {
-  DEMO_WORKSPACE, demoAccounts, demoAgents, demoCatalog, demoChats, demoReminders, demoServers,
-  demoSkillBody, demoSkills, demoWorkspaces, type DemoChat,
+  DEMO_WORKSPACE,
+  demoAccounts,
+  demoAgents,
+  demoCatalog,
+  demoChats,
+  demoReminders,
+  demoServers,
+  demoSkillBody,
+  demoSkills,
+  demoWorkspaces,
+  type DemoChat,
 } from './demo-data';
 import { openingSteps, resumeSteps, type Step } from './demo-script';
 
@@ -164,7 +173,12 @@ export class DemoDaemon {
         break;
       case 'auth.begin':
         // Never open an external browser during a review — and there is no daemon to hold a token.
-        this.soon({ type: 'auth.done', server: cmd.server, ok: false, error: 'Connecting accounts is unavailable in demo mode.' });
+        this.soon({
+          type: 'auth.done',
+          server: cmd.server,
+          ok: false,
+          error: 'Connecting accounts is unavailable in demo mode.',
+        });
         break;
       case 'auth.callback':
       case 'presence.set':
@@ -238,7 +252,17 @@ export class DemoDaemon {
     const now = new Date(this.host.now()).toISOString();
     const input = task ?? 'Run your scheduled task now.';
     const chat: DemoChat = {
-      meta: { id, name, source: 'agent', agent: name, created: now, updated: now, read: now, turns: 0, preview: 'Running…' },
+      meta: {
+        id,
+        name,
+        source: 'agent',
+        agent: name,
+        created: now,
+        updated: now,
+        read: now,
+        turns: 0,
+        preview: 'Running…',
+      },
       messages: [],
       tools: [],
     };
@@ -249,7 +273,14 @@ export class DemoDaemon {
     this.turns.set(id, turn);
     this.run(id, turn, agentRunSteps(id, name), () => {
       this.finish(id, turn);
-      this.host.emit({ type: 'notification', ws: WS, kind: 'notify', chatId: id, title: name, message: 'The run finished — three items, nothing needing you.' });
+      this.host.emit({
+        type: 'notification',
+        ws: WS,
+        kind: 'notify',
+        chatId: id,
+        title: name,
+        message: 'The run finished — three items, nothing needing you.',
+      });
     });
   }
 
@@ -279,8 +310,7 @@ export class DemoDaemon {
       this.soon({ type: 'error', text: `workspace "${name}" already exists` });
       return;
     }
-    this.workspaces = [...this.workspaces, { name, title: title || name }]
-      .sort((a, b) => a.name.localeCompare(b.name)); // the daemon sorts by name; a reshuffling set is unreadable
+    this.workspaces = [...this.workspaces, { name, title: title || name }].sort((a, b) => a.name.localeCompare(b.name)); // the daemon sorts by name; a reshuffling set is unreadable
     this.sendWorkspaces();
   }
 
@@ -451,7 +481,15 @@ export class DemoDaemon {
     turn.events.push(event);
     if (event.type === 'chat.token' && event.frame === 0) turn.text += event.text;
     if (event.type === 'chat.tool' && event.phase === 'end') {
-      turn.nodes.push({ id: event.id, parent: event.frame, tool: event.tool, args: event.args, result: event.result, err: event.err, durationMs: event.durationMs });
+      turn.nodes.push({
+        id: event.id,
+        parent: event.frame,
+        tool: event.tool,
+        args: event.args,
+        result: event.result,
+        err: event.err,
+        durationMs: event.durationMs,
+      });
     }
   }
 
@@ -481,7 +519,16 @@ export class DemoDaemon {
     if (existing) return existing;
     const now = new Date(this.host.now()).toISOString();
     const chat: DemoChat = {
-      meta: { id, name: firstLine(text), source: 'user', created: now, updated: now, read: now, turns: 0, preview: firstLine(text) },
+      meta: {
+        id,
+        name: firstLine(text),
+        source: 'user',
+        created: now,
+        updated: now,
+        read: now,
+        turns: 0,
+        preview: firstLine(text),
+      },
       messages: [],
       tools: [],
     };
@@ -518,9 +565,23 @@ function agentRunSteps(chatId: string, name: string): Step[] {
     { after: 80, event: { type: 'chat.turnStart', chatId, frame: 0 } },
     { after: 60, event: { type: 'chat.thinking', chatId, frame: 0, text: `Running ${name}: read, summarise, file.` } },
     { after: 140, event: { type: 'chat.tool', chatId, phase: 'start', frame: 0, id: 1, tool: 'http_read', args } },
-    { after: 420, event: { type: 'chat.tool', chatId, phase: 'end', frame: 0, id: 1, tool: 'http_read', args, result: '{"items":5}', durationMs: 417 } },
+    {
+      after: 420,
+      event: {
+        type: 'chat.tool',
+        chatId,
+        phase: 'end',
+        frame: 0,
+        id: 1,
+        tool: 'http_read',
+        args,
+        result: '{"items":5}',
+        durationMs: 417,
+      },
+    },
   ];
-  for (const part of text.match(/\s*\S+/g) ?? []) steps.push({ after: 22, event: { type: 'chat.token', chatId, frame: 0, text: part } });
+  for (const part of text.match(/\s*\S+/g) ?? [])
+    steps.push({ after: 22, event: { type: 'chat.token', chatId, frame: 0, text: part } });
   steps.push({ after: 120, event: { type: 'chat.turnEnd', chatId, frame: 0, tokens: 642 } });
   return steps;
 }

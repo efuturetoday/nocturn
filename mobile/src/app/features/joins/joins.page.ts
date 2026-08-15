@@ -1,7 +1,17 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import {
-  IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonButton, IonList, IonItem,
-  IonLabel, IonNote, IonChip, ModalController,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonContent,
+  IonButtons,
+  IonButton,
+  IonList,
+  IonItem,
+  IonLabel,
+  IonNote,
+  IonChip,
+  ModalController,
 } from '@ionic/angular/standalone';
 import { AuthService } from '../../core/services/auth.service';
 
@@ -15,8 +25,17 @@ import { AuthService } from '../../core/services/auth.service';
   selector: 'app-joins',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonButton, IonList, IonItem,
-    IonLabel, IonNote, IonChip,
+    IonHeader,
+    IonToolbar,
+    IonTitle,
+    IonContent,
+    IonButtons,
+    IonButton,
+    IonList,
+    IonItem,
+    IonLabel,
+    IonNote,
+    IonChip,
   ],
   template: `
     <ion-header>

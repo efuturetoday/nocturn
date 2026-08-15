@@ -1,7 +1,13 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel,
-  IonItemSliding, IonItemOptions, IonItemOption,
+  IonContent,
+  IonList,
+  IonListHeader,
+  IonItem,
+  IonLabel,
+  IonItemSliding,
+  IonItemOptions,
+  IonItemOption,
 } from '@ionic/angular/standalone';
 import { LucideAlarmClock } from '@lucide/angular';
 import { ReminderService } from '../../core/services/reminder.service';
@@ -19,9 +25,17 @@ import { ReminderRowComponent } from './components/reminder-row';
   selector: 'app-reminders',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    WorkspaceHeaderComponent, ReminderRowComponent, LucideAlarmClock,
-    IonContent, IonList, IonListHeader, IonItem, IonLabel,
-    IonItemSliding, IonItemOptions, IonItemOption,
+    WorkspaceHeaderComponent,
+    ReminderRowComponent,
+    LucideAlarmClock,
+    IonContent,
+    IonList,
+    IonListHeader,
+    IonItem,
+    IonLabel,
+    IonItemSliding,
+    IonItemOptions,
+    IonItemOption,
   ],
   template: `
     <app-workspace-header />

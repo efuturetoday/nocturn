@@ -1,6 +1,13 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonButton,
+  IonContent,
+  IonList,
+  IonListHeader,
+  IonItem,
+  IonLabel,
+  IonNote,
+  IonChip,
+  IonButton,
   AlertController,
 } from '@ionic/angular/standalone';
 import { LucidePlus } from '@lucide/angular';
@@ -31,10 +38,7 @@ const VALID_NAME = /^[a-z0-9][a-z0-9_-]*$/;
 @Component({
   selector: 'app-workspaces',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
-    LucidePlus,
-    IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonButton,
-  ],
+  imports: [LucidePlus, IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonButton],
   template: `
     <ion-content>
       <ion-list inset="true">
@@ -134,7 +138,12 @@ export class WorkspacesPage {
       inputs: [{ name: 'title', type: 'text', value: w.title, placeholder: 'Display name' }],
       buttons: [
         { text: 'Cancel', role: 'cancel' },
-        { text: 'Rename', handler: (v) => { this.ws.rename(w.name, (v.title ?? '').trim()); } },
+        {
+          text: 'Rename',
+          handler: (v) => {
+            this.ws.rename(w.name, (v.title ?? '').trim());
+          },
+        },
       ],
     });
     await alert.present();

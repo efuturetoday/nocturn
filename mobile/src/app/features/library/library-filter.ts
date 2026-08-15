@@ -30,7 +30,15 @@ export function filterCatalog(catalog: LibraryCatalog | null, query: string, kin
 
   if (kind === 'all' || kind === 'skill') {
     for (const s of catalog.skills) {
-      push(out, q, { kind: 'skill', id: s.id, title: s.title, description: s.description, tags: s.tags ?? [], sub: '', item: s });
+      push(out, q, {
+        kind: 'skill',
+        id: s.id,
+        title: s.title,
+        description: s.description,
+        tags: s.tags ?? [],
+        sub: '',
+        item: s,
+      });
     }
   }
 

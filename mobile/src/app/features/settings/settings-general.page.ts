@@ -1,7 +1,14 @@
 import { Component, ChangeDetectionStrategy, computed, inject } from '@angular/core';
 import { Router } from '@angular/router';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonChip, IonSpinner,
+  IonContent,
+  IonList,
+  IonListHeader,
+  IonItem,
+  IonLabel,
+  IonNote,
+  IonChip,
+  IonSpinner,
 } from '@ionic/angular/standalone';
 import { Capacitor } from '@capacitor/core';
 import { LucideLogOut } from '@lucide/angular';

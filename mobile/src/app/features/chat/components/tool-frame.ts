@@ -16,10 +16,7 @@ import { highlightCode } from '../../../shared/highlight';
 @Component({
   selector: 'app-tool-frame',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
-    IonAccordion, IonAccordionGroup, IonItem,
-    LucideCircleCheck, LucideCircleAlert, LucideCircleEllipsis,
-  ],
+  imports: [IonAccordion, IonAccordionGroup, IonItem, LucideCircleCheck, LucideCircleAlert, LucideCircleEllipsis],
   host: { class: 'tool-frame' },
   template: `
     <ion-accordion-group (ionChange)="onToggle($event)">
@@ -181,7 +178,6 @@ export class ToolFrameComponent {
   });
 
   constructor() {
-
     // Live timer while actually executing — frozen while this branch is parked on an approval (frozen()).
     effect((onCleanup) => {
       if (!this.tool().running || this.frozen()) return;

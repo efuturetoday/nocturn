@@ -1,6 +1,13 @@
 import { Component, ChangeDetectionStrategy, inject, signal } from '@angular/core';
 import {
-  IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonButton, AlertController,
+  IonContent,
+  IonList,
+  IonListHeader,
+  IonItem,
+  IonLabel,
+  IonNote,
+  IonButton,
+  AlertController,
 } from '@ionic/angular/standalone';
 import { LucideStore } from '@lucide/angular';
 import { PluginService } from '../../core/services/plugin.service';
@@ -20,8 +27,15 @@ import type { PluginInfo } from '../../core/protocol/nocturn-protocol';
   selector: 'app-plugins',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    LibraryModalComponent, LucideStore,
-    IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonButton,
+    LibraryModalComponent,
+    LucideStore,
+    IonContent,
+    IonList,
+    IonListHeader,
+    IonItem,
+    IonLabel,
+    IonNote,
+    IonButton,
   ],
   template: `
     <ion-content>

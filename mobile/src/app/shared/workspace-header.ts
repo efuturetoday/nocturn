@@ -1,7 +1,12 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import { Router } from '@angular/router';
 import {
-  IonHeader, IonToolbar, IonButtons, IonButton, IonMenuButton, ActionSheetController,
+  IonHeader,
+  IonToolbar,
+  IonButtons,
+  IonButton,
+  IonMenuButton,
+  ActionSheetController,
 } from '@ionic/angular/standalone';
 import { LucideMenu, LucideChevronDown } from '@lucide/angular';
 import { WorkspaceService } from '../core/services/workspace.service';
@@ -63,9 +68,16 @@ export class WorkspaceHeaderComponent {
         ...this.ws.workspaces().map((w) => ({
           text: w.title,
           role: w.name === current ? ('selected' as const) : undefined,
-          handler: () => { void this.ws.setActive(w.name); },
+          handler: () => {
+            void this.ws.setActive(w.name);
+          },
         })),
-        { text: 'Manage workspaces…', handler: () => { void this.router.navigateByUrl('/app/workspaces'); } },
+        {
+          text: 'Manage workspaces…',
+          handler: () => {
+            void this.router.navigateByUrl('/app/workspaces');
+          },
+        },
         { text: 'Cancel', role: 'cancel' as const },
       ],
     });

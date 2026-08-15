@@ -1,6 +1,13 @@
 import { Component, ChangeDetectionStrategy, inject, computed, signal, DestroyRef } from '@angular/core';
 import { Router } from '@angular/router';
-import { IonContent, IonSpinner, IonFooter, IonSkeletonText, AlertController, ModalController } from '@ionic/angular/standalone';
+import {
+  IonContent,
+  IonSpinner,
+  IonFooter,
+  IonSkeletonText,
+  AlertController,
+  ModalController,
+} from '@ionic/angular/standalone';
 import { PairPage } from '../pair/pair.page';
 import { LucideRadio } from '@lucide/angular';
 import { DiscoveryService } from '../../core/services/discovery.service';

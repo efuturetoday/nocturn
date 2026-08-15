@@ -6,7 +6,13 @@ import { Capacitor } from '@capacitor/core';
 import { ConnectionService } from './connection.service';
 import { DEMO_BEARER, isDemoUrl } from '../demo/is-demo';
 import { httpBase } from '../util/daemon-url';
-import type { PairResponse, JoinResponse, JoinConfirmResponse, PendingJoin, EnrolledDevice } from '../protocol/nocturn-protocol';
+import type {
+  PairResponse,
+  JoinResponse,
+  JoinConfirmResponse,
+  PendingJoin,
+  EnrolledDevice,
+} from '../protocol/nocturn-protocol';
 
 /**
  * AuthService owns device pairing + the per-daemon bearer. A device must pair before `/ws` will

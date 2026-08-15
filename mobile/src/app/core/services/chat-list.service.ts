@@ -37,7 +37,14 @@ export class ChatListService {
   });
 
   /** Unread counts split by chat kind (agent runs badge the Agents tab, not Chat). */
-  private readonly agentChatIds = computed(() => new Set(this._chats().filter((c) => c.source === 'agent').map((c) => c.id)));
+  private readonly agentChatIds = computed(
+    () =>
+      new Set(
+        this._chats()
+          .filter((c) => c.source === 'agent')
+          .map((c) => c.id),
+      ),
+  );
   readonly unreadUserCount = computed(() => [...this.unreadIds()].filter((id) => !this.agentChatIds().has(id)).length);
   readonly unreadAgentCount = computed(() => [...this.unreadIds()].filter((id) => this.agentChatIds().has(id)).length);
 

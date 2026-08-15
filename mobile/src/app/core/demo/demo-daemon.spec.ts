@@ -51,9 +51,7 @@ function play(...cmds: ClientCommand[]): { host: TestHost; daemon: DemoDaemon } 
 
 /** Fold a chat's events exactly as ConversationService does: route by chatId, then applyEvent. */
 function view(events: ServerEvent[], chatId: string, from: ChatView = EMPTY): ChatView {
-  return events
-    .filter((e) => 'chatId' in e && e.chatId === chatId)
-    .reduce((v, e) => applyEvent(v, e, 1000), from);
+  return events.filter((e) => 'chatId' in e && e.chatId === chatId).reduce((v, e) => applyEvent(v, e, 1000), from);
 }
 
 /** The state a submit leaves behind before any event arrives: the echoed bubble, and running set by
@@ -133,7 +131,10 @@ describe('the state-sync commands', () => {
   });
 
   it('says nothing for the commands that have no answer', () => {
-    const { host } = play({ cmd: 'presence.set', active: true }, { cmd: 'auth.callback', ws: WS, id: 'x', code: 'c', state: 's' });
+    const { host } = play(
+      { cmd: 'presence.set', active: true },
+      { cmd: 'auth.callback', ws: WS, id: 'x', code: 'c', state: 's' },
+    );
 
     expect(host.events).toEqual([]);
   });
@@ -312,7 +313,13 @@ describe('the library', () => {
 
 describe('the scripted turn', () => {
   const ID = 'aa11bb22cc33';
-  const submit: ClientCommand = { cmd: 'chat.submit', ws: WS, kind: 'user', id: ID, text: 'File an issue about the flaky pairing test.' };
+  const submit: ClientCommand = {
+    cmd: 'chat.submit',
+    ws: WS,
+    kind: 'user',
+    id: ID,
+    text: 'File an issue about the flaky pairing test.',
+  };
 
   it('parks at the approval instead of finishing the turn', () => {
     const { host } = play(submit);
@@ -411,7 +418,10 @@ describe('the scripted turn', () => {
 
 describe('snapshots', () => {
   it('hands over the persisted transcript with its nested tool forest', () => {
-    const { host } = play({ cmd: 'chat.list', ws: WS, kind: 'user' }, { cmd: 'chat.open', ws: WS, kind: 'user', id: 'c1a2b3c4d5e6' });
+    const { host } = play(
+      { cmd: 'chat.list', ws: WS, kind: 'user' },
+      { cmd: 'chat.open', ws: WS, kind: 'user', id: 'c1a2b3c4d5e6' },
+    );
     const snap = host.events.find((e) => e.type === 'chat.snapshot')!;
     const v = seed(snap, 1000);
 

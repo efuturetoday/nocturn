@@ -1,10 +1,29 @@
 import {
-  Component, ChangeDetectionStrategy, inject, input, effect, signal, untracked, viewChild, computed,
+  Component,
+  ChangeDetectionStrategy,
+  inject,
+  input,
+  effect,
+  signal,
+  untracked,
+  viewChild,
+  computed,
 } from '@angular/core';
 import {
-  IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonButton, IonMenuButton,
-  IonFooter, IonFab, IonFabButton, NavController,
-  type ViewWillEnter, type ViewDidEnter, type ViewDidLeave,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonContent,
+  IonButtons,
+  IonButton,
+  IonMenuButton,
+  IonFooter,
+  IonFab,
+  IonFabButton,
+  NavController,
+  type ViewWillEnter,
+  type ViewDidEnter,
+  type ViewDidLeave,
 } from '@ionic/angular/standalone';
 import { LucideMenu, LucidePlus, LucideChevronDown } from '@lucide/angular';
 import { chatToHero } from '../../shared/hero-transition';
@@ -34,10 +53,21 @@ import { ComposerComponent } from '../../shared/composer';
     },
   ],
   imports: [
-    IonHeader, IonToolbar, IonTitle, IonContent, IonButtons, IonButton, IonMenuButton,
-    IonFooter, IonFab, IonFabButton,
-    MessageBubbleComponent, ComposerComponent,
-    LucideMenu, LucidePlus, LucideChevronDown,
+    IonHeader,
+    IonToolbar,
+    IonTitle,
+    IonContent,
+    IonButtons,
+    IonButton,
+    IonMenuButton,
+    IonFooter,
+    IonFab,
+    IonFabButton,
+    MessageBubbleComponent,
+    ComposerComponent,
+    LucideMenu,
+    LucidePlus,
+    LucideChevronDown,
   ],
   template: `
     <!-- No back button: there is no list page behind this one any more. The drawer holds the
@@ -152,8 +182,9 @@ export class ChatPage implements ViewWillEnter, ViewDidEnter, ViewDidLeave {
   /** The toolbar names the conversation, since the drawer no longer does it for us. Falls back
       while the list is still loading (a freshly minted chat has no meta yet). */
   protected readonly title = computed(
-    () => this.chatList.chats().find((c) => c.id === this.id())?.name
-      || (this.kind() === 'agent' ? 'Agent run' : 'New chat'),
+    () =>
+      this.chatList.chats().find((c) => c.id === this.id())?.name ||
+      (this.kind() === 'agent' ? 'Agent run' : 'New chat'),
   );
 
   private readonly content = viewChild.required<IonContent>('content');
