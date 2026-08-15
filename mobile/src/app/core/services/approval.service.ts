@@ -51,7 +51,10 @@ export class ApprovalService {
         this._pending.update((ps) =>
           ps.some((p) => p.id === e.id)
             ? ps
-            : [...ps, { id: e.id, frame: e.frame, chatId: e.chatId, kind: e.kind, target: e.target, options: e.options }],
+            : [
+                ...ps,
+                { id: e.id, frame: e.frame, chatId: e.chatId, kind: e.kind, target: e.target, options: e.options },
+              ],
         );
         break;
 

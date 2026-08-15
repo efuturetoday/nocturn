@@ -1,6 +1,11 @@
 import { Component, ChangeDetectionStrategy } from '@angular/core';
 import {
-  IonToolbar, IonSegment, IonSegmentButton, IonSegmentView, IonSegmentContent, IonLabel,
+  IonToolbar,
+  IonSegment,
+  IonSegmentButton,
+  IonSegmentView,
+  IonSegmentContent,
+  IonLabel,
 } from '@ionic/angular/standalone';
 import { WorkspaceHeaderComponent } from '../../shared/workspace-header';
 import { SettingsGeneralPage } from './settings-general.page';
@@ -26,8 +31,19 @@ import { WorkspacesPage } from '../workspaces/workspaces.page';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     WorkspaceHeaderComponent,
-    SettingsGeneralPage, SettingsDevicesPage, SkillsPage, PluginsPage, McpPage, PermissionsPage, WorkspacesPage,
-    IonToolbar, IonSegment, IonSegmentButton, IonSegmentView, IonSegmentContent, IonLabel,
+    SettingsGeneralPage,
+    SettingsDevicesPage,
+    SkillsPage,
+    PluginsPage,
+    McpPage,
+    PermissionsPage,
+    WorkspacesPage,
+    IonToolbar,
+    IonSegment,
+    IonSegmentButton,
+    IonSegmentView,
+    IonSegmentContent,
+    IonLabel,
   ],
   template: `
     <app-workspace-header />

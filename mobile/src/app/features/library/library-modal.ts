@@ -1,7 +1,5 @@
 import { Component, ChangeDetectionStrategy, model, input } from '@angular/core';
-import {
-  IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
-} from '@ionic/angular/standalone';
+import { IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton } from '@ionic/angular/standalone';
 import { LucideX } from '@lucide/angular';
 import { LibraryBrowserComponent } from './library-browser';
 import type { LibraryKind } from './library-filter';
