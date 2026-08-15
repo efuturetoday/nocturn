@@ -1,6 +1,8 @@
 import { Injectable, signal } from '@angular/core';
+import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
 import { mDNS, type MdnsService } from '@devioarts/capacitor-mdns';
+import { isDemoUrl } from '../demo/is-demo';
 
 /** Nocturn's Bonjour service type (trailing dot required by the plugin). */
 const SERVICE_TYPE = '_nocturn._tcp.';
@@ -42,8 +44,21 @@ export class DiscoveryService {
     void this.loadPersisted();
   }
 
+  /**
+   * Whether this platform can browse the LAN at all.
+   *
+   * The mDNS plugin is native-only, and a browser has no way to send a multicast query — so on the
+   * web this is not "found nothing yet", it is "there is nothing here that could ever find
+   * anything". A caller must be able to tell those apart, because they want opposite screens: one
+   * keeps listening, the other has to offer the ways in that do work.
+   */
+  readonly available = Capacitor.isNativePlatform();
+
   /** Browse the LAN for nocturn daemons. Populates `hosts`; sets `error` on failure. */
   async scan(): Promise<void> {
+    // Not a failure and not an error: a browser was never going to answer this. Reporting one would
+    // put "mDNS discovery unavailable" in front of somebody who did not ask for mDNS.
+    if (!this.available) return;
     this._scanning.set(true);
     this._error.set(null);
     try {
@@ -51,7 +66,8 @@ export class DiscoveryService {
       this._hosts.set(res.services.map((s) => this.toHost(s)).filter((h): h is DiscoveredHost => h !== null));
       if (res.error && res.errorMessage) this._error.set(res.errorMessage);
     } catch (e) {
-      // Web platform / permission denied / no plugin: fall back to manual entry.
+      // Permission denied, or the plugin missing on a platform that should have it: fall back to
+      // manual entry.
       this._error.set(e instanceof Error ? e.message : 'mDNS discovery unavailable');
       this._hosts.set([]);
     } finally {
@@ -65,8 +81,16 @@ export class DiscoveryService {
     return `ws://${h}:${port}${DEFAULT_PATH}`;
   }
 
-  /** Persist a URL as last-used and add it to the saved list. */
+  /**
+   * Persist a URL as last-used and add it to the saved list.
+   *
+   * The demo is never persisted. It is somewhere you go on purpose to look around, not a place to be
+   * returned to: remembering it meant every later launch re-entered the demo, and the way out was a
+   * Disconnect buried in Settings that nobody looks for while wondering why the app shows a
+   * stranger's conversations.
+   */
   async remember(url: string): Promise<void> {
+    if (isDemoUrl(url)) return;
     this._lastHost.set(url);
     await Preferences.set({ key: KEY_LAST, value: url });
     const saved = this._savedHosts();
@@ -84,10 +108,17 @@ export class DiscoveryService {
     return { name: s.name, url: `ws://${ip}:${s.port}${path}` };
   }
 
-  /** The persisted last-used ws:// URL (read straight from storage; survives app reload). */
+  /**
+   * The persisted last-used ws:// URL (read straight from storage; survives app reload).
+   *
+   * A stored demo is ignored rather than trusted. `remember` no longer writes one, but anybody who
+   * entered the demo before that already has one on disk — and for them the rule would otherwise
+   * only take effect after they had found their way out of the demo once.
+   */
   async lastHostValue(): Promise<string | null> {
     const { value } = await Preferences.get({ key: KEY_LAST });
-    return value ?? null;
+    if (!value || isDemoUrl(value)) return null;
+    return value;
   }
 
   private async loadPersisted(): Promise<void> {
@@ -95,10 +126,13 @@ export class DiscoveryService {
       Preferences.get({ key: KEY_LAST }),
       Preferences.get({ key: KEY_SAVED }),
     ]);
-    if (last) this._lastHost.set(last);
+    // Filtered on the way in, so there is ONE answer to "is the demo a place we go back to" rather
+    // than a no from lastHostValue and a yes from the signal beside it. Storage written before the
+    // rule existed can hold one.
+    if (last && !isDemoUrl(last)) this._lastHost.set(last);
     if (saved) {
       try {
-        this._savedHosts.set(JSON.parse(saved) as string[]);
+        this._savedHosts.set((JSON.parse(saved) as string[]).filter((u) => !isDemoUrl(u)));
       } catch {
         /* ignore corrupt cache */
       }

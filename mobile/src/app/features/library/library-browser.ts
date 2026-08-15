@@ -3,7 +3,7 @@ import {
 } from '@angular/core';
 import {
   IonContent, IonSearchbar, IonChip, IonLabel, IonList, IonItem, IonNote, IonButton, IonSpinner,
-  IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonRefresher, IonRefresherContent,
+  IonModal, IonHeader, IonFooter, IonToolbar, IonTitle, IonButtons, IonRefresher, IonRefresherContent,
   IonGrid, IonRow, IonCol, AlertController,
 } from '@ionic/angular/standalone';
 import { LucideX } from '@lucide/angular';
@@ -39,7 +39,7 @@ const KINDS: { key: LibraryKind; label: string }[] = [
   imports: [
     MarkdownComponent, LucideX,
     IonContent, IonSearchbar, IonChip, IonLabel, IonList, IonItem, IonNote, IonButton, IonSpinner,
-    IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonRefresher, IonRefresherContent,
+    IonModal, IonHeader, IonFooter, IonToolbar, IonTitle, IonButtons, IonRefresher, IonRefresherContent,
     IonGrid, IonRow, IonCol,
   ],
   template: `
@@ -250,22 +250,27 @@ const KINDS: { key: LibraryKind; label: string }[] = [
             }
           </ion-content>
 
-          <ion-toolbar class="foot-bar">
-            @if (installed()) {
-              <!-- Installed is not a dead end: the one thing you want here is to take it off again. -->
-              <ion-button expand="block" fill="outline" color="danger" (click)="uninstall()">
-                Uninstall from {{ ws() }}
-              </ion-button>
-            } @else {
-              <ion-button class="install" expand="block" [disabled]="library.installing() !== null" (click)="install()">
-                @if (library.installing()) {
-                  <ion-spinner name="dots" />
-                } @else {
-                  Install into {{ ws() }}
-                }
-              </ion-button>
-            }
-          </ion-toolbar>
+          <!-- ion-footer, not a bare toolbar. Ionic gives the home-indicator inset to the last
+               toolbar INSIDE a footer; a toolbar that is merely the modal's last child gets
+               nothing, so on a notched iPhone the install button sat under the indicator. -->
+          <ion-footer>
+            <ion-toolbar class="foot-bar">
+              @if (installed()) {
+                <!-- Installed is not a dead end: the one thing you want here is to take it off again. -->
+                <ion-button expand="block" fill="outline" color="danger" (click)="uninstall()">
+                  Uninstall from {{ ws() }}
+                </ion-button>
+              } @else {
+                <ion-button class="install" expand="block" [disabled]="library.installing() !== null" (click)="install()">
+                  @if (library.installing()) {
+                    <ion-spinner name="dots" />
+                  } @else {
+                    Install into {{ ws() }}
+                  }
+                </ion-button>
+              }
+            </ion-toolbar>
+          </ion-footer>
         </ng-template>
       </ion-modal>
     </ion-content>
