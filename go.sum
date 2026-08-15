@@ -1,7 +1,7 @@
 github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
 github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
-github.com/grindlemire/go-tui v0.18.2 h1:pMYnqPuAIA3w1czqFp34Jdf5s9JHdFATIytTjij1QRc=
-github.com/grindlemire/go-tui v0.18.2/go.mod h1:95oaPy6Iu6MZpiByUqxYz2Wcbckzvaw3K0jgQeI4dD0=
+github.com/grindlemire/go-tui v0.19.0 h1:4k4MRoYUFChUCfO5Lr4Z05SI3jlTSuH3W1H5/HKVH8s=
+github.com/grindlemire/go-tui v0.19.0/go.mod h1:95oaPy6Iu6MZpiByUqxYz2Wcbckzvaw3K0jgQeI4dD0=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
 github.com/libp2p/zeroconf/v2 v2.2.0 h1:Cup06Jv6u81HLhIj1KasuNM/RHHrJ8T7wOTS4+Tv53Q=

@@ -26,7 +26,7 @@ require (
 	github.com/efuturetoday/nocturn/agentkit/gemini v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/openai v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/runtime v0.0.0
-	github.com/grindlemire/go-tui v0.18.2
+	github.com/grindlemire/go-tui v0.19.0
 	github.com/lmittmann/tint v1.2.0
 )
 
