@@ -2,6 +2,7 @@ import { Injectable, signal } from '@angular/core';
 import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
 import { mDNS, type MdnsService } from '@devioarts/capacitor-mdns';
+import { isDemoUrl } from '../demo/is-demo';
 
 /** Nocturn's Bonjour service type (trailing dot required by the plugin). */
 const SERVICE_TYPE = '_nocturn._tcp.';
@@ -80,8 +81,16 @@ export class DiscoveryService {
     return `ws://${h}:${port}${DEFAULT_PATH}`;
   }
 
-  /** Persist a URL as last-used and add it to the saved list. */
+  /**
+   * Persist a URL as last-used and add it to the saved list.
+   *
+   * The demo is never persisted. It is somewhere you go on purpose to look around, not a place to be
+   * returned to: remembering it meant every later launch re-entered the demo, and the way out was a
+   * Disconnect buried in Settings that nobody looks for while wondering why the app shows a
+   * stranger's conversations.
+   */
   async remember(url: string): Promise<void> {
+    if (isDemoUrl(url)) return;
     this._lastHost.set(url);
     await Preferences.set({ key: KEY_LAST, value: url });
     const saved = this._savedHosts();
@@ -99,10 +108,17 @@ export class DiscoveryService {
     return { name: s.name, url: `ws://${ip}:${s.port}${path}` };
   }
 
-  /** The persisted last-used ws:// URL (read straight from storage; survives app reload). */
+  /**
+   * The persisted last-used ws:// URL (read straight from storage; survives app reload).
+   *
+   * A stored demo is ignored rather than trusted. `remember` no longer writes one, but anybody who
+   * entered the demo before that already has one on disk — and for them the rule would otherwise
+   * only take effect after they had found their way out of the demo once.
+   */
   async lastHostValue(): Promise<string | null> {
     const { value } = await Preferences.get({ key: KEY_LAST });
-    return value ?? null;
+    if (!value || isDemoUrl(value)) return null;
+    return value;
   }
 
   private async loadPersisted(): Promise<void> {
@@ -110,10 +126,13 @@ export class DiscoveryService {
       Preferences.get({ key: KEY_LAST }),
       Preferences.get({ key: KEY_SAVED }),
     ]);
-    if (last) this._lastHost.set(last);
+    // Filtered on the way in, so there is ONE answer to "is the demo a place we go back to" rather
+    // than a no from lastHostValue and a yes from the signal beside it. Storage written before the
+    // rule existed can hold one.
+    if (last && !isDemoUrl(last)) this._lastHost.set(last);
     if (saved) {
       try {
-        this._savedHosts.set(JSON.parse(saved) as string[]);
+        this._savedHosts.set((JSON.parse(saved) as string[]).filter((u) => !isDemoUrl(u)));
       } catch {
         /* ignore corrupt cache */
       }

@@ -240,9 +240,10 @@ export class DiscoverPage {
   protected async connect(url: string): Promise<void> {
     // A browser served by the daemon has one candidate host and cannot be repointed, so remembering
     // it would only leave a stale entry to mislead a later LAN session.
+    // The demo is refused by remember() itself, so this stays about the one case it is about.
     if (!this.sameOrigin()) await this.discovery.remember(url);
-    // The demo has nothing to pair with, so it skips the pairing sheet — but is remembered like any
-    // host, which is what lets the connection guard re-enter it after a relaunch.
+    // The demo has nothing to pair with, so it skips the pairing sheet. Nor is it persisted: the
+    // next launch starts here again, which is the point — it is a look around, not a destination.
     let bearer = isDemoUrl(url) ? DEMO_BEARER : await this.auth.bearerFor(url);
     if (!bearer) {
       // Ask the daemon which way in it has open before offering one. A code is armed only while
