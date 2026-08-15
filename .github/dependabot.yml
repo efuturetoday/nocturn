@@ -8,14 +8,35 @@ version: 2
 # Monthly rather than weekly, on purpose: this is a one-maintainer repository, and a pull request
 # nobody reads is worse than a slightly older dependency. The Go modules are the exception, because
 # the daemon's dependency list is deliberately short and each entry there is load-bearing.
+#
+# One entry per component, even where a single entry could list several directories: `labels` and
+# `commit-message` are per ENTRY, so bundling /docs with /mobile would cost the very thing that
+# makes a bump readable in the pull request list — which part of the tree it touches.
+#
+# A `labels` list REPLACES the defaults rather than extending them, so `dependencies` and the
+# ecosystem label are spelled out again wherever a component label is added — and the label itself
+# must already exist in the repository, since Dependabot silently drops names it does not find.
+#
+# The prefix carries that component as a conventional-commit scope, because the pull request title
+# IS the squashed commit subject and .github/workflows/pr-title.yml only accepts the release-please
+# component names (see release-please-config.json). `include: scope` is deliberately absent: it
+# appends (deps)/(deps-dev) after the prefix and would emit an unparseable `build(mobile)(deps):`.
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    labels:
+      - dependencies
+      - github_actions
+      - ci
+    commit-message:
+      prefix: build
 
   # go.work spans the root module and the agentkit siblings; each needs its own entry, since
-  # Dependabot resolves one go.mod per directory.
+  # Dependabot resolves one go.mod per directory. They share one update entry because they share a
+  # component: the root Go module, which has no name of its own in release-please — hence a bare
+  # `build` prefix with no scope, and no label beyond the `go` one Dependabot adds itself.
   - package-ecosystem: gomod
     directories:
       - /
@@ -28,10 +49,27 @@ updates:
       - /agentkit/example
     schedule:
       interval: weekly
+    commit-message:
+      prefix: build
 
   - package-ecosystem: npm
-    directories:
-      - /docs
-      - /mobile
+    directory: /docs
     schedule:
       interval: monthly
+    labels:
+      - dependencies
+      - javascript
+      - docs
+    commit-message:
+      prefix: build(docs)
+
+  - package-ecosystem: npm
+    directory: /mobile
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
+      - javascript
+      - mobile
+    commit-message:
+      prefix: build(mobile)
