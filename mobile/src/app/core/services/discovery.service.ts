@@ -1,4 +1,5 @@
 import { Injectable, signal } from '@angular/core';
+import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
 import { mDNS, type MdnsService } from '@devioarts/capacitor-mdns';
 
@@ -42,8 +43,21 @@ export class DiscoveryService {
     void this.loadPersisted();
   }
 
+  /**
+   * Whether this platform can browse the LAN at all.
+   *
+   * The mDNS plugin is native-only, and a browser has no way to send a multicast query — so on the
+   * web this is not "found nothing yet", it is "there is nothing here that could ever find
+   * anything". A caller must be able to tell those apart, because they want opposite screens: one
+   * keeps listening, the other has to offer the ways in that do work.
+   */
+  readonly available = Capacitor.isNativePlatform();
+
   /** Browse the LAN for nocturn daemons. Populates `hosts`; sets `error` on failure. */
   async scan(): Promise<void> {
+    // Not a failure and not an error: a browser was never going to answer this. Reporting one would
+    // put "mDNS discovery unavailable" in front of somebody who did not ask for mDNS.
+    if (!this.available) return;
     this._scanning.set(true);
     this._error.set(null);
     try {
@@ -51,7 +65,8 @@ export class DiscoveryService {
       this._hosts.set(res.services.map((s) => this.toHost(s)).filter((h): h is DiscoveredHost => h !== null));
       if (res.error && res.errorMessage) this._error.set(res.errorMessage);
     } catch (e) {
-      // Web platform / permission denied / no plugin: fall back to manual entry.
+      // Permission denied, or the plugin missing on a platform that should have it: fall back to
+      // manual entry.
       this._error.set(e instanceof Error ? e.message : 'mDNS discovery unavailable');
       this._hosts.set([]);
     } finally {

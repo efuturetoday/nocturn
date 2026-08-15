@@ -7,7 +7,7 @@ import { DiscoveryService } from '../../core/services/discovery.service';
 import { DaemonService } from '../../core/services/daemon.service';
 import { ConnectionService } from '../../core/services/connection.service';
 import { AuthService } from '../../core/services/auth.service';
-import { DEMO_BEARER, isDemoUrl } from '../../core/demo/is-demo';
+import { DEMO_BEARER, DEMO_HOST, isDemoUrl } from '../../core/demo/is-demo';
 
 const RESCAN_MS = 4000;
 
@@ -50,14 +50,25 @@ const RESCAN_MS = 4000;
                 <span class="host-text"><b>{{ h.name }}</b><small>{{ h.url }}</small></span>
               </button>
             } @empty {
-              <!-- Perpetual scan: skeleton placeholder while listening on the LAN. -->
-              <div class="host skeleton">
-                <ion-skeleton-text [animated]="true" class="dot" />
-                <span class="host-text">
-                  <ion-skeleton-text [animated]="true" style="width: 45%" />
-                  <ion-skeleton-text [animated]="true" style="width: 75%" />
-                </span>
-              </div>
+              @if (discovery.available) {
+                <!-- Perpetual scan: skeleton placeholder while listening on the LAN. -->
+                <div class="host skeleton">
+                  <ion-skeleton-text [animated]="true" class="dot" />
+                  <span class="host-text">
+                    <ion-skeleton-text [animated]="true" style="width: 45%" />
+                    <ion-skeleton-text [animated]="true" style="width: 75%" />
+                  </span>
+                </div>
+              } @else {
+                <!-- A browser cannot send a multicast query, so a skeleton here would be an
+                     animation of something that is not happening — a wait with no end, which reads
+                     as a broken app rather than as a missing capability. Say so, and offer the two
+                     ways in that DO work here. -->
+                <p class="no-scan">
+                  A browser cannot look for servers on your network. Enter one below, or take a look
+                  around first.
+                </p>
+              }
             }
           </div>
         }
@@ -67,6 +78,10 @@ const RESCAN_MS = 4000;
     @if (!sameOrigin()) {
       <ion-footer class="manual-footer">
         <button class="manual" (click)="manual()">Enter server manually</button>
+        <!-- The demo existed all along and nothing pointed at it: the only way in was typing "demo"
+             as the host in the manual dialog, which nobody guesses. It is the honest answer to
+             "there is no server yet" — everything works, in-process, against a scripted daemon. -->
+        <button class="manual demo" (click)="tryDemo()">Take a look around without a server</button>
       </ion-footer>
     }
   `,
@@ -116,15 +131,28 @@ const RESCAN_MS = 4000;
     .host.skeleton .dot { width: 1.3rem; height: 1.3rem; border-radius: 50%; }
     .host.skeleton .host-text { flex: 1; gap: 0.375rem; }
 
-    .manual-footer { --background: transparent; text-align: center; }
+    .no-scan {
+      margin: 0; text-align: center;
+      color: var(--ion-color-medium); font-size: 0.9rem; line-height: 1.5;
+    }
+
+    /* The home-indicator inset belongs to the footer, not to a button inside it. On the button it
+       was the last child's bottom padding, so a second button pushed the inset into the middle of
+       the stack and left the last one sitting on the indicator. */
+    .manual-footer {
+      --background: transparent; text-align: center;
+      padding-bottom: var(--ion-safe-area-bottom, 0px);
+    }
     .manual-footer::before { display: none; }
     .manual {
       background: none; border: none; cursor: pointer;
       color: var(--ion-color-primary); font: inherit; font-size: 0.9rem;
       text-decoration: underline;
-      padding: 0.75rem; padding-bottom: calc(0.75rem + var(--ion-safe-area-bottom, 0px));
+      padding: 0.75rem;
       width: 100%;
     }
+    /* The demo is the softer of the two offers: available, not the recommended path. */
+    .manual.demo { color: var(--ion-color-medium); padding-top: 0; }
   `,
 })
 export class DiscoverPage {
@@ -163,6 +191,10 @@ export class DiscoverPage {
       }
       // Perpetual discovery: scan now, then re-scan on an interval so the spinner keeps listening
       // and newly-appearing daemons show up. Cleaned up when the page is destroyed.
+      //
+      // Only where scanning is a thing that can happen. A browser has no way to browse a LAN, so a
+      // timer there would wake every four seconds for the rest of the session to do nothing.
+      if (!this.discovery.available) return;
       void this.discovery.scan();
       const timer = setInterval(() => void this.discovery.scan(), RESCAN_MS);
       destroyRef.onDestroy(() => clearInterval(timer));
@@ -192,6 +224,11 @@ export class DiscoverPage {
       ],
     });
     await alert.present();
+  }
+
+  /** Enter the in-app demo: a scripted daemon behind the same wire protocol, no host involved. */
+  protected async tryDemo(): Promise<void> {
+    await this.connect(this.discovery.manualUrl(DEMO_HOST, 8765));
   }
 
   /** Pair with the daemon that served this page. Also the retry after a cancelled sheet. */
