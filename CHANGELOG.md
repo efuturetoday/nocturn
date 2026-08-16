@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/efuturetoday/nocturn/compare/v0.3.0...v0.4.0) (2026-08-16)
+
+
+### Features
+
+* **gate:** tell the approver the recall ceiling ([#38](https://github.com/efuturetoday/nocturn/issues/38)) ([fe5ae10](https://github.com/efuturetoday/nocturn/commit/fe5ae1067d29d61aad074914489ab195c4a25824))
+* **mail:** support imap and smtp, sending gated per recipient ([#35](https://github.com/efuturetoday/nocturn/issues/35)) ([ee2550b](https://github.com/efuturetoday/nocturn/commit/ee2550b4179b011bade8acc1d106c0b78f8d8ca3))
+
 ## [0.3.0](https://github.com/efuturetoday/nocturn/compare/v0.2.0...v0.3.0) (2026-08-14)
 
 
