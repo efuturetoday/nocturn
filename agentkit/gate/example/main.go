@@ -16,7 +16,9 @@ type scriptApprover struct {
 	asks    int
 }
 
-func (s *scriptApprover) Ask(_ context.Context, a gate.Action, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+var _ gate.Approver = (*scriptApprover)(nil)
+
+func (s *scriptApprover) Ask(_ context.Context, a gate.Action, _ gate.Recall, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	s.asks++
 	fmt.Printf("  [approver] asked about %+v -> approve=%v recall=%v\n", a, s.approve, s.recall)
 	return s.approve, gate.Grant{Kind: a.Kind, Target: a.Target}, s.recall, nil

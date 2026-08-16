@@ -513,11 +513,13 @@ type announcingApprover struct {
 	log   *slog.Logger
 }
 
-func (a *announcingApprover) Ask(ctx context.Context, act gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+var _ gate.Approver = (*announcingApprover)(nil)
+
+func (a *announcingApprover) Ask(ctx context.Context, act gate.Action, ceiling gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	call, ok := ctx.Value(callKey{}).(agentkit.LiveToolCall)
 	if !ok {
 		// A gate check outside a live tool call — nothing to answer, so nothing to announce.
-		return a.inner.Ask(ctx, act, suggest)
+		return a.inner.Ask(ctx, act, ceiling, suggest)
 	}
 	target := act.Kind
 	if act.Target != "" {
@@ -545,7 +547,7 @@ func (a *announcingApprover) Ask(ctx context.Context, act gate.Action, suggest [
 		}
 	}()
 
-	return a.inner.Ask(ctx, act, suggest)
+	return a.inner.Ask(ctx, act, ceiling, suggest)
 }
 
 // trace logs one live event at debug level. A duplex session is otherwise opaque from the outside:

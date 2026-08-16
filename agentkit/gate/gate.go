@@ -108,7 +108,10 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 
 	lg.Debug("gate ask", "recall", ruling.recall)
 	resume := agentkit.Pause(ctx) // a human deciding must not consume the turn's wall-clock
-	approved, g, chosen, err := p.approver.Ask(ctx, a, suggest)
+	// The ceiling goes WITH the question. An approver that does not know it offers answers this
+	// function then quietly narrows, which is how a person comes to believe they settled something
+	// once and for all and gets asked again tomorrow.
+	approved, g, chosen, err := p.approver.Ask(ctx, a, ruling.recall, suggest)
 	resume()
 	if err != nil {
 		lg.Warn("gate deny", "reason", "approver-error", "err", err)
@@ -120,7 +123,10 @@ func Check(ctx context.Context, a Action, match Matcher, suggest ...Grant) error
 	}
 
 	// Remember the (possibly widened) grant at the more restrictive of the policy's ceiling and the
-	// human's choice; RecallNever means don't remember (asks again next time).
+	// human's choice; RecallNever means don't remember (asks again next time). The approver was told
+	// the ceiling, so this min is belt and braces: it keeps a third-party implementation that ignores
+	// it from widening the policy, and it is why ignoring the ceiling is a honesty bug rather than a
+	// security one.
 	if effective := min(ruling.recall, chosen); effective != RecallNever && p.grants != nil {
 		p.grants.Remember(g, effective)
 		lg.Info("gate grant remembered", "grant_target", g.Target, "recall", effective)

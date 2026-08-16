@@ -96,7 +96,7 @@ func TestApprovalRendersTheActionAndItsOptions(t *testing.T) {
 	go func() {
 		defer close(done)
 		//nolint:errcheck // the goroutine only exists to produce the pending ask
-		ask.Ask(t.Context(), gate.Action{Kind: "net", Target: "api.example.com"},
+		ask.Ask(t.Context(), gate.Action{Kind: "net", Target: "api.example.com"}, gate.RecallAlways,
 			[]gate.Grant{{Kind: "net", Target: "*.example.com"}})
 	}()
 	pending := <-ask.Asks()

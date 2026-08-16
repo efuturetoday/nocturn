@@ -49,7 +49,7 @@ func TestApprovalResolve_ForwardsOptionToBroker(t *testing.T) {
 
 			result := make(chan bool, 1)
 			go func() {
-				approved, _, _, _ := broker.Ask(ctx, gate.Action{Kind: "net", Target: "example.com"}, nil)
+				approved, _, _, _ := broker.Ask(ctx, gate.Action{Kind: "net", Target: "example.com"}, gate.RecallAlways, nil)
 				result <- approved
 			}()
 
