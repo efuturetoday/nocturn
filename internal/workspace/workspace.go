@@ -91,6 +91,7 @@ type Workspace struct {
 	waker      *tools.Waker      // self-continuation timers, bound to the chat manager
 	mem        *memory.Store     // the assistant's durable notes; its index is folded into every prompt
 	knowledge  *knowledge.Store  // the user's own documents; nil when no embedder is configured
+	mailbox    *mail.Mailbox     // the household's mailbox and its ONE kept connection; nil without a mail.json
 	voice      *voice.Manager    // live spoken sessions, one per device; nil when Host.Live is unset
 	voices     *speaker.Profiles // enrolled voices, for telling this household apart
 	accounts   *MCPAuth          // MCP OAuth session orchestration; nil when the vault is locked
@@ -242,8 +243,9 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: %w", name, err)
 	}
+	var mailbox *mail.Mailbox
 	if hasMail {
-		mailTools, err := mail.New(mail.Config{
+		mailbox = mail.New(mail.Config{
 			Account: acct,
 			Password: func(secretName string) (string, bool) {
 				if sec.vault == nil {
@@ -254,7 +256,8 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 			},
 			Scanner: scanner,
 			Log:     wslog.With("component", "mail"),
-		}).Tools()
+		})
+		mailTools, err := mailbox.Tools()
 		if err != nil {
 			return nil, fmt.Errorf("workspace %q: mail tools: %w", name, err)
 		}
@@ -333,6 +336,7 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	w := &Workspace{
 		voices:     voices,
 		knowledge:  knowledgeStore,
+		mailbox:    mailbox,
 		name:       name,
 		dir:        dir,
 		llm:        h.LLM,
