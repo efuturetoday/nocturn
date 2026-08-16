@@ -58,9 +58,27 @@ type Message struct {
 }
 
 // Client is a connected mailbox. It is NOT safe for concurrent use: one connection carries one
-// selected folder, so two callers would race over which folder is open. Callers dial per operation.
+// selected folder, so two callers would race over which folder is open. Mailbox serialises access to
+// the one it keeps.
+//
+// It holds the raw connection as well as the protocol client, because a reused connection has to be
+// re-bounded before every operation — see bound.
 type Client struct {
-	c *imapclient.Client
+	c    *imapclient.Client
+	conn net.Conn
+}
+
+// bound re-stamps the deadline for the operation about to run, and returns the client to run it on.
+//
+// A deadline is an absolute time, so stamping it once at dial bounds the FIRST use and expires under
+// every one after it. That is invisible while a caller dials per operation and immediate the moment a
+// connection is kept — the second call fails on a socket that is perfectly healthy. So the stamp
+// belongs to the call, not to the connection.
+func (c *Client) bound(ctx context.Context) (*imapclient.Client, error) {
+	if err := setSessionDeadline(ctx, c.conn); err != nil {
+		return nil, fmt.Errorf("mail: %w", err)
+	}
+	return c.c, nil
 }
 
 // Dial opens a TLS connection to the account's IMAP server and logs in.
@@ -78,17 +96,17 @@ func Dial(ctx context.Context, acct Account, password string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mail: dial %s: %w", acct.IMAPAddr, err)
 	}
-	if err := setSessionDeadline(ctx, conn); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("mail: %s: %w", acct.IMAPAddr, err)
-	}
-	return NewClient(conn, acct.User, password)
+	return NewClient(ctx, conn, acct.User, password)
 }
 
-// sessionTimeout bounds a whole mail conversation when the caller set no deadline of its own. Not a
-// per-command budget: it is one absolute time for the session, which is the shape net.Conn offers and
-// enough for the failure it exists to stop — a server that answers nothing.
-const sessionTimeout = 2 * time.Minute
+// sessionTimeout bounds ONE mail operation when the caller set no deadline of its own.
+//
+// A minute, deliberately shorter than a turn: in the daemon the turn context already carries a
+// deadline and this never applies, so what it really governs is the command line and anything else
+// calling in without a budget. Matching the turn's two minutes would have read as a considered
+// relationship between the two and was a coincidence — a mail command that needs half a turn is
+// already broken, and failing at a minute says so a minute earlier.
+const sessionTimeout = time.Minute
 
 // withSessionDeadline bounds ctx BEFORE anything is dialled, and leaves a caller's own deadline
 // alone. It has to come first: tls.Dialer.DialContext completes the handshake before it returns, so
@@ -115,7 +133,12 @@ func setSessionDeadline(ctx context.Context, conn net.Conn) error {
 // NewClient logs in over an already-established connection and takes ownership of it — the transport seam,
 // so the tests drive a scripted server over a pipe instead of a socket with a certificate. Dial is
 // the production path; nothing outside a test builds the connection itself.
-func NewClient(conn net.Conn, user, password string) (*Client, error) {
+func NewClient(ctx context.Context, conn net.Conn, user, password string) (*Client, error) {
+	// The login is an operation like any other, so it is bounded like one.
+	if err := setSessionDeadline(ctx, conn); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("mail: %w", err)
+	}
 	// Decode RFC 2047 encoded-words with go-message's charset table. Without it a subject in
 	// ISO-8859-1 or ISO-2022-JP arrives as its raw encoded form, which is the swamp this library was
 	// taken for in the first place.
@@ -126,7 +149,7 @@ func NewClient(conn net.Conn, user, password string) (*Client, error) {
 		_ = c.Close()
 		return nil, fmt.Errorf("mail: login as %s: %w", user, err)
 	}
-	return &Client{c: c}, nil
+	return &Client{c: c, conn: conn}, nil
 }
 
 // Close logs out and closes the connection.
@@ -142,11 +165,15 @@ func (c *Client) Close() error {
 //
 // Newest-first is the useful order and it is also the safe one: a mailbox has no upper bound, so a
 // listing that started at the beginning would spend the model's whole context on mail from years ago.
-func (c *Client) List(folder string, limit int) ([]Header, error) {
+func (c *Client) List(ctx context.Context, folder string, limit int) ([]Header, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
-	sel, err := c.c.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait()
+	cl, err := c.bound(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sel, err := cl.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait()
 	if err != nil {
 		return nil, fmt.Errorf("mail: select %q: %w", folder, err)
 	}
@@ -160,7 +187,7 @@ func (c *Client) List(folder string, limit int) ([]Header, error) {
 	var set imap.SeqSet
 	set.AddRange(from, sel.NumMessages)
 
-	msgs, err := c.c.Fetch(set, &imap.FetchOptions{UID: true, Envelope: true, Flags: true}).Collect()
+	msgs, err := cl.Fetch(set, &imap.FetchOptions{UID: true, Envelope: true, Flags: true}).Collect()
 	if err != nil {
 		return nil, fmt.Errorf("mail: fetch headers from %q: %w", folder, err)
 	}
@@ -192,12 +219,16 @@ type Query struct {
 // What it does NOT do is semantics — SEARCH matches substrings, so "roof" does not find "Dachdecker".
 // That limit is real and is the reason a mail-specific index may still be worth building later, with
 // its own corpus and its own provenance.
-func (c *Client) Search(folder string, q Query) ([]Header, error) {
+func (c *Client) Search(ctx context.Context, folder string, q Query) ([]Header, error) {
 	limit := q.Limit
 	if limit <= 0 {
 		return nil, nil
 	}
-	if _, err := c.c.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
+	cl, err := c.bound(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := cl.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
 		return nil, fmt.Errorf("mail: select %q: %w", folder, err)
 	}
 	criteria := &imap.SearchCriteria{Since: q.Since}
@@ -207,7 +238,7 @@ func (c *Client) Search(folder string, q Query) ([]Header, error) {
 	if q.From != "" {
 		criteria.Header = []imap.SearchCriteriaHeaderField{{Key: "From", Value: q.From}}
 	}
-	data, err := c.c.UIDSearch(criteria, nil).Wait()
+	data, err := cl.UIDSearch(criteria, nil).Wait()
 	if err != nil {
 		return nil, fmt.Errorf("mail: search %q: %w", folder, err)
 	}
@@ -218,7 +249,7 @@ func (c *Client) Search(folder string, q Query) ([]Header, error) {
 	if len(uids) > limit { // the server answers ascending; the newest are the tail
 		uids = uids[len(uids)-limit:]
 	}
-	msgs, err := c.c.Fetch(imap.UIDSetNum(uids...), &imap.FetchOptions{
+	msgs, err := cl.Fetch(imap.UIDSetNum(uids...), &imap.FetchOptions{
 		UID: true, Envelope: true, Flags: true,
 	}).Collect()
 	if err != nil {
@@ -236,12 +267,16 @@ func (c *Client) Search(folder string, q Query) ([]Header, error) {
 // The fetch PEEKS: reading a mailbox through the assistant must not mark the household's mail as
 // seen. A person's unread list is theirs, and a background agent skimming the inbox at six in the
 // morning would otherwise quietly empty it.
-func (c *Client) Read(folder string, uid uint32) (Message, error) {
-	if _, err := c.c.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
+func (c *Client) Read(ctx context.Context, folder string, uid uint32) (Message, error) {
+	cl, err := c.bound(ctx)
+	if err != nil {
+		return Message{}, err
+	}
+	if _, err := cl.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
 		return Message{}, fmt.Errorf("mail: select %q: %w", folder, err)
 	}
 	section := &imap.FetchItemBodySection{Peek: true}
-	msgs, err := c.c.Fetch(imap.UIDSetNum(imap.UID(uid)), &imap.FetchOptions{
+	msgs, err := cl.Fetch(imap.UIDSetNum(imap.UID(uid)), &imap.FetchOptions{
 		UID:         true,
 		Envelope:    true,
 		Flags:       true,

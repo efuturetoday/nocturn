@@ -61,7 +61,7 @@ func Verify(ctx context.Context, acct Account, imapPassword, smtpPassword string
 	if c, err := Dial(ctx, acct, imapPassword); err != nil {
 		imapErr = err
 	} else {
-		if _, err := c.List("INBOX", 1); err != nil {
+		if _, err := c.List(ctx, "INBOX", 1); err != nil {
 			imapErr = err
 		}
 		_ = c.Close()

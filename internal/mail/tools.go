@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	netmail "net/mail"
+	"sync"
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
@@ -45,7 +48,11 @@ type Config struct {
 	Log *slog.Logger
 }
 
-// Mailbox is the mail tool group.
+// Mailbox is the mail tool group, and it owns the ONE connection this workspace keeps open.
+//
+// One, not a pool: a Client carries a selected folder, so concurrent use would race over which folder
+// is open, and IMAP servers count sessions per account with a low ceiling. Access is serialised under
+// mu, which costs nothing here — there is a single caller, a turn, and it asks one thing at a time.
 type Mailbox struct {
 	acct     Account
 	password func(name string) (string, bool)
@@ -56,6 +63,21 @@ type Mailbox struct {
 	// Production never sets them; New fills in Dial and Send.
 	dial func(ctx context.Context, acct Account, password string) (*Client, error)
 	send func(ctx context.Context, acct Account, password string, msg Outgoing) error
+
+	// mu guards the kept connection AND is held across the operation running on it. That is the usual
+	// advice inverted on purpose: the thing being protected IS the connection, and a Client carries
+	// one selected folder, so two operations overlapping is a folder race rather than a speed-up.
+	// Serialising is the feature.
+	mu   sync.Mutex
+	conn *Client // nil = nothing open right now
+	idle *time.Timer
+	// gen counts how often the connection was handed out. The reaper captures the value it was armed
+	// with and drops nothing if it has moved: a timer that has already fired cannot be cancelled, so
+	// without this it would close a connection that was used again while it waited on mu — one
+	// pointless reconnect, arriving at random, which is the worst kind to chase.
+	gen       int
+	idleAfter time.Duration // 0 = idleTimeout; only a test sets it
+	closed    bool
 }
 
 // New builds the mail tool group.
@@ -132,13 +154,124 @@ func (m *Mailbox) Tools() ([]agentkit.Tool, error) {
 	return []agentkit.Tool{list, search, read, send}, nil
 }
 
-// connect opens a mailbox connection with the password out of the vault.
-func (m *Mailbox) connect(ctx context.Context) (*Client, error) {
+// idleTimeout is how long an unused connection is kept. An authenticated IMAP session is a slot the
+// household's own server counts, so holding one open for a mailbox nobody is reading is borrowing
+// something for nothing. Long enough that a conversation ("what came in?" … "read the second one")
+// stays on one login; short enough that an idle daemon holds no sockets.
+const idleTimeout = 5 * time.Minute
+
+// withClient runs one operation on the kept connection, opening one if there is none.
+//
+// It retries ONCE on a transport failure, and that is safe only because everything routed through
+// here is a read. A server drops an idle session whenever it likes, so the alternative to a retry is
+// an error the person sees instead of their mail. Sending never comes through here: a retry on a
+// half-delivered DATA sends the message twice, and no amount of convenience pays for that.
+func (m *Mailbox) withClient(ctx context.Context, fn func(*Client) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("mail: the mailbox is closed")
+	}
+
+	c, fresh, err := m.clientLocked(ctx)
+	if err != nil {
+		return err
+	}
+	err = fn(c)
+	if err == nil || fresh || !isTransport(err) {
+		m.armIdleLocked()
+		return err
+	}
+
+	// The connection was one we had lying about and it is gone. Drop it, dial again, run once more.
+	m.log.Info("mail: reconnecting", "reason", err)
+	m.dropLocked()
+	c, _, err = m.clientLocked(ctx)
+	if err != nil {
+		return err
+	}
+	err = fn(c)
+	m.armIdleLocked()
+	return err
+}
+
+// clientLocked returns the kept connection, or opens one. fresh says whether it was opened just now —
+// a failure on a connection this call created is a real failure, not a stale socket, so it must not
+// be retried into an endless pair of logins.
+func (m *Mailbox) clientLocked(ctx context.Context) (c *Client, fresh bool, err error) {
+	if m.conn != nil {
+		return m.conn, false, nil
+	}
 	password, ok := m.password(SecretIMAPPassword)
 	if !ok {
-		return nil, fmt.Errorf("no mail password stored — set it with: nocturn secret set %s", SecretIMAPPassword)
+		return nil, false, fmt.Errorf("no mail password stored — set it with: nocturn secret set %s", SecretIMAPPassword)
 	}
-	return m.dial(ctx, m.acct, password)
+	conn, err := m.dial(ctx, m.acct, password)
+	if err != nil {
+		return nil, false, err
+	}
+	m.conn = conn
+	return conn, true, nil
+}
+
+// dropLocked closes and forgets the connection, ignoring the error: it is already broken, which is
+// why we are here.
+func (m *Mailbox) dropLocked() {
+	if m.conn != nil {
+		_ = m.conn.Close()
+		m.conn = nil
+	}
+}
+
+// armIdleLocked (re)starts the reaper that closes an unused connection.
+func (m *Mailbox) armIdleLocked() {
+	if m.idle != nil {
+		m.idle.Stop() // may return false: it can have fired already and be waiting on mu — see gen
+	}
+	if m.conn == nil {
+		return
+	}
+	m.gen++
+	gen := m.gen
+	after := m.idleAfter
+	if after == 0 {
+		after = idleTimeout
+	}
+	m.idle = time.AfterFunc(after, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.gen != gen {
+			return // used again since this reaper was armed
+		}
+		m.dropLocked()
+	})
+}
+
+// Close releases the connection. Idempotent, and after it every operation fails rather than quietly
+// opening a new session on a workspace that is being taken down.
+func (m *Mailbox) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
+	if m.idle != nil {
+		m.idle.Stop()
+		m.idle = nil
+	}
+	m.dropLocked()
+}
+
+// isTransport reports whether an error means the connection is gone rather than the request being
+// wrong. The distinction is load-bearing: a retry on "no such UID" hides a real answer behind a
+// second login, and doubles every future investigation.
+func isTransport(err error) bool {
+	if errors.Is(err, ErrNotFound) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 func (m *Mailbox) list(ctx context.Context, args string) (string, error) {
@@ -149,15 +282,12 @@ func (m *Mailbox) list(ctx context.Context, args string) (string, error) {
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
-	c, err := m.connect(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer c.Close()
-
 	folder := folderOrDefault(a.Folder)
-	headers, err := c.List(folder, limitOrDefault(a.Limit))
-	if err != nil {
+	var headers []Header
+	if err := m.withClient(ctx, func(c *Client) (err error) {
+		headers, err = c.List(ctx, folder, limitOrDefault(a.Limit))
+		return err
+	}); err != nil {
 		return "", err
 	}
 	m.log.Debug("mail listed", "folder", folder, "messages", len(headers))
@@ -183,15 +313,12 @@ func (m *Mailbox) search(ctx context.Context, args string) (string, error) {
 		}
 		q.Since = since
 	}
-	c, err := m.connect(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer c.Close()
-
 	folder := folderOrDefault(a.Folder)
-	headers, err := c.Search(folder, q)
-	if err != nil {
+	var headers []Header
+	if err := m.withClient(ctx, func(c *Client) (err error) {
+		headers, err = c.Search(ctx, folder, q)
+		return err
+	}); err != nil {
 		return "", err
 	}
 	m.log.Debug("mail searched", "folder", folder, "matches", len(headers))
@@ -209,15 +336,12 @@ func (m *Mailbox) read(ctx context.Context, args string) (string, error) {
 	if a.UID == 0 {
 		return "", errors.New("missing required field: uid")
 	}
-	c, err := m.connect(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer c.Close()
-
 	folder := folderOrDefault(a.Folder)
-	msg, err := c.Read(folder, a.UID)
-	if err != nil {
+	var msg Message
+	if err := m.withClient(ctx, func(c *Client) (err error) {
+		msg, err = c.Read(ctx, folder, a.UID)
+		return err
+	}); err != nil {
 		return "", err
 	}
 	// The reader stops one byte past its limit, so anything longer was cut there rather than ending.

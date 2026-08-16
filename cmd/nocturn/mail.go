@@ -177,7 +177,7 @@ func runMailCheck(wsName string) error {
 		return err
 	}
 	defer c.Close()
-	headers, err := c.List("INBOX", 1)
+	headers, err := c.List(ctx, "INBOX", 1)
 	if err != nil {
 		return err
 	}
