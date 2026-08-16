@@ -112,6 +112,8 @@ func dispatch(args []string) int {
 		return cmdAuth(args[1:])
 	case "secret":
 		return cmdSecret(args[1:])
+	case "mail":
+		return cmdMail(args[1:])
 	case "ls":
 		return cmdLs(args[1:])
 	case "version", "--version", "-v":
@@ -144,6 +146,8 @@ Usage:
   nocturn auth <provider>      Connect an OAuth account (prints a URL to open)
   nocturn secret set <target>  Seed a static credential (value read from stdin)
   nocturn secret ls            List the credential names a workspace holds (never values)
+  nocturn mail setup --user <a> Configure a workspace's mailbox (password read from stdin)
+  nocturn mail check           Connect with the configured mailbox and report what it sees
   nocturn ls                   List workspaces, or one workspace's plugins/mcp/agents/skills
   nocturn version              Print the version
   nocturn help                 Show this help

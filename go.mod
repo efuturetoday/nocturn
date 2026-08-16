@@ -16,8 +16,10 @@ require (
 )
 
 require (
+	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
 	github.com/miekg/dns v1.1.43 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )
 
 require (
@@ -26,6 +28,8 @@ require (
 	github.com/efuturetoday/nocturn/agentkit/gemini v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/openai v0.0.0
 	github.com/efuturetoday/nocturn/agentkit/runtime v0.0.0
+	github.com/emersion/go-imap/v2 v2.0.0-beta.8
+	github.com/emersion/go-message v0.18.2
 	github.com/grindlemire/go-tui v0.19.0
 	github.com/lmittmann/tint v1.2.0
 )

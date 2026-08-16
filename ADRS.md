@@ -340,3 +340,62 @@ next start would open the trash as a workspace, with its own vault and its own s
 
 *Realized in `internal/workspace/{meta,registry}.go`.*
 
+## ADR-17 — Mail: reading is context, sending is its own Kind aimed at the recipient
+Reading a mailbox is **ungated**, on the same reading as `memory_read`, `knowledge_search` and
+`skill_read`: it is context, never authority. Asking a person for permission to look into their own
+inbox buys nothing, because the risk of a mail is not that it was read — it is that it is *foreign
+text*, and therefore the plainest prompt-injection channel in the tree. That is defended where the
+injection would have its effect (every gated action the model takes afterwards), plus
+`Scanner.RedactIngress` on the way in, not by a prompt in front of the reading.
+
+Sending gates on **`mail.SendKind`, with the recipient address as Target** — deliberately not on
+`NetKind`. The Target of a net action is the host, and the host of an SMTP submission is one's own
+provider: a remembered "yes" for `smtp.mailbox.org` would silently cover every future message to
+everyone. The recipient *is* the decision, so the recipient is the Target, and the widening mirrors
+the host one — `chef@domain.de` offers `*@domain.de`, never a bare `*`. Several recipients are
+several `Check` calls, because "send to 3 people?" is not a question a human on a phone can answer.
+This deviates from `FileKind`, where read and write share one Kind, and the deviation is the point:
+there a path bounds both directions equally, here the ask is rendered from `Action{Kind, Target}` and
+`mail · chef@firma.de` would not tell a person whether something is being read or sent.
+
+Unlike `memory.Kind` it asks in the **base** policy too, not only in `agentPolicy`. The argument that
+an interactive transcript makes an approval "before instead of after" holds for a note on disk and
+collapses for a mail: there is no after in which it can be taken back.
+
+The credential does **not** go through `secret.Injector`. That is the cookie jar for outgoing HTTP —
+a `Binding` stamps one secret into one header — and mail is neither HTTP nor one value. The mail tool
+is host-side Go and resolves from the `Store` directly, the way the LLM and embedding endpoints do;
+the guest still never sees a value, because a plugin's `mail_send` lands in the host tool like every
+other call. Two vault entries rather than one JSON blob, so `scanExact` knows each value separately —
+a blob would register as a single secret and let the bare password through. The **username stays out
+of the vault**: it is the household's own address, appears legitimately in half of what leaves, and as
+a registered secret the scanner would redact it everywhere. The outgoing body runs through
+`ScanEgress` — it is model output going to a third party, the shortest exfiltration path there is —
+and the refusal handed back to the model is generic. Unlike a rejected `http_write` there is nothing
+for it to correct, and the specific error would tell it which text is a stored secret.
+
+Dependencies: **`emersion/go-imap/v2` + `go-message`**, pinned, with `net/smtp` for submission.
+Rejected: our own IMAP client on the `internal/mcp` precedent. Measured, the library costs three
+modules (`go-imap/v2`, `go-message`, `go-sasl`) plus `golang.org/x/text`, all pure Go — and the hard
+part of mail is not the protocol but MIME: encoded-words, quoted-printable, nested multiparts,
+charsets that are not UTF-8. `x/text` is exactly what `go-message` carries for the last of those. An
+own client would have had to borrow `go-message` anyway, leaving the difficult half foreign and the
+easy half hand-written. The cost is that v2 is a beta — `v2.0.0-beta.8`, tagged but pre-1.0 and free
+to move its API; the precedent for pinning such a dependency is `go-tui`, and the library stays behind
+our own facade so it can be swapped.
+
+Searching is **server-side IMAP `SEARCH`**, and mail is deliberately NOT folded into the knowledge
+index. `knowledge_search` is ungated on the argument that it is context and never authority, and that
+argument rests on the corpus being what the household itself filed in `mnt/knowledge`. A mailbox is
+the opposite: anyone who knows the address can write to it. Indexing it would hand every sender a
+write into the assistant's retrieval corpus — worse than reading one mail, because the retrieval
+surfaces it at a moment the attacker picks rather than the moment somebody opens the message, and the
+reciprocal-rank fusion that ranks a search erases which corpus a hit came from. Two further reasons
+point the same way: embedding a mailbox sends the household's whole private correspondence to a remote
+embedder, where today only deliberately filed documents go, and keeping it current needs UIDVALIDITY,
+deletions and moves — a sync engine, against a directory walk. `SEARCH` costs one command and copies
+nothing. What it does not do is semantics, which is the open door: a mail-specific index, its own
+corpus, its own provenance, never fused into the same ranking.
+
+*Decided.*
+

@@ -111,6 +111,11 @@ name resolution for three: a skill names itself in SKILL.md) ·
 port, an `Embedder` port with a remote OpenAI-compatible adapter, hybrid cosine+BM25 fused by
 reciprocal rank, an index OUTSIDE the mount that records its model and refuses to mix embedders, and
 a one-minute reconcile that costs a directory walk when nothing changed) ·
+`mail` (the household's mailbox over `go-imap/v2`, kept behind a narrow facade: reading and
+server-side `SEARCH` are ungated, sending gates on `SendKind` with the RECIPIENT as target and one
+check per address. The account is a plain `mail.json`; the password lives in the vault under a name
+the file cannot change, and never rides the HTTP `secret.Injector`. Not folded into `knowledge` —
+ADR-17 says why) ·
 `chat` (file-backed transcript store + Manager) · `agent` (declaration + cron only; execution is
 injected by the workspace) ·
 `workspace` (the composition root, cut in two along ONE question — what may not exist twice. The
@@ -156,6 +161,8 @@ CGO — the package doc says why not onnxruntime, wasm or a tensor framework, wi
 | `remind` `remind_list` `remind_cancel` | `RemindKind` |
 | `memory_write` (`internal/memory`) | `memory.Kind`, target = note path, **outside `mnt`**; allowed in chat, asked in agent runs |
 | `memory_read` (`internal/memory`) | **ungated** — context, never authority (same argument as `skill_read`) |
+| `mail_send` (`internal/mail`) | `mail.SendKind`, target = recipient address, one check per address; asked in chat AND in agent runs; widening `*@domain` |
+| `mail_list` `mail_search` `mail_read` (`internal/mail`) | **ungated** — context, never authority; reading PEEKS, so nothing is marked as read; only registered when the workspace has a `mail.json` |
 | `time_now` `wake` | **ungated** — zero authority (reading a clock reaches nothing), `wake` bounded |
 | `whoami` (`internal/speaker`) | **ungated** — only registered when `NOCTURN_SPEAKER_MODEL` is set |
 | `knowledge_search` (`internal/knowledge`) | **ungated** — context, never authority; only registered when an embedding endpoint is configured |
@@ -165,7 +172,9 @@ CGO — the package doc says why not onnxruntime, wasm or a tensor framework, wi
 **Dependencies:** agentkit core: **none**. nocturn: `wazero`, `coder/websocket`,
 `libp2p/zeroconf/v2`, `x/crypto`, `x/net`, `x/oauth2`, `aho-corasick` (leak scanner only),
 `yaml.v3` (skill frontmatter only), `lmittmann/tint`, `godotenv`,
-`grindlemire/go-tui` (the terminal UI; pre-1.0, PINNED — its only runtime dependency is `x/sys`).
+`grindlemire/go-tui` (the terminal UI; pre-1.0, PINNED — its only runtime dependency is `x/sys`),
+`emersion/go-imap/v2` + `go-message` (mail; pre-1.0 beta, PINNED — MIME and charset decoding is the
+part worth borrowing, see ADR-17; they bring `go-sasl` and `x/text`).
 `go-openai` is indirect.
 **Rejected:** langchaingo (290 deps, brings its own loop that bypasses our security).
 **Dev tools:** `wat2wasm` (brew wabt) for the WAT test guests; `wasi-sdk` + a quickjs-ng checkout
@@ -185,6 +194,11 @@ Read this before touching anything security-shaped — it is easy to assume the 
 - **The workspace root policy** (`internal/workspace/workspace.go:policy`): `NetKind` and `FileKind`
   → **ask, remembered for the session**; every other kind → **allow**. It is *not* deny-by-default.
   Tightening it is a deliberate change, not a bugfix.
+- **`mail.SendKind` asks in BOTH policies**, which is the one place the memory argument below does
+  not carry. A transcript showing a write after the fact is enough when the thing written is a note on
+  disk; a message that has reached a third party has no afterwards. Its target is the recipient rather
+  than the mail host, because a grant for `smtp.provider.de` would stand for every future message to
+  everyone — and reading is ungated on the same footing as `knowledge_search`.
 - **`agentPolicy` is `policy` plus `memory.Kind` → ask** — the one axis staggered by who is watching.
   A chat shows the write in its transcript as it happens, so asking would only buy "before" instead
   of "after"; an unattended run has no reader, so it asks out of band (and with no device, denies).
@@ -481,7 +495,7 @@ go generate ./internal/webui/         # copies dist/mobile/browser in; no bundle
 # The .gsx templates compile to committed *_gsx.go; regenerate after touching one.
 go install github.com/grindlemire/go-tui/cmd/tui@v0.18.2
 tui generate ./internal/tui/...
-#   subcommands: auth <provider> · secret set|ls · ls · version · help (most take -w)
+#   subcommands: auth <provider> · secret set|ls · mail setup|check · ls · version · help (most take -w)
 
 cd docs && npm run build              # generates the Catalog section from catalog/, THEN astro build
 #   (a bare `npx astro build` skips the generator and publishes the site without that section)

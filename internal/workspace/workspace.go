@@ -34,6 +34,7 @@ import (
 	"github.com/efuturetoday/nocturn/internal/chat"
 	"github.com/efuturetoday/nocturn/internal/knowledge"
 	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
+	"github.com/efuturetoday/nocturn/internal/mail"
 	"github.com/efuturetoday/nocturn/internal/memory"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -232,6 +233,33 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace %q: memory: %w", name, err)
 	}
 	baseTools = append(baseTools, memTools...)
+
+	// Mail: the household's mailbox, offered only when mail.json names one. The password is NOT in
+	// that file — it is read from THIS workspace's vault here, at the composition root, because
+	// secret.Store exposes presence and never value on purpose. A locked vault therefore means the
+	// tools exist and say what is missing, which is better than a mailbox that silently is not there.
+	acct, hasMail, err := mail.LoadAccount(filepath.Join(dir, mail.ConfigFile))
+	if err != nil {
+		return nil, fmt.Errorf("workspace %q: %w", name, err)
+	}
+	if hasMail {
+		mailTools, err := mail.New(mail.Config{
+			Account: acct,
+			Password: func(secretName string) (string, bool) {
+				if sec.vault == nil {
+					return "", false
+				}
+				v, ok := sec.vault.Get(secretName)
+				return string(v), ok
+			},
+			Scanner: scanner,
+			Log:     wslog.With("component", "mail"),
+		}).Tools()
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q: mail tools: %w", name, err)
+		}
+		baseTools = append(baseTools, mailTools...)
+	}
 
 	// Knowledge: the user's OWN documents, and the mirror image of memory. It lives INSIDE mnt,
 	// because documents are data the human puts there and the model may read and write like any other
