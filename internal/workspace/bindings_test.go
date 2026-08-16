@@ -115,6 +115,8 @@ func (l *callOnceLLM) Next(_ context.Context, conv []agentkit.Message, _ []agent
 // alwaysYes stands in for the human at the phone, approving without remembering.
 type alwaysYes struct{}
 
+var _ gate.Approver = (*alwaysYes)(nil)
+
 func (alwaysYes) Ask(context.Context, gate.Action, gate.Recall, []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	return true, gate.Grant{}, gate.RecallNever, nil
 }

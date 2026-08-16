@@ -35,6 +35,8 @@ type fakeApprover struct {
 	lastCeiling gate.Recall
 }
 
+var _ gate.Approver = (*fakeApprover)(nil)
+
 func (f *fakeApprover) Ask(ctx context.Context, a gate.Action, ceiling gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	f.mu.Lock()
 	f.calls++
@@ -386,5 +388,16 @@ func TestOfferable(t *testing.T) {
 					tc.want, tc.ceiling, tc.widens, recall, ok, tc.wantRecall, tc.wantOK)
 			}
 		})
+	}
+}
+
+// TestOfferable_AlwaysLeavesAnAnswer pins the property every approver's sheet depends on: whatever
+// the ceiling, "allow once" survives. Filtering by a ceiling must narrow the answers, never remove
+// them all — an action nobody can approve is not a stricter policy, it is a broken one.
+func TestOfferable_AlwaysLeavesAnAnswer(t *testing.T) {
+	for _, ceiling := range []gate.Recall{gate.RecallNever, gate.RecallSession, gate.RecallAlways} {
+		if _, ok := gate.Offerable(gate.RecallNever, ceiling, false); !ok {
+			t.Errorf("ceiling %v left no answer at all", ceiling)
+		}
 	}
 }

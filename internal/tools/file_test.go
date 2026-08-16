@@ -495,6 +495,8 @@ func TestFile_AbsolutePath_Contained(t *testing.T) {
 // approverFunc adapts a func to gate.Approver.
 type approverFunc func(context.Context, gate.Action, []gate.Grant) (bool, gate.Grant, gate.Recall, error)
 
+var _ gate.Approver = approverFunc(nil)
+
 func (f approverFunc) Ask(ctx context.Context, a gate.Action, _ gate.Recall, s []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	return f(ctx, a, s)
 }

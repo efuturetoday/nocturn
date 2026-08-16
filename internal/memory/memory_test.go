@@ -69,6 +69,8 @@ type approver struct {
 	suggest []gate.Grant
 }
 
+var _ gate.Approver = (*approver)(nil)
+
 func (a *approver) Ask(_ context.Context, act gate.Action, _ gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	a.asked++
 	a.last = act

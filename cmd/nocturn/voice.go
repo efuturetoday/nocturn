@@ -142,29 +142,70 @@ type stdinApprover struct {
 	in *bufio.Reader
 }
 
-func (s *stdinApprover) Ask(_ context.Context, a gate.Action, _ gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+var _ gate.Approver = (*stdinApprover)(nil)
+
+func (s *stdinApprover) Ask(_ context.Context, a gate.Action, ceiling gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
+	// Offer only what the ceiling allows. "o=once" is RecallNever and therefore always there, which
+	// is what keeps a capped action approvable at all — dropping session and always without it would
+	// leave refusal as the only answer.
+	session, sessionOK := gate.Offerable(gate.RecallSession, ceiling, false)
+	always, alwaysOK := gate.Offerable(gate.RecallAlways, ceiling, false)
+
 	fmt.Print("\n  [approve] " + a.Kind)
 	if a.Target != "" {
 		fmt.Print(" → " + a.Target)
 	}
-	fmt.Print(" ? [y=session / a=always")
-	for i, s := range suggest {
-		fmt.Printf(" / %d=always %s", i+1, s.Target)
+	fmt.Print(" ? [o=once")
+	if sessionOK {
+		fmt.Print(" / y=session")
+	}
+	if alwaysOK {
+		fmt.Print(" / a=always")
+	}
+	widenings := make([]gate.Grant, 0, len(suggest))
+	recalls := make([]gate.Recall, 0, len(suggest))
+	for _, s := range suggest {
+		recall, ok := gate.Offerable(gate.RecallAlways, ceiling, true)
+		if !ok {
+			continue
+		}
+		widenings = append(widenings, s)
+		recalls = append(recalls, recall)
+		fmt.Printf(" / %d=%s %s", len(widenings), recallWord(recall), s.Target)
 	}
 	fmt.Print(" / N] ")
 
 	line, _ := s.in.ReadString('\n')
 	switch choice := strings.ToLower(strings.TrimSpace(line)); choice {
+	case "o":
+		return true, exact, gate.RecallNever, nil
 	case "y":
-		return true, exact, gate.RecallSession, nil
-	case "a":
-		return true, exact, gate.RecallAlways, nil
-	default:
-		if n, err := strconv.Atoi(choice); err == nil && n >= 1 && n <= len(suggest) {
-			return true, suggest[n-1], gate.RecallAlways, nil
+		if sessionOK {
+			return true, exact, session, nil
 		}
-		return false, gate.Grant{}, gate.RecallNever, nil
+	case "a":
+		if alwaysOK {
+			return true, exact, always, nil
+		}
+	default:
+		if n, err := strconv.Atoi(choice); err == nil && n >= 1 && n <= len(widenings) {
+			return true, widenings[n-1], recalls[n-1], nil
+		}
+	}
+	return false, gate.Grant{}, gate.RecallNever, nil
+}
+
+// recallWord labels an answer with what it actually does, so a clamped widening does not say
+// "always" while lasting only until the process exits.
+func recallWord(r gate.Recall) string {
+	switch r {
+	case gate.RecallAlways:
+		return "always"
+	case gate.RecallSession:
+		return "session"
+	default:
+		return "once"
 	}
 }
 
@@ -177,6 +218,8 @@ type delayedApprover struct {
 	after time.Duration
 	log   *slog.Logger
 }
+
+var _ gate.Approver = delayedApprover{}
 
 func (d delayedApprover) Ask(ctx context.Context, a gate.Action, _ gate.Recall, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	d.log.Info("simulated approval pending", "kind", a.Kind, "target", a.Target, "after", d.after)

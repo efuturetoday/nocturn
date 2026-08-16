@@ -513,6 +513,8 @@ type announcingApprover struct {
 	log   *slog.Logger
 }
 
+var _ gate.Approver = (*announcingApprover)(nil)
+
 func (a *announcingApprover) Ask(ctx context.Context, act gate.Action, ceiling gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	call, ok := ctx.Value(callKey{}).(agentkit.LiveToolCall)
 	if !ok {

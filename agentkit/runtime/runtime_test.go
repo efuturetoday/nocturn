@@ -128,6 +128,8 @@ type fakeApprover struct {
 	calls int
 }
 
+var _ gate.Approver = (*fakeApprover)(nil)
+
 func (f *fakeApprover) Ask(_ context.Context, a gate.Action, _ gate.Recall, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	f.mu.Lock()
 	f.calls++
