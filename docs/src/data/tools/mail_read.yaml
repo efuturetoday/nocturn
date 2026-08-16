@@ -23,8 +23,10 @@ input:
 
 output: >-
   A JSON object with `uid`, `from`, `to`, `subject`, `date` and `body`. The body is capped at
-  **16 KiB** and truncation is marked. A message with no plain-text part comes back with an empty
-  body rather than a page of markup, and attachments are not carried at all.
+  **16 KiB** — for the whole message, not per part, and enforced while reading rather than by cutting
+  a finished string — and truncation is marked. Several plain-text parts are separated by a blank
+  line instead of running into one another. A message with no plain-text part comes back with an
+  empty body rather than a page of markup, and attachments are not carried at all.
 
 js:
   wrapper: null
