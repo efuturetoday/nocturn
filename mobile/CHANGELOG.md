@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/efuturetoday/nocturn/compare/mobile-v0.3.0...mobile-v0.3.1) (2026-08-16)
+
+
+### Bug Fixes
+
+* **mobile:** show the demo, stop faking a scan the browser cannot do ([#32](https://github.com/efuturetoday/nocturn/issues/32)) ([c3dd89b](https://github.com/efuturetoday/nocturn/commit/c3dd89bac29137a08ab2050e74d1f546eeb2039a))
+
 ## [0.3.0](https://github.com/efuturetoday/nocturn/compare/mobile-v0.2.0...mobile-v0.3.0) (2026-08-14)
 
 
