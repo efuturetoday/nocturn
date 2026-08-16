@@ -78,7 +78,7 @@ func Dial(ctx context.Context, acct Account, password string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mail: dial %s: %w", acct.IMAPAddr, err)
 	}
-	if err := boundSession(ctx, conn); err != nil {
+	if err := setSessionDeadline(ctx, conn); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("mail: %s: %w", acct.IMAPAddr, err)
 	}
@@ -101,10 +101,10 @@ func withSessionDeadline(ctx context.Context) (context.Context, context.CancelFu
 	return context.WithTimeout(ctx, sessionTimeout)
 }
 
-// boundSession stamps the deadline onto the connection, so every command after the handshake is
+// setSessionDeadline stamps the deadline onto the connection, so every command after the handshake is
 // covered too. The deadline is absolute, so it outlives the context it was read from — cancelling
 // that context does not shorten a session already under way.
-func boundSession(ctx context.Context, conn net.Conn) error {
+func setSessionDeadline(ctx context.Context, conn net.Conn) error {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(sessionTimeout)
@@ -251,14 +251,14 @@ func (c *Client) Read(folder string, uid uint32) (Message, error) {
 		return Message{}, fmt.Errorf("mail: fetch uid %d from %q: %w", uid, folder, err)
 	}
 	if len(msgs) == 0 {
-		return Message{}, fmt.Errorf("mail: uid %d in %q: %w", uid, folder, ErrNotFound)
+		return Message{}, fmt.Errorf("uid %d in %q: %w", uid, folder, ErrNotFound)
 	}
 	buf := msgs[0]
 	m := Message{Header: headerOf(buf)}
 	if buf.Envelope != nil {
 		m.To = addresses(buf.Envelope.To)
 	}
-	text, err := plainText(buf.FindBodySection(section))
+	text, err := plainText(buf.FindBodySection(section), maxBodyBytes)
 	if err != nil {
 		return Message{}, fmt.Errorf("mail: parse uid %d: %w", uid, err)
 	}
@@ -268,7 +268,7 @@ func (c *Client) Read(folder string, uid uint32) (Message, error) {
 
 // ErrNotFound reports a UID the server does not have — a message moved or deleted between a listing
 // and a read, which is ordinary rather than exceptional, so callers branch on it.
-var ErrNotFound = errors.New("message not found")
+var ErrNotFound = errors.New("mail: message not found")
 
 func headerOf(buf *imapclient.FetchMessageBuffer) Header {
 	h := Header{UID: uint32(buf.UID)}
@@ -295,11 +295,20 @@ func addresses(addrs []imap.Address) []string {
 	return out
 }
 
+// maxBodyBytes is how much readable text one message may contribute, across all of its parts. A
+// mailbox is an unbounded corpus nobody here controls: without a cap, one message decides how much
+// memory this call allocates and how much of the model's context it fills.
+const maxBodyBytes = 16 << 10
+
 // plainText pulls the text/plain body out of a raw message, decoding transfer encoding and charset on
-// the way. A message with no plain part yields "" and no error: HTML-only mail is common and is not a
-// failure, and handing the model a page of markup would be worse than handing it nothing.
-func plainText(raw []byte) (string, error) {
-	if len(raw) == 0 {
+// the way, and stops after limit bytes. A message with no plain part yields "" and no error:
+// HTML-only mail is common and is not a failure, and handing the model a page of markup would be
+// worse than handing it nothing.
+//
+// It reads one byte past the limit on purpose, so a caller can tell a body that happened to end
+// exactly there from one that was cut.
+func plainText(raw []byte, limit int) (string, error) {
+	if len(raw) == 0 || limit <= 0 {
 		return "", nil
 	}
 	r, err := gomail.CreateReader(bytes.NewReader(raw))
@@ -308,7 +317,7 @@ func plainText(raw []byte) (string, error) {
 	}
 	defer r.Close()
 	var b strings.Builder
-	for {
+	for b.Len() <= limit {
 		p, err := r.NextPart()
 		if errors.Is(err, io.EOF) {
 			break
@@ -324,11 +333,12 @@ func plainText(raw []byte) (string, error) {
 		if err != nil || t != "text/plain" {
 			continue
 		}
-		body, err := io.ReadAll(p.Body)
-		if err != nil {
+		if b.Len() > 0 {
+			b.WriteString("\n\n") // parts are separate texts; concatenating them joins two sentences
+		}
+		if _, err := io.Copy(&b, io.LimitReader(p.Body, int64(limit-b.Len())+1)); err != nil {
 			return "", err
 		}
-		b.Write(body)
 	}
 	return b.String(), nil
 }

@@ -49,11 +49,7 @@ func Send(ctx context.Context, acct Account, password string, msg Outgoing) erro
 	if err != nil {
 		return err
 	}
-	host, port, err := net.SplitHostPort(acct.SMTPAddr)
-	if err != nil {
-		return fmt.Errorf("mail: smtp address %q: %w", acct.SMTPAddr, err)
-	}
-	c, err := connectSMTP(ctx, acct, password, host, port)
+	c, err := connectSMTP(ctx, acct, password)
 	if err != nil {
 		return err
 	}
@@ -84,7 +80,11 @@ func Send(ctx context.Context, acct Account, password string, msg Outgoing) erro
 // connectSMTP opens an authenticated submission session. Shared by Send and Verify, which is the
 // point: what a setup command checks has to be the same path a message later takes, or a verified
 // account can still fail on the first real send.
-func connectSMTP(ctx context.Context, acct Account, password, host, port string) (*smtp.Client, error) {
+func connectSMTP(ctx context.Context, acct Account, password string) (*smtp.Client, error) {
+	host, port, err := net.SplitHostPort(acct.SMTPAddr)
+	if err != nil {
+		return nil, fmt.Errorf("mail: smtp address %q: %w", acct.SMTPAddr, err)
+	}
 	conn, err := dialSMTP(ctx, acct.SMTPAddr, host, port)
 	if err != nil {
 		return nil, err
@@ -136,7 +136,7 @@ func dialSMTP(ctx context.Context, addr, host, port string) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mail: dial %s: %w", addr, err)
 	}
-	if err := boundSession(ctx, conn); err != nil {
+	if err := setSessionDeadline(ctx, conn); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("mail: %s: %w", addr, err)
 	}

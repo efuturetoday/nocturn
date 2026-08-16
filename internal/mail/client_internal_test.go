@@ -23,7 +23,7 @@ Content-Type: text/plain; charset=utf-8
 
 Bis Freitag dann.
 `)
-	got, err := plainText(raw)
+	got, err := plainText(raw, maxBodyBytes)
 	if err != nil {
 		t.Fatalf("plainText: %v", err)
 	}
@@ -49,7 +49,7 @@ Content-Type: text/html; charset=utf-8
 <html><body><p>Bis Freitag.</p></body></html>
 --xx--
 `)
-	got, err := plainText(raw)
+	got, err := plainText(raw, maxBodyBytes)
 	if err != nil {
 		t.Fatalf("plainText: %v", err)
 	}
@@ -72,7 +72,7 @@ Content-Transfer-Encoding: quoted-printable
 
 Sch=F6ne Gr=FC=DFe
 `)
-	got, err := plainText(raw)
+	got, err := plainText(raw, maxBodyBytes)
 	if err != nil {
 		t.Fatalf("plainText: %v", err)
 	}
@@ -90,7 +90,7 @@ Content-Type: text/html; charset=utf-8
 
 <html><body>Angebote</body></html>
 `)
-	got, err := plainText(raw)
+	got, err := plainText(raw, maxBodyBytes)
 	if err != nil {
 		t.Fatalf("plainText: %v", err)
 	}
@@ -117,7 +117,7 @@ Content-Disposition: attachment; filename="liste.txt"
 GEHEIMER ANHANG
 --xx--
 `)
-	got, err := plainText(raw)
+	got, err := plainText(raw, maxBodyBytes)
 	if err != nil {
 		t.Fatalf("plainText: %v", err)
 	}
@@ -130,7 +130,79 @@ GEHEIMER ANHANG
 }
 
 func TestPlainTextEmpty(t *testing.T) {
-	got, err := plainText(nil)
+	got, err := plainText(nil, maxBodyBytes)
+	if err != nil {
+		t.Fatalf("plainText: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+// TestPlainTextStopsAtTheLimit pins the cap. A mailbox is an unbounded corpus nobody here controls,
+// so without one a single message decides how much memory the call allocates and how much of the
+// model's context it fills.
+func TestPlainTextStopsAtTheLimit(t *testing.T) {
+	raw := crlf("Content-Type: text/plain; charset=utf-8\n\n" + strings.Repeat("a", 100_000))
+	got, err := plainText(raw, 1000)
+	if err != nil {
+		t.Fatalf("plainText: %v", err)
+	}
+	// One byte past the limit, so a caller can tell a cut body from one that ended there.
+	if len(got) != 1001 {
+		t.Errorf("read %d bytes, want 1001 (the limit plus the marker byte)", len(got))
+	}
+}
+
+// TestPlainTextLimitSpansEveryPart pins that the cap is for the MESSAGE, not for each part: twenty
+// parts under the limit each would otherwise add up to twenty times it.
+func TestPlainTextLimitSpansEveryPart(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("Content-Type: multipart/mixed; boundary=xx\n\n")
+	for range 20 {
+		b.WriteString("--xx\nContent-Type: text/plain; charset=utf-8\n\n" + strings.Repeat("b", 500) + "\n")
+	}
+	b.WriteString("--xx--\n")
+	got, err := plainText(crlf(b.String()), 1000)
+	if err != nil {
+		t.Fatalf("plainText: %v", err)
+	}
+	if len(got) > 1100 { // the limit, its marker byte, and one separator
+		t.Errorf("read %d bytes across 20 parts, want the message-wide limit to hold", len(got))
+	}
+}
+
+// TestPlainTextSeparatesParts pins that two parts do not run into one another — concatenating them
+// joins the last line of one to the first line of the next, and the model reads that as one sentence.
+func TestPlainTextSeparatesParts(t *testing.T) {
+	raw := crlf(`Content-Type: multipart/mixed; boundary=xx
+
+--xx
+Content-Type: text/plain; charset=utf-8
+
+Erster Teil
+--xx
+Content-Type: text/plain; charset=utf-8
+
+Zweiter Teil
+--xx--
+`)
+	got, err := plainText(raw, maxBodyBytes)
+	if err != nil {
+		t.Fatalf("plainText: %v", err)
+	}
+	if !strings.Contains(got, "Erster Teil") || !strings.Contains(got, "Zweiter Teil") {
+		t.Fatalf("a part went missing: %q", got)
+	}
+	if strings.Contains(got, "Erster TeilZweiter") {
+		t.Errorf("the parts were concatenated without a separator: %q", got)
+	}
+}
+
+// TestPlainTextZeroLimit pins that asking for nothing reads nothing, rather than reading everything.
+func TestPlainTextZeroLimit(t *testing.T) {
+	raw := crlf("Content-Type: text/plain; charset=utf-8\n\nirgendwas")
+	got, err := plainText(raw, 0)
 	if err != nil {
 		t.Fatalf("plainText: %v", err)
 	}

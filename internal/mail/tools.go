@@ -25,10 +25,6 @@ const maxLimit = 50
 // defaultLimit is what a call that names no limit gets: a screenful, not a mailbox.
 const defaultLimit = 10
 
-// maxBodyChars bounds the text of one message handed back. Past this a mail is a newsletter or a
-// forwarded thread from 2019, and neither is worth the context it would cost.
-const maxBodyChars = 16 << 10
-
 // Config is what the mail tools need. The workspace assembles it: this package holds no vault handle
 // and reads no configuration file.
 type Config struct {
@@ -224,8 +220,9 @@ func (m *Mailbox) read(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(msg.Text) > maxBodyChars {
-		msg.Text = msg.Text[:maxBodyChars] + "\n[…truncated]"
+	// The reader stops one byte past its limit, so anything longer was cut there rather than ending.
+	if len(msg.Text) > maxBodyBytes {
+		msg.Text = msg.Text[:maxBodyBytes] + "\n[…truncated]"
 	}
 	m.log.Debug("mail read", "folder", folder, "uid", a.UID)
 	return m.marshalRedacted(map[string]any{

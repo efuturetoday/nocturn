@@ -71,11 +71,7 @@ func Verify(ctx context.Context, acct Account, imapPassword, smtpPassword string
 
 // verifySubmission authenticates to the submission server and hangs up without sending.
 func verifySubmission(ctx context.Context, acct Account, password string) error {
-	host, port, err := net.SplitHostPort(acct.SMTPAddr)
-	if err != nil {
-		return fmt.Errorf("mail: smtp address %q: %w", acct.SMTPAddr, err)
-	}
-	c, err := connectSMTP(ctx, acct, password, host, port)
+	c, err := connectSMTP(ctx, acct, password)
 	if err != nil {
 		return err
 	}
