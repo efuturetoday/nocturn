@@ -498,7 +498,7 @@ func TestPolicy_AlwaysSurvivesARestart(t *testing.T) {
 // alwaysApprover is a human who says yes and picks "always", and counts how often it was asked.
 type alwaysApprover struct{ asked int }
 
-func (a *alwaysApprover) Ask(_ context.Context, act gate.Action, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+func (a *alwaysApprover) Ask(_ context.Context, act gate.Action, _ gate.Recall, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	a.asked++
 	return true, gate.Grant{Kind: act.Kind, Target: act.Target}, gate.RecallAlways, nil
 }

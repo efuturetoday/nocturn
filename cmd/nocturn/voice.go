@@ -142,7 +142,7 @@ type stdinApprover struct {
 	in *bufio.Reader
 }
 
-func (s *stdinApprover) Ask(_ context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+func (s *stdinApprover) Ask(_ context.Context, a gate.Action, _ gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
 	fmt.Print("\n  [approve] " + a.Kind)
 	if a.Target != "" {
@@ -178,7 +178,7 @@ type delayedApprover struct {
 	log   *slog.Logger
 }
 
-func (d delayedApprover) Ask(ctx context.Context, a gate.Action, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+func (d delayedApprover) Ask(ctx context.Context, a gate.Action, _ gate.Recall, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	d.log.Info("simulated approval pending", "kind", a.Kind, "target", a.Target, "after", d.after)
 	select {
 	case <-time.After(d.after):

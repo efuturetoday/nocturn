@@ -21,9 +21,15 @@ type answer struct {
 // arrives on. It blocks until the approver has presented, so no test needs a sleep.
 func ask(t *testing.T, ctx context.Context, p *tui.Approver, a gate.Action, suggest ...gate.Grant) (*tui.Ask, <-chan answer) {
 	t.Helper()
+	return askCapped(t, ctx, p, a, gate.RecallAlways, suggest...)
+}
+
+// askCapped is ask with the policy ceiling spelled out, for the tests that are about it.
+func askCapped(t *testing.T, ctx context.Context, p *tui.Approver, a gate.Action, ceiling gate.Recall, suggest ...gate.Grant) (*tui.Ask, <-chan answer) {
+	t.Helper()
 	out := make(chan answer, 1)
 	go func() {
-		approved, grant, recall, err := p.Ask(ctx, a, suggest)
+		approved, grant, recall, err := p.Ask(ctx, a, ceiling, suggest)
 		out <- answer{approved, grant, recall, err}
 	}()
 	return <-p.Asks(), out
@@ -179,7 +185,7 @@ func TestAskAfterCloseDoesNotBlock(t *testing.T) {
 	p := tui.NewApprover()
 	p.Close()
 
-	approved, _, recall, err := p.Ask(t.Context(), gate.Action{Kind: "net", Target: "x"}, nil)
+	approved, _, recall, err := p.Ask(t.Context(), gate.Action{Kind: "net", Target: "x"}, gate.RecallAlways, nil)
 
 	if approved || recall != gate.RecallNever || !errors.Is(err, tui.ErrClosed) {
 		t.Errorf("Ask() = %v/%v/%v, want a closed refusal", approved, recall, err)
@@ -194,4 +200,41 @@ func TestAnsweringAnAbandonedAskIsHarmless(t *testing.T) {
 	<-res
 
 	pending.Resolve(2) // the modal was still on screen when the turn died
+}
+
+// TestOptionsRespectTheCeiling pins that the terminal sheet is filtered by the same rule as the
+// phone's. A person sitting at a keyboard must not be offered "always" for a kind the gate asks about
+// every time either — the lie is the same lie, it is just closer.
+func TestOptionsRespectTheCeiling(t *testing.T) {
+	p := tui.NewApprover()
+	defer p.Close()
+
+	action := gate.Action{Kind: "net", Target: "api.example.com"}
+	widening := gate.Grant{Kind: "net", Target: "*.example.com"}
+
+	t.Run("never leaves one answer", func(t *testing.T) {
+		pending, out := askCapped(t, t.Context(), p, action, gate.RecallNever, widening)
+		defer func() { pending.Deny(); <-out }()
+
+		if len(pending.Options) != 1 {
+			t.Fatalf("offered %d answers under a never ceiling: %+v", len(pending.Options), pending.Options)
+		}
+		if o := pending.Options[0]; o.Recall != gate.RecallNever || o.Widens {
+			t.Errorf("the single answer was %+v, want the exact target at never", o)
+		}
+	})
+
+	t.Run("session drops always and clamps the widening", func(t *testing.T) {
+		pending, out := askCapped(t, t.Context(), p, action, gate.RecallSession, widening)
+		defer func() { pending.Deny(); <-out }()
+
+		for _, o := range pending.Options {
+			if o.Recall > gate.RecallSession {
+				t.Errorf("answer %q offered recall %v above the ceiling", o.Label, o.Recall)
+			}
+		}
+		if len(pending.Options) != 3 { // once, this session, and the widening
+			t.Errorf("offered %d answers, want 3: %+v", len(pending.Options), pending.Options)
+		}
+	})
 }

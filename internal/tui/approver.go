@@ -85,8 +85,8 @@ func (p *Approver) Close() { p.once.Do(func() { close(p.done) }) }
 
 // Ask presents the action and blocks until the person answers, the turn is cancelled, or the UI
 // closes. It implements gate.Approver.
-func (p *Approver) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
-	ask := &Ask{Action: a, Options: options(a, suggest), reply: make(chan int, 1)}
+func (p *Approver) Ask(ctx context.Context, a gate.Action, ceiling gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+	ask := &Ask{Action: a, Options: options(a, ceiling, suggest), reply: make(chan int, 1)}
 
 	select {
 	case p.asks <- ask:
@@ -128,20 +128,29 @@ func deny(err error) (bool, gate.Grant, gate.Recall, error) {
 // each on the action's EXACT target — then the tool's suggested widenings, each always-remembered.
 // The order is the presentation order and matches internal/hitl, so the same action reads the same
 // way whether it is answered here or on the phone.
-func options(a gate.Action, suggest []gate.Grant) []Option {
+//
+// The ceiling drops what the gate would narrow anyway, through the same gate.Offerable the phone's
+// sheet uses — a person at a terminal must not be offered "always" for a kind that is asked every
+// time either. A widening's LABEL still says "always", which is why an unofferable one is dropped
+// rather than relabelled: "always net api.example.com, for this call only" is not a button.
+func options(a gate.Action, ceiling gate.Recall, suggest []gate.Grant) []Option {
 	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
-	opts := []Option{
-		{Label: "once", Grant: exact, Recall: gate.RecallNever},
-		{Label: "this session", Grant: exact, Recall: gate.RecallSession},
-		{Label: "always", Grant: exact, Recall: gate.RecallAlways},
+	var opts []Option
+	add := func(lbl string, want gate.Recall, g gate.Grant, widens bool) {
+		recall, ok := gate.Offerable(want, ceiling, widens)
+		if !ok {
+			return
+		}
+		opts = append(opts, Option{Label: lbl, Grant: g, Recall: recall, Widens: widens})
 	}
+	answer := func(lbl string, want gate.Recall) { add(lbl, want, exact, false) }
+	widening := func(g gate.Grant) { add("always "+label(g), gate.RecallAlways, g, true) }
+
+	answer("once", gate.RecallNever)
+	answer("this session", gate.RecallSession)
+	answer("always", gate.RecallAlways)
 	for _, s := range suggest {
-		opts = append(opts, Option{
-			Label:  "always " + label(s),
-			Grant:  s,
-			Recall: gate.RecallAlways,
-			Widens: true,
-		})
+		widening(s)
 	}
 	return opts
 }

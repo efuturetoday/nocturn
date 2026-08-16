@@ -147,7 +147,7 @@ type consoleApprover struct {
 	in *bufio.Reader
 }
 
-func (c *consoleApprover) Ask(_ context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+func (c *consoleApprover) Ask(_ context.Context, a gate.Action, _ gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
 	fmt.Print("\n  [approve] " + a.Kind)
 	if a.Target != "" {

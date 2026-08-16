@@ -122,8 +122,18 @@ the ceiling the policy allows and what the human actually chose — so `AskWith(
 not mean "remember everything forever". It means the person may answer for good, and the approver
 may offer that. Answering "just this once" still stores nothing.
 
-A voice session is the exception: it caps at `RecallNever`, because whoever is audible can speak, and
-a spoken "always" would be a standing permission granted by a channel that authenticates nobody.
+**The ceiling goes with the question.** The approver is told it, and every answer it offers passes
+`gate.Offerable` first, so a sheet never shows an answer the gate would narrow afterwards. Under a
+`RecallNever` ceiling there is exactly one answer — allow once — because the other three would all
+resolve to it. A widening is dropped there rather than shown, since a broader grant that is never
+remembered covers nothing beyond the call in front of you.
+
+That rule lives in `gate` and not in either approver, because the terminal and the app each render
+their own sheet and the same action has to read the same way in both.
+
+A voice session is the exception that made this necessary: it caps at `RecallNever`, because whoever
+is audible can speak, and a spoken "always" would be a standing permission granted by a channel that
+authenticates nobody. Its sheet now says so instead of offering three buttons that do one thing.
 
 ```json
 [

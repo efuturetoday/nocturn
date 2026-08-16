@@ -32,13 +32,15 @@ type fakeApprover struct {
 	calls       int
 	lastAction  gate.Action
 	lastSuggest []gate.Grant
+	lastCeiling gate.Recall
 }
 
-func (f *fakeApprover) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+func (f *fakeApprover) Ask(ctx context.Context, a gate.Action, ceiling gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	f.mu.Lock()
 	f.calls++
 	f.lastAction = a
 	f.lastSuggest = suggest
+	f.lastCeiling = ceiling
 	f.mu.Unlock()
 
 	if f.entered != nil {
@@ -321,4 +323,68 @@ func TestCheck_PausesTurnClockAroundAsk(t *testing.T) {
 			t.Fatalf("ctx cancelled after resume: %v", err)
 		}
 	})
+}
+
+// TestCheck_TellsTheApproverTheCeiling pins the whole point of the ceiling parameter: an approver
+// renders the answer sheet, so it has to know which answers survive. Before this it did not, and
+// Check narrowed the human's choice afterwards — a person pressed "always" and was asked again the
+// next day, having answered a question that was never on offer.
+func TestCheck_TellsTheApproverTheCeiling(t *testing.T) {
+	for _, ceiling := range []gate.Recall{gate.RecallNever, gate.RecallSession, gate.RecallAlways} {
+		appr := &fakeApprover{approved: true}
+		policy := gate.PolicyFunc(func(gate.Action) gate.Ruling { return gate.AskWith(ceiling) })
+		ctx := gate.With(t.Context(), policy, gate.NewMemGrants(), appr)
+
+		if err := gate.Check(ctx, gate.Action{Kind: "net", Target: "example.com"}, nil); err != nil {
+			t.Fatalf("ceiling %v: Check: %v", ceiling, err)
+		}
+		if appr.lastCeiling != ceiling {
+			t.Errorf("approver was told ceiling %v, want %v", appr.lastCeiling, ceiling)
+		}
+	}
+}
+
+// TestCheck_ClampsAnApproverThatIgnoresTheCeiling pins the belt-and-braces half. Telling the approver
+// is about honesty; this is about a third-party implementation that answers above the cap anyway.
+func TestCheck_ClampsAnApproverThatIgnoresTheCeiling(t *testing.T) {
+	appr := &fakeApprover{approved: true, recall: gate.RecallAlways}
+	grants := gate.NewMemGrants()
+	policy := gate.PolicyFunc(func(gate.Action) gate.Ruling { return gate.AskWith(gate.RecallNever) })
+	ctx := gate.With(t.Context(), policy, grants, appr)
+
+	action := gate.Action{Kind: "net", Target: "example.com"}
+	if err := gate.Check(ctx, action, nil); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if grants.Allowed(action, nil) {
+		t.Error("an answer above a RecallNever ceiling was remembered anyway")
+	}
+}
+
+func TestOfferable(t *testing.T) {
+	cases := []struct {
+		name       string
+		want       gate.Recall
+		ceiling    gate.Recall
+		widens     bool
+		wantRecall gate.Recall
+		wantOK     bool
+	}{
+		{"under the ceiling, untouched", gate.RecallSession, gate.RecallAlways, false, gate.RecallSession, true},
+		{"at the ceiling, untouched", gate.RecallAlways, gate.RecallAlways, false, gate.RecallAlways, true},
+		{"an exact answer above the ceiling is dropped, not clamped", gate.RecallAlways, gate.RecallSession, false, gate.RecallAlways, false},
+		{"once survives every ceiling", gate.RecallNever, gate.RecallNever, false, gate.RecallNever, true},
+		{"always is dropped under a never ceiling", gate.RecallAlways, gate.RecallNever, false, gate.RecallAlways, false},
+		{"a widening is clamped like anything else", gate.RecallAlways, gate.RecallSession, true, gate.RecallSession, true},
+		{"a widening that remembers nothing is not an answer", gate.RecallAlways, gate.RecallNever, true, gate.RecallNever, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recall, ok := gate.Offerable(tc.want, tc.ceiling, tc.widens)
+			if recall != tc.wantRecall || ok != tc.wantOK {
+				t.Errorf("Offerable(%v, %v, widens=%v) = (%v, %v), want (%v, %v)",
+					tc.want, tc.ceiling, tc.widens, recall, ok, tc.wantRecall, tc.wantOK)
+			}
+		})
+	}
 }

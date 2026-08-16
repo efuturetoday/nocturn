@@ -23,7 +23,7 @@ type recordingApprover struct {
 	approve  bool
 }
 
-func (r *recordingApprover) Ask(_ context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+func (r *recordingApprover) Ask(_ context.Context, a gate.Action, _ gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.asked = append(r.asked, a)

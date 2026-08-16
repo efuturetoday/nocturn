@@ -472,7 +472,7 @@ func TestToolResult_LateWhenTheConversationMovedOn(t *testing.T) {
 // test says so.
 type blockingApprover struct{ release chan struct{} }
 
-func (b blockingApprover) Ask(ctx context.Context, a gate.Action, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+func (b blockingApprover) Ask(ctx context.Context, a gate.Action, _ gate.Recall, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	select {
 	case <-b.release:
 		return true, gate.Grant{Kind: a.Kind, Target: a.Target}, gate.RecallNever, nil

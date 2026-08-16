@@ -25,7 +25,7 @@ type recordingApprover struct {
 	remember gate.Grant
 }
 
-func (r *recordingApprover) Ask(_ context.Context, _ gate.Action, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+func (r *recordingApprover) Ask(_ context.Context, _ gate.Action, _ gate.Recall, _ []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	r.mu.Lock()
 	r.asked = true
 	r.mu.Unlock()

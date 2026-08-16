@@ -186,8 +186,8 @@ func (b *Broker) Resolve(id, option string) {
 // ErrApprovalTimeout, and a cancelled turn returns ctx.Err() — so the caller can tell "the human
 // declined" from "nobody answered" from "the turn was torn down". gate.Check pauses the turn clock
 // around this call.
-func (b *Broker) Ask(ctx context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
-	opts := options(a, suggest)
+func (b *Broker) Ask(ctx context.Context, a gate.Action, ceiling gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+	opts := options(a, ceiling, suggest)
 	present := Approval{
 		ID:      newID(),
 		Frame:   agentkit.FrameFrom(ctx), // the tool call asking — for the UI to tie the prompt to it
@@ -284,20 +284,28 @@ func (b *Broker) activeSinks() []Sink {
 // tool's suggested widenings, each always-remembered. The order is the presentation order. The ids
 // are opaque to a client, which chooses by echoing one back; a client keying off them instead of off
 // Recall and Widens is a client bug, because this mapping is the authoritative one either way.
-func options(a gate.Action, suggest []gate.Grant) []Option {
+// Every answer passes gate.Offerable first, so the sheet never shows one the gate would narrow
+// afterwards. A ceiling of RecallNever therefore leaves exactly "once" — which is the truth about a
+// kind that is asked every time, and better said than dressed up as three buttons doing one thing.
+// The rule lives in gate because internal/tui builds the same sheet for the terminal.
+func options(a gate.Action, ceiling gate.Recall, suggest []gate.Grant) []Option {
 	exact := gate.Grant{Kind: a.Kind, Target: a.Target}
-	opts := []Option{
-		{ID: "once", Recall: gate.RecallNever, Grant: exact},
-		{ID: "session", Recall: gate.RecallSession, Grant: exact},
-		{ID: "always", Recall: gate.RecallAlways, Grant: exact},
+	var opts []Option
+	add := func(id string, want gate.Recall, g gate.Grant, widens bool) {
+		recall, ok := gate.Offerable(want, ceiling, widens)
+		if !ok {
+			return
+		}
+		opts = append(opts, Option{ID: id, Recall: recall, Grant: g, Widens: widens})
 	}
+	answer := func(id string, want gate.Recall) { add(id, want, exact, false) }
+	widening := func(id string, g gate.Grant) { add(id, gate.RecallAlways, g, true) }
+
+	answer("once", gate.RecallNever)
+	answer("session", gate.RecallSession)
+	answer("always", gate.RecallAlways)
 	for i, s := range suggest {
-		opts = append(opts, Option{
-			ID:     "widen" + strconv.Itoa(i),
-			Recall: gate.RecallAlways,
-			Grant:  s,
-			Widens: true,
-		})
+		widening("widen"+strconv.Itoa(i), s)
 	}
 	return opts
 }

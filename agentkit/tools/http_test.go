@@ -55,7 +55,7 @@ type fakeApprover struct {
 	approve bool
 }
 
-func (f *fakeApprover) Ask(_ context.Context, a gate.Action, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
+func (f *fakeApprover) Ask(_ context.Context, a gate.Action, _ gate.Recall, suggest []gate.Grant) (bool, gate.Grant, gate.Recall, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.called = true

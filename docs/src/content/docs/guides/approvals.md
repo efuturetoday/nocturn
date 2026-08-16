@@ -75,6 +75,11 @@ grant. The words you read are the app's own, from a table compiled into it. Note
 sheet shows and what it does not: the kind and the target, plus which conversation asked. Not the
 sentence that led there — the decision is about the reach, not about the prose around it.
 
+Not every answer is on offer every time. The policy caps how long an approval may be remembered, and
+the sheet is filtered by that cap — a kind that is asked every time (a voice session, say) offers
+`Allow once` and nothing else. What you are shown is what you can actually get; an answer that the
+gate would quietly shorten is not presented at all.
+
 An answer varies on two axes, and the sheet shows them as two. **Recall** is how long it is kept;
 **reach** is how much it covers. A widening is the only answer that moves both at once, which is why
 it sits apart rather than beside `always`.

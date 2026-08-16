@@ -30,9 +30,14 @@ type askResult struct {
 // the Ask goroutine never blocks after answering. Call it from inside a synctest bubble for the
 // timeout cases; the started goroutine joins the caller's bubble.
 func runAsk(b *hitl.Broker, ctx context.Context, a gate.Action, suggest []gate.Grant) <-chan askResult {
+	return runAskCapped(b, ctx, a, gate.RecallAlways, suggest)
+}
+
+// runAskCapped is runAsk with the policy ceiling spelled out, for the tests that are about it.
+func runAskCapped(b *hitl.Broker, ctx context.Context, a gate.Action, ceiling gate.Recall, suggest []gate.Grant) <-chan askResult {
 	ch := make(chan askResult, 1)
 	go func() {
-		approved, grant, recall, err := b.Ask(ctx, a, suggest)
+		approved, grant, recall, err := b.Ask(ctx, a, ceiling, suggest)
 		ch <- askResult{approved, grant, recall, err}
 	}()
 	return ch
@@ -761,3 +766,62 @@ var _ hitl.Sink = nopSink{}
 
 func (nopSink) Approval(context.Context, hitl.Approval) {}
 func (nopSink) Resolved(context.Context, string)        {}
+
+// TestOptionsUnderARecallNeverCeiling pins the sheet a phone renders for a kind that is asked every
+// time: one answer, "once". Before the ceiling reached the approver it showed three buttons and a
+// widening, and the gate quietly turned every one of them into "once" — so a person's "always" was
+// taken, discarded, and asked for again the next day.
+func TestOptionsUnderARecallNeverCeiling(t *testing.T) {
+	action := gate.Action{Kind: "net", Target: "api.github.com"}
+	suggest := []gate.Grant{{Kind: "net", Target: "*.github.com"}}
+
+	b := hitl.NewBroker(nil, discard())
+	sink := newFakeSink()
+	b.Attach(context.Background(), sink)
+
+	res := runAskCapped(b, context.Background(), action, gate.RecallNever, suggest)
+	call := <-sink.gotApproval
+	defer func() { b.Resolve(call.ID, hitl.DenyOption); <-res }()
+
+	if len(call.Options) != 1 {
+		t.Fatalf("offered %d answers under a never ceiling: %+v", len(call.Options), call.Options)
+	}
+	if o := call.Options[0]; o.ID != "once" || o.Recall != gate.RecallNever {
+		t.Errorf("the single answer was %+v, want once/never", o)
+	}
+}
+
+// TestOptionsUnderARecallSessionCeiling pins the middle case: "always" disappears, and the widening
+// stays but as a session answer — its target is still worth broadening even when the answer cannot be
+// kept forever.
+func TestOptionsUnderARecallSessionCeiling(t *testing.T) {
+	action := gate.Action{Kind: "net", Target: "api.github.com"}
+	suggest := []gate.Grant{{Kind: "net", Target: "*.github.com"}}
+
+	b := hitl.NewBroker(nil, discard())
+	sink := newFakeSink()
+	b.Attach(context.Background(), sink)
+
+	res := runAskCapped(b, context.Background(), action, gate.RecallSession, suggest)
+	call := <-sink.gotApproval
+	defer func() { b.Resolve(call.ID, hitl.DenyOption); <-res }()
+
+	var widen *hitl.Option
+	for i, o := range call.Options {
+		if o.Recall > gate.RecallSession {
+			t.Errorf("answer %q offered recall %v above the ceiling", o.ID, o.Recall)
+		}
+		if o.ID == "always" {
+			t.Error(`"always" was offered under a session ceiling`)
+		}
+		if o.Widens {
+			widen = &call.Options[i]
+		}
+	}
+	if widen == nil {
+		t.Fatal("the widening was dropped under a session ceiling, where it is still meaningful")
+	}
+	if widen.Recall != gate.RecallSession {
+		t.Errorf("the widening carries recall %v, want session", widen.Recall)
+	}
+}

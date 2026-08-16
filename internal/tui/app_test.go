@@ -73,7 +73,7 @@ func pendingAsk(t *testing.T, a *app) (*Ask, <-chan answered) {
 	out := make(chan answered, 1)
 	go func() {
 		ok, grant, recall, _ := a.approver.Ask(t.Context(),
-			gate.Action{Kind: "net", Target: "api.example.com"},
+			gate.Action{Kind: "net", Target: "api.example.com"}, gate.RecallAlways,
 			[]gate.Grant{{Kind: "net", Target: "*.example.com"}})
 		out <- answered{ok, recall, grant.Target}
 	}()
