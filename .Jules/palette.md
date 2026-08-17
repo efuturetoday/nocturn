@@ -1,0 +1,3 @@
+## 2024-08-17 - Add aria-expanded to trigger buttons
+**Learning:** Found a component (`MessageBubbleComponent`) that toggles a modal/accordion via a stateful `signal(false)` bound to an `ion-modal` property. The trigger button lacked an `aria-expanded` tag. For screen reader users to understand that they are interacting with a toggle for a modal or popover, trigger elements must indicate their state explicitly.
+**Action:** When adding or discovering trigger buttons for modals and drop-downs, always ensure the presence of an `[attr.aria-expanded]` bound to the same state as the overlay's visibility. Also remember to use ternary string outputs for boolean Angular aria attributes (e.g., `isOpen() ? 'true' : 'false'`).
