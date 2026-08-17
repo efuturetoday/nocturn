@@ -76,7 +76,7 @@ import { ComposerComponent } from '../../shared/composer';
     <ion-header>
       <ion-toolbar>
         <ion-buttons slot="start">
-          <ion-menu-button menu="main"><svg lucideMenu [size]="24" /></ion-menu-button>
+          <ion-menu-button menu="main" aria-label="Open menu"><svg lucideMenu [size]="24" /></ion-menu-button>
         </ion-buttons>
         <ion-title>{{ title() }}</ion-title>
         <ion-buttons slot="end">
