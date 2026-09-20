@@ -49,7 +49,7 @@ import type { ChatMessageView } from '../../../core/services/chat-view';
     <!-- One finger-sized trigger for the whole turn's tools — tapping opens a window with EVERY tool
          as an accordion, so a fat finger never has to pick one tiny row out of the forest. -->
     @if (message().tools.length) {
-      <button type="button" class="tools-trigger" (click)="open.set(true)">
+      <button type="button" class="tools-trigger" (click)="open.set(true)" aria-label="View tools" [attr.aria-expanded]="open() ? 'true' : 'false'">
         @if (anyRunning()) {
           <ion-spinner name="dots" />
         } @else {
