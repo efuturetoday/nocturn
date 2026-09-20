@@ -1,0 +1,10 @@
+{
+  "title": "Home Assistant",
+  "description": "Read and control the house through Home Assistant's REST API — states, services, history. Needs a long-lived token bound to the Home Assistant host.",
+  "homepage": "https://developers.home-assistant.io/docs/api/rest/",
+  "tags": [
+    "home",
+    "web"
+  ],
+  "serial": 1
+}

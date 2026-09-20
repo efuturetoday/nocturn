@@ -1,0 +1,52 @@
+name: PR Title
+
+# The PR title is a commit message now, so it is checked like one.
+#
+# Merges are squash-only and GitHub takes the squashed commit's SUBJECT from the pull request title
+# (repo setting `squash_merge_commit_title: PR_TITLE`). That subject is the only thing release-please
+# reads to decide whether anything shipped: a title it cannot parse produces no changelog entry and
+# no version bump, silently — the PR merges green and simply never appears in a release.
+#
+# The scopes below are the release-please components (see release-please-config.json). A scope is
+# optional: a change spanning the tree belongs to the root Go module, which has no component name.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint:
+    name: Conventional commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            docs
+            build
+            ci
+            chore
+            refactor
+            test
+            style
+            revert
+          scopes: |
+            mobile
+            satellite
+            docs
+          requireScope: false
+          # Sentence case, no trailing period — the subject reads as an instruction, the way every
+          # commit in this tree already does.
+          subjectPattern: ^(?![A-Z])(?!.*\.$).+$
+          subjectPatternError: |
+            The subject "{subject}" is not formatted correctly.
+            Start it in lower case and leave off the closing period, e.g.
+              feat(mobile): side menu shell and galaxy hero

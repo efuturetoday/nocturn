@@ -5,23 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
-	"github.com/efuturetoday/nocturn/internal/discovery"
-	"github.com/efuturetoday/nocturn/internal/mcp"
-	"github.com/efuturetoday/nocturn/internal/plugin"
+	"github.com/efuturetoday/nocturn/internal/extension"
+	"github.com/efuturetoday/nocturn/internal/mail"
 	"github.com/efuturetoday/nocturn/internal/secret"
+	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
 // runSecretSet seeds a static credential value into a plugin/mcp folder's encrypted secret shard.
 // The target is the owner-namespaced credential the value belongs to — the SAME identifier that shows
 // up in `secret ls`, diagnostics, and the vault:
 //
-//	plugin:<name>/<credential>   a plugin credential (from the plugin's manifest)
-//	mcp:<name>                   an MCP server's bearer (host-bound; the host comes from its mcp.json)
+//	<extension>/<credential>   the credential an extension's declaration names
+//	<extension>                the same, when it declares exactly one
 //
 // The value is read from stdin (never argv), so it can be piped from a password manager. It is sealed
 // into <wsRoot>/<workspace>/<relPath>/secrets.enc under the folder-path-derived key + path-bound AAD —
@@ -62,34 +63,84 @@ func runSecretSet(wsName, target string) error {
 	return nil
 }
 
-// resolveSecretTarget maps an owner-form target to its shard folder (relPath) and the vault key a
-// binding looks the value up under, so a seeded value always lands under exactly the key
-// installPlugins / mcp.NewConn register.
-func resolveSecretTarget(wsDir, target string) (relPath, key string, err error) {
-	switch {
-	case strings.HasPrefix(target, "plugin:"):
-		name, cred, ok := strings.Cut(strings.TrimPrefix(target, "plugin:"), "/")
-		if !ok || !discovery.ValidName(name) || cred == "" {
-			return "", "", fmt.Errorf("plugin target must be plugin:<name>/<credential>, got %q", target)
-		}
-		return "plugins/" + name, plugin.SecretName(name, cred), nil
-
-	case strings.HasPrefix(target, "mcp:"):
-		name := strings.TrimPrefix(target, "mcp:")
-		if !discovery.ValidName(name) {
-			return "", "", fmt.Errorf("mcp target must be mcp:<name>, got %q", target)
-		}
-		srv, ok := mcp.Discover(filepath.Join(wsDir, "mcp"), nil).Get(name)
-		if !ok {
-			return "", "", fmt.Errorf("no MCP server %q in workspace (add mcp/%s/mcp.json first)", name, name)
-		}
-		u, err := url.Parse(srv.URL)
-		if err != nil {
-			return "", "", fmt.Errorf("mcp server %q has an unparseable url: %w", name, err)
-		}
-		return "mcp/" + name, mcp.SecretName(name, u.Host), nil
-
-	default:
-		return "", "", fmt.Errorf("target must be plugin:<name>/<credential> or mcp:<name>, got %q", target)
+// runSecretRemove deletes a seeded credential from its extension's shard. It is the counterpart of
+// runSecretSet and resolves the same target, so a value can always be revoked by the name it was
+// stored under — a credential channel that only ever grows is one nobody can take back.
+func runSecretRemove(wsName, target string) error {
+	master, err := openMaster()
+	if err != nil {
+		return fmt.Errorf("unlock vault: %w", err)
 	}
+	if master == nil {
+		return errors.New("set NOCTURN_MASTER_PASSPHRASE to unlock the vault before removing a secret")
+	}
+	wsDir := filepath.Join(wsRoot, wsName)
+	relPath, secretKey, err := resolveSecretTarget(wsDir, target)
+	if err != nil {
+		return err
+	}
+	sv, err := secret.OpenShard(master, wsDir, wsName, relPath)
+	if err != nil {
+		return fmt.Errorf("open shard %s: %w", relPath, err)
+	}
+	if err := sv.Delete(secretKey); err != nil {
+		return fmt.Errorf("remove %q: %w", secretKey, err)
+	}
+	fmt.Printf("removed %s from workspace %q\n", secretKey, wsName)
+	return nil
+}
+
+// resolveSecretTarget maps a credential target to its shard folder (relPath) and the vault key the
+// injector looks the value up under, so a seeded value always lands under exactly the key that gets
+// injected.
+//
+// The target is "<extension>[/<credential>]" — one grammar, and no kind in it: an extension is one
+// installed thing whatever it carries, so naming its sort would only invite naming it wrongly. The
+// credential may be left out when the extension declares exactly one.
+func resolveSecretTarget(wsDir, target string) (relPath, key string, err error) {
+	name, cred, _ := strings.Cut(target, "/")
+	if !extension.ValidName(name) {
+		return "", "", fmt.Errorf("target must be <extension>[/<credential>], got %q", target)
+	}
+	// The mailbox is not an extension — nothing installs it — but it holds credentials in a folder of
+	// its own, so it answers to the same grammar. Without this the error message the mail tools print
+	// ("seed it with: nocturn secret set mail/imap") would name a command that cannot work.
+	if name == mail.Dir {
+		switch cred {
+		case "":
+			return "", "", fmt.Errorf("the mailbox has two credentials — name one: %s, %s",
+				mail.CredentialIMAP, mail.CredentialSMTP)
+		case mail.CredentialIMAP, mail.CredentialSMTP:
+			return mail.Dir, mail.Owner + "/" + cred, nil
+		default:
+			return "", "", fmt.Errorf("the mailbox has no credential %q (it has: %s, %s)",
+				cred, mail.CredentialIMAP, mail.CredentialSMTP)
+		}
+	}
+	decl, values, err := workspace.DeclOf(wsDir, name)
+	if err != nil {
+		return "", "", err
+	}
+	keys, err := decl.Keys(extension.Owner(name), values)
+	if err != nil {
+		return "", "", fmt.Errorf("%s: %w", name, err)
+	}
+	if len(keys) == 0 {
+		return "", "", fmt.Errorf("%s declares no credentials", name)
+	}
+	if cred == "" {
+		if len(keys) > 1 {
+			return "", "", fmt.Errorf("%s declares %d credentials — name one: %s",
+				name, len(keys), strings.Join(slices.Sorted(maps.Keys(keys)), ", "))
+		}
+		for only := range keys {
+			cred = only
+		}
+	}
+	k, ok := keys[cred]
+	if !ok {
+		return "", "", fmt.Errorf("%s declares no credential %q (it has: %s)",
+			name, cred, strings.Join(slices.Sorted(maps.Keys(keys)), ", "))
+	}
+	return extension.Dir + "/" + name, k, nil
 }

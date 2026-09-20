@@ -3,6 +3,7 @@ package plugin
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/internal/discovery"
@@ -24,10 +25,18 @@ func Discover(root string, base agentkit.ToolSet, diag *agentkit.Diagnostics) Se
 		return set
 	}
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		l, err := Load(filepath.Join(root, e.Name()))
+		dir := filepath.Join(root, e.Name())
+		// One tree holds every installed thing, so most folders here carry no plugin at all. A
+		// missing manifest is therefore silence, not a diagnostic — reporting it would fill the log
+		// with "this skill is not a plugin". A manifest that EXISTS and will not load is still
+		// reported: that is a broken plugin, not an absent one.
+		if _, err := os.Stat(filepath.Join(dir, ManifestFile)); err != nil {
+			continue
+		}
+		l, err := Load(dir)
 		if err != nil {
 			discovery.Diagnose(diag, "plugin:"+e.Name(), err.Error())
 			continue

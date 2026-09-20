@@ -132,7 +132,7 @@ func TestLoadShardsInto_LoadsAndFailsClosed(t *testing.T) {
 	}
 
 	res := secret.NewStore()
-	secret.LoadShardsInto(res, m, wsDir, "ws", anyName, quiet())
+	secret.LoadShardsInto(res, m, wsDir, "ws", []string{"plugins", "mcp", "skills"}, anyName, quiet())
 
 	if !res.Exists("plugin:gmail/acct") {
 		t.Error("gmail shard secret must be loaded into the resolution store")
@@ -151,7 +151,7 @@ func TestLoadShardsInto_WrongWorkspaceName_NothingLoads(t *testing.T) {
 	writeShard(t, m, wsDir, "ws", "plugins/gmail", "plugin:gmail/acct", "s3cr3t")
 
 	res := secret.NewStore()
-	secret.LoadShardsInto(res, m, wsDir, "OTHER-WS", anyName, quiet()) // wrong ws name → wrong key
+	secret.LoadShardsInto(res, m, wsDir, "OTHER-WS", []string{"plugins", "mcp", "skills"}, anyName, quiet()) // wrong ws name → wrong key
 
 	if res.Exists("plugin:gmail/acct") {
 		t.Error("a shard sealed for workspace 'ws' must not decrypt under another workspace's key")

@@ -95,9 +95,9 @@ func TestInjectMatching_OwnerScoping_NoCrossPluginBleed(t *testing.T) {
 	store := secret.NewStore()
 	store.Set("a-tok", []byte("plugin-a-token"))
 	in := secret.NewInjector(store)
-	in.AddBinding("pluginA", secret.Binding{
+	in.SetOwned(map[string][]secret.Binding{"pluginA": {{
 		Secret: "a-tok", Host: "shared.example.com", Header: "Authorization", Prefix: "Bearer ",
-	})
+	}}})
 
 	cases := []struct {
 		name    string

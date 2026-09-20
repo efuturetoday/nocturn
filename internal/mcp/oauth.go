@@ -3,6 +3,8 @@ package mcp
 import (
 	"net/url"
 	"path/filepath"
+
+	"github.com/efuturetoday/nocturn/internal/extension"
 )
 
 // OAuthProvider is one MCP server's OAuth declaration flattened with the vault key its bearer lives
@@ -30,7 +32,7 @@ type OAuthProvider struct {
 // (the MCP key is owner-namespaced and host-bound), so no credential can cross.
 func DiscoverOAuth(wsDir string) []OAuthProvider {
 	var out []OAuthProvider
-	servers := Discover(filepath.Join(wsDir, "mcp"), nil) // a broken file is surfaced on the real startup path
+	servers := Discover(filepath.Join(wsDir, extension.Dir), nil) // a broken file is surfaced on the real startup path
 	for _, srv := range servers.All() {
 		if srv.OAuth == nil {
 			continue

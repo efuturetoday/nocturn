@@ -1,10 +1,7 @@
-// Package catalog_test proves the published catalog is installable.
-//
-// It is not a test of the library package — that one has its own. What it guards is the file this
-// repository publishes, against the one failure mode a catalog has: an entry the daemon drops
-// silently. A wrong digest, a folder name with an underscore in it, a SKILL.md without a description,
-// two skills claiming one name, a server URL that is not https — every one of those makes an entry
-// vanish from the shelf with no error anywhere, and the only place that can be noticed is here.
+// Package catalog_test checks the PUBLISHED catalog the way a daemon reads it: over HTTP, through
+// library.Store, with every check the daemon applies. Nothing here parses the JSON by hand — a test
+// with its own parser would prove the file is fine and say nothing about whether the daemon can use
+// it.
 package catalog_test
 
 import (
@@ -18,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/library"
 	"github.com/efuturetoday/nocturn/internal/mcp"
 	"github.com/efuturetoday/nocturn/internal/plugin"
@@ -27,29 +25,35 @@ import (
 // published is the generated catalog, as it will be served.
 const published = "../docs/public/catalog.json"
 
-// TestThePublishedCatalogOffersEverySourceEntry is the drop detector: the daemon's own parser reads
-// the published file, and what comes out has to match what the source tree holds.
-func TestThePublishedCatalogOffersEverySourceEntry(t *testing.T) {
-	cat := fetch(t)
+// src is the source tree entries are authored in.
+const src = "extensions"
 
-	wantSkills := dirNames(t, "skills")
-	gotSkills := make([]string, 0, len(cat.Skills))
-	for _, s := range cat.Skills {
-		gotSkills = append(gotSkills, s.ID)
+// TestThePublishedCatalogOffersEverySignedEntry is the drop detector: the daemon's own parser reads
+// the published file, and what comes out has to match the signed folders in the source tree. An
+// UNSIGNED folder is expected to be absent — the generator declines to publish one, since a remote
+// daemon would drop it anyway.
+func TestThePublishedCatalogOffersEverySignedEntry(t *testing.T) {
+	cat := fetch(t)
+	got := make([]string, 0, len(cat.Items))
+	for _, it := range cat.Items {
+		got = append(got, it.ID)
 	}
-	if diff := missing(wantSkills, gotSkills); len(diff) > 0 {
-		t.Errorf("skills in catalog/skills/ that the daemon does not offer: %v\n"+
+	if diff := missing(signedEntries(t), got); len(diff) > 0 {
+		t.Errorf("signed entries the daemon does not offer: %v\n"+
 			"they were dropped by library.parse — regenerate with `go generate ./catalog/`", diff)
 	}
+}
 
-	wantServers := fileNames(t, "mcp")
-	gotServers := make([]string, 0, len(cat.MCP))
-	for _, s := range cat.MCP {
-		gotServers = append(gotServers, s.ID)
+// signedEntries are the source folders that carry a signature, and may therefore be published.
+func signedEntries(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, name := range dirNames(t, src) {
+		if _, err := os.Stat(filepath.Join(src, name, "extension.sig")); err == nil {
+			out = append(out, name)
+		}
 	}
-	if diff := missing(wantServers, gotServers); len(diff) > 0 {
-		t.Errorf("servers in catalog/mcp/ that the daemon does not offer: %v", diff)
-	}
+	return out
 }
 
 // TestTheDropDetectorCanSeeADrop is the counter-check for the test above. A green "nothing was
@@ -64,102 +68,94 @@ func TestTheDropDetectorCanSeeADrop(t *testing.T) {
 	if err := json.Unmarshal(data, &cat); err != nil {
 		t.Fatal(err)
 	}
-	if len(cat.Skills) == 0 {
-		t.Fatal("no skills to tamper with")
+	if len(cat.Items) == 0 {
+		t.Fatal("nothing published to tamper with — this check is vacuous until the tree is signed")
 	}
-	victim := cat.Skills[0].ID
-	cat.Skills[0].SHA256 = strings.Repeat("0", 64)
+	victim := cat.Items[0].ID
+	cat.Items[0].SHA256 = strings.Repeat("0", 64)
 	tampered, err := json.Marshal(cat)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	got := serve(t, tampered)
-	for _, s := range got.Skills {
+	for _, s := range got.Items {
 		if s.ID == victim {
-			t.Fatalf("skill %q survived a wrong digest; this test can no longer detect a dropped entry", victim)
+			t.Fatalf("entry %q survived a wrong digest; this test can no longer detect a dropped entry", victim)
 		}
 	}
 }
 
-// TestEverySkillInstalls rehearses the real install of every offered skill into a scratch directory.
-// skill.Write is what the daemon calls, so a body that could not land on disk fails here — including
-// the trap that the catalog's folder grammar allows an underscore and a skill NAME does not.
-func TestEverySkillInstalls(t *testing.T) {
+// TestEveryEntryInstalls rehearses the real install of every offered entry into a scratch directory.
+// extension.Install is what the daemon calls, so a payload that could not land on disk fails here,
+// and each payload is then read back by the loader that will read it in a workspace.
+func TestEveryEntryInstalls(t *testing.T) {
 	cat := fetch(t)
-	dir := t.TempDir()
-
-	if len(cat.Skills) == 0 {
-		t.Fatal("the catalog offers no skills at all")
+	if len(cat.Items) == 0 {
+		t.Fatal("nothing published — the install rehearsal is vacuous until the tree is signed")
 	}
-	for _, it := range cat.Skills {
-		// One shared directory on purpose: Write refuses a name that already exists, so two skills
-		// resolving to one name fail here rather than shadowing each other after install.
-		e, err := skill.Write(dir, it.Folder, it.Body)
+	dir := t.TempDir()
+	for _, it := range cat.Items {
+		// One shared directory on purpose: Install refuses a name that already exists, so two entries
+		// resolving to one folder fail here rather than shadowing each other after install.
+		err := extension.Install(dir, extension.Package{
+			Name:           it.ID,
+			Manifest:       it.Manifest,
+			Skill:          it.Skill,
+			PluginManifest: it.PluginManifest,
+			PluginScript:   it.PluginScript,
+			MCP:            it.MCP,
+		})
 		if err != nil {
-			t.Errorf("skill %q: %v", it.ID, err)
+			t.Errorf("entry %q: %v", it.ID, err)
 			continue
 		}
-		if e.Description == "" {
-			t.Errorf("skill %q installed without a description", it.ID)
+		if it.Carries(extension.PayloadSkill) {
+			sk, err := skill.Parse(it.Skill, it.ID)
+			if err != nil {
+				t.Errorf("entry %q: its skill would be skipped: %v", it.ID, err)
+			} else if sk.Description == "" {
+				t.Errorf("entry %q: its skill has no description", it.ID)
+			}
+		}
+		if it.Carries(extension.PayloadPlugin) {
+			loaded, err := plugin.Load(filepath.Join(dir, it.ID))
+			if err != nil {
+				t.Errorf("entry %q: the plugin it installed will not load: %v", it.ID, err)
+			} else if len(loaded.Manifest.Tools) == 0 {
+				t.Errorf("entry %q: its plugin exposes no tools", it.ID)
+			}
+		}
+		if it.Carries(extension.PayloadMCP) {
+			if _, err := mcp.Read(dir, it.ID); err != nil {
+				t.Errorf("entry %q: the server it installed will not load: %v", it.ID, err)
+			}
 		}
 	}
 }
 
-// TestEveryPluginInstalls rehearses the install of every offered plugin, and with it the two things
-// only a plugin has: a manifest the loader must accept, and a bundled skill that has to parse into
-// the same catalog a hand-written one lands in.
-func TestEveryPluginInstalls(t *testing.T) {
-	cat := fetch(t)
-	dir := t.TempDir()
-
-	for _, it := range cat.Plugins {
-		m, err := plugin.Write(dir, it.Folder, it.Manifest, it.Script, it.Skill)
-		if err != nil {
-			t.Errorf("plugin %q: %v", it.ID, err)
-			continue
-		}
-		if len(m.Tools) == 0 {
-			t.Errorf("plugin %q installed with no tools", it.ID)
-		}
-		if it.Skill == "" {
-			continue
-		}
-		if _, err := skill.Parse(it.Skill, it.Folder); err != nil {
-			t.Errorf("plugin %q: its bundled skill would be skipped: %v", it.ID, err)
-		}
-	}
-}
-
-// TestEveryPluginIsSigned is the counter-check to the one above: an unsigned or tampered plugin is
-// dropped by library.parse, so a green install rehearsal over an EMPTY list would prove nothing.
-func TestEveryPluginIsSigned(t *testing.T) {
-	want := dirNames(t, "plugins")
+// TestEveryEntryIsSigned is the counter-check to the rehearsal above: an unsigned or tampered entry is
+// dropped by library.parse, so a green rehearsal over an EMPTY list would prove nothing.
+//
+// It FAILS rather than logs. A tree where nothing is signed publishes an empty shelf to every daemon
+// that has not configured its own catalog — which is exactly the state a green test suite must not
+// describe as fine. The fix is one command, and the message says it.
+func TestEveryEntryIsSigned(t *testing.T) {
+	want := dirNames(t, src)
 	if len(want) == 0 {
-		t.Skip("no plugins in the catalog yet")
+		t.Skip("no entries in the source tree")
 	}
 	cat := fetch(t)
-	got := make([]string, 0, len(cat.Plugins))
-	for _, p := range cat.Plugins {
-		got = append(got, p.ID)
+	got := make([]string, 0, len(cat.Items))
+	for _, it := range cat.Items {
+		got = append(got, it.ID)
 	}
 	if diff := missing(want, got); len(diff) > 0 {
-		t.Errorf("plugins the daemon refuses to offer: %v\n"+
-			"most likely unsigned or re-signed against another key — run `go run sign.go` with the project key",
-			diff)
-	}
-}
-
-// TestEveryServerInstalls does the same for the MCP declarations.
-func TestEveryServerInstalls(t *testing.T) {
-	cat := fetch(t)
-	dir := t.TempDir()
-
-	for _, it := range cat.MCP {
-		err := mcp.Write(dir, mcp.Server{Name: it.Name, URL: it.URL, Auth: it.Auth, OAuth: it.OAuth})
-		if err != nil {
-			t.Errorf("server %q: %v", it.ID, err)
-		}
+		t.Errorf("entries the catalog does not offer: %v\n"+
+			"they are unsigned, or signed against a key this build does not trust — sign them with\n"+
+			"    (cd catalog && go run sign.go entryread.go -key <the project key>)\n"+
+			"and regenerate with `go generate ./catalog/`. Publishing an unsigned entry would put it on\n"+
+			"a shelf every remote daemon silently drops.", diff)
 	}
 }
 
@@ -175,15 +171,25 @@ func TestTheCatalogIsRegenerated(t *testing.T) {
 	if err := json.Unmarshal(data, &cat); err != nil {
 		t.Fatal(err)
 	}
-	for _, it := range cat.Skills {
-		body, err := os.ReadFile(filepath.Join("skills", it.Folder, "SKILL.md"))
-		if err != nil {
-			t.Errorf("skill %q is published but has no source: %v", it.ID, err)
-			continue
-		}
-		if string(body) != it.Body {
-			t.Errorf("skill %q: the published body differs from catalog/skills/%s/SKILL.md — run `go generate ./catalog/`",
-				it.ID, it.Folder)
+	for _, it := range cat.Items {
+		for file, published := range map[string]string{
+			"SKILL.md":    it.Skill,
+			"plugin.json": it.PluginManifest,
+			"plugin.js":   it.PluginScript,
+			"mcp.json":    it.MCP,
+		} {
+			if published == "" {
+				continue
+			}
+			body, err := os.ReadFile(filepath.Join(src, it.ID, file))
+			if err != nil {
+				t.Errorf("entry %q publishes a %s with no source: %v", it.ID, file, err)
+				continue
+			}
+			if string(body) != published {
+				t.Errorf("entry %q: the published %s differs from %s/%s/%s — run `go generate ./catalog/`",
+					it.ID, file, src, it.ID, file)
+			}
 		}
 	}
 }
@@ -261,24 +267,6 @@ func dirNames(t *testing.T, dir string) []string {
 	return out
 }
 
-// fileNames lists the *.json entries under dir, skipping the underscore-prefixed ones the importer
-// writes — those are candidates a person has not curated yet, and generate.go skips them too.
-func fileNames(t *testing.T, dir string) []string {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []string
-	for _, e := range entries {
-		name, ok := strings.CutSuffix(e.Name(), ".json")
-		if !e.IsDir() && ok && !strings.HasPrefix(e.Name(), "_") && !strings.HasPrefix(e.Name(), ".") {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
 // missing returns the entries of want that got does not contain.
 func missing(want, got []string) []string {
 	have := make(map[string]bool, len(got))
@@ -292,4 +280,16 @@ func missing(want, got []string) []string {
 		}
 	}
 	return out
+}
+
+// A published name is a security principal and a tool-name prefix ("<name>_<tool>" must stay inside a
+// provider's 64 characters). The check belongs where a name is CHOSEN — here, at publish time —
+// rather than in discovery, where a cap would silently stop reading folders that already exist.
+func TestAPublishedNameFitsAToolPrefix(t *testing.T) {
+	const max = 32
+	for _, name := range dirNames(t, src) {
+		if len(name) > max {
+			t.Errorf("%q: a published name must be at most %d characters", name, max)
+		}
+	}
 }

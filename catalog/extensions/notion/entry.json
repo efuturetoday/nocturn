@@ -1,0 +1,10 @@
+{
+  "title": "Notion",
+  "description": "Search and edit Notion pages and databases. Signs in with OAuth.",
+  "homepage": "https://developers.notion.com/docs/mcp",
+  "tags": [
+    "work",
+    "writing"
+  ],
+  "serial": 1
+}

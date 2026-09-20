@@ -51,6 +51,12 @@ func ReadTool(dirs map[string]string) (agentkit.Tool, error) {
 			if rel == "" {
 				return "", errors.New("empty resource path")
 			}
+			// The skill folder is also the extension control plane — its declaration, its config
+			// values, its encrypted shard. Confinement keeps this tool inside the folder; this keeps
+			// it out of the three files in there that are not the skill's content.
+			if controlPlane(filepath.ToSlash(filepath.Clean(rel))) {
+				return "", fmt.Errorf("skill %q: %q is not a readable resource", a.Name, rel)
+			}
 
 			// os.Root opens ONLY skillDir; every operation through it is confined below that
 			// directory at the syscall level. An escaping path fails here, before any byte is read.

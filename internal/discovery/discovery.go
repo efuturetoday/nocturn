@@ -19,6 +19,11 @@ import (
 // the secret shard — so it must be a tame identifier: no path separators, no ":",
 // no NUL, no whitespace, no unicode. It also namespaces model-facing tools
 // ("<name>_<tool>"), which OpenAI/agentkit require to match ^[a-zA-Z0-9_-]{1,64}$.
+// Deliberately UNBOUNDED in length. A cap here is retroactive: it governs folders and workspaces that
+// already exist on disk, and an item whose name is suddenly too long does not fail loudly — it stops
+// being discovered, its shard stops loading, and its credentials stop resolving. The 64-character
+// limit that matters ("<name>_<tool>" for a provider) is checked where a name is CHOSEN — at publish
+// time in catalog/ — not where existing ones are read.
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // ValidName reports whether s is a safe item identifier (see nameRe).

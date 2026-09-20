@@ -19,10 +19,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit/gate"
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/mcp/authflow"
 	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/tools"
@@ -49,22 +49,18 @@ func (e *AuthRequiredError) Error() string {
 // server's own bearer, injected host-side as "Authorization: Bearer …".
 const credentialName = "oauth"
 
-// Owner is the credential-injection owner id for an MCP connection:
-// "mcp:<server>". The typed prefix shares ONE owner namespace with plugins
-// (plugin.Owner = "plugin:<name>") without colliding — a plugin "github" and
-// an MCP server "github" get distinct owners.
-func Owner(name string) string { return "mcp:" + name }
+// Owner is the credential-injection owner id for the extension this server belongs
+// to: "ext:<name>", its folder. A folder that declares this server and ships the
+// skill explaining it is one extension with one owner.
+func Owner(name string) string { return extension.Owner(name) }
 
-// SecretName is the vault key (and binding secret name) for a server's bearer,
-// bound to BOTH the server name AND the host it was issued for:
-// "mcp:<name>@<host>/oauth". Host-binding is a security boundary: if mcp.json is
-// edited to point the SAME-named server at a DIFFERENT host, the key changes, so
-// the stored token is not found — the old token is never injected to the new
-// host (no silent cross-host exfil). Same host = same key = the token survives
-// restarts. The host is lowercased (hostnames are case-insensitive) so the key
-// stays stable.
+// SecretName is the vault key (and binding secret name) for a server's bearer:
+// the shared extension key, "mcp:<name>@<host>/oauth". Host-binding is a
+// security boundary — re-point the same-named server at a different host and the
+// key changes, so the token issued for the old one is not found — and it is now
+// the rule for every kind rather than this one's own.
 func SecretName(name, host string) string {
-	return Owner(name) + "@" + strings.ToLower(host) + "/" + credentialName
+	return extension.SecretName(Owner(name), host, credentialName)
 }
 
 // Conn is a gated connection to one remote MCP server. Its transport is the ONE
@@ -99,15 +95,10 @@ func NewConn(srv Server, creds *secret.Injector, scanner *secret.Scanner) (*Conn
 	c := &Conn{server: srv, creds: creds, scanner: scanner, log: slog.New(slog.DiscardHandler), host: u.Host}
 	c.http = &http.Client{Timeout: 30 * time.Second, CheckRedirect: c.checkRedirect}
 	c.client = New(c.transport)
-	// Every credential-bearing mode — a static token, a manual oauth block, or discover-mode
-	// (auth:"oauth") — binds the server's bearer host-side under its owner. Only a public server
-	// (AuthNone) has nothing to inject.
-	if srv.OAuthMode() != AuthNone && creds != nil {
-		creds.AddBinding(Owner(srv.Name), secret.Binding{
-			Secret: SecretName(srv.Name, c.host), Host: c.host,
-			Header: "Authorization", Prefix: "Bearer ",
-		})
-	}
+	// The server's bearer is NOT bound here. What a credential-bearing mode declares is Server.Decl,
+	// and the workspace registers every extension's declaration in one place — including this one.
+	// Binding it from the connection looked like ownership and was not: nothing ever removed it, so
+	// each reload appended another copy and a removed server kept injecting until the process ended.
 	return c, nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,15 +20,15 @@ import (
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
-// A workspace-level binding is what makes a REST API reachable by the MODEL rather than by a plugin:
-// bindings.json registers under owner "", and the net tools consult the injector by destination host.
+// A skill's declared credential is what makes a REST API reachable by the MODEL rather than by a
+// plugin: the skill's manifest names the credential and the host it binds to, its config.json supplies
+// the address the household actually uses, and the value lives in the skill's own encrypted shard.
 // internal/tools proves the injection itself; what this proves is the seam above it — that a
-// credential seeded into the vault, named in bindings.json, and never mentioned in a prompt arrives
-// as a header on the model's own http_read.
+// credential nobody ever mentions in a prompt arrives as a header on the model's own http_read.
 //
-// It is the whole basis for reaching Gmail, Calendar, Drive or Graph from a skill: the skill writes
-// URLs, the host attaches the account.
-func TestAWorkspaceBindingReachesTheModelsHTTPTool(t *testing.T) {
+// It is the whole basis for reaching a household server, Gmail, Calendar or Graph from a skill: the
+// skill writes URLs, the host attaches the account.
+func TestASkillsCredentialReachesTheModelsHTTPTool(t *testing.T) {
 	var gotAuth string
 	var once sync.Once
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,18 +39,13 @@ func TestAWorkspaceBindingReachesTheModelsHTTPTool(t *testing.T) {
 	defer api.Close()
 
 	dir := t.TempDir()
-	host := strings.TrimPrefix(api.URL, "http://")
-	writeBindings(t, filepath.Join(dir, "bindings.json"), []map[string]string{{
-		"secret": "acct_token",
-		"host":   host,
-		"header": "Authorization",
-		"prefix": "Bearer ",
-	}})
+	writeSkillExtension(t, dir, "house", api.URL)
 
 	// The vault has to be unlocked for any of this to exist: a locked workspace has no injector at
 	// all, which is the fail-closed side of the same design.
-	t.Setenv("NOCTURN_SECRET_ACCT_TOKEN", "ya29.spike-token")
 	master := testMaster(t)
+	seedShard(t, master, dir, "test", "extensions/house",
+		"ext:house@"+strings.TrimPrefix(api.URL, "http://")+"/token", "ya29.spike-token")
 
 	llm := &callOnceLLM{tool: "http_read", args: `{"url":"` + api.URL + `/v1/messages"}`}
 	h := workspace.Host{LLM: llm, Master: master, Approver: &alwaysYes{}, Log: slog.New(slog.DiscardHandler)}
@@ -80,6 +76,64 @@ func TestAWorkspaceBindingReachesTheModelsHTTPTool(t *testing.T) {
 	}
 }
 
+// TestAnUnconfiguredSkillBindsNothing: a skill whose address is not set yet has no host to bind a
+// credential to, so nothing is registered — and the workspace still opens, because an extension
+// somebody has not finished setting up is a state, not a failure.
+func TestAnUnconfiguredSkillBindsNothing(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillExtension(t, dir, "house", "") // manifest, no config.json
+
+	master := testMaster(t)
+	h := workspace.Host{LLM: &callOnceLLM{}, Master: master, Log: slog.New(slog.DiscardHandler)}
+	w, err := workspace.Open(h, "test", dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(w.Close)
+
+	// The skill is still in the catalog — hiding it would have the assistant deny it can do the thing
+	// instead of naming the one command that finishes the setup.
+	if !slices.Contains(w.Inventory().Skills, "house") {
+		t.Fatalf("an unconfigured skill vanished from the catalog: %v", w.Inventory().Skills)
+	}
+}
+
+// writeSkillExtension installs a skill that declares a credential bound to a configured address. An
+// empty baseURL writes no config.json, which is an installed-but-unconfigured extension.
+func writeSkillExtension(t *testing.T, wsDir, name, baseURL string) {
+	t.Helper()
+	dir := filepath.Join(wsDir, "extensions", name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: " + name + "\ndescription: Talk to the household server.\n---\nCall {{config.base_url}}/v1/messages.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"config":[{"name":"base_url","type":"url"}],
+		"credentials":[{"name":"token","host":"{{config.base_url}}","header":"Authorization","prefix":"Bearer ","audience":"model"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if baseURL == "" {
+		return
+	}
+	writeFileJSON(t, filepath.Join(dir, "config.json"), map[string]string{"base_url": baseURL})
+}
+
+// seedShard stores a credential value in an extension's own encrypted shard — what `nocturn secret
+// set` writes, and the only place a value ever lives.
+func seedShard(t *testing.T, master *secret.Master, wsDir, wsName, relPath, key, value string) {
+	t.Helper()
+	sv, err := secret.OpenShard(master, wsDir, wsName, relPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sv.Set(key, []byte(value)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // testMaster derives a master key over a scratch salt — the same derivation the daemon does, at the
 // lowest work factor so a test is not a key-stretching benchmark.
 func testMaster(t *testing.T) *secret.Master {
@@ -91,7 +145,7 @@ func testMaster(t *testing.T) *secret.Master {
 	return m
 }
 
-func writeBindings(t *testing.T, path string, v any) {
+func writeFileJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	data, err := json.Marshal(v)
 	if err != nil {

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
-	"github.com/efuturetoday/nocturn/internal/plugin"
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
@@ -29,7 +29,7 @@ func openForReload(t *testing.T, dir string) *Workspace {
 // writeSkill lays down a valid skill (skills/<dir>/SKILL.md) under root.
 func writeSkill(t *testing.T, root, dirName, name string) {
 	t.Helper()
-	sdir := filepath.Join(root, "skills", dirName)
+	sdir := filepath.Join(root, extension.Dir, dirName)
 	if err := os.MkdirAll(sdir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -182,13 +182,21 @@ func TestReload_DoesNotAccumulateInjectorBindings(t *testing.T) {
 	t.Cleanup(w.Close)
 
 	writePlugin(t, dir, "weather", "now", []secret.Binding{{Secret: "api_key", Host: "api.example.com", Header: "Authorization"}})
-	w.sec.resolution.Set(plugin.SecretName("weather", "api_key"), []byte("v"))
+	// Into the plugin's own shard, not straight into the resolution store: the store is rebuilt from
+	// disk on every pass now, so anything seeded past it would vanish at the first reload.
+	sv, err := secret.OpenShard(m, dir, "test", "extensions/weather")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sv.Set("ext:weather@api.example.com/api_key", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
 
 	// InjectMatching names every credential it stamped, so a duplicated binding shows up as the same
 	// name twice — the exact observable, through the public API.
 	inject := func() []string {
 		t.Helper()
-		ctx := secret.WithOwner(t.Context(), plugin.Owner("weather"))
+		ctx := secret.WithOwner(t.Context(), extension.Owner("weather"))
 		names, err := w.sec.injector.InjectMatching(ctx, &secret.Request{Headers: map[string]string{}}, "api.example.com")
 		if err != nil {
 			t.Fatalf("InjectMatching: %v", err)
@@ -208,7 +216,7 @@ func TestReload_DoesNotAccumulateInjectorBindings(t *testing.T) {
 	// Removing the plugin from disk must take its binding with it. This is the half that matters: a
 	// deleted plugin whose credential still rides along on requests to its host is authority that
 	// outlived the thing it was granted to.
-	if err := os.RemoveAll(filepath.Join(dir, "plugins", "weather")); err != nil {
+	if err := os.RemoveAll(filepath.Join(dir, extension.Dir, "weather")); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Reload(); err != nil {

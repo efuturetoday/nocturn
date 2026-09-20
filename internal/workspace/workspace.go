@@ -32,6 +32,7 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
 	"github.com/efuturetoday/nocturn/internal/chat"
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/knowledge"
 	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
 	"github.com/efuturetoday/nocturn/internal/mail"
@@ -102,7 +103,7 @@ type Workspace struct {
 
 	// The credential stack. It is durable — one vault on one file — and internal/secret is built to
 	// be reconciled rather than rebuilt: the Injector's own doc says bindings and resolvers are
-	// mutated at runtime, and RemoveBindingsFor exists for exactly the uninstall case. So each discovery pass
+	// mutated at runtime, and SetOwned replaces the whole owned set for exactly the uninstall case. So each discovery pass
 	// re-runs the discovery-dependent registrations into these, instead of replacing them.
 	sec workspaceSecrets
 
@@ -235,23 +236,47 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 	}
 	baseTools = append(baseTools, memTools...)
 
-	// Mail: the household's mailbox, offered only when mail.json names one. The password is NOT in
-	// that file — it is read from THIS workspace's vault here, at the composition root, because
+	// Mail: the household's mailbox, offered only when mail/mail.json names one. It is NOT an
+	// extension — nothing is installed, there is no artifact, and a workspace has exactly one — but it
+	// has a folder for the same reason an extension does: a secret shard is keyed by its path, so the
+	// passwords can only belong to the mailbox if the mailbox has a place of its own.
+	//
+	// The password is NOT in the account file. It is read here, at the composition root, because
 	// secret.Store exposes presence and never value on purpose. A locked vault therefore means the
 	// tools exist and say what is missing, which is better than a mailbox that silently is not there.
-	acct, hasMail, err := mail.LoadAccount(filepath.Join(dir, mail.ConfigFile))
+	acct, hasMail, err := mail.LoadAccount(filepath.Join(dir, mail.Dir, mail.ConfigFile))
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: %w", name, err)
 	}
+	// A mailbox that used to sit at the workspace root is not read from there any more. Silence would
+	// mean the mail tools simply stop existing, which reads as "the assistant cannot do mail" rather
+	// than "your mailbox moved" — so say it, once, with the two steps that fix it.
+	if !hasMail {
+		if _, err := os.Stat(filepath.Join(dir, mail.ConfigFile)); err == nil {
+			wslog.Warn("mail: the account file is in the old place and is not read any more",
+				"action", "move it to "+mail.Dir+"/"+mail.ConfigFile+" and re-run `nocturn mail setup`")
+		}
+	}
 	var mailbox *mail.Mailbox
 	if hasMail {
+		// Its own shard, opened once, in the folder its account file sits in — so the passwords belong
+		// to the mailbox and go when it goes. A locked vault yields no handle and the tools then say
+		// what is missing rather than vanishing.
+		var shard *secret.Vault
+		if h.Master != nil {
+			if v, err := secret.OpenShard(h.Master, dir, name, mail.Dir); err == nil {
+				shard = v
+			} else {
+				wslog.Warn("mail: its credentials could not be opened", "err", err)
+			}
+		}
 		mailbox = mail.New(mail.Config{
 			Account: acct,
-			Password: func(secretName string) (string, bool) {
-				if sec.vault == nil {
+			Password: func(credential string) (string, bool) {
+				if shard == nil {
 					return "", false
 				}
-				v, ok := sec.vault.Get(secretName)
+				v, ok := shard.Get(mail.Owner + "/" + credential)
 				return string(v), ok
 			},
 			Scanner: scanner,
@@ -434,10 +459,15 @@ func Open(h Host, name, dir string) (*Workspace, error) {
 // SkillsDir is where this workspace's skills live. Exported because managing them — listing, reading,
 // switching one off — is the consumer's job, the same way discovery is: internal/skill owns the
 // format and the rules, the workspace owns where they sit.
-func (w *Workspace) SkillsDir() string { return w.path("skills") }
+func (w *Workspace) SkillsDir() string { return w.ExtensionsDir() }
 
 // PluginsDir is where this workspace's plugins live, exported for the same reason SkillsDir is.
-func (w *Workspace) PluginsDir() string { return w.path("plugins") }
+func (w *Workspace) PluginsDir() string { return w.ExtensionsDir() }
+
+// ExtensionsDir is the one tree installed things live in. SkillsDir, PluginsDir and MCPDir all name
+// it: they survive as the words their callers think in ("write this skill", "read that server"), and
+// what they return is the same folder, because an extension is one thing whatever it carries.
+func (w *Workspace) ExtensionsDir() string { return w.path(extension.Dir) }
 
 // Name returns the workspace name.
 func (w *Workspace) Name() string { return w.name }

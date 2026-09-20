@@ -10,6 +10,8 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/runtime"
 	"github.com/efuturetoday/nocturn/internal/agent"
+	"github.com/efuturetoday/nocturn/internal/extension"
+	"github.com/efuturetoday/nocturn/internal/mcp"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/skill"
@@ -133,15 +135,28 @@ func (w *Workspace) discover() (snap *snapshot, err error) {
 
 	agents := agent.Discover(w.path("agents"), &diag)
 
-	// Skills: load the workspace's skills/ folder into an agentkit.SkillSet. agentkit surfaces the
+	// The declared servers, read ONCE per pass and used three times — for the declarations below, for
+	// the bindings, and for the handshakes. Reading the folder again per use let an mcp.json edited in
+	// between produce a connection whose bearer was derived from the other state, which shows up as a
+	// server that handshakes unauthenticated until the next reload.
+	mcpServers := mcp.Discover(w.path(extension.Dir), &diag).All()
+
+	// ONE walk over the extensions tree: what each folder carries, what it declares, what has been
+	// configured for it. Everything below reads its own payload out of the same folders — a SKILL.md
+	// for the prompt, a plugin.json for the sandbox, an mcp.json for the dial — so a folder that
+	// carries several is one installed thing rather than three that happen to share a name.
+	installed := discoverExtensions(w.path(extension.Dir), mcpServers, &diag)
+
+	// Skills: load the workspace's extensions tree into an agentkit.SkillSet. agentkit surfaces the
 	// catalog (system prompt) and skill_load per top-level session; skill_read (for a skill's bundled
 	// files) joins the base tools, so it flows into the cages like the file tools. An invalid skill is
 	// skipped inside Load with a logged warning — never blocks the workspace.
 	//
 	// This is the only base tool discovery decides, which is why baseTools is durable and only this is
 	// appended: everything else in it belongs to an object that must not exist twice.
-	skills, skillDirs := skill.Discover(w.path("skills"), &diag)
-	foldPluginSkills(skills, w.path("plugins"), &diag)
+	// One walk covers every skill, including the one an extension carries beside its code: they are
+	// in the same tree, so there is no second fold and no name to shadow.
+	skills, skillDirs := skill.Discover(w.path(extension.Dir), &diag)
 	baseTools := slices.Clone(w.baseTools)
 	if len(skillDirs) > 0 {
 		readTool, err := skill.ReadTool(skillDirs)
@@ -163,16 +178,12 @@ func (w *Workspace) discover() (snap *snapshot, err error) {
 	}
 
 	// Discover + install plugins as top-level tools, each caged to a subset of the base tools and
-	// gated exactly like the model's own calls. Their credentials are bound host-side on the injector,
-	// reconciled against the previous snapshot's so a plugin removed from disk stops injecting.
-	var prevPlugins []*plugin.Plugin
-	if prev := w.snapshot(); prev != nil {
-		prevPlugins = prev.plugins
-	}
-	plugins, err := p.installPlugins(base, toolset, prevPlugins)
+	// gated exactly like the model's own calls.
+	plugins, err := p.installPlugins(base, toolset)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: plugins: %w", w.name, err)
 	}
+
 	// The guests are compiled now. Everything below can still fail, and a pass that fails produces no
 	// snapshot — so nothing would ever retire them. Park them on the way out instead.
 	defer func() {
@@ -187,20 +198,11 @@ func (w *Workspace) discover() (snap *snapshot, err error) {
 	// made "add an MCP server from the phone, authorize it, use it" impossible without a restart —
 	// the token was stored and the injector had no resolver that could find it.
 	//
-	// Both are idempotent by construction: LoadShardsInto copies by name and SetResolver replaces by
-	// name. Plugin bindings are not (AddBinding appends), which is why installPlugins clears each
-	// owner's first.
+	// Both are idempotent by construction: the resolution store is rebuilt and swapped, and
+	// SetResolver replaces by name. It runs BEFORE bindExtensions, and the order matters: SetOwned
+	// keeps the resolver of every secret that stays bound, so a refreshing OAuth source registered
+	// here survives the rebind instead of being replaced by a static read of the stored token.
 	w.sec.reconcile(w.dir, w.name, w.log)
-
-	// Discover + connect the remote MCP servers declared in <dir>/mcp/*.json and fold their tools in
-	// (as <server>_<tool>), each gated on the net host-allowlist like http_read/http_write (ADR-9).
-	mcpStatus := p.installMCP(toolset)
-
-	// The persona is resolved per discovery pass, not once per process. The rule it answers to is that the
-	// assistant's identity must not shift MID-TURN, and the turn boundary already guarantees that: the
-	// root runtime reads this snapshot when a turn starts and works with it throughout. Resolving it
-	// here is what makes editing PERSONA.md take effect on the next turn instead of the next restart.
-	persona := resolvePersona(w.dir, w.log)
 
 	// One runtime per declared agent (its cage + gate + autonomy). Autonomy is a declaration property,
 	// so a run's authority never depends on when it fires. The agent manager's resolver maps a run to
@@ -215,9 +217,29 @@ func (w *Workspace) discover() (snap *snapshot, err error) {
 		agentRuntimes[a.Name] = art
 	}
 
+	// Every kind's declared credentials are bound here, in one step, from one shape: a skill's
+	// manifest.json, a plugin's plugin.json and an MCP server's mcp.json all reduce to extension.Decl
+	// first.
+	//
+	// It comes after everything that can FAIL, and that ordering is the guarantee: the injector is
+	// durable while a pass is not, so a pass that dies must not have touched it. What follows below —
+	// the MCP handshakes, the persona — cannot fail the pass, and the handshakes need their bindings
+	// already in place, which is why this is here rather than at the very end of the function.
+	p.bindExtensions(installed)
+
+	// Discover + connect the remote MCP servers declared in <dir>/mcp/*.json and fold their tools in
+	// (as <server>_<tool>), each gated on the net host-allowlist like http_read/http_write (ADR-9).
+	mcpStatus := p.installMCP(toolset, mcpServers)
+
+	// The persona is resolved per discovery pass, not once per process. The rule it answers to is that the
+	// assistant's identity must not shift MID-TURN, and the turn boundary already guarantees that: the
+	// root runtime reads this snapshot when a turn starts and works with it throughout. Resolving it
+	// here is what makes editing PERSONA.md take effect on the next turn instead of the next restart.
+	persona := resolvePersona(w.dir, w.log)
+
 	// The names come from the SKILL SET, not from skillDirs: a skill a plugin bundled is in the set
-	// and therefore in front of the model, but has no directory under skills/ — reporting the folders
-	// would show a workspace with fewer skills than the prompt actually carries.
+	// and therefore in front of the model, but has no folder of its own under extensions/ — reporting
+	// the folders would show a workspace with fewer skills than the prompt actually carries.
 	names := inventoryNames{plugins: pluginNames(plugins), skills: slices.Sorted(maps.Keys(skills))}
 
 	// Every kind's discovery skips (bad agent/skill/plugin/server) drained through the one collector,
@@ -225,6 +247,7 @@ func (w *Workspace) discover() (snap *snapshot, err error) {
 	for _, d := range diag.All() {
 		w.log.With("component", "discovery").Warn("skipped", "subject", d.Subject, "detail", d.Message)
 	}
+
 	// One readiness line stating what was discovered — so an operator sees the assembled stack at a
 	// glance instead of inferring it from behavior. Logged on every pass, because a reload is
 	// exactly the moment somebody wants to know what the workspace can do now.

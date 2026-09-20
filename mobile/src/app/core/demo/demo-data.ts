@@ -15,9 +15,7 @@ import type {
   Account,
   AgentInfo,
   ChatMeta,
-  LibraryPlugin,
-  LibrarySkill,
-  LibraryServer,
+  LibraryEntry,
   MCPInfo,
   Message,
   ReminderInfo,
@@ -162,23 +160,20 @@ export function demoServers(): MCPInfo[] {
   ];
 }
 
-/** A catalog with two of each. The skill bodies are whole, as the real catalog serves them: the
-    Library shows the entire body before installing, so a truncated one would misrepresent the page. */
-export function demoCatalog(): {
-  version: string;
-  skills: LibrarySkill[];
-  mcp: LibraryServer[];
-  plugins: LibraryPlugin[];
-} {
+/** A demo catalog: instructions, code, a server, and one entry that carries several. The skill
+    bodies are whole, as the real catalog serves them — the Library shows the entire body before
+    installing, so a truncated one would misrepresent the page. */
+export function demoCatalog(): { version: string; entries: LibraryEntry[] } {
   return {
     version: 'demo',
-    skills: [
+    entries: [
       {
         id: 'commit-messages',
         title: 'Commit messages',
         description: 'Writes commit messages that say why, not what.',
         tags: ['git', 'writing'],
-        body: [
+        carries: ['skill'],
+        skill: [
           '---',
           'name: commit-messages',
           'description: Writes commit messages that say why, not what.',
@@ -195,7 +190,8 @@ export function demoCatalog(): {
         title: 'Travel planning',
         description: 'Plans a trip and keeps the constraints straight.',
         tags: ['life'],
-        body: [
+        carries: ['skill'],
+        skill: [
           '---',
           'name: travel',
           'description: Plans a trip and keeps the constraints straight.',
@@ -207,20 +203,17 @@ export function demoCatalog(): {
           'Everything else is negotiable and should be offered as options, with the cost of each.',
         ].join('\n'),
       },
-    ],
-    plugins: [
       {
         id: 'gmail',
         title: 'Gmail (read-only)',
         description: 'Search and read your mail. Needs your own Google OAuth client, connected once on the host.',
         homepage: 'https://developers.google.com/gmail/api/guides',
         tags: ['mail', 'work'],
-        name: 'gmail',
+        carries: ['plugin', 'skill'],
         tools: ['gmail_search', 'gmail_read', 'gmail_labels'],
         uses: ['http_read'],
         hosts: ['gmail.googleapis.com'],
         scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
-        manifest: '{ "name": "gmail", "version": "1", "uses": ["http_read"] }',
         script: '// the plugin source, shown whole in the real catalog',
         skill: [
           '---',
@@ -233,17 +226,14 @@ export function demoCatalog(): {
           "`gmail_search` takes Gmail's own query syntax: `is:unread`, `from:anna newer_than:7d`.",
         ].join('\n'),
       },
-    ],
-    mcp: [
       {
         id: 'linear',
         title: 'Linear',
         description: 'Issues, projects and cycles.',
         homepage: 'https://linear.app',
         tags: ['work'],
-        name: 'linear',
+        carries: ['mcp'],
         url: 'https://mcp.linear.app/sse',
-        auth: 'oauth',
         scopes: ['read', 'write:issue'],
       },
       {
@@ -251,8 +241,35 @@ export function demoCatalog(): {
         title: 'Weather',
         description: 'Forecasts, no account needed.',
         tags: ['life'],
-        name: 'weather',
+        carries: ['mcp'],
         url: 'https://weather.example/mcp',
+      },
+      {
+        id: 'home-assistant',
+        title: 'Home Assistant',
+        description: 'Read and control the house — lights, heating, sensors — through your own server.',
+        homepage: 'https://developers.home-assistant.io/docs/api/rest/',
+        tags: ['home'],
+        carries: ['skill'],
+        settings: [
+          {
+            name: 'base_url',
+            type: 'url',
+            label: 'Address of your Home Assistant',
+            example: 'https://hass.example.com',
+          },
+        ],
+        hosts: ['{{config.base_url}}'],
+        skill: [
+          '---',
+          'name: home-assistant',
+          'description: Read and control the house through Home Assistant.',
+          '---',
+          '',
+          '# Home Assistant',
+          '',
+          'Find the entity before touching it, and never write state directly — call a service.',
+        ].join('\n'),
       },
     ],
   };

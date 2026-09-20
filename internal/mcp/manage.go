@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/efuturetoday/nocturn/internal/discovery"
+	"github.com/efuturetoday/nocturn/internal/extension"
 )
 
 // Write declares a server: <dir>/<name>/mcp.json, where dir is a workspace's mcp/ folder.
@@ -85,16 +86,7 @@ func Read(dir, name string) (Server, error) {
 // derived from this folder's path, so it is readable nowhere else, and leaving it behind would be a
 // token for a server nobody declared any more. Dropping <dir>/<name>/ removes exactly that server,
 // which is what the layout was chosen for.
-func Remove(dir, name string) error {
-	if !discovery.ValidName(name) {
-		return fmt.Errorf("mcp: invalid server name %q", name)
-	}
-	target := filepath.Join(dir, name)
-	if _, err := os.Stat(target); err != nil {
-		return fmt.Errorf("no mcp server %q", name)
-	}
-	return os.RemoveAll(target)
-}
+func Remove(dir, name string) error { return extension.Remove(dir, name) }
 
 // Host is the network host a server's URL points at — the target its gate grants are keyed by, and
 // what a caller needs to revoke them. ok is false for a URL with no host.

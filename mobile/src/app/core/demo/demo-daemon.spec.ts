@@ -272,32 +272,35 @@ describe('managing MCP servers', () => {
 });
 
 describe('the library', () => {
-  it('serves both kinds, and a skill arrives with its whole body', () => {
+  it('serves entries that say what they carry, and a skill arrives with its whole body', () => {
     const { host } = play({ cmd: 'library.list' });
     const [cat] = host.events.filter((e) => e.type === 'library.catalog');
 
-    expect(cat.skills.length).toBeGreaterThan(0);
-    expect(cat.mcp.length).toBeGreaterThan(0);
-    expect(cat.skills.every((s) => s.body.includes('---'))).toBe(true);
+    expect(cat.entries.length).toBeGreaterThan(0);
+    expect(cat.entries.every((e) => e.carries.length > 0)).toBe(true);
+    const skills = cat.entries.filter((e) => e.carries.includes('skill'));
+    expect(skills.length).toBeGreaterThan(0);
+    expect(skills.every((e) => (e.skill ?? '').includes('---'))).toBe(true);
+    expect(cat.entries.some((e) => e.carries.includes('mcp'))).toBe(true);
   });
 
   it('installs a skill into the workspace list', () => {
-    const { host } = play({ cmd: 'library.install', ws: WS, kind: 'skill', id: 'commit-messages' });
+    const { host } = play({ cmd: 'library.install', ws: WS, id: 'commit-messages' });
 
     expect(lastSkills(host.events).map((s) => s.name)).toContain('commit-messages');
   });
 
   it('refuses a second install rather than doing nothing quietly', () => {
     const { host } = play(
-      { cmd: 'library.install', ws: WS, kind: 'skill', id: 'commit-messages' },
-      { cmd: 'library.install', ws: WS, kind: 'skill', id: 'commit-messages' },
+      { cmd: 'library.install', ws: WS, id: 'commit-messages' },
+      { cmd: 'library.install', ws: WS, id: 'commit-messages' },
     );
 
     expect(typesOf(host.events)).toEqual(['skill.list', 'error']);
   });
 
   it('installs a server through the same connecting-then-outcome path as mcp.add', () => {
-    const { host } = play({ cmd: 'library.install', ws: WS, kind: 'mcp', id: 'weather' });
+    const { host } = play({ cmd: 'library.install', ws: WS, id: 'weather' });
     const lists = host.events.filter((e) => e.type === 'mcp.list');
 
     expect(lists[0].items.find((s) => s.name === 'weather')!.state).toBe('connecting');
@@ -305,7 +308,7 @@ describe('the library', () => {
   });
 
   it('refuses a server the workspace already declares — the catalog holds linear, so does the demo', () => {
-    const { host } = play({ cmd: 'library.install', ws: WS, kind: 'mcp', id: 'linear' });
+    const { host } = play({ cmd: 'library.install', ws: WS, id: 'linear' });
 
     expect(typesOf(host.events)).toEqual(['error']);
   });

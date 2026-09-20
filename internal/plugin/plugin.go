@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/sandbox"
 	"github.com/efuturetoday/nocturn/internal/script"
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -18,16 +19,16 @@ import (
 // defaultTimeout bounds one plugin tool-call (a single guest run).
 const defaultTimeout = 60 * time.Second
 
-// Owner is the credential-injection owner id for a plugin: "plugin:<name>". The typed prefix keeps
-// plugins (and later other injecting owners, e.g. an MCP connection) in one owner namespace without
-// colliding — a plugin "github" and an MCP server "github" get distinct owners.
-func Owner(name string) string { return "plugin:" + name }
+// Owner is the credential-injection owner id for the extension a plugin belongs to: "ext:<name>",
+// its folder. A folder holding this plugin AND a skill explaining it is ONE extension with one owner.
+func Owner(name string) string { return extension.Owner(name) }
 
-// SecretName is the vault key (and binding secret name) for a plugin credential, owner-namespaced so
-// two plugins declaring the same credential name never share a stored value or overwrite each other's
-// OAuth resolver: "plugin:<plugin>/<cred>". This mirrors mcp.SecretName; the owner prefix is the same
-// boundary Owner enforces for injection, now reflected in the value's identity too.
-func SecretName(pluginName, credName string) string { return Owner(pluginName) + "/" + credName }
+// SecretNames are the vault keys a plugin's credentials live under, by credential name. The key
+// carries the host the credential was declared for (extension.SecretName), so a manifest re-pointed
+// at another host cannot reuse the token issued for the old one.
+func SecretNames(m Manifest) (map[string]string, error) {
+	return m.Keys(Owner(m.Name), nil)
+}
 
 // Plugin is a loaded, sandboxed plugin. Its tools are exposed to the model as <name>_<tool>.
 // Execution is STATELESS — a fresh sandbox instance per tool-call; cross-call state is host-mediated
@@ -67,9 +68,9 @@ func New(l Loaded, base agentkit.ToolSet) *Plugin {
 // Name returns the plugin name.
 func (p *Plugin) Name() string { return p.manifest.Name }
 
-// Credentials returns the plugin's declared credential bindings, so the caller can register them on
-// the shared injector under this plugin's owner.
-func (p *Plugin) Credentials() []CredentialDecl { return p.manifest.Credentials }
+// Decl returns the plugin's shared declaration — its config and its credentials — so the workspace
+// registers a plugin's bindings through the same path a skill's or an MCP server's take.
+func (p *Plugin) Decl() extension.Decl { return p.manifest.Decl }
 
 // Tools returns the plugin's model-facing tools, namespaced <plugin>_<tool>. Each tool's Call runs
 // the plugin artifact for that tool.
@@ -209,8 +210,8 @@ func (p *Plugin) explain(err error) error {
 			err, p.manifest.Name, p.manifest.Name)
 	}
 	if len(p.manifest.Credentials) > 0 {
-		return fmt.Errorf("%w — %s has no credential; seed it with: nocturn secret set %s",
-			err, p.manifest.Name, SecretName(p.manifest.Name, p.manifest.Credentials[0].Name))
+		return fmt.Errorf("%w — %s has no credential; seed it with: nocturn secret set %s/%s",
+			err, p.manifest.Name, p.manifest.Name, p.manifest.Credentials[0].Name)
 	}
 	return err
 }

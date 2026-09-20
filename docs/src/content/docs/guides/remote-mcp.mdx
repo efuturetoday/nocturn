@@ -18,7 +18,7 @@ here it is an API call and fits the same model as everything else.
 
 ## Add a server
 
-One folder per server under `mcp/` in the workspace, each with an `mcp.json`:
+One folder per server under `extensions/` in the workspace, each with an `mcp.json`:
 
 ```json
 {
@@ -30,7 +30,7 @@ One folder per server under `mcp/` in the workspace, each with an `mcp.json`:
 | Field | Meaning |
 |---|---|
 | `url` | **Required, and must be `https`.** A Bearer must never ride to a cleartext endpoint, so an `http` URL is rejected rather than warned about. |
-| `name` | Optional — the folder name is the identity (`mcp/cloudflare/` → `cloudflare`). It namespaces the tools the model sees (`cloudflare_*`) and the credential owner (`mcp:cloudflare`), and must match `^[a-z0-9][a-z0-9_-]{0,31}$`: no dots, and short enough that `<server>_<tool>` fits the 64 characters a tool name is allowed. A `name` that disagrees with its folder is warned about, because that is usually a slip. |
+| `name` | Optional — the folder name is the identity (`extensions/cloudflare/` → `cloudflare`). It namespaces the tools the model sees (`cloudflare_*`) and the credential owner (`ext:cloudflare`), and must match `^[a-z0-9][a-z0-9_-]{0,31}$`: no dots, and short enough that `<server>_<tool>` fits the 64 characters a tool name is allowed. A `name` that disagrees with its folder is warned about, because that is usually a slip. |
 | `auth` | How the Bearer is obtained: `"token"` (you seed it into the vault yourself), `"oauth"` (the server discovers the flow, see below), or omit it for a public server. Any other value is an error. |
 | `oauth` | Optional, and only for a server whose endpoints you must supply by hand. Mutually exclusive with `auth` — one credential, one source. |
 
@@ -60,7 +60,7 @@ would inherit a "yes" nobody gave for it. The cost is that the same grant may be
 `http_read` could reach that host; you are asked once more, which is what the gate is for.
 
 Declaring a server is an authority-relevant act: it hands the model that server's tools and wires
-your token to its host. That is why `mcp/` lives in the control plane, outside `mnt/` — the model
+your token to its host. That is why `extensions/` lives in the control plane, outside `mnt/` — the model
 can neither read nor write these files. **Presence is the authorization.** There is no separate
 review step; dropping the folder in is the decision.
 
@@ -135,8 +135,8 @@ exchange it for anything.
 ## Putting one in: Cloudflare, end to end
 
 ```sh
-mkdir -p nocturn-data/workspaces/main/mcp/cloudflare
-cat > nocturn-data/workspaces/main/mcp/cloudflare/mcp.json <<'JSON'
+mkdir -p nocturn-data/workspaces/main/extensions/cloudflare
+cat > nocturn-data/workspaces/main/extensions/cloudflare/mcp.json <<'JSON'
 { "url": "https://mcp.cloudflare.com/mcp", "auth": "oauth" }
 JSON
 
@@ -156,7 +156,7 @@ The order matters, and one step is easy to get wrong:
    workspace opens. The app can make it look again at any time.
 
 :::note[Order only matters on the command line]
-There is no watcher on `mcp/`: a daemon that was already running when you created the folder does not
+There is no watcher on `extensions/`: a daemon that was already running when you created the folder does not
 know the server exists, and one that started *before* you signed in logged `mcp server needs
 authorization` and moved on. On the command line, `nocturn reload` makes it look again — including
 after `nocturn auth`, so signing in and picking up the tools does not need a restart.

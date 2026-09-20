@@ -31,10 +31,14 @@ const defaultLimit = 10
 // Config is what the mail tools need. The workspace assembles it: this package holds no vault handle
 // and reads no configuration file.
 type Config struct {
+	// Name is the extension this mailbox belongs to. It appears in the one place a person needs it:
+	// the sentence that says which command seeds the missing password.
+	Name string
+
 	// Account is the mailbox. Its password is NOT in it — see Password.
 	Account Account
 
-	// Password resolves a vault entry by name (SecretIMAPPassword, SecretSMTPPassword) at call time.
+	// Password resolves a vault entry by name (CredentialIMAP, CredentialSMTP) at call time.
 	// It is a function because secret.Store deliberately exposes presence and never value: the
 	// workspace holds the vault handle and hands the value down, so the read stays at the composition
 	// root instead of spreading into every package that needs a credential.
@@ -54,6 +58,7 @@ type Config struct {
 // is open, and IMAP servers count sessions per account with a low ceiling. Access is serialised under
 // mu, which costs nothing here — there is a single caller, a turn, and it asks one thing at a time.
 type Mailbox struct {
+	name     string
 	acct     Account
 	password func(name string) (string, bool)
 	scanner  *secret.Scanner
@@ -86,7 +91,12 @@ func New(cfg Config) *Mailbox {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
+	name := cfg.Name
+	if name == "" {
+		name = "mail"
+	}
 	return &Mailbox{
+		name:     name,
 		acct:     cfg.Account,
 		password: cfg.Password,
 		scanner:  cfg.Scanner,
@@ -218,9 +228,9 @@ func (m *Mailbox) clientLocked(ctx context.Context) (c *Client, fresh bool, err 
 	if m.conn != nil {
 		return m.conn, false, nil
 	}
-	password, ok := m.password(SecretIMAPPassword)
+	password, ok := m.password(CredentialIMAP)
 	if !ok {
-		return nil, false, fmt.Errorf("no mail password stored — set it with: nocturn secret set %s", SecretIMAPPassword)
+		return nil, false, fmt.Errorf("no mail password stored — set it with: nocturn secret set %s/%s", m.name, CredentialIMAP)
 	}
 	conn, err := m.dial(ctx, m.acct, password)
 	if err != nil {
@@ -422,9 +432,9 @@ func (m *Mailbox) sendTool(ctx context.Context, args string) (string, error) {
 		}
 	}
 
-	password, ok := m.password(SecretSMTPPassword)
+	password, ok := m.password(CredentialSMTP)
 	if !ok {
-		return "", fmt.Errorf("no mail password stored — set it with: nocturn secret set %s", SecretSMTPPassword)
+		return "", fmt.Errorf("no mail password stored — set it with: nocturn secret set %s/%s", m.name, CredentialSMTP)
 	}
 	if err := m.send(ctx, m.acct, password, Outgoing{To: a.To, Subject: a.Subject, Body: a.Body}); err != nil {
 		return "", err

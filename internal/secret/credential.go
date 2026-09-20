@@ -39,6 +39,18 @@ type Binding struct {
 	Host   string
 	Header string
 	Prefix string
+
+	// Ambient makes a binding ride ANY caller's request to its host, including the model's own
+	// http_read, while still belonging to the owner it was registered under.
+	//
+	// It exists because owner scoping assumes the owner EXECUTES. A plugin's guest runs with its
+	// owner on the context, so its token can be confined to its own calls; a skill has no runtime at
+	// all — it is text, and the model is what acts on it — so there is no execution context to
+	// attribute the request to, and a skill credential confined to its owner would never be injected
+	// by anything. The owner still governs identity and lifetime: the key names the skill, removing
+	// the skill removes the binding. What it cannot do for an ambient binding is separate two skills
+	// that talk to the same host, because at the boundary those two requests are indistinguishable.
+	Ambient bool
 }
 
 // Request is an outgoing HTTP request the host performs on the guest's behalf.
@@ -127,41 +139,51 @@ func (in *Injector) addBindingLocked(owner string, b Binding) {
 	}
 }
 
-// AddBinding installs a binding tagged with owner (a plugin name), seeding a
-// static store-backed Resolver for its secret if none exists yet.
-func (in *Injector) AddBinding(owner string, b Binding) {
+// SetOwned replaces EVERY owned binding with the given set, in one step under one lock. Unowned
+// bindings (app defaults, handed to NewInjector) are untouched.
+//
+// One call rather than add/remove pairs, because both hazards this replaced were shapes of "the
+// injector is durable while a discovery pass is not". Adding without clearing injected a credential
+// once more per reload; clearing from a list kept beside the last published snapshot missed the
+// bindings of a pass that failed, so they outlived the extension that declared them. And doing it in
+// two steps left a window in which an in-flight request found no binding at all and went out
+// unauthenticated. A single swap has none of the three, by construction rather than by comment.
+//
+// Resolvers are preserved for every secret still bound afterwards. That is not an optimisation: an
+// OAuth credential's resolver REFRESHES the token, and it is registered by a different part of the
+// pass. Dropping and re-seeding it here would replace it with a static store read, which for an OAuth
+// credential means the stored token JSON — the whole serialized token, refresh token included — would
+// be stamped into an Authorization header. A resolver whose secret is no longer bound by anything is
+// dropped, so an uninstall still forgets the credential material it referenced.
+func (in *Injector) SetOwned(owned map[string][]Binding) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	in.addBindingLocked(owner, b)
-}
 
-// RemoveBindingsFor drops every binding installed by owner (plugin uninstall) AND
-// each source those bindings referenced, once no remaining binding uses it — so an
-// uninstall forgets the plugin's in-memory credential material, not just stops
-// injecting it. This is safe now that credentials are owner-namespaced
-// (plugin.SecretName): a source is owner-private, so it can't vanish under another
-// owner. (The persisted token file is the caller's concern.)
-func (in *Injector) RemoveBindingsFor(owner string) {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	var removed []string
 	kept := in.bindings[:0]
 	for _, b := range in.bindings {
-		if b.owner == owner {
-			removed = append(removed, b.Secret)
-		} else {
+		if b.owner == "" {
 			kept = append(kept, b)
 		}
 	}
 	in.bindings = kept
-
-	stillUsed := make(map[string]bool, len(kept))
-	for _, b := range kept {
-		stillUsed[b.Secret] = true
+	for owner, bindings := range owned {
+		for _, b := range bindings {
+			in.bindings = append(in.bindings, ownedBinding{owner: owner, Binding: b})
+		}
 	}
-	for _, s := range removed {
-		if !stillUsed[s] {
-			delete(in.resolvers, s)
+
+	// Seed a static resolver for anything newly bound that has none, and forget the resolvers of
+	// secrets nothing binds any more.
+	bound := make(map[string]bool, len(in.bindings))
+	for _, b := range in.bindings {
+		bound[b.Secret] = true
+		if _, ok := in.resolvers[b.Secret]; !ok {
+			in.resolvers[b.Secret] = storeResolver{store: in.store, name: b.Secret}
+		}
+	}
+	for name := range in.resolvers {
+		if !bound[name] {
+			delete(in.resolvers, name)
 		}
 	}
 }
@@ -202,7 +224,7 @@ func (in *Injector) InjectMatching(ctx context.Context, req *Request, host strin
 		lg = slog.New(slog.DiscardHandler) // a directly-constructed Injector may not have set one
 	}
 	for _, ob := range in.bindings {
-		if !ownerMatches(ob.owner, caller) || !hostMatches(ob.Host, host) {
+		if !ownerMatches(ob, caller) || !hostMatches(ob.Host, host) {
 			continue
 		}
 		src, ok := in.resolvers[ob.Secret]
@@ -257,11 +279,20 @@ func ownerFrom(ctx context.Context) string {
 	return o
 }
 
-// ownerMatches reports whether a binding owned by bindingOwner may ride along on
-// a call from caller: an unowned binding (owner "") is an app default shared by
-// all callers; an owned binding rides ONLY on its owner's own calls.
-func ownerMatches(bindingOwner, caller string) bool {
-	return bindingOwner == "" || bindingOwner == caller
+// ownerMatches reports whether ob may ride along on a call from caller: an unowned
+// binding (owner "") is an app default shared by all callers; an owned binding rides
+// ONLY on its owner's own calls, unless it is Ambient — see Binding.Ambient for why a
+// skill's credential has to be.
+//
+// It takes the owned binding whole rather than the flag and the owner side by side,
+// because those two are one fact and passing them separately is a way to ask about one
+// binding's ambience and another's owner.
+func ownerMatches(ob ownedBinding, caller string) bool {
+	// Ambient means the UNOWNED caller — the model's own tool call — not "everybody". A plugin guest
+	// and an MCP connection both carry their owner on the context and make their own requests; letting
+	// a skill's credential ride those too would hand every installed plugin the household's token for
+	// that host, which is strictly more than owner scoping gave anyone before.
+	return (ob.Ambient && caller == "") || ob.owner == "" || ob.owner == caller
 }
 
 // hostMatches reports whether a destination host is covered by a binding's Host
@@ -272,6 +303,14 @@ func hostMatches(pattern, host string) bool {
 	if host == "" {
 		return false
 	}
+	// Case-INSENSITIVE, and in this one place. Hostnames are case-insensitive, but the two sides of
+	// this comparison come from different worlds: the pattern from a declaration somebody wrote, the
+	// host from whatever URL the caller built. Lowercasing only one side (which is what a
+	// declaration-side fix does) moves the mismatch rather than removing it, and the symptom is the
+	// worst kind — the credential is seedable, listable, and simply never injected, with the request
+	// going out unauthenticated and nothing saying why.
+	host = strings.ToLower(host)
+	pattern = strings.ToLower(pattern)
 	if suffix, ok := strings.CutPrefix(pattern, "*."); ok {
 		return host != suffix && strings.HasSuffix(host, "."+suffix)
 	}

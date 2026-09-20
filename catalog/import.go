@@ -1,13 +1,13 @@
 //go:build ignore
 
 // Command import lists the remote MCP servers the official registry knows about, probes each one, and
-// writes what it found to mcp/_candidates.json.
+// writes what it found to _candidates.json.
 //
 // It does NOT add anything to the catalog. That is the point: the registry is self-published — a name
 // there is a claim by whoever published it — while this catalog is what a daemon offers by default,
 // under our name, to somebody who configured nothing. So the machine does the mechanical half (find
 // the remotes, check they answer, see whether they want OAuth) and a person moves an entry into
-// mcp/<name>.json with a title, tags and a homepage they wrote.
+// extensions/<name>/mcp.json plus an entry.json with a title, tags and a homepage they wrote.
 //
 // Run it from this directory:
 //
@@ -36,7 +36,7 @@ import (
 
 const (
 	registryURL = "https://registry.modelcontextprotocol.io/v0/servers"
-	out         = "mcp/_candidates.json"
+	out         = "_candidates.json"
 	pageLimit   = 100
 	// maxPages bounds the walk. It has to be well above the registry's real size — the first version
 	// stopped at 50 pages, which looked like a complete run and was in fact the letter "a": every

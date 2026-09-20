@@ -24,8 +24,17 @@ import (
 // The USERNAME is deliberately not among them: it is the household's own address, appears legitimately
 // in half of what leaves, and as a registered secret the scanner would redact it everywhere.
 const (
-	SecretIMAPPassword = "mail.imap.password"
-	SecretSMTPPassword = "mail.smtp.password"
+	// CredentialIMAP and CredentialSMTP are the names the mailbox asks its host for. They are
+	// CREDENTIAL names, not vault keys: the key is the extension's (ext:<folder>/imap), so a mailbox
+	// installed as one extension cannot read a password stored for another. Which vault key that is
+	// stays the composition root's business — this package asks by name and is handed a value.
+	CredentialIMAP = "imap"
+	CredentialSMTP = "smtp"
+
+	// Owner is what the mailbox's credentials are stored under: "mail/imap", "mail/smtp". One
+	// mailbox per workspace, so it is a constant — the name answers "whose password is this", and
+	// there is only ever one possible answer.
+	Owner = "mail"
 )
 
 // Outgoing is one message to send. Plain text only: an assistant writing HTML mail is a formatting

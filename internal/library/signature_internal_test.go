@@ -3,9 +3,7 @@ package library
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"log/slog"
 	"strings"
 	"testing"
@@ -26,39 +24,38 @@ func TestVerifySignature(t *testing.T) {
 	foreign := signedItem(t, notOurs, "gmail", "MANIFEST", "SCRIPT", "SKILL")
 
 	for name, tc := range map[string]struct {
-		item PluginItem
+		item Item
 		want string // empty = it must verify
 	}{
-		"a signed entry verifies":        {signed, ""},
-		"no signature":                   {tweaked(signed, func(p *PluginItem) { p.Signature = "" }), "unsigned"},
-		"not base64":                     {tweaked(signed, func(p *PluginItem) { p.Signature = "!!!" }), "not base64"},
-		"another key":                    {foreign, "no trusted key"},
-		"the id was changed":             {tweaked(signed, func(p *PluginItem) { p.ID = "gmai1" }), "no trusted key"},
-		"the install folder was changed": {tweaked(signed, func(p *PluginItem) { p.Folder = "elsewhere" }), "no trusted key"},
-		"the manifest was edited":        {resigned(t, signed, "OTHER MANIFEST", "SCRIPT", "SKILL"), "no trusted key"},
-		"the script was edited":          {resigned(t, signed, "MANIFEST", "OTHER SCRIPT", "SKILL"), "no trusted key"},
-		"the bundled skill was edited":   {resigned(t, signed, "MANIFEST", "SCRIPT", "OTHER SKILL"), "no trusted key"},
+		"a signed entry verifies":      {signed, ""},
+		"no signature":                 {tweaked(signed, func(p *Item) { p.Signature = "" }), "unsigned"},
+		"not base64":                   {tweaked(signed, func(p *Item) { p.Signature = "!!!" }), "not base64"},
+		"another key":                  {foreign, "no trusted key"},
+		"the id was changed":           {tweaked(signed, func(p *Item) { p.ID = "gmai1" }), "no trusted key"},
+		"the manifest was edited":      {resigned(t, signed, "OTHER MANIFEST", "SCRIPT", "SKILL"), "no trusted key"},
+		"the script was edited":        {resigned(t, signed, "MANIFEST", "OTHER SCRIPT", "SKILL"), "no trusted key"},
+		"the bundled skill was edited": {resigned(t, signed, "MANIFEST", "SCRIPT", "OTHER SKILL"), "no trusted key"},
 		// The attack a per-file signature would allow: keep one entry's signature and put another
 		// entry's artifacts behind it.
-		"another entry's signature": {tweaked(signed, func(p *PluginItem) { p.Signature = other.Signature }), "no trusted key"},
+		"another entry's signature": {tweaked(signed, func(p *Item) { p.Signature = other.Signature }), "no trusted key"},
 		// The listing is what a person READS when deciding. A host that had been taken over could
 		// otherwise rebrand a signed plugin — "calendar sync, no mail access" over a mail plugin —
 		// while the artifacts stayed the ones we signed.
-		"the title was rebranded":       {tweaked(signed, func(p *PluginItem) { p.Title = "Calendar sync" }), "no trusted key"},
-		"the description was rebranded": {tweaked(signed, func(p *PluginItem) { p.Description = "no mail access" }), "no trusted key"},
-		"a tag was added":               {tweaked(signed, func(p *PluginItem) { p.Tags = append(p.Tags, "safe") }), "no trusted key"},
-		"the homepage was moved":        {tweaked(signed, func(p *PluginItem) { p.Homepage = "https://evil.example" }), "no trusted key"},
-		"the serial was raised":         {tweaked(signed, func(p *PluginItem) { p.Serial = 99 }), "no trusted key"},
+		"the title was rebranded":       {tweaked(signed, func(p *Item) { p.Title = "Calendar sync" }), "no trusted key"},
+		"the description was rebranded": {tweaked(signed, func(p *Item) { p.Description = "no mail access" }), "no trusted key"},
+		"a tag was added":               {tweaked(signed, func(p *Item) { p.Tags = append(p.Tags, "safe") }), "no trusted key"},
+		"the homepage was moved":        {tweaked(signed, func(p *Item) { p.Homepage = "https://evil.example" }), "no trusted key"},
+		"the serial was raised":         {tweaked(signed, func(p *Item) { p.Serial = 99 }), "no trusted key"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := verifySignature(tc.item, signaturesRequired)
+			err := verifyItemSignature(tc.item, true)
 			switch {
 			case tc.want == "" && err != nil:
-				t.Errorf("verifySignature() = %v, want it to verify", err)
+				t.Errorf("verifyItemSignature() = %v, want it to verify", err)
 			case tc.want != "" && err == nil:
-				t.Errorf("verifySignature() accepted the entry; want an error mentioning %q", tc.want)
+				t.Errorf("verifyItemSignature() accepted the entry; want an error mentioning %q", tc.want)
 			case tc.want != "" && !strings.Contains(err.Error(), tc.want):
-				t.Errorf("verifySignature() = %v, want it to mention %q", err, tc.want)
+				t.Errorf("verifyItemSignature() = %v, want it to mention %q", err, tc.want)
 			}
 		})
 	}
@@ -73,9 +70,9 @@ func TestVerifySignature_NoTrustedKeys(t *testing.T) {
 	t.Cleanup(func() { signingKeys = saved })
 
 	_, priv := testKey(t)
-	err := verifySignature(signedItem(t, priv, "gmail", "M", "S", ""), signaturesRequired)
+	err := verifyItemSignature(signedItem(t, priv, "gmail", "M", "S", ""), true)
 	if err == nil || !strings.Contains(err.Error(), "trusts no catalog signing key") {
-		t.Errorf("verifySignature() = %v, want it to name the missing key", err)
+		t.Errorf("verifyItemSignature() = %v, want it to name the missing key", err)
 	}
 }
 
@@ -102,11 +99,11 @@ func TestTrustedKeys_TheCompiledInKeysDecode(t *testing.T) {
 }
 
 // A dropped entry has to be named in the log, or "my plugin is not in the library" is unanswerable.
-func TestValidPlugins_LogsWhyAnEntryWasDropped(t *testing.T) {
+func TestValidItems_LogsWhyAnEntryWasDropped(t *testing.T) {
 	var log strings.Builder
 	logger := slog.New(slog.NewTextHandler(&log, nil))
 
-	kept := validPlugins([]PluginItem{{ID: "gmail", Manifest: "m", Script: "s", Folder: "gmail"}}, logger, signaturesRequired, nil)
+	kept := validItems([]Item{{ID: "gmail", PluginManifest: "m", PluginScript: "s"}}, logger, signaturesRequired, nil)
 	if len(kept) != 0 {
 		t.Fatal("an entry with mismatched digests was offered")
 	}
@@ -125,55 +122,38 @@ func testKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 }
 
 // signedItem builds an entry whose digests and signature are all consistent.
-func signedItem(t *testing.T, priv ed25519.PrivateKey, id, manifest, script, skill string) PluginItem {
+func signedItem(t *testing.T, priv ed25519.PrivateKey, id, manifest, script, skill string) Item {
 	t.Helper()
-	it := PluginItem{
-		ID:          id,
-		Title:       "Gmail",
-		Description: "reads mail",
-		Tags:        []string{"mail"},
-		Folder:      id,
-		Manifest:    manifest,
-		Script:      script,
-		Skill:       skill,
-		ManifestSHA: digestOf(manifest),
-		ScriptSHA:   digestOf(script),
-		Serial:      1,
+	it := Item{
+		ID:             id,
+		Title:          id,
+		Description:    "d",
+		Serial:         1,
+		PluginManifest: manifest,
+		PluginScript:   script,
+		Skill:          skill,
 	}
-	if skill != "" {
-		it.SkillSHA = digestOf(skill)
-	}
+	it.SHA256 = ItemDigest(it)
 	it.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(priv, SignedStatement(Signed{
-		ID: it.ID, Folder: it.Folder,
-		ManifestSHA: it.ManifestSHA, ScriptSHA: it.ScriptSHA, SkillSHA: it.SkillSHA,
-		ListingSHA: it.listingDigest(), Serial: it.Serial,
+		ID: it.ID, SHA256: it.SHA256, ListingSHA: it.listingDigest(), Serial: it.Serial,
 	})))
 	return it
 }
 
-// resigned swaps the artifacts and their digests but KEEPS the original signature — an edit by
-// somebody who can rewrite the catalog document and cannot sign.
-func resigned(t *testing.T, from PluginItem, manifest, script, skill string) PluginItem {
+// resigned swaps the payloads and their digest but KEEPS the original signature — an edit by somebody
+// who can rewrite the catalog document and cannot sign.
+func resigned(t *testing.T, from Item, manifest, script, skill string) Item {
 	t.Helper()
 	it := from
-	it.Manifest, it.Script, it.Skill = manifest, script, skill
-	it.ManifestSHA, it.ScriptSHA = digestOf(manifest), digestOf(script)
-	it.SkillSHA = ""
-	if skill != "" {
-		it.SkillSHA = digestOf(skill)
-	}
+	it.PluginManifest, it.PluginScript, it.Skill = manifest, script, skill
+	it.SHA256 = ItemDigest(it)
 	return it
 }
 
 // tweaked returns a copy with one field changed — the shape of a catalog document somebody edited.
-func tweaked(it PluginItem, mutate func(*PluginItem)) PluginItem {
+func tweaked(it Item, mutate func(*Item)) Item {
 	mutate(&it)
 	return it
-}
-
-func digestOf(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
 }
 
 // A catalog read off this machine may ship an unsigned plugin: there is no channel to authenticate,
@@ -185,13 +165,13 @@ func TestVerifySignature_LocalSourceNeedsNoSignature(t *testing.T) {
 
 	unsigned := signedItem(t, priv, "mine", "M", "S", "")
 	unsigned.Signature = ""
-	if err := verifySignature(unsigned, signaturesOptional); err != nil {
-		t.Errorf("verifySignature(local) = %v, want an unsigned local entry to be offered", err)
+	if err := verifyItemSignature(unsigned, false); err != nil {
+		t.Errorf("verifyItemSignature(local) = %v, want an unsigned local entry to be offered", err)
 	}
 
 	_, foreign := testKey(t)
 	wrong := signedItem(t, foreign, "mine", "M", "S", "")
-	if err := verifySignature(wrong, signaturesOptional); err == nil {
+	if err := verifyItemSignature(wrong, false); err == nil {
 		t.Error("a signature by an untrusted key was accepted from a local catalog")
 	}
 }

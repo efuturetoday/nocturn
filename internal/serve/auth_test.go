@@ -16,7 +16,7 @@ import (
 func openUnlockedWorkspace(t *testing.T) *workspace.Registry {
 	t.Helper()
 	root := t.TempDir()
-	srvDir := filepath.Join(root, workspace.DefaultWorkspace, "mcp", "acme")
+	srvDir := filepath.Join(root, workspace.DefaultWorkspace, "extensions", "acme")
 	if err := os.MkdirAll(srvDir, 0o700); err != nil {
 		t.Fatal(err)
 	}

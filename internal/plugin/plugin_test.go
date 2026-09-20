@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
@@ -205,9 +206,11 @@ func TestLoad_ManifestPlusExactlyOneArtifact(t *testing.T) {
 
 // --- Owner ------------------------------------------------------------------
 
-func TestPlugin_Owner_Prefix(t *testing.T) {
-	if got := plugin.Owner("github"); got != "plugin:github" {
-		t.Fatalf("Owner(github) = %q, want plugin:github", got)
+// The owner is the extension folder the plugin lives in, not the plugin as a separate species: a
+// folder holding this plugin and the skill explaining it is one installed thing with one credential.
+func TestPlugin_Owner_IsTheExtension(t *testing.T) {
+	if got := plugin.Owner("github"); got != "ext:github" {
+		t.Fatalf("Owner(github) = %q, want ext:github", got)
 	}
 }
 
@@ -248,8 +251,8 @@ func TestDiscover_FolderIsIdentity_NameSpoofClosed(t *testing.T) {
 	if p.Name() != "evil" {
 		t.Errorf("Name() = %q, want evil (folder) — the spoofed manifest name must not win", p.Name())
 	}
-	if plugin.Owner(p.Name()) != "plugin:evil" {
-		t.Errorf("owner = %q, want plugin:evil", plugin.Owner(p.Name()))
+	if plugin.Owner(p.Name()) != "ext:evil" {
+		t.Errorf("owner = %q, want ext:evil", plugin.Owner(p.Name()))
 	}
 	if _, ok := set.Get("gmail"); ok {
 		t.Error("the spoofed manifest name 'gmail' must NOT become an identity")
@@ -382,9 +385,9 @@ func TestPlugin_Run_ScopesCredentialOwner(t *testing.T) {
 	store := secret.NewStore()
 	store.Set("tok", []byte("SECRET"))
 	inj := secret.NewInjector(store)
-	inj.AddBinding(plugin.Owner("myplug"), secret.Binding{
+	inj.SetOwned(map[string][]secret.Binding{plugin.Owner("myplug"): {{
 		Secret: "tok", Host: "api.example.com", Header: "Authorization", Prefix: "Bearer ",
-	})
+	}}})
 
 	req := &secret.Request{}
 	if _, err := inj.InjectMatching(gotCtx, req, "api.example.com"); err != nil {
@@ -491,10 +494,10 @@ func TestPlugin_Close_NoOpForJS_ClosesWasmEngine(t *testing.T) {
 // with `nocturn auth <plugin> --client-id …`. Everything else about the block stays required.
 func TestManifest_Validate_AllowsAnOAuthBlockWithoutAClient(t *testing.T) {
 	m := plugin.Manifest{
-		Name:        "gmail",
-		Version:     "1",
-		Tools:       []plugin.ToolDecl{{Name: "search", Parameters: []byte(`{"type":"object"}`)}},
-		Credentials: []plugin.CredentialDecl{{Name: "account", Host: "gmail.googleapis.com", Header: "Authorization"}},
+		Name:    "gmail",
+		Version: "1",
+		Tools:   []plugin.ToolDecl{{Name: "search", Parameters: []byte(`{"type":"object"}`)}},
+		Decl:    extension.Decl{Credentials: []plugin.CredentialDecl{{Name: "account", Host: "gmail.googleapis.com", Header: "Authorization"}}},
 		OAuth: []plugin.OAuthDecl{{
 			Name:     "account",
 			AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",

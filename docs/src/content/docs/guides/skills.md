@@ -39,7 +39,7 @@ put it there. A skill carries **zero authority** — no credential owner, no vau
 so nothing hangs off its identity, and it follows the agentskills.io convention of naming itself in
 `SKILL.md` instead.
 
-Drop the folder in `skills/` and it is available at the next start. A folder without a `SKILL.md` is
+Drop the folder in `extensions/` and it is available at the next start. A folder without a `SKILL.md` is
 simply not a skill; an unparseable one is skipped with a diagnostic rather than breaking the others.
 
 If the folder holds other files besides `SKILL.md`, a listing of them (up to 40) is appended to the
@@ -49,13 +49,13 @@ body, so a loaded skill tells the assistant what it can go on to
 ## Putting one in, end to end
 
 ```sh
-cp -r examples/workspace/skills/summarize-url \
-      nocturn-data/workspaces/main/skills/summarize-url
+cp -r examples/workspace/extensions/summarize-url \
+      nocturn-data/workspaces/main/extensions/summarize-url
 
 nocturn serve        # start, or restart if it was already running
 ```
 
-There is no watcher on `skills/`, so a running daemon does not notice a folder you copied in — it
+There is no watcher on `extensions/`, so a running daemon does not notice a folder you copied in — it
 reads them when the workspace opens. `nocturn reload` (`-w <workspace>` for another one) is how you
 tell it to look again; it prints what the workspace holds afterwards. Restarting works too.
 
@@ -103,16 +103,16 @@ it always was — copying a folder on the host.
 
 A [plugin](/nocturn/guides/writing-plugins/) can ship a `SKILL.md` beside its code, saying when to
 reach for the tools it adds and what their arguments really take. It joins this same catalog and is
-loaded the same way — the difference is that it has no folder of its own under `skills/`, so it
+loaded the same way — the difference is that it has no folder of its own, so it
 cannot be switched off or deleted: it arrives and leaves with its plugin. The Skills list shows it
 anyway, marked with the plugin it came from, because it is in front of the model either way.
 
-A skill you wrote or installed **wins** a name collision. A skill under `skills/` is something this
+A skill you wrote or installed **wins** a name collision. A skill in the extensions tree is something this
 household chose on purpose, and an installed plugin must not be able to take its name over.
 
 ### Off is not gone
 
-Switching a skill off moves its folder to `skills/.disabled/`, which the daemon skips — so it leaves
+Switching a skill off moves its folder to `extensions/.disabled/`, which the daemon skips — so it leaves
 the catalog while everything you assembled stays where it is, bundled files included. Switching it
 back on moves it back. Removing it deletes the folder; unlike a workspace there is no trash, because
 a skill is instructions that came from somewhere and can come from there again.

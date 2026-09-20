@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/efuturetoday/nocturn/internal/mcp"
-	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
@@ -17,7 +16,7 @@ func TestDiscoverOAuth_AggregatesSources(t *testing.T) {
 	wsDir := t.TempDir()
 
 	// A plugin with an OAuth credential.
-	pdir := filepath.Join(wsDir, "plugins", "gmail")
+	pdir := filepath.Join(wsDir, "extensions", "gmail")
 	if err := os.MkdirAll(pdir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +34,7 @@ func TestDiscoverOAuth_AggregatesSources(t *testing.T) {
 	}
 
 	// An MCP server with an OAuth block — one folder per server, name from the folder.
-	calDir := filepath.Join(wsDir, "mcp", "cal")
+	calDir := filepath.Join(wsDir, "extensions", "cal")
 	if err := os.MkdirAll(calDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -49,8 +48,8 @@ func TestDiscoverOAuth_AggregatesSources(t *testing.T) {
 	for _, p := range got {
 		keys[p.SecretName] = true
 	}
-	if !keys[plugin.SecretName("gmail", "acct")] {
-		t.Errorf("missing plugin provider key %q; got %v", plugin.SecretName("gmail", "acct"), keys)
+	if want := "ext:gmail@gmail.googleapis.com/acct"; !keys[want] {
+		t.Errorf("missing plugin provider key %q; got %v", want, keys)
 	}
 	if !keys[mcp.SecretName("cal", "cal.example.com")] {
 		t.Errorf("missing mcp provider key %q; got %v", mcp.SecretName("cal", "cal.example.com"), keys)

@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/mcp"
 	"github.com/efuturetoday/nocturn/internal/mcp/authflow"
 	"github.com/efuturetoday/nocturn/internal/plugin"
@@ -88,17 +89,22 @@ func NewShardTokens(master *secret.Master, wsDir, wsName string, log *slog.Logge
 // relPath maps an owner-namespaced SecretName to its shard folder. ok is false for a name that is not
 // a shard-owned credential (a bare workspace secret), so it is never mis-routed.
 func (s ShardTokens) relPath(secretName string) (string, bool) {
-	if rest, ok := strings.CutPrefix(secretName, "plugin:"); ok {
-		if folder, _, _ := strings.Cut(rest, "/"); folder != "" {
-			return "plugins/" + folder, true
-		}
+	rest, ok := strings.CutPrefix(secretName, "ext:")
+	if !ok {
+		return "", false // not an extension-owned credential; never mis-routed
 	}
-	if rest, ok := strings.CutPrefix(secretName, "mcp:"); ok {
-		if folder, _, _ := strings.Cut(rest, "@"); folder != "" {
-			return "mcp/" + folder, true
-		}
+	// The key is "ext:<name>@<host>/<credential>", and the folder is the name — so cut at whichever
+	// separator comes first. Cutting only at "/" was the bug the day plugin keys gained the "@host"
+	// half: the folder became "gmail@gmail.googleapis.com", `nocturn auth` wrote the token into a
+	// directory nothing loads, and every authorized plugin lost OAuth in silence.
+	folder := rest
+	if i := strings.IndexAny(folder, "@/"); i >= 0 {
+		folder = folder[:i]
 	}
-	return "", false
+	if folder == "" {
+		return "", false
+	}
+	return extension.Dir + "/" + folder, true
 }
 
 // Get reads a token from its shard; ok is false when the name is not shard-owned or its shard/entry
@@ -152,7 +158,7 @@ func registerOAuth(injector *secret.Injector, tokens TokenStore, wsDir string, l
 	}
 	// MCP OAuth: a manual block's endpoints from config, or a persisted record from discovery. Both
 	// carry the RFC 8707 resource (the server's canonical URI) so refresh stays audience-bound.
-	for _, srv := range mcp.Discover(filepath.Join(wsDir, "mcp"), nil).All() {
+	for _, srv := range mcp.Discover(filepath.Join(wsDir, extension.Dir), nil).All() {
 		sn, ok := mcpSecretName(srv)
 		if !ok {
 			continue

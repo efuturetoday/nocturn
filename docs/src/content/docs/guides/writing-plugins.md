@@ -11,7 +11,7 @@ code runs in the WASM sandbox, and every call it makes leaves through a base too
 ## The shape of one
 
 ```
-nocturn-data/workspaces/main/plugins/my-api/
+nocturn-data/workspaces/main/extensions/my-api/
   plugin.json   ← what it offers, and which base tools it may call
   plugin.js     ← the code
 ```
@@ -168,8 +168,8 @@ See [the vault](/nocturn/guides/vault/) for where the token then lives.
 The repository ships a runnable one — a `weather` plugin with a single tool, caged to `http_read`:
 
 ```sh
-cp -r examples/workspace/plugins/weather \
-      nocturn-data/workspaces/main/plugins/weather
+cp -r examples/workspace/extensions/weather \
+      nocturn-data/workspaces/main/extensions/weather
 
 nocturn serve        # start, or restart if it was already running
 ```
@@ -181,7 +181,7 @@ statement of what the plugin can reach — `"uses": ["http_read"]` here — and 
 running anything. The code cannot widen it.
 
 **Tell the server to look again.** Plugins are discovered when a workspace opens, and there is no
-watcher on `plugins/` — a server that was already running does not see the new folder by itself:
+watcher on `extensions/` — a server that was already running does not see the new folder by itself:
 
 ```sh
 nocturn reload            # or -w <workspace>

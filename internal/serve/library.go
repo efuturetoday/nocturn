@@ -3,12 +3,11 @@ package serve
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/library"
 	"github.com/efuturetoday/nocturn/internal/mcp"
 	"github.com/efuturetoday/nocturn/internal/plugin"
-	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
 
@@ -30,65 +29,60 @@ type LibraryRefresh struct {
 // fetched itself". The content is looked up server-side; there is no wire form that supplies it.
 // Sideloading stays what it always was: copying a folder on the host.
 type LibraryInstall struct {
-	Cmd  string `json:"cmd"`
-	Ws   string `json:"ws"`
-	Kind string `json:"kind"` // "skill" | "mcp" | "plugin"
-	ID   string `json:"id"`
+	Cmd string `json:"cmd"`
+	Ws  string `json:"ws"`
+	ID  string `json:"id"` // the catalog entry; what it carries is the entry's business
 }
 
-// LibrarySkill is one installable skill, as the catalog offers it.
-type LibrarySkill struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Homepage    string   `json:"homepage,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Body        string   `json:"body"`
-}
-
-// LibraryServer is one installable MCP server, as the catalog offers it.
-type LibraryServer struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Homepage    string   `json:"homepage,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Name        string   `json:"name"`
-	URL         string   `json:"url"`
-	Auth        string   `json:"auth,omitempty"`
-	Scopes      []string `json:"scopes,omitempty"`
-}
-
-// LibraryPlugin is one installable plugin, as the catalog offers it.
+// LibraryEntry is one installable extension, as the catalog offers it — and as a person has to be
+// able to judge it before saying yes.
 //
-// The manifest goes out whole, and beside it the three things that decide what installing grants,
-// already pulled apart so a client does not have to parse JSON to render them: the tools it will
-// expose, the base tools its guest may call, and the hosts a credential would be attached to. The
-// script goes out too — showing it is right even though nobody audits four hundred lines on a phone,
-// and it is the manifest above that is the honest review surface.
-type LibraryPlugin struct {
+// What it CARRIES is a list ("skill", "plugin", "mcp"), because one entry may bring several: an
+// integration that brings its own instructions is one thing, not three that share a name. What it
+// ASKS FOR is pulled apart here rather than left as JSON for a client to parse: the settings a person
+// must supply, the hosts a credential would ride to, the tools it would expose, the base tools its
+// guest may call, and the scopes a sign-in would request. That list is the review surface; the
+// sandbox decides what code CAN do, the declaration what it wants.
+//
+// The bodies travel with the listing rather than on demand: the app shows them before installing, and
+// a second round trip to fetch what the daemon already holds would only make that step skippable —
+// which is the step worth not skipping.
+type LibraryEntry struct {
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
 	Homepage    string   `json:"homepage,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
-	Name        string   `json:"name"`
-	Tools       []string `json:"tools"`
-	Uses        []string `json:"uses"`
-	Hosts       []string `json:"hosts,omitempty"`  // where a declared credential would ride
-	Scopes      []string `json:"scopes,omitempty"` // what a sign-in would ask for
-	Manifest    string   `json:"manifest"`
-	Script      string   `json:"script"`
-	Skill       string   `json:"skill,omitempty"` // instructions it bundles, which land in the prompt catalog
+	Carries     []string `json:"carries"`
+
+	Settings []LibrarySetting `json:"settings,omitempty"` // what a person must supply
+	Hosts    []string         `json:"hosts,omitempty"`    // where a declared credential would ride
+	Tools    []string         `json:"tools,omitempty"`    // what it would expose to the model
+	Uses     []string         `json:"uses,omitempty"`     // the base tools a guest may call: its cage
+	Scopes   []string         `json:"scopes,omitempty"`   // what a sign-in would ask for
+	URL      string           `json:"url,omitempty"`      // the server it would dial
+
+	Skill    string `json:"skill,omitempty"`    // the whole SKILL.md
+	Manifest string `json:"manifest,omitempty"` // the shared declaration
+	Script   string `json:"script,omitempty"`   // the plugin artifact
+}
+
+// LibrarySetting is one value an entry needs before it works, in the form a client renders a field
+// from. It never carries a value — those are typed in after installing.
+type LibrarySetting struct {
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`
+	Label    string   `json:"label,omitempty"`
+	Example  string   `json:"example,omitempty"`
+	Values   []string `json:"values,omitempty"`
+	Optional bool     `json:"optional,omitempty"`
 }
 
 // LibraryCatalog carries the catalog (server → client).
 type LibraryCatalog struct {
-	Type    string          `json:"type"`
-	Version string          `json:"version"`
-	Skills  []LibrarySkill  `json:"skills"`
-	MCP     []LibraryServer `json:"mcp"`
-	Plugins []LibraryPlugin `json:"plugins"`
+	Type    string         `json:"type"`
+	Version string         `json:"version"`
+	Entries []LibraryEntry `json:"entries"`
 }
 
 // libraryCmd dispatches a library.* action.
@@ -128,7 +122,7 @@ func (c *conn) libraryCmd(ctx context.Context, cmd string, data []byte) {
 		if !ok {
 			return
 		}
-		if err := c.install(ctx, ws, m.Kind, m.ID); err != nil {
+		if err := c.install(ctx, ws, m.ID); err != nil {
 			c.badRequest(ctx, err.Error())
 			return
 		}
@@ -139,57 +133,69 @@ func (c *conn) libraryCmd(ctx context.Context, cmd string, data []byte) {
 
 // install writes one catalog entry into a workspace and makes it take effect.
 //
-// The content comes from the catalog the daemon fetched, never from the command — see
-// LibraryInstall. Everything after that is the same path a hand-assembled folder takes, including
-// the refusals: a skill whose name is already held, a server whose folder exists.
-func (c *conn) install(ctx context.Context, ws *workspace.Workspace, kind, id string) error {
-	switch kind {
-	case "skill":
-		item, err := c.library.Skill(ctx, id)
-		if err != nil {
-			return err
-		}
-		if _, err := skill.Write(ws.SkillsDir(), item.Folder, item.Body); err != nil {
-			return err
-		}
-		c.log.Info("installed a skill from the catalog", "ws", ws.Name(), "id", id, "folder", item.Folder)
-		c.applySkills(ws, "install", item.Folder)
-		return nil
-
-	case "mcp":
-		item, err := c.library.Server(ctx, id)
-		if err != nil {
-			return err
-		}
-		srv := mcp.Server{Name: item.Name, URL: item.URL, Auth: item.Auth, OAuth: item.OAuth}
-		if err := mcp.Write(ws.MCPDir(), srv); err != nil {
-			return err
-		}
-		c.log.Info("installed an MCP server from the catalog", "ws", ws.Name(), "id", id, "server", item.Name)
-		first := mcpList(ws)
-		first.Items = append(first.Items, MCPInfo{
-			Name: srv.Name, URL: srv.URL, State: string(workspace.MCPConnecting),
-		})
-		c.applyMCP(ws, "install", item.Name, first)
-		return nil
-
-	case "plugin":
-		item, err := c.library.Plugin(ctx, id)
-		if err != nil {
-			return err
-		}
-		m, err := plugin.Write(ws.PluginsDir(), item.Folder, item.Manifest, item.Script, item.Skill)
-		if err != nil {
-			return err
-		}
-		c.log.Info("installed a plugin from the catalog", "ws", ws.Name(), "id", id,
-			"plugin", m.Name, "uses", m.Uses, "tools", len(m.Tools))
-		c.applyPlugins(ws, m.Name)
-		return nil
-
-	default:
-		return fmt.Errorf("unknown kind %q (want \"skill\", \"mcp\" or \"plugin\")", kind)
+// The content comes from the catalog the daemon fetched, never from the command — see LibraryInstall.
+// One folder is written with everything the entry carries, so an integration that brings a server and
+// the instructions for it lands as ONE extension with one owner and one credential. Everything after
+// that is the same path a hand-assembled folder takes, including the refusal: a folder that exists is
+// not overwritten.
+func (c *conn) install(ctx context.Context, ws *workspace.Workspace, id string) error {
+	item, err := c.library.Item(ctx, id)
+	if err != nil {
+		return err
 	}
+	if err := extension.Install(ws.ExtensionsDir(), extension.Package{
+		Name:           item.ID,
+		Manifest:       item.Manifest,
+		Skill:          item.Skill,
+		PluginManifest: item.PluginManifest,
+		PluginScript:   item.PluginScript,
+		MCP:            item.MCP,
+	}); err != nil {
+		return err
+	}
+	c.log.Info("installed from the catalog", "ws", ws.Name(), "id", id, "carries", carriedBy(item))
+	c.applyInstall(ws, item)
+	return nil
+}
+
+// carriedBy names what an entry brought, for the log line an operator reads.
+func carriedBy(it library.Item) []string {
+	var out []string
+	for _, p := range []extension.Payload{extension.PayloadSkill, extension.PayloadPlugin, extension.PayloadMCP} {
+		if it.Carries(p) {
+			out = append(out, string(p))
+		}
+	}
+	return out
+}
+
+// applyInstall reloads the workspace and tells every device what is installed now — one list per
+// payload the entry brought, because that is how the app groups them.
+func (c *conn) applyInstall(ws *workspace.Workspace, it library.Item) {
+	log := c.log.With("ws", ws.Name(), "id", it.ID)
+	// A server's handshake takes seconds, so its list goes out FIRST with the new entry marked as
+	// connecting — otherwise a device sits on a stale list until the reload finishes and cannot tell
+	// "not installed" from "not connected yet".
+	if it.Carries(extension.PayloadMCP) {
+		first := mcpList(ws)
+		first.Items = append(first.Items, MCPInfo{Name: it.ID, State: string(workspace.MCPConnecting)})
+		c.send(context.Background(), first)
+	}
+	go func() {
+		if err := ws.Reload(); err != nil {
+			log.Error("reloading the workspace after an install", "err", err)
+			return
+		}
+		if it.Carries(extension.PayloadSkill) {
+			c.hub.broadcast(skillList(ws))
+		}
+		if it.Carries(extension.PayloadPlugin) {
+			c.hub.broadcast(pluginList(ws))
+		}
+		if it.Carries(extension.PayloadMCP) {
+			c.hub.broadcast(mcpList(ws))
+		}
+	}()
 }
 
 // applyPlugins makes an installed plugin take effect and tells every device what is installed now.
@@ -209,90 +215,80 @@ func (c *conn) applyPlugins(ws *workspace.Workspace, name string) {
 	}()
 }
 
-// catalogFrame renders the catalog for the wire.
+// catalogFrame renders the catalog for the wire, summarising each entry's declaration so a client can
+// show the grant without parsing JSON.
 //
-// A skill's whole body goes out with the listing rather than on demand. The app shows it before
-// installing, and a second round-trip to fetch what the daemon already holds would only make that
-// step skippable — which is the step that is worth not skipping. An MCP entry has no body: it is a
-// URL and an auth mode, and both are shown in full.
+// A declaration that will not parse is summarised as nothing rather than dropped: library.parse
+// already refused those, so reaching here with one would be a bug, and a listing that silently
+// omitted an entry the daemon does offer would be worse than one showing an empty cage.
 func catalogFrame(cat *library.Catalog) LibraryCatalog {
 	out := LibraryCatalog{
 		Type:    "library.catalog",
 		Version: cat.Version,
-		Skills:  make([]LibrarySkill, 0, len(cat.Skills)),
-		MCP:     make([]LibraryServer, 0, len(cat.MCP)),
+		Entries: make([]LibraryEntry, 0, len(cat.Items)),
 	}
-	for _, it := range cat.Skills {
-		out.Skills = append(out.Skills, LibrarySkill{
-			ID:          it.ID,
-			Title:       it.Title,
-			Description: it.Description,
-			Homepage:    it.Homepage,
-			Tags:        it.Tags,
-			Body:        it.Body,
-		})
-	}
-	for _, it := range cat.MCP {
-		e := LibraryServer{
-			ID:          it.ID,
-			Title:       it.Title,
-			Description: it.Description,
-			Homepage:    it.Homepage,
-			Tags:        it.Tags,
-			Name:        it.Name,
-			URL:         it.URL,
-			Auth:        it.Auth,
-		}
-		// The scopes a sign-in would ask for, so consent is informed before the browser opens. The
-		// client id and secret stay here: they are ours, not the user's, and a listing is not the
-		// place for them.
-		if it.OAuth != nil {
-			e.Scopes = it.OAuth.Scopes
-		}
-		out.MCP = append(out.MCP, e)
-	}
-	for _, it := range cat.Plugins {
-		out.Plugins = append(out.Plugins, pluginEntry(it))
+	for _, it := range cat.Items {
+		out.Entries = append(out.Entries, entryFrame(it))
 	}
 	return out
 }
 
-// pluginEntry renders one catalog plugin, summarising its manifest so the grant is legible.
-//
-// A manifest that will not parse is summarised as nothing rather than dropped: library.parse already
-// refused those, so reaching here with one would be a bug, and a listing that silently omitted an
-// entry the daemon does offer would be worse than one showing an empty cage.
-func pluginEntry(it library.PluginItem) LibraryPlugin {
-	e := LibraryPlugin{
+// entryFrame renders one catalog entry with what it carries and what it asks for.
+func entryFrame(it library.Item) LibraryEntry {
+	e := LibraryEntry{
 		ID:          it.ID,
 		Title:       it.Title,
 		Description: it.Description,
 		Homepage:    it.Homepage,
 		Tags:        it.Tags,
-		Name:        it.Folder,
-		Tools:       []string{},
-		Uses:        []string{},
-		Manifest:    it.Manifest,
-		Script:      it.Script,
+		Carries:     carriedBy(it),
 		Skill:       it.Skill,
+		Manifest:    it.Manifest,
+		Script:      it.PluginScript,
 	}
-	var m plugin.Manifest
-	if err := json.Unmarshal([]byte(it.Manifest), &m); err != nil {
-		return e
+	if it.Manifest != "" {
+		// The same reader the install uses, so what the app renders a form from is a declaration that
+		// passed Validate — not one a second unmarshal here happened to accept.
+		if d, err := extension.ParseDecl([]byte(it.Manifest)); err == nil {
+			for _, c := range d.Config {
+				e.Settings = append(e.Settings, LibrarySetting{
+					Name: c.Name, Type: string(c.Type), Label: c.Label,
+					Example: c.Example, Values: c.Values, Optional: c.Optional,
+				})
+			}
+			for _, c := range d.Credentials {
+				if c.Host != "" {
+					e.Hosts = append(e.Hosts, c.Host)
+				}
+			}
+		}
 	}
-	for _, t := range m.Tools {
-		// As the model will see them. A bare "search" in a list of things a plugin adds says nothing
-		// about which search, and the namespaced name is also what an error message will name.
-		e.Tools = append(e.Tools, m.Name+"_"+t.Name)
+	if it.Carries(extension.PayloadPlugin) {
+		var m plugin.Manifest
+		if json.Unmarshal([]byte(it.PluginManifest), &m) == nil {
+			for _, t := range m.Tools {
+				// As the model will see them. A bare "search" says nothing about which search, and
+				// the namespaced name is also what an error message will name.
+				e.Tools = append(e.Tools, m.Name+"_"+t.Name)
+			}
+			e.Uses = append(e.Uses, m.Uses...)
+			for _, c := range m.Credentials {
+				e.Hosts = append(e.Hosts, c.Host)
+			}
+			// The client id and secret stay here: what a person needs before agreeing is which access
+			// is about to be requested in their name.
+			for _, o := range m.OAuth {
+				e.Scopes = append(e.Scopes, o.Scopes...)
+			}
+		}
 	}
-	e.Uses = append(e.Uses, m.Uses...)
-	for _, c := range m.Credentials {
-		e.Hosts = append(e.Hosts, c.Host)
-	}
-	// The client id and secret stay here, as with an MCP server: what a person needs before agreeing
-	// is which access is about to be requested in their name.
-	for _, o := range m.OAuth {
-		e.Scopes = append(e.Scopes, o.Scopes...)
+	if it.Carries(extension.PayloadMCP) {
+		if srv, err := mcp.Parse([]byte(it.MCP), it.ID); err == nil {
+			e.URL = srv.URL
+			if srv.OAuth != nil {
+				e.Scopes = append(e.Scopes, srv.OAuth.Scopes...)
+			}
+		}
 	}
 	return e
 }

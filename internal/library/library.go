@@ -1,30 +1,42 @@
-// Package library is the curated catalog a person installs skills and MCP servers from — the shop
-// side of extending a workspace, as opposed to assembling a folder by hand.
+// Package library is the curated catalog a person installs extensions from — the shop side of
+// extending a workspace, as opposed to assembling a folder by hand.
 //
 // It is daemon-wide rather than per-workspace: the catalog is the same wherever it is installed into,
 // and one fetch serves every workspace. It is also not a tool. Nothing the model says reaches it, so
 // it passes no gate — the same class of host-initiated traffic as the LLM endpoint, the embedding
 // endpoint and the push provider.
 //
+// ONE ENTRY per installable thing, carrying whatever it brings: instructions, code, a server
+// declaration, or several at once. What a household installs is a capability, not a delivery
+// mechanism — and three separate lists let somebody take the server and leave behind the instructions
+// that say when to use it.
+//
 // # What trust rests on, exactly
 //
-// Signing is not built (Ed25519 for skills and plugins is an open item), so this package does not
-// pretend it is. Two things carry the weight instead:
+// Three things, in this order:
 //
-//   - ONE source, over TLS. The catalog is fetched from a single configured host and carries skill
-//     bodies INLINE, so installing never fetches from a second place. A catalog listing URLs would
-//     turn every listed URL into a trust anchor and the daemon into something that fetches from
-//     strangers.
-//   - A digest per entry, checked before anything is written. It authenticates nothing on its own —
+//   - A SIGNATURE per entry, required from a remote source. Ed25519 over identity, the digest of
+//     every payload an install would write, the listing a person picks by, and a serial — all in one
+//     statement (see signature.go), verified against a key compiled into the binary. Signing the
+//     parts separately would let somebody keep the artifact we signed and put a different
+//     declaration in front of it, and the declaration is the half that asks for a credential.
+//   - ONE source, over TLS, with every payload INLINE, so installing never fetches from a second
+//     place. A catalog listing URLs would turn every listed URL into a trust anchor and the daemon
+//     into something that fetches from strangers.
+//   - A digest per entry, checked before anything is written. On its own it authenticates nothing —
 //     whoever serves the catalog serves the digest — but it turns a truncated or garbled response
-//     into a refusal instead of a half-installed skill, and it is the field a signature would be
-//     computed over later.
+//     into a refusal instead of a half-installed extension, and it is what the signature covers.
 //
-// What it deliberately does NOT rest on is a person reading a skill body before installing it. The
-// app shows the body, and showing it is right, but nobody spots a subtle instruction in four thousand
-// tokens on a phone. The controls that actually hold are elsewhere and already built: a skill carries
-// zero authority (ADR-10 — the gate reads no skills), and an installed MCP server's first call still
-// asks about its host on the net axis.
+// A catalog read off THIS machine (a file path, or loopback) needs no signature: there is no channel
+// for one to substitute for, and whoever can write that file could drop the folder into the
+// extensions tree directly.
+//
+// What none of this rests on is a person reading a skill body before installing it. The app shows the
+// body, and showing it is right, but nobody spots a subtle instruction in four thousand tokens on a
+// phone. The controls that actually hold are elsewhere: a skill body carries zero authority (ADR-10 —
+// the gate reads no skills), an installed server's first call still asks about its host on the net
+// axis, and a credential an entry declares is bound to a host, owned by that extension, and gone when
+// it is removed.
 package library
 
 import (
@@ -46,6 +58,7 @@ import (
 	"time"
 
 	"github.com/efuturetoday/nocturn/internal/discovery"
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/mcp"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 )
@@ -86,81 +99,74 @@ const (
 	maxRedirects = 3
 )
 
-// Catalog is what the remote publishes.
+// Catalog is what the remote publishes: one list, because one entry is one installable thing.
+//
+// Three lists was the older shape, and it made the delivery mechanism the unit of choice: a person
+// installing "GitHub" had to find the server, then the skill that says when to use it, and could
+// easily take one and not the other. What a household picks is a capability; what it carries is this
+// entry's business.
 type Catalog struct {
-	SchemaVersion int          `json:"schemaVersion"`
-	Version       string       `json:"version"` // the catalog's own revision, for a client to show
-	Skills        []SkillItem  `json:"skills"`
-	MCP           []MCPItem    `json:"mcp"`
-	Plugins       []PluginItem `json:"plugins,omitempty"`
+	SchemaVersion int    `json:"schemaVersion"`
+	Version       string `json:"version"` // the catalog's own revision, for a client to show
+	Items         []Item `json:"items"`
 }
 
-// SkillItem is one installable skill. The body is inline, which is what keeps the catalog the only
-// place this daemon fetches from.
-type SkillItem struct {
-	ID          string   `json:"id"` // stable, what an install names
+// Item is one installable extension: what it is called, what it declares, and every payload it
+// carries — all inline, which is what keeps the catalog the only place this daemon fetches from.
+//
+// The payloads are optional and combinable. A folder with a SKILL.md is instructions; with a
+// plugin.json + plugin.js it is code in the sandbox; with an mcp.json it is a remote server; with all
+// three it is one integration that brings its own explanation. Each payload keeps its own trust rule
+// — text is read, code is sandboxed, a host is gated — and the SIGNATURE covers them together, so
+// nobody can keep the artifact we signed and put a different declaration in front of it.
+type Item struct {
+	ID          string   `json:"id"` // stable, what an install names; also the folder
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
 	Homepage    string   `json:"homepage,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
-	Folder      string   `json:"folder"` // the directory name to install under
-	Body        string   `json:"body"`   // the whole SKILL.md, frontmatter included
-	SHA256      string   `json:"sha256"` // of Body
-}
 
-// PluginItem is one installable plugin: a manifest and a JS artifact, both inline, for the same
-// reason a skill's body is — installing must never fetch from a second place.
-//
-// Shipping CODE through the catalog is a step past a skill, and it rests on a different control. A
-// skill carries zero authority (ADR-10), so its risk is what it talks the model into. A plugin's guest
-// runs, and what makes that tractable is the sandbox: zero ambient authority, brokered imports only,
-// memory-capped, deadline-bounded — malicious code is the threat class the sandbox exists for.
-//
-// What the sandbox does NOT cover is the manifest, and that is the review surface a client must show.
-// `uses` is the guest's cage (a subset of the base tools, no static host list — a host is still the
-// human's per-request decision at the gate), `credentials` binds a token to a host, and `oauth` says
-// which account it will ask for. Those three sentences are what installing actually grants.
-type PluginItem struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Homepage    string   `json:"homepage,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Folder      string   `json:"folder"`                 // the directory name to install under
-	Manifest    string   `json:"manifest"`               // the whole plugin.json
-	Script      string   `json:"script"`                 // the whole plugin.js
-	Skill       string   `json:"skill,omitempty"`        // the bundled SKILL.md, if it brought one
-	ManifestSHA string   `json:"manifest_sha256"`        // of Manifest
-	ScriptSHA   string   `json:"script_sha256"`          // of Script
-	SkillSHA    string   `json:"skill_sha256,omitempty"` // of Skill, when there is one
+	// Manifest is the shared declaration (manifest.json): the config a human supplies and the
+	// credentials the host injects. Empty means the extension asks for nothing.
+	Manifest string `json:"manifest,omitempty"`
+	// Skill is the whole SKILL.md, frontmatter included.
+	Skill string `json:"skill,omitempty"`
+	// PluginManifest and PluginScript are plugin.json and plugin.js.
+	PluginManifest string `json:"plugin_manifest,omitempty"`
+	PluginScript   string `json:"plugin_script,omitempty"`
+	// MCP is the server declaration (mcp.json), written verbatim.
+	MCP string `json:"mcp,omitempty"`
+
+	// SHA256 covers every part above, each length-prefixed and labelled, so no part can be moved
+	// across a boundary undetected. It is what the signature is computed over.
+	SHA256 string `json:"sha256"`
 	// Serial is this entry's revision, and it only ever goes up. A signature says "we published these
 	// bytes", never "this is current" — without something monotonic a host can serve an old, correctly
-	// signed entry forever, including one withdrawn because it turned out to be wrong. The daemon
-	// remembers the highest it has seen per plugin and refuses to go back. See freshness.go.
+	// signed entry forever, including one withdrawn because it turned out to be wrong. See freshness.
 	Serial int `json:"serial"`
-	// Signature is Ed25519 over SignedStatement, base64. Required: an entry this build cannot verify
-	// is not offered. See signature.go for why code is held to a key while text is held to TLS.
+	// Signature is Ed25519 over SignedItemStatement, base64. Required from a remote source: an entry
+	// this build cannot verify is not offered. See signature.go.
 	Signature string `json:"signature"`
+}
+
+// Carries reports whether this entry brings the given payload.
+func (it Item) Carries(p extension.Payload) bool {
+	switch p {
+	case extension.PayloadSkill:
+		return it.Skill != ""
+	case extension.PayloadPlugin:
+		return it.PluginManifest != "" && it.PluginScript != ""
+	case extension.PayloadMCP:
+		return it.MCP != ""
+	}
+	return false
 }
 
 // listingDigest is the digest of this entry's own listing fields — what a person reads when deciding
 // to install. It is recomputed rather than carried, so a catalog cannot sign one listing and show
 // another.
-func (it PluginItem) listingDigest() string {
+func (it Item) listingDigest() string {
 	return ListingDigest(it.Title, it.Description, it.Homepage, it.Tags)
-}
-
-// MCPItem is one installable MCP server: a declaration, never code and never a credential.
-type MCPItem struct {
-	ID          string         `json:"id"`
-	Title       string         `json:"title"`
-	Description string         `json:"description"`
-	Homepage    string         `json:"homepage,omitempty"`
-	Tags        []string       `json:"tags,omitempty"`
-	Name        string         `json:"name"` // the folder/server name to install under
-	URL         string         `json:"url"`
-	Auth        string         `json:"auth,omitempty"`
-	OAuth       *mcp.OAuthDecl `json:"oauth,omitempty"`
 }
 
 // Source is where a catalog comes from. Split out so a test can serve one without a network, and so
@@ -309,46 +315,18 @@ func (s *Store) Catalog(ctx context.Context, force bool) (*Catalog, error) {
 	return nil, err
 }
 
-// Skill returns one catalog skill by id.
-func (s *Store) Skill(ctx context.Context, id string) (SkillItem, error) {
+// Item returns one catalog entry by id.
+func (s *Store) Item(ctx context.Context, id string) (Item, error) {
 	cat, err := s.Catalog(ctx, false)
 	if err != nil {
-		return SkillItem{}, err
+		return Item{}, err
 	}
-	for _, it := range cat.Skills {
+	for _, it := range cat.Items {
 		if it.ID == id {
 			return it, nil
 		}
 	}
-	return SkillItem{}, fmt.Errorf("library: no skill %q", id)
-}
-
-// Plugin returns one catalog plugin by id.
-func (s *Store) Plugin(ctx context.Context, id string) (PluginItem, error) {
-	cat, err := s.Catalog(ctx, false)
-	if err != nil {
-		return PluginItem{}, err
-	}
-	for _, it := range cat.Plugins {
-		if it.ID == id {
-			return it, nil
-		}
-	}
-	return PluginItem{}, fmt.Errorf("library: no plugin %q", id)
-}
-
-// Server returns one catalog MCP server by id.
-func (s *Store) Server(ctx context.Context, id string) (MCPItem, error) {
-	cat, err := s.Catalog(ctx, false)
-	if err != nil {
-		return MCPItem{}, err
-	}
-	for _, it := range cat.MCP {
-		if it.ID == id {
-			return it, nil
-		}
-	}
-	return MCPItem{}, fmt.Errorf("library: no server %q", id)
+	return Item{}, fmt.Errorf("library: no entry %q", id)
 }
 
 // fetch reads and validates the catalog.
@@ -391,7 +369,7 @@ func (s *Store) fetch(ctx context.Context) (*Catalog, error) {
 //
 // A household with its own skills should not have to run a web server to install them: the file sits
 // on the same host as the workspaces, and whoever can write it can already drop a folder into
-// skills/ or plugins/ directly. So a path is a first-class catalog source, and it is the one shape
+// extensions/ directly. So a path is a first-class catalog source, and it is the one shape
 // where the transport guarantees are not merely relaxed but absent — hence signaturesOptional below.
 func (s *Store) readFile(path string) (*Catalog, error) {
 	info, err := os.Stat(path)
@@ -424,130 +402,120 @@ func parse(data []byte, log *slog.Logger, signing signaturePolicy, seen *freshne
 	if cat.SchemaVersion != schemaVersion {
 		return nil, fmt.Errorf("library: catalog schema %d, this build reads %d", cat.SchemaVersion, schemaVersion)
 	}
-	cat.Skills = validSkills(cat.Skills, log)
-	cat.MCP = validServers(cat.MCP, log)
-	cat.Plugins = validPlugins(cat.Plugins, log, signing, seen)
+	cat.Items = validItems(cat.Items, log, signing, seen)
 	return &cat, nil
 }
 
-// validPlugins keeps the entries this build can install, running the manifest through the very
-// parser the loader uses — so the catalog cannot offer a plugin that would be skipped the moment it
-// landed on disk, and a client can trust that what it renders as "this is what it may reach" is what
-// the daemon will read back.
-func validPlugins(items []PluginItem, log *slog.Logger, signing signaturePolicy, seen *freshness) []PluginItem {
-	out := make([]PluginItem, 0, len(items))
+// validItems keeps the entries this build can install. A bad entry is dropped, not fatal: one
+// malformed row must not take a whole catalog down, and its absence is fail-closed — an item that is
+// not offered cannot be installed. Every drop is logged with its reason, because "my skill is not in
+// the library" is otherwise a question nobody can answer.
+//
+// A plugin payload additionally runs through the very parser the loader uses, so the catalog cannot
+// offer code that would be skipped the moment it landed on disk — and what a client renders as "this
+// is what it may reach" is what the daemon will read back.
+func validItems(items []Item, log *slog.Logger, signing signaturePolicy, seen *freshness) []Item {
+	out := make([]Item, 0, len(items))
 	for _, it := range items {
 		switch {
-		case it.ID == "":
-			log.Warn("catalog plugin dropped", "reason", "no id")
-		case it.Manifest == "" || it.Script == "":
-			log.Warn("catalog plugin dropped", "id", it.ID, "reason", "manifest or script missing")
-		case !discovery.ValidName(it.Folder):
-			log.Warn("catalog plugin dropped", "id", it.ID, "reason", "invalid folder", "folder", it.Folder)
-		case !digestMatches(it.Manifest, it.ManifestSHA):
-			log.Warn("catalog plugin dropped", "id", it.ID, "reason", "manifest_sha256 does not match")
-		case !digestMatches(it.Script, it.ScriptSHA):
-			log.Warn("catalog plugin dropped", "id", it.ID, "reason", "script_sha256 does not match")
-		case it.Skill != "" && !digestMatches(it.Skill, it.SkillSHA):
-			log.Warn("catalog plugin dropped", "id", it.ID, "reason", "skill_sha256 does not match")
-		case it.Skill == "" && it.SkillSHA != "":
-			log.Warn("catalog plugin dropped", "id", it.ID, "reason", "skill_sha256 without a skill")
+		case !discovery.ValidName(it.ID):
+			// The id is the folder, the credential owner and the shard key, and it goes into the
+			// signed statement between newline-delimited fields.
+			log.Warn("catalog entry dropped", "reason", "invalid id", "id", it.ID)
+		case !it.Carries(extension.PayloadSkill) && !it.Carries(extension.PayloadPlugin) && !it.Carries(extension.PayloadMCP):
+			log.Warn("catalog entry dropped", "id", it.ID, "reason", "carries nothing installable")
+		case (it.PluginManifest == "") != (it.PluginScript == ""):
+			log.Warn("catalog entry dropped", "id", it.ID, "reason", "half a plugin (a manifest without a script, or the reverse)")
+		case it.SHA256 == "" || ItemDigest(it) != strings.ToLower(it.SHA256):
+			log.Warn("catalog entry dropped", "id", it.ID, "reason", "sha256 does not match what would be installed")
 		case it.Serial < 0:
-			log.Warn("catalog plugin dropped", "id", it.ID, "reason", "negative serial")
+			log.Warn("catalog entry dropped", "id", it.ID, "reason", "negative serial")
 		default:
-			// The signature first, and only then the manifest: refusing an unsigned entry before
-			// parsing what it declares keeps the parser off bytes nobody vouched for.
-			if err := verifySignature(it, signing); err != nil {
-				log.Warn("catalog plugin dropped", "id", it.ID, "reason", err)
+			// The signature first, and only then the payloads: refusing an entry nobody vouched for
+			// before parsing what it declares keeps the parser off unvouched bytes.
+			if err := verifyItemSignature(it, signing == signaturesRequired); err != nil {
+				log.Warn("catalog entry dropped", "id", it.ID, "reason", err)
 				continue
 			}
 			// Then freshness, which a signature cannot answer: this one is genuine and may still be
-			// yesterday's.
-			if err := seen.check(it); err != nil {
-				log.Warn("catalog plugin dropped", "id", it.ID, "reason", err)
+			// yesterday's — including one withdrawn for a reason.
+			if it.Signature != "" {
+				if err := seen.checkSerial(it.ID, it.Serial); err != nil {
+					log.Warn("catalog entry dropped", "id", it.ID, "reason", err)
+					continue
+				}
+			}
+			if err := checkPayloads(it); err != nil {
+				log.Warn("catalog entry dropped", "id", it.ID, "reason", err)
 				continue
 			}
-			if err := checkManifest(it); err != nil {
-				log.Warn("catalog plugin dropped", "id", it.ID, "reason", err)
-				continue
+			if it.Signature != "" {
+				seen.acceptSerial(it.ID, it.Serial)
 			}
-			seen.accept(it)
 			out = append(out, it)
 		}
 	}
 	return out
 }
 
-// checkManifest parses one plugin manifest the way the loader will. Strict, because a field this
-// build cannot see is one it cannot honour — and here the unseen field would be part of what a person
-// was shown before they agreed.
-func checkManifest(it PluginItem) error {
-	dec := json.NewDecoder(strings.NewReader(it.Manifest))
-	dec.DisallowUnknownFields()
-	var m plugin.Manifest
-	if err := dec.Decode(&m); err != nil {
-		return fmt.Errorf("manifest: %w", err)
-	}
-	if m.Name == "" {
-		m.Name = it.Folder // the loader's own default: the folder is the identity
-	}
-	return m.Validate()
-}
-
-// validSkills keeps the entries this build can install. A bad entry is dropped, not fatal: one
-// malformed row must not take a whole catalog down, and its absence is fail-closed — an item that is
-// not offered cannot be installed.
-func validSkills(items []SkillItem, log *slog.Logger) []SkillItem {
-	out := make([]SkillItem, 0, len(items))
-	for _, it := range items {
-		switch {
-		case it.ID == "":
-			log.Warn("catalog skill dropped", "reason", "no id")
-		case it.Body == "":
-			log.Warn("catalog skill dropped", "id", it.ID, "reason", "no body")
-		case !discovery.ValidName(it.Folder):
-			log.Warn("catalog skill dropped", "id", it.ID, "reason", "invalid folder", "folder", it.Folder)
-		case !digestMatches(it.Body, it.SHA256):
-			log.Warn("catalog skill dropped", "id", it.ID, "reason", "sha256 does not match the body")
-		default:
-			out = append(out, it)
-		}
-	}
-	return out
-}
-
-// validServers keeps the declarations this build can install, checked by the same Validate the loader
-// runs — so the catalog cannot offer something that would be skipped the moment it landed on disk.
-func validServers(items []MCPItem, log *slog.Logger) []MCPItem {
-	out := make([]MCPItem, 0, len(items))
-	for _, it := range items {
-		srv := mcp.Server{Name: it.Name, URL: it.URL, Auth: it.Auth, OAuth: it.OAuth}
-		switch err := srv.Validate(); {
-		case it.ID == "":
-			log.Warn("catalog server dropped", "reason", "no id")
-		case !discovery.ValidName(it.Name):
-			log.Warn("catalog server dropped", "id", it.ID, "reason", "invalid name", "name", it.Name)
-		case err != nil:
-			log.Warn("catalog server dropped", "id", it.ID, "reason", err)
-		default:
-			out = append(out, it)
-		}
-	}
-	return out
-}
-
-// digestMatches checks a body against its declared sha256.
+// checkPayloads runs each payload through the parser that will read it on disk: the shared
+// declaration, the plugin manifest, the server declaration. What the catalog offers and what the
+// workspace would accept cannot then drift apart.
 //
-// It authenticates nothing — whoever serves the catalog serves the digest too — and this comment
-// exists so nobody later mistakes it for a signature. What it does is turn a truncated or corrupted
-// body into a refusal rather than a half-installed skill, and it is the field a signature would be
-// computed over when there is one.
-func digestMatches(body, want string) bool {
-	if want == "" {
-		return false
+// Strict about identity: a payload naming something other than the entry would install as one thing
+// and call itself another, and the folder is what owns the credential.
+func checkPayloads(it Item) error {
+	if it.Manifest != "" {
+		if _, err := extension.ParseDecl([]byte(it.Manifest)); err != nil {
+			return err
+		}
 	}
-	sum := sha256.Sum256([]byte(body))
-	return hex.EncodeToString(sum[:]) == strings.ToLower(want)
+	if it.Carries(extension.PayloadPlugin) {
+		var m plugin.Manifest
+		dec := json.NewDecoder(strings.NewReader(it.PluginManifest))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&m); err != nil {
+			return fmt.Errorf("plugin manifest: %w", err)
+		}
+		if err := m.Validate(); err != nil {
+			return err
+		}
+		if m.Name != it.ID {
+			return fmt.Errorf("plugin manifest names %q, but the entry is %q", m.Name, it.ID)
+		}
+	}
+	if it.Carries(extension.PayloadMCP) {
+		srv, err := mcp.Parse([]byte(it.MCP), it.ID)
+		if err != nil {
+			return err
+		}
+		if err := srv.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ItemDigest covers every part an install would write, each labelled and length-prefixed so no byte
+// can move across a boundary undetected.
+//
+// Plain concatenation would be malleable: the same byte string split differently hashes the same, so
+// a catalog host could serve a manifest as trailing body text — identical digest, credential
+// declaration silently gone (or, the other way round, appeared). This is the field the signature is
+// computed over, so the malleability would be inherited by the signature.
+func ItemDigest(it Item) string {
+	h := sha256.New()
+	for _, part := range []struct{ label, body string }{
+		{"manifest", it.Manifest},
+		{"skill", it.Skill},
+		{"plugin_manifest", it.PluginManifest},
+		{"plugin_script", it.PluginScript},
+		{"mcp", it.MCP},
+	} {
+		fmt.Fprintf(h, "%s\x00%d\x00", part.label, len(part.body))
+		h.Write([]byte(part.body))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // save writes the catalog beside the other daemon-wide state. Best-effort: a failed write costs the

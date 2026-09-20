@@ -152,6 +152,27 @@ func (v *Vault) Set(name string, value []byte) error {
 	return nil
 }
 
+// Delete removes a secret and re-persists. A name that is not there is not an error: the caller wants
+// it gone, and it is. Like Set, the in-memory store is only updated once the write succeeded, so disk
+// and memory never diverge.
+//
+// It exists because a credential channel that can only ever grow leaves values behind when the thing
+// that used them is removed — and a secret nobody can name is a secret nobody can revoke.
+func (v *Vault) Delete(name string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if _, ok := v.store.value(name); !ok {
+		return nil
+	}
+	snap := v.store.snapshot()
+	delete(snap, name)
+	if err := v.persistSnapshot(snap); err != nil {
+		return err
+	}
+	v.store.Delete(name)
+	return nil
+}
+
 // Get is the host-side read of a secret value — used by the composition root, e.g. to
 // seed an OAuth credential from its stored token. The Vault is never handed to a guest
 // (the guest surface is GuestView), so this does not weaken the "guest sees presence

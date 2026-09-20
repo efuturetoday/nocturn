@@ -12,10 +12,10 @@ import (
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/agentkit/gate"
 	"github.com/efuturetoday/nocturn/internal/agent"
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/knowledge/embed"
 	"github.com/efuturetoday/nocturn/internal/mail"
 	"github.com/efuturetoday/nocturn/internal/memory"
-	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/speaker"
 	"github.com/efuturetoday/nocturn/internal/tools"
@@ -207,10 +207,10 @@ func TestAgentPolicy_AsksOnMemory(t *testing.T) {
 	}
 }
 
-// writePlugin lays down a valid JS plugin (plugin.json + plugin.js) under root/plugins/<name>.
+// writePlugin lays down a valid JS plugin (plugin.json + plugin.js) under root/extensions/<name>.
 func writePlugin(t *testing.T, root, name, tool string, creds []secret.Binding) {
 	t.Helper()
-	pdir := filepath.Join(root, "plugins", name)
+	pdir := filepath.Join(root, extension.Dir, name)
 	if err := os.MkdirAll(pdir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -252,22 +252,23 @@ func TestInstallPlugins_NameCollision_Refused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := (pass{dir: dir}).installPlugins(base, toolset, nil); err == nil {
+	if _, err := (pass{dir: dir}).installPlugins(base, toolset); err == nil {
 		t.Fatal("installPlugins must refuse a plugin tool that collides with an existing tool")
 	}
 }
 
-// TestInstallPlugins_BindsCredentialsUnderOwner: a plugin's declared credential is bound on the
+// TestBindExtensions_BindsPluginCredentialsUnderOwner: a plugin's declared credential is bound on the
 // injector under the plugin's owner — so it rides the plugin's own calls but not a bare model call.
-func TestInstallPlugins_BindsCredentialsUnderOwner(t *testing.T) {
+// It goes through bindExtensions, the one registration path every kind takes.
+func TestBindExtensions_BindsPluginCredentialsUnderOwner(t *testing.T) {
 	dir := t.TempDir()
 	cred := secret.Binding{Secret: "mytoken", Host: "api.example.com", Header: "Authorization", Prefix: "Bearer "}
 	writePlugin(t, dir, "creds", "noop", []secret.Binding{cred})
 
 	store := secret.NewStore()
-	// installPlugins binds the credential under the owner-namespaced key plugin.SecretName(plugin,
-	// cred), so the stored value must live there too (not the bare credential name).
-	store.Set(plugin.SecretName("creds", "mytoken"), []byte("s3cr3t"))
+	// The credential is bound under the owner+host-bound key, so the stored value must live there
+	// too (not under the bare credential name).
+	store.Set("ext:creds@api.example.com/mytoken", []byte("s3cr3t"))
 	inj := secret.NewInjector(store)
 
 	base, err := agentkit.NewToolSet()
@@ -278,13 +279,18 @@ func TestInstallPlugins_BindsCredentialsUnderOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if names, err := (pass{dir: dir, injector: inj}).installPlugins(base, toolset, nil); err != nil || len(names) != 1 {
-		t.Fatalf("installPlugins = %v, %v; want one plugin, nil", names, err)
+	p := pass{dir: dir, injector: inj}
+	plugins, err := p.installPlugins(base, toolset)
+	if err != nil || len(plugins) != 1 {
+		t.Fatalf("installPlugins = %v, %v; want one plugin, nil", plugins, err)
+	}
+	if owners := p.bindExtensions(discoverExtensions(filepath.Join(dir, extension.Dir), nil, nil)); len(owners) != 1 {
+		t.Fatalf("bindExtensions bound %v, want the one owner", owners)
 	}
 
 	// As the plugin owner, the credential is injected at the bound host.
 	owned := &secret.Request{Method: "GET", URL: "https://api.example.com/x"}
-	names, err := inj.InjectMatching(secret.WithOwner(context.Background(), "plugin:creds"), owned, "api.example.com")
+	names, err := inj.InjectMatching(secret.WithOwner(context.Background(), "ext:creds"), owned, "api.example.com")
 	if err != nil {
 		t.Fatalf("InjectMatching (owner): %v", err)
 	}

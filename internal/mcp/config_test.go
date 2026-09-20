@@ -150,23 +150,24 @@ func TestDiscover_BadFilenameSkipped(t *testing.T) {
 }
 
 func TestOwnerAndSecretName(t *testing.T) {
-	if got := mcp.Owner("github"); got != "mcp:github" {
+	// The owner is the extension's folder, whatever it carries: a folder holding this server AND the
+	// skill that explains it is one installed thing with one credential.
+	if got := mcp.Owner("github"); got != "ext:github" {
 		t.Errorf("Owner = %q", got)
 	}
 	// The secret is bound to (name, host): the SAME server name at a DIFFERENT
 	// host yields a different key, so a stored token can never ride to a new host.
-	if got := mcp.SecretName("github", "api.githubcopilot.com"); got != "mcp:github@api.githubcopilot.com/oauth" {
+	if got := mcp.SecretName("github", "api.githubcopilot.com"); got != "ext:github@api.githubcopilot.com/oauth" {
 		t.Errorf("SecretName = %q", got)
 	}
 	if a, b := mcp.SecretName("github", "api.githubcopilot.com"), mcp.SecretName("github", "evil.com"); a == b {
 		t.Errorf("same-name/other-host keys must differ: %q == %q", a, b)
 	}
 	// Host is lowercased so the key stays stable across case.
-	if got := mcp.SecretName("github", "API.GitHub.COM"); got != "mcp:github@api.github.com/oauth" {
+	if got := mcp.SecretName("github", "API.GitHub.COM"); got != "ext:github@api.github.com/oauth" {
 		t.Errorf("SecretName host not lowercased: %q", got)
 	}
-	// The typed prefix keeps an MCP server "github" and a plugin "github" in
-	// distinct owner namespaces — no credential can cross.
+	// The prefix keeps an extension's credentials out of anything else's namespace.
 	if mcp.Owner("github") == "plugin:github" {
 		t.Error("owner namespaces collide")
 	}

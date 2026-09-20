@@ -107,7 +107,7 @@ func TestWrite_RefusesAShadowedName(t *testing.T) {
 	write(t, dir, "deploy", "deploy")
 
 	body := "---\nname: deploy\ndescription: a second one\n---\n\nDifferent.\n"
-	if _, err := skill.Write(dir, "deploy-2", body); err == nil {
+	if _, err := skill.Write(dir, "deploy-2", body, ""); err == nil {
 		t.Fatal("installing a skill whose name is already taken was allowed")
 	}
 
@@ -116,7 +116,7 @@ func TestWrite_RefusesAShadowedName(t *testing.T) {
 	if err := skill.SetEnabled(dir, "deploy", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := skill.Write(dir, "deploy-2", body); err == nil {
+	if _, err := skill.Write(dir, "deploy-2", body, ""); err == nil {
 		t.Fatal("a disabled skill did not shadow the name it still holds")
 	}
 }
@@ -130,7 +130,7 @@ func TestWrite_RejectsAnInvalidBody(t *testing.T) {
 		"---\nname: ok\n---\n\nbody\n",         // no description
 		"---\ndescription: only this\n---\n\n", // no name, and the folder is not one either
 	} {
-		if _, err := skill.Write(dir, "Bad Folder", body); err == nil {
+		if _, err := skill.Write(dir, "Bad Folder", body, ""); err == nil {
 			t.Fatalf("accepted an invalid skill: %q", body)
 		}
 	}
@@ -140,7 +140,7 @@ func TestWrite_RejectsAnInvalidBody(t *testing.T) {
 func TestWrite_InstallsAndIsDiscovered(t *testing.T) {
 	dir := t.TempDir()
 	body := "---\nname: deploy\ndescription: ships things\n---\n\nDo the deploy.\n"
-	e, err := skill.Write(dir, "deploy", body)
+	e, err := skill.Write(dir, "deploy", body, "")
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}

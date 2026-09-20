@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/mcp"
 	"github.com/efuturetoday/nocturn/internal/mcp/authflow"
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -237,7 +238,7 @@ type Account struct {
 // so a UI can show what can be connected and what already is. Sorted by name for a stable listing.
 func (a *MCPAuth) List() []Account {
 	var out []Account
-	for _, srv := range mcp.Discover(filepath.Join(a.wsDir, "mcp"), nil).All() {
+	for _, srv := range mcp.Discover(filepath.Join(a.wsDir, extension.Dir), nil).All() {
 		if srv.OAuthMode() != mcp.AuthDiscover {
 			continue
 		}
@@ -255,7 +256,7 @@ func (a *MCPAuth) List() []Account {
 // discoverServer resolves a discover-mode server by name in this workspace's mcp/ directory. A server
 // that exists but is not in discover mode, or is absent, is an error the caller reports.
 func (a *MCPAuth) discoverServer(name string) (mcp.Server, error) {
-	for _, srv := range mcp.Discover(filepath.Join(a.wsDir, "mcp"), nil).All() {
+	for _, srv := range mcp.Discover(filepath.Join(a.wsDir, extension.Dir), nil).All() {
 		if srv.Name != name {
 			continue
 		}

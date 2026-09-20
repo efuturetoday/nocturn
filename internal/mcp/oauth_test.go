@@ -13,7 +13,7 @@ import (
 // servers contribute nothing.
 func TestDiscoverOAuth(t *testing.T) {
 	wsDir := t.TempDir()
-	mcpDir := filepath.Join(wsDir, "mcp")
+	mcpDir := filepath.Join(wsDir, "extensions")
 	if err := os.MkdirAll(mcpDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
