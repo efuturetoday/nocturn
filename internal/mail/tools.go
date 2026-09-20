@@ -178,19 +178,35 @@ func (m *Mailbox) withClient(ctx context.Context, fn func(*Client) error) error 
 		return err
 	}
 	err = fn(c)
-	if err == nil || fresh || !isTransport(err) {
+	if err == nil || !isTransport(err) {
 		m.armIdleLocked()
 		return err
 	}
 
-	// The connection was one we had lying about and it is gone. Drop it, dial again, run once more.
-	m.log.Info("mail: reconnecting", "reason", err)
+	// A connection that failed at the transport is not a connection any more, so it goes — whether or
+	// not a retry follows, and that is why this comes BEFORE the fresh check rather than inside the
+	// retry below. Keeping it would not keep anything: the next operation would spend a round trip
+	// discovering the same dead socket, and it would only find its way back here if that second
+	// failure were classified as transport too. isTransport does not recognise a protocol desync, so
+	// "it heals itself eventually" is not a property this code has.
 	m.dropLocked()
+	if fresh {
+		// Opened by this very call, so the failure is real and not a stale socket. Retrying it would
+		// be an endless pair of logins. Nothing is kept now, which arming settles by stopping the
+		// reaper that was watching the connection we just closed.
+		m.armIdleLocked()
+		return err
+	}
+
+	// It was one we had lying about and the server had since hung up. Dial again, run once more.
+	m.log.Info("mail: reconnecting", "reason", err)
 	c, _, err = m.clientLocked(ctx)
 	if err != nil {
 		return err
 	}
-	err = fn(c)
+	if err = fn(c); err != nil && isTransport(err) {
+		m.dropLocked() // a moment-old connection, same rule — and one retry is the whole budget
+	}
 	m.armIdleLocked()
 	return err
 }

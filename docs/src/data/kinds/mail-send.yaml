@@ -58,10 +58,10 @@ limits:
     **Plain text only**, and no attachments. The subject goes out RFC 2047-encoded, the body
     quoted-printable.
   - >-
-    **Every operation is bounded**, whether or not the caller set a deadline: a minute covering the
-    dial, the handshake and the commands after it. Neither IMAP nor SMTP takes a context per command,
-    so without it a server that accepts a connection and then says nothing would hold the turn open
-    indefinitely.
+    **Every operation is bounded.** A caller's own deadline is left alone; a caller that set none gets
+    a minute, covering the dial, the handshake and the commands after it. Neither IMAP nor SMTP takes
+    a context per command, so without a bound a server that accepts a connection and then says nothing
+    would hold the turn open indefinitely.
   - >-
     **Sending dials every time.** The reading tools share one kept IMAP connection, and a kept
     connection needs a retry when the server hangs up — which is safe for a read and never for a

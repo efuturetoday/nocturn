@@ -147,6 +147,56 @@ func TestWithClientDoesNotRetryAFreshConnection(t *testing.T) {
 	}
 }
 
+// TestWithClientDropsAConnectionThatFailedAtTheTransport is what makes the retry above worth having
+// past the first failure: what is KEPT has to be usable. A dead socket left in the pool costs the
+// next operation a round trip before it can discover the same thing again — and it only finds its way
+// back to the retry at all if that second failure is classified as transport too, which a protocol
+// desync is not.
+func TestWithClientDropsAConnectionThatFailedAtTheTransport(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		warm  bool // open a connection first, so the failing one is not the one this call dialled
+		want  int  // logins by the end
+		calls int  // times the operation ran
+	}{
+		{name: "a fresh connection", warm: false, want: 1, calls: 1},
+		{name: "a kept one, and the retry fails too", warm: true, want: 2, calls: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, d := pooled(t)
+			if tc.warm {
+				if err := m.withClient(t.Context(), func(*Client) error { return nil }); err != nil {
+					t.Fatalf("warming the connection: %v", err)
+				}
+			}
+			calls := 0
+			err := m.withClient(t.Context(), func(*Client) error {
+				calls++
+				return io.EOF
+			})
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("err = %v, want the transport error surfaced", err)
+			}
+			if calls != tc.calls {
+				t.Errorf("the operation ran %d times, want %d", calls, tc.calls)
+			}
+			if got := d.count(); got != tc.want {
+				t.Fatalf("%d logins during the failing call, want %d", got, tc.want)
+			}
+
+			// The point of the test: nothing broken was kept, so the next call dials rather than
+			// handing the same dead connection out again.
+			if err := m.withClient(t.Context(), func(*Client) error { return nil }); err != nil {
+				t.Fatalf("the call after the failure: %v", err)
+			}
+			if got := d.count(); got != tc.want+1 {
+				t.Errorf("%d logins, want %d — the failed connection was kept and handed out again",
+					got, tc.want+1)
+			}
+		})
+	}
+}
+
 // TestWithClientDoesNotRetryARequestError is the other half, and the one that keeps debugging
 // possible: "no such UID" is an answer. Retrying it would hide it behind a second login and double
 // every future investigation.
