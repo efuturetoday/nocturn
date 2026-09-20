@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "angular-developer": {
+      "source": "angular/skills",
+      "sourceType": "github",
+      "skillPath": "angular-developer/SKILL.md",
+      "computedHash": "0850aa966b6a7da1151daa9d0ef2081bf397f052573a35c1643fb92b948f0f00"
+    },
+    "angular-new-app": {
+      "source": "angular/skills",
+      "sourceType": "github",
+      "skillPath": "angular-new-app/SKILL.md",
+      "computedHash": "49bd84ab08bd3498c52f476bed48fbb942dc6dbc0925607e84549adbed34bccf"
+    },
+    "capacitor-angular": {
+      "source": "capawesome-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/capacitor-angular/SKILL.md",
+      "computedHash": "0478046b336ceb17d0d608925f2120b8d7bbaf52ccd8e25b6c845f4ab3f373d5"
+    },
+    "capacitor-app-development": {
+      "source": "capawesome-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/capacitor-app-development/SKILL.md",
+      "computedHash": "f9ed46d94010df018f0152cf5caf195b98c0251ff92b01bce6382968bd64767b"
+    },
+    "capacitor-push-notifications": {
+      "source": "capawesome-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/capacitor-push-notifications/SKILL.md",
+      "computedHash": "3c8da46bb2c63d83cade9d3c1e99fba6272dc5faf70b967e06e5bf0b3fc8aa56"
+    },
+    "ionic-angular": {
+      "source": "capawesome-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ionic-angular/SKILL.md",
+      "computedHash": "4a125898e111081f5445e6da801fc6c3059eac7c933191fac8e253f95ca49330"
+    }
+  }
+}
