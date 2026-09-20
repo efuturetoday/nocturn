@@ -34,8 +34,18 @@ var messages = []struct {
 // it received, so a test can assert on what the client asked for and not only on what it did with the
 // answer.
 type fakeServer struct {
-	mu    sync.Mutex
-	lines []string
+	mu       sync.Mutex
+	lines    []string
+	logins   int
+	hangUpAt int // after this many commands, drop the connection mid-conversation (0 = never)
+	commandN int
+}
+
+// Logins reports how many times a client authenticated — the number the reuse tests are about.
+func (s *fakeServer) Logins() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.logins
 }
 
 // envelope is one message's ENVELOPE in wire form: date, subject, from, sender, reply-to, to, then
@@ -91,10 +101,20 @@ func (s *fakeServer) serve(conn net.Conn) {
 		}
 		line = strings.TrimRight(line, "\r\n")
 		s.record(line)
+		s.mu.Lock()
+		s.commandN++
+		drop := s.hangUpAt > 0 && s.commandN > s.hangUpAt
+		s.mu.Unlock()
+		if drop {
+			return // the server hung up, the way a real one does with an idle session
+		}
 		tag, rest, _ := strings.Cut(line, " ")
 		cmd, args, _ := strings.Cut(rest, " ")
 		switch strings.ToUpper(cmd) {
 		case "LOGIN":
+			s.mu.Lock()
+			s.logins++
+			s.mu.Unlock()
 			send(tag + " OK LOGIN completed")
 		case "SELECT", "EXAMINE": // a read-only select goes out as EXAMINE
 			send("* 3 EXISTS")
@@ -152,7 +172,7 @@ func dial(t *testing.T) (*mail.Client, *fakeServer) {
 	client, server := net.Pipe()
 	s := &fakeServer{}
 	go s.serve(server)
-	c, err := mail.NewClient(client, "ich@firma.de", "geheim")
+	c, err := mail.NewClient(t.Context(), client, "ich@firma.de", "geheim")
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -165,7 +185,7 @@ func dial(t *testing.T) (*mail.Client, *fakeServer) {
 // reach today's.
 func TestListReturnsNewestFirst(t *testing.T) {
 	c, _ := dial(t)
-	got, err := c.List("INBOX", 3)
+	got, err := c.List(t.Context(), "INBOX", 3)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -196,7 +216,7 @@ func TestListReturnsNewestFirst(t *testing.T) {
 // slice: fetching a whole mailbox and then cutting it to ten would move every message over the wire.
 func TestListAsksOnlyForTheTail(t *testing.T) {
 	c, s := dial(t)
-	if _, err := c.List("INBOX", 2); err != nil {
+	if _, err := c.List(t.Context(), "INBOX", 2); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if !s.sent("FETCH 2:3") {
@@ -206,7 +226,7 @@ func TestListAsksOnlyForTheTail(t *testing.T) {
 
 func TestListEmptyLimit(t *testing.T) {
 	c, s := dial(t)
-	got, err := c.List("INBOX", 0)
+	got, err := c.List(t.Context(), "INBOX", 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -223,7 +243,7 @@ func TestListEmptyLimit(t *testing.T) {
 // their unread list before they wake up.
 func TestReadPeeks(t *testing.T) {
 	c, s := dial(t)
-	if _, err := c.Read("INBOX", 103); err != nil {
+	if _, err := c.Read(t.Context(), "INBOX", 103); err != nil {
 		t.Fatalf("Read: %v", err)
 	}
 	if !s.sent("BODY.PEEK[") {
@@ -236,7 +256,7 @@ func TestReadPeeks(t *testing.T) {
 
 func TestReadReturnsTheMessage(t *testing.T) {
 	c, _ := dial(t)
-	got, err := c.Read("INBOX", 103)
+	got, err := c.Read(t.Context(), "INBOX", 103)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -258,7 +278,7 @@ func TestReadReturnsTheMessage(t *testing.T) {
 // branchable outcome rather than an opaque failure.
 func TestReadMissingUID(t *testing.T) {
 	c, _ := dial(t)
-	_, err := c.Read("INBOX", 999)
+	_, err := c.Read(t.Context(), "INBOX", 999)
 	if err == nil {
 		t.Fatal("reading a missing UID succeeded")
 	}
@@ -273,7 +293,7 @@ func TestReadMissingUID(t *testing.T) {
 func TestSearchRunsOnTheServer(t *testing.T) {
 	c, s := dial(t)
 	since := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
-	if _, err := c.Search("INBOX", mail.Query{Text: "Dach", From: "chef", Since: since, Limit: 10}); err != nil {
+	if _, err := c.Search(t.Context(), "INBOX", mail.Query{Text: "Dach", From: "chef", Since: since, Limit: 10}); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	for _, want := range []string{"UID SEARCH", `TEXT "Dach"`, `SINCE "1-Aug-2026"`, `FROM "chef"`} {
@@ -287,7 +307,7 @@ func TestSearchRunsOnTheServer(t *testing.T) {
 // matches: a search for a common word would otherwise answer with the oldest mail in the mailbox.
 func TestSearchReturnsNewestFirst(t *testing.T) {
 	c, _ := dial(t)
-	got, err := c.Search("INBOX", mail.Query{Text: "Freitag", Limit: 2})
+	got, err := c.Search(t.Context(), "INBOX", mail.Query{Text: "Freitag", Limit: 2})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -301,7 +321,7 @@ func TestSearchReturnsNewestFirst(t *testing.T) {
 
 func TestSearchWithoutLimitAsksNothing(t *testing.T) {
 	c, s := dial(t)
-	got, err := c.Search("INBOX", mail.Query{Text: "Freitag"})
+	got, err := c.Search(t.Context(), "INBOX", mail.Query{Text: "Freitag"})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

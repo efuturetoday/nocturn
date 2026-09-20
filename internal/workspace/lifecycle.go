@@ -32,6 +32,11 @@ func (w *Workspace) Close() {
 	w.chats.CloseAll()
 	w.agentChats.CloseAll()
 	w.closePlugins()
+	if w.mailbox != nil {
+		// After the chat managers, like the plugins and for the same reason: nothing can still be in
+		// a turn that would open a fresh session on a workspace on its way out.
+		w.mailbox.Close()
+	}
 	if w.voice != nil {
 		w.voice.CloseAll()
 	}

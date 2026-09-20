@@ -35,9 +35,11 @@ js:
     const inbox = nocturn.call("mail_list", { folder: "INBOX", limit: 10 });
 
 notes: >-
-  A mail session is bounded at two minutes when the caller sets no deadline of its own — the dial,
-  the handshake and every command after it — so a server that stops answering ends the call rather
-  than the turn. The fetch **peeks**: listing and reading never set the `\Seen` flag, so an agent skimming the inbox
+  The four mail tools share **one** connection per workspace rather than logging in per call: a
+  conversation is usually a listing followed by two or three reads, and a handshake and login for each
+  of them is time the household pays for one question. It is dropped after five minutes unused, and a
+  server that hangs up in the meantime costs one silent reconnect rather than an error. Every
+  operation is bounded at a minute when the caller sets no deadline of its own. The fetch **peeks**: listing and reading never set the `\Seen` flag, so an agent skimming the inbox
   at six in the morning does not empty your unread list before you wake up. The tools exist only in a
   workspace that has a `mail.json` — no mailbox configured means no mail tools at all, rather than
   tools that fail on every call.

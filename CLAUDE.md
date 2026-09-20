@@ -113,7 +113,9 @@ reciprocal rank, an index OUTSIDE the mount that records its model and refuses t
 a one-minute reconcile that costs a directory walk when nothing changed) ·
 `mail` (the household's mailbox over `go-imap/v2`, kept behind a narrow facade: reading and
 server-side `SEARCH` are ungated, sending gates on `SendKind` with the RECIPIENT as target and one
-check per address. The account is a plain `mail.json`; the password lives in the vault under a name
+check per address. ONE IMAP connection per workspace, serialised and reaped after five minutes idle,
+with a single reconnect-and-retry when the server hangs up — safe only because everything pooled is a
+read; SMTP dials per message, since retrying a half-delivered one sends it twice. The account is a plain `mail.json`; the password lives in the vault under a name
 the file cannot change, and never rides the HTTP `secret.Injector`. Not folded into `knowledge` —
 ADR-17 says why) ·
 `chat` (file-backed transcript store + Manager) · `agent` (declaration + cron only; execution is
