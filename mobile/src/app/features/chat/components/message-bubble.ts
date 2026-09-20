@@ -49,17 +49,23 @@ import type { ChatMessageView } from '../../../core/services/chat-view';
     <!-- One finger-sized trigger for the whole turn's tools — tapping opens a window with EVERY tool
          as an accordion, so a fat finger never has to pick one tiny row out of the forest. -->
     @if (message().tools.length) {
-      <button type="button" class="tools-trigger" (click)="open.set(true)">
+      <button
+        type="button"
+        class="tools-trigger"
+        (click)="open.set(true)"
+        [attr.aria-expanded]="open()"
+        aria-haspopup="dialog"
+      >
         @if (anyRunning()) {
-          <ion-spinner name="dots" />
+          <ion-spinner name="dots" aria-hidden="true" />
         } @else {
-          <svg lucideWrench [size]="16" />
+          <svg lucideWrench [size]="16" aria-hidden="true" />
         }
         <span class="summary">{{ toolSummary() }}</span>
         @if (anyWaiting()) {
           <span class="wait">needs approval</span>
         }
-        <svg lucideChevronRight class="chev" [size]="16" />
+        <svg lucideChevronRight class="chev" [size]="16" aria-hidden="true" />
       </button>
 
       <ion-modal [isOpen]="open()" (didDismiss)="open.set(false)">
@@ -107,8 +113,12 @@ import type { ChatMessageView } from '../../../core/services/chat-view';
       border-radius: 1rem;
       word-break: break-word;
     }
-    .plain { white-space: pre-wrap; }
-    .thinking { white-space: pre-wrap; }
+    .plain {
+      white-space: pre-wrap;
+    }
+    .thinking {
+      white-space: pre-wrap;
+    }
     :host.user {
       margin-left: auto;
       background: var(--ion-color-primary);
@@ -121,25 +131,60 @@ import type { ChatMessageView } from '../../../core/services/chat-view';
       color: var(--ion-text-color);
       border-bottom-left-radius: 0.25rem;
     }
-    .thinking { display: block; font-style: italic; margin-bottom: 0.375rem; }
+    .thinking {
+      display: block;
+      font-style: italic;
+      margin-bottom: 0.375rem;
+    }
 
     /* Trigger row: full width, finger-sized — the single tap target for the turn's tools. */
     .tools-trigger {
-      display: flex; align-items: center; gap: 0.5rem; width: 100%;
-      margin-bottom: 0.375rem; padding: 0.375rem 0.5rem;
-      background: var(--ion-background-color-step-150); border: 0; border-radius: 0.625rem;
-      color: inherit; text-align: left; cursor: pointer; font-size: 0.8rem; min-height: 2.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      width: 100%;
+      margin-bottom: 0.375rem;
+      padding: 0.375rem 0.5rem;
+      background: var(--ion-background-color-step-150);
+      border: 0;
+      border-radius: 0.625rem;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+      font-size: 0.8rem;
+      min-height: 2.25rem;
     }
-    .tools-trigger > svg { color: var(--ion-color-medium); }
-    .tools-trigger ion-spinner { width: 1rem; height: 1rem; flex-shrink: 0; }
+    .tools-trigger > svg {
+      color: var(--ion-color-medium);
+    }
+    .tools-trigger ion-spinner {
+      width: 1rem;
+      height: 1rem;
+      flex-shrink: 0;
+    }
     .tools-trigger .summary {
-      flex: 1; min-width: 0; font-family: var(--ion-font-family-monospace, monospace);
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+      font-family: var(--ion-font-family-monospace, monospace);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .tools-trigger .wait { color: var(--ion-color-warning); flex-shrink: 0; font-size: 0.78rem; }
-    .tools-trigger .chev { opacity: 0.5; }
+    .tools-trigger .wait {
+      color: var(--ion-color-warning);
+      flex-shrink: 0;
+      font-size: 0.78rem;
+    }
+    .tools-trigger .chev {
+      opacity: 0.5;
+    }
 
-    .tools-window { --padding-start: 0.75rem; --padding-end: 0.75rem; --padding-top: 0.5rem; --padding-bottom: 1.5rem; }
+    .tools-window {
+      --padding-start: 0.75rem;
+      --padding-end: 0.75rem;
+      --padding-top: 0.5rem;
+      --padding-bottom: 1.5rem;
+    }
   `,
 })
 export class MessageBubbleComponent {
