@@ -28,7 +28,7 @@ import { heroToChat } from '../../shared/hero-transition';
     <!-- autoHide is left at its default ON: once ion-split-pane pins the drawer open (lg and up)
          the menu stops being an overlay, and Ionic takes the button away by itself. A burger that
          toggles a sidebar already on screen is a control with nothing to do. -->
-    <ion-menu-button class="burger" menu="main">
+    <ion-menu-button class="burger" menu="main" aria-label="Open menu">
       <svg lucideMenu [size]="24" />
     </ion-menu-button>
 
