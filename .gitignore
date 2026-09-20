@@ -18,8 +18,9 @@ internal/script/qjs/.buildcache/
 # macOS
 .DS_Store
 
-# Claude Code: shared project config (.claude/settings.json — plugins + hooks) IS
-# committed for all maintainers; personal overrides (permissions) stay local.
+# Agent config is committed: AGENTS.md and the symlinks to it, .agents/ (instructions + the
+# canonical skills), skills-lock.json, .claude/settings.json (plugins + hooks) and the
+# .claude/skills/ symlinks. Only personal overrides stay local.
 .claude/settings.local.json
 
 # local runtime plugins — installed plugins may hold OAuth tokens; never commit them

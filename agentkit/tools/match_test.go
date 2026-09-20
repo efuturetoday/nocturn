@@ -84,8 +84,8 @@ func TestHostMatch_SubdomainWildcardRejectsSuffixTrick(t *testing.T) {
 	}
 }
 
-// TestHostMatch_EmptyMatchesNothing pins that an empty grant pattern covers no host-bearing call —
-// the security-relevant property from CLAUDE.md §6 ("leer matcht nichts").
+// TestHostMatch_EmptyMatchesNothing pins that an empty grant pattern covers no host-bearing call:
+// a grant nobody filled in must widen nothing.
 //
 // DISCREPANCY vs TESTPLAN: the plan says "" should match even an empty host, but the code's equality
 // branch (`pattern == host`) makes HostMatch("", "") == true. That degenerate case is unreachable in

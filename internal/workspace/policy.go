@@ -9,8 +9,9 @@ import (
 
 // This file is the workspace permission model: which Kind of action runs free, which one asks a
 // human, and how that answer may be remembered. It is small on purpose and it is its own file on
-// purpose — it is the rule CLAUDE.md §4 describes, and tightening it is a deliberate change rather
-// than a bugfix, so it should not have to be found underneath something else.
+// purpose — it is the rule .agents/docs/permissions.md describes, and tightening it is a
+// deliberate change rather than a bugfix, so it should not have to be found underneath something
+// else.
 
 // policy is the workspace-root policy — the one a chat the human is watching runs under: the net and
 // file kinds ask; every other Kind runs free.

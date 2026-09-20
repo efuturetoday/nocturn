@@ -1,7 +1,7 @@
 package openai
 
-// Internal (white-box) tests for schema.go's unexported renderSchema — per CLAUDE.md §9,
-// unexported behavior is tested in the same-package test file.
+// Internal (white-box) tests for schema.go's unexported renderSchema: unexported behavior is
+// tested in the same-package test file.
 
 import (
 	"reflect"

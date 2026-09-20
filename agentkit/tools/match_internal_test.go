@@ -1,7 +1,7 @@
 package tools
 
-// Internal (white-box) test: parentDomain is unexported, so per CLAUDE.md §9 it is exercised in the
-// package's own test package. Everything else lives in the external tools_test package.
+// Internal (white-box) test: parentDomain is unexported, so it is exercised in the package's own
+// test package. Everything else lives in the external tools_test package.
 
 import "testing"
 
