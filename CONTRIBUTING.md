@@ -19,6 +19,7 @@ not ask for one.
 ## The loop
 
 ```bash
+git config core.hooksPath .githooks   # once per clone — the two commit gates below
 go build ./...                # go.work spans nocturn and the agentkit modules
 go test -race ./...           # must be green before anything else is worth discussing
 gofmt -l cmd internal agentkit # must print nothing
@@ -39,19 +40,22 @@ your change take effect, nothing more.
 Some tests skip themselves without a speaker-embedding checkpoint. That is deliberate — the file is
 ~26 MB and is never committed. `export NOCTURN_SPEAKER_MODEL=…` to run them.
 
-## Two hooks will stop you, on purpose
+## Two gates will stop you, on purpose
 
-`.claude/settings.json` is committed, and it is the process rather than a description of it.
+They live in `scripts/gates/` and run from `.githooks/pre-commit`, so they hold for every agent and
+for a human at a keyboard — `git config core.hooksPath .githooks` is what arms them in your clone.
+`.claude/settings.json` calls the same two scripts a moment earlier, so Claude Code shows the reason
+before git runs at all. The scripts are the process rather than a description of it.
 
-- **Before a commit** with staged `.go` files: the commit is *denied* until that exact diff has been
-  through the Go review skills — Effective Go and the Google Go Style Guide, cited by rule and
-  `file:line`. Fix the findings or justify each one you leave; the same staged content is never
-  blocked twice.
-- **After a commit** touching only `internal/` or `cmd/`: blocked until you have said what
-  documentation changes, or why none does.
+- **Staged `.go` files** are refused until that exact diff has been through the Go review skills —
+  Effective Go and the Google Go Style Guide, cited by rule and `file:line`. The orchestrator is
+  `cc-skills-golang:golang-how-to`; it knows which skills exist and which match the diff.
+- **A commit that changes only `internal/` or `cmd/`** is refused until the documentation question
+  has been answered — updated, or explicitly not needed for exactly these changes.
 
-If you work without those tools, do the same two things by hand. The point is that neither step is
-optional, not which program performs it.
+Both refuse the same staged content only once: fix the findings or justify each one you leave, then
+commit again. If you work without the skills, do both things by hand. The point is that neither step
+is optional, not which program performs it.
 
 ## What a change should look like
 
@@ -63,7 +67,7 @@ A wrapper kept "just in case" is a second thing to keep correct.
 
 **Explain the why, not the what.** The diff already says what changed. A comment earns its place by
 recording the alternative that was rejected, the measurement that settled it, or the failure mode
-that is not obvious. `CLAUDE.md` §6 is the running list of pitfalls actually hit — add to it when
+that is not obvious. `.agents/docs/pitfalls.md` is the running list of pitfalls actually hit — add to it when
 you find a new one, so it is paid for once.
 
 **Fail closed.** A forgotten field must never silently mean *allow*, *permanent*, or *wildcard*.

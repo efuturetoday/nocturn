@@ -1,8 +1,8 @@
 package openai
 
-// Internal (white-box) tests for client.go's unexported buildMessages — per CLAUDE.md §9,
-// unexported behavior is tested in the same-package test file; the public API lives in
-// client_test.go (package openai_test).
+// Internal (white-box) tests for client.go's unexported buildMessages: unexported behavior is
+// tested in the same-package test file, while the public API lives in client_test.go (package
+// openai_test).
 
 import (
 	"reflect"

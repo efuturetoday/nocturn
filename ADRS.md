@@ -1,268 +1,331 @@
 # Nocturn — Architecture Decision Records
 
-> The *why* behind the design — the choices and their rationale, which no `go doc`
-> can tell you. Package-level *what* lives in the code (`go doc ./internal/<pkg>`,
-> `go doc ./agentkit/...`); project vision, patterns, and pitfalls live in `CLAUDE.md`.
-> This file is the decision log: read it before reversing a decision, and add one when
-> you make a new load-bearing choice.
+> **A record here is a decision, not a manual.** Problem, decision, the reason that carries it, what
+> was rejected — and a pointer to where the mechanism lives. If a paragraph explains *how* something
+> works, it belongs in `.agents/docs/` or in the package's doc comment, not here.
+>
+> Read this before reversing a decision. Add one when you make a new load-bearing choice.
 
-Status legend: **decided** (still just a decision) · **realized in `<pkg>`** (built).
+Status: **decided** (still just a decision) · **realized in `<pkg>`** (built).
 
 ---
 
 ## ADR-1 — One isolation gate: WASM/wazero
-No second in-process interpreter (goja) for foreign code — a second interpreter means no memory
-isolation and a second security door to keep straight (sprawl). Polyglot comes from compile
-stages; JS/TS → QuickJS-in-WASM. **Code execution is first-class**; a pure compute transformation
-needs **zero permissions**. *Realized in `sandbox` + `script`.*
+*Realized in `sandbox` + `script`.*
+
+**Problem.** Foreign code has to run; each runtime that can run it is a security door to keep straight.
+**Decision.** WASM/wazero is the only one. Polyglot comes from compile stages (JS/TS → QuickJS-in-WASM).
+Code execution is first-class, and a pure compute transformation needs zero permissions.
+**Why.** A second in-process interpreter (goja) means no memory isolation and a second door — sprawl.
+**Detail:** `go doc ./internal/sandbox`, `go doc ./internal/script`.
 
 ## ADR-2 — Native effects are host tools, not guest code
-WASM cannot exec binaries. Rebuild the common effects (`http`, `dns`, `ping`) **natively in Go**;
-real `exec` is the last resort only (allowlist + HITL + OS sandbox). The model calls those tools
-directly — the same gated tools the script interpreter and plugins reach through. *Realized in
-`internal/tools` (`exec` deliberately absent — see ADR-7).*
+*Realized in `internal/tools`; `exec` deliberately absent (ADR-7).*
+
+**Problem.** WASM cannot exec binaries, and the effects an assistant needs are exactly the ones that
+touch the OS.
+**Decision.** Rebuild the common effects natively in Go (`http`, `dns`, `ping`, `file`). The model
+calls them directly — the same gated tools the script interpreter and plugins reach through.
+**Why.** One implementation, one gate, one audit point, whoever is calling.
+**Detail:** `.agents/docs/architecture.md` (the tool table).
 
 ## ADR-3 — Distribution borrowed from IronHub, simplified
-Git monorepo + `index.json` (url + sha256) + release assets, **no OCI**. Tool (wasm) / skill
-(Markdown) split. **Nocturn-plus: code signing** (IronClaw has none). *Decided.*
+*Decided; realized for the catalog in `library` (see ADR-19).*
+
+**Decision.** Git monorepo + an index of url + sha256 + release assets. No OCI. Tool (wasm) / skill
+(Markdown) split, plus code signing, which IronHub has none of.
 
 ## ADR-4 — Dynamic target-gating, not a static allowlist
-Known target → auto-allow; unknown → **mandatory out-of-band HITL**. Rigid per-tool allowlists
-cannot express "ask about the unknown": the risky part of a call is its *target* (which host,
-which path), and that only exists at call time. So the unit of decision is an **action**
-(`Action{Kind, Target}`) evaluated per call, not a tool listed once at startup. `Kind` is a tool
-name *or a shared axis* — `http_read`, `http_write`, `ping` and `dns_resolve` all gate on
-`"net"`, so one grant covers the whole axis instead of one per tool. An answer is remembered at
-the scope the human picked — this session, or always. *Realized in `agentkit/gate` (policy →
-allow/ask/deny, grants, approver) + the target-matching tools in `internal/tools`.*
+*Realized in `agentkit/gate` + the target-matching tools in `internal/tools`.*
 
-## ADR-5 — Host-managed credentials/OAuth; the guest never sees the token
-The host runs the OAuth flow + refresh and injects the Bearer only at the boundary; the guest gets
-only presence (a secret *exists*), never the value. *Realized in `secret` + `secret/oauth`.*
+**Problem.** The risky part of a call is its *target* — which host, which path — and that only exists
+at call time. A per-tool allowlist cannot express "ask about the unknown".
+**Decision.** The unit of decision is an **action**, `Action{Kind, Target}`, evaluated per call. Known
+target → auto-allow; unknown → mandatory out-of-band HITL. An answer is remembered at the scope the
+human picked: this session, or always.
+**Why.** `Kind` is a tool name *or a shared axis* — `http_read`, `http_write`, `ping` and `dns_resolve`
+all gate on `"net"` — so one grant covers an axis instead of one grant per tool.
+**Detail:** `.agents/docs/permissions.md`, `go doc ./agentkit/gate`.
 
-## LLM provider — go-openai + native tool_calls
-**go-openai** (dependency-free) for the chat call; **native `tool_calls`** (confirmed live against
-freellm) instead of a parsed prompt protocol; arguments JSON-Schema-validated (unmarshal + retry
-on error). Since ADR-11 this is the *only* place the dependency exists: go-openai is an indirect
-dep of the tree, reachable through one adapter module and nothing else. *Realized in
-`agentkit/openai`.*
+## ADR-5 — Host-managed credentials; the guest never sees the token
+*Realized in `secret` + `secret/oauth`.*
+
+**Decision.** The host runs the OAuth flow and refresh and injects the Bearer at the boundary. The
+guest learns only that a secret *exists*.
+**Why.** A value the guest can read is a value the guest can exfiltrate; presence is all it needs to
+decide whether a call is possible.
+**Detail:** `.agents/docs/permissions.md` (credentials), ADR-20 (lifetime and ownership).
 
 ## ADR-6 — Product identity: a secure personal assistant, NOT a coding agent
-The defensible moat is the *combination* — mandatory out-of-band HITL + WASM isolation +
-per-action gating + single binary — which no one has. Every step toward a full coding agent
-(ambient `exec`, local MCP servers, sandboxing a Node/Python runtime) **erodes exactly that moat**
-and makes Nocturn a worse Claude Code. So: **assistant-first by default.** Coding navigation
-(grep/read/edit/git plumbing) is still covered — without `exec`. "Whatever coding agents use" is
-the wrong yardstick. Not irreversible: the `exec` escape hatch (ADR-7) can be added later without
-flipping the default. *Decided.*
+*Decided.*
+
+**Decision.** Assistant-first by default. Coding navigation (grep/read/edit/git plumbing) is covered —
+without `exec`.
+**Why.** The moat is the *combination*: mandatory out-of-band HITL + WASM isolation + per-action gating
++ single binary. Every step toward a full coding agent (ambient `exec`, local MCP servers, sandboxing a
+Node/Python runtime) erodes exactly that and makes Nocturn a worse Claude Code. "Whatever coding agents
+use" is the wrong yardstick.
+**Not irreversible.** The `exec` escape hatch (ADR-7) can be added later without flipping the default.
 
 ## ADR-7 — Tool taxonomy: the 3-bucket compass
-Classify by *what the tool does*, not "it's a CLI":
-- **(A) local read/compute** (grep/find/ls/jq/text) → **`code_run`** (the model writes JS in the
-  QuickJS sandbox and reads through `file_read`, **zero new permissions**) or the `file_search`
-  tool.
-- **(B) API-client "CLIs"** (gh, aws, gcloud, stripe, linear, curl) → **a plugin over
-  `http_read`/`http_write` + a host-injected token** — *safer* than the real CLI (token host-held,
-  cage-bounded, HITL on writes); the model's sweet spot.
-- **(C) real arbitrary exec** (npm test, go build, make) → the **only `exec` escape hatch**
-  (OS sandbox + allowlist + HITL, ADR-2's "last resort"), **never the default**.
+*A + B realized (`script`, `internal/tools`, `plugin`); C deliberately unbuilt.*
 
-A + B cover the overwhelming majority without `exec`. *A + B realized (`script`, the `file_*` and
-network tools in `internal/tools`, `plugin`); C deliberately unbuilt.*
+**Decision.** Classify by what a tool *does*, not by "it's a CLI":
 
-## ADR-8 — Kernel-vs-plugin boundary: "expressible through the primitives? → plugin"
-The **host stays a minimal kernel**: the gate + HITL + interpreter (`code_run`) + the **primitives
-that need a real syscall** (`http`, `file`, `dns` — a guest cannot open a socket or the FS
-itself). **Everything expressible through those primitives → a plugin** (git = `file` on `/work`
-+ `http` for push/pull; gmail/github = `http`). Putting trusted first-party code in a plugin buys
-*no* isolation, but keeps the **TCB small** (pillar 4) + one uniform extension model +
-signable/versionable — which outweighs the sandbox overhead. **git concretely: go-git built
-`GOOS=wasip1 GOARCH=wasm` as `plugin.wasm`** (Go does this natively; the go-git dep lives in the
-plugin build, never the host). **NOT** `wasm-git`/libgit2 (Emscripten↔wazero break) and **no
-CGo**. Costs accepted: WASI-FS is slower, the plugin writes its own HTTP transport, local git
-FS-ops run over the confined `/work` mount (not per-op HITL) — only the push/commit gate is
-brokered. *Decided; `plugin` realized.*
+| | | |
+|---|---|---|
+| **A** | local read/compute (grep/find/ls/jq/text) | `code_run` in the QuickJS sandbox, or `file_search` — **zero new permissions** |
+| **B** | API-client "CLIs" (gh, aws, stripe, curl) | a plugin over `http_read`/`http_write` + a host-injected token |
+| **C** | real arbitrary exec (npm test, go build) | the **only** `exec` escape hatch — OS sandbox + allowlist + HITL, never the default |
+
+**Why.** A + B cover the overwhelming majority without `exec`, and B is *safer* than the real CLI: the
+token is host-held, the cage bounds the call, writes are gated.
+
+## ADR-8 — Kernel-vs-plugin boundary: expressible through the primitives? → plugin
+*Decided; `plugin` realized.*
+
+**Decision.** The host stays a minimal kernel: gate + HITL + interpreter + the primitives that need a
+real syscall (`http`, `file`, `dns`). Everything expressible through those is a plugin — git is `file`
+on `/work` plus `http` for push/pull; gmail and github are `http`.
+**Why.** Trusted first-party code in a plugin buys no isolation, but keeps the TCB small, gives one
+uniform extension model, and makes the thing signable and versionable. That outweighs the sandbox
+overhead.
+**Rejected.** `wasm-git`/libgit2 (Emscripten↔wazero break) and any CGo. git would be go-git built
+`GOOS=wasip1 GOARCH=wasm`.
+**Costs accepted.** WASI-FS is slower; a plugin writes its own HTTP transport; local git FS-ops run over
+the confined `/work` mount rather than per-op HITL.
 
 ## ADR-9 — MCP line: remote (HTTP) YES, local (stdio) NO
-*Local* stdio-MCP = a foreign **process on your machine** with your rights → exactly the
-supply-chain threat we avoid. *Remote* MCP = a service on **someone else's infra**; no code runs
-locally → architecturally identical to "call an HTTP API" and fits the model exactly (MCP client
-as JSON-RPC-over-HTTP: `tools/list` → tool specs, `tools/call` → a gated network action against
-the MCP host, OAuth host-injected, HITL on writes, results leak-scanned/untrusted). **No sandbox
-needed (no foreign code).** Opens the growing **hosted-MCP ecosystem** (GitHub, Notion, Linear,
-Sentry, Atlassian…) *without* breaking the model — and that is where MCP is heading. Reminder: the
-*largest* assistant ecosystem is Markdown skills (5,400+), not MCP — adopted un-sandboxed-safe
-because a skill only acts through gated tools. *Realized in `mcp` (+ `mcp/authflow`).*
+*Realized in `mcp` (+ `mcp/authflow`).*
 
-## ADR-10 — Workspace = the portable/versionable unit; the LLM inhabits only `mnt/`
-No DB — the **workspace folder IS the state** (data + skills + standing rights), copyable/git-able
-as a whole. Layout:
-```
-nocturn-data/
-  devices.json         ← paired devices, process-wide (not per workspace)
-  workspaces/main/     ← "main" is DefaultWorkspace
-    mnt/               ← the ONLY thing the LLM sees: file-tool root + sandbox /work (data plane)
-    PERSONA.md         ← the assistant's system prompt (control plane, optional)
-    agents/            ← child-agent declarations (host-read, not mounted)
-    extensions/<name>/ ← everything installed, one folder each: its payloads (SKILL.md ·
-                         plugin.json+plugin.js · mcp.json), manifest.json (what it declares),
-                         config.json (what a human supplied), secrets.enc (its own shard)
-    mail/              ← the mailbox: mail.json + its own shard. Not an extension (nothing is
-                         installed), but a folder for the same reason — a shard is path-keyed
-    grants.json        ← host-managed standing permissions, outside the mount
-    vault.enc          ← encrypted credentials (this workspace's own key), outside the mount
-    reminders.json     ← pending reminders
-    chats/  agent-runs/ ← persisted transcripts (user chats · agent firings)
-```
-**The control-plane/data-plane split is structural (mount scope), not a deny rule:** the model can
-neither see nor write `agents`/`skills`/`grants`/`PERSONA.md`, because they are simply not in the
-mount — confinement by construction. The self-modification threat is solved for free. **Severity
-clarity:** a self-written *skill* grants no authority (the gate reads no skills, `allowed-tools`
-is ignored) → low; the **load-bearing** protection is `grants.json` (authority-granting — if the
-model could write it, an injection could set itself standing grants → HITL silent → gate
-bypassed). So `grants.json` lives in the workspace (per-workspace, portable), not `~/.config`.
-*Realized in `workspace` (composition + the grant store it owns) + the workspace-confined `file_*`
-tools.*
+**Decision.** Remote MCP servers only.
+**Why.** Local stdio-MCP is a foreign **process on your machine with your rights** — the supply-chain
+threat we exist to avoid. A remote server runs no code locally, so it is architecturally identical to
+"call an HTTP API" and needs no sandbox: `tools/list` for specs, `tools/call` as a gated network action,
+OAuth host-injected, results leak-scanned and untrusted. It also opens the hosted-MCP ecosystem without
+bending the model.
+**Worth remembering.** The largest assistant ecosystem is Markdown skills, not MCP — adopted safely
+un-sandboxed because a skill acts only through gated tools (ADR-10).
+**Detail:** `go doc ./internal/mcp`.
 
-**Where "a skill grants no authority" stops holding.** A skill's SKILL.md is still text. Its
-`manifest.json` is not: it declares a credential and the host that credential is bound to, which tells
-the HOST to stamp a stored secret onto every request going there — and because a skill has no runtime
-of its own, that binding is ambient (it rides the model's own `http_read`, not "the skill's calls",
-which do not exist). So the severity split above applies to the BODY, and the declaration is on the
-other side of it. What holds the line is the same rule plugins answer to: every catalog entry is
-SIGNED (`nocturn-extension-v1` over identity, the digest of every payload an install writes, the
-listing and a serial), and an unsigned one is refused from a remote catalog while still accepted from a file on this
-machine — whoever can write that file can already drop the folder into `extensions/`. Signing only the
-entries that declare a credential was the first attempt and is not what shipped: it produced two kinds
-of catalog skill with two trust paths, which is a distinction every reader then has to make.
-*Realized in `internal/extension` (the declaration), `internal/library` (`validSkills` +
-`signaturePolicy`), `internal/workspace/extensions.go` (the one registration).*
+## ADR-10 — The workspace is the portable unit; the LLM inhabits only `mnt/`
+*Realized in `workspace` + the workspace-confined `file_*` tools.*
+
+**Problem.** State needs somewhere to live, and the model needs somewhere it cannot reach.
+**Decision.** No DB — the workspace folder IS the state, copyable and git-able as a whole. `mnt/` is the
+only thing the LLM sees; agents, extensions, `grants.json`, `PERSONA.md` and the vault sit outside it.
+**Why.** The control-plane/data-plane split is **structural — mount scope, not a deny rule**. The model
+cannot write what is not in the mount, so self-modification is solved by construction. Severity is not
+uniform: a self-written *skill body* grants no authority (the gate reads no skills, `allowed-tools` is
+ignored), while `grants.json` is load-bearing — a model that could write it could grant itself standing
+permissions and silence HITL. That is why grants live in the workspace, not `~/.config`.
+**Where "a skill grants no authority" stops.** A `manifest.json` is not text: it tells the host to stamp
+a stored secret onto every request to a host it names, ambiently (ADR-20, ADR-19).
+**Detail:** `.agents/docs/architecture.md` (the workspace layout), `.agents/docs/permissions.md`.
 
 ## ADR-11 — agentkit is a separate, zero-dependency, policy-blind module
-The turn loop, the ports, the immutable sets, sub-agents, events and guards are **product-
-independent**; nocturn's security boundary is not. Holding both in one package made the engine
-un-publishable and blurred which half the security actually lives in. So the engine is its own
-module (`agentkit`, joined via `go.work`), and nocturn is one consumer of it.
+*Realized in `agentkit` + `agentkit/{gate,runtime,openai,tools}`; extraction into its own repository is
+still open.*
 
-Three constraints keep the split honest:
-- **Zero dependencies in the core.** Every provider, transport and storage concern must be a port
-  (`LLM`, `Tool`, `Logger`, `Store`); the adapters (`gate`, `runtime`, `openai`, `tools`) are
-  sibling modules, not internals. A dep in the core would mean a concern leaked inward.
-- **The core is policy-blind.** It knows nothing about permissions; gating is a wrapper on top
-  (ADR-4). Rejected alternative: a Gate/Decision type inside the loop — it would tie every future
-  consumer to nocturn's permission model and put the security decision inside the component that
-  the LLM's output flows through. The split also forces two questions apart that get conflated:
-  **WHICH** tools an agent has at all (`ToolSet.Select`, bound once, statically) vs **WHAT** a tool
-  may do (the gate, per action, asked when risky, remembered).
-- **A sub-agent is a tool**, not a subsystem: `AgentTool` wraps an agent as a tool whose call runs
-  a nested session. Nesting rides on ctx (event frame, shared budget), so a single set of guards
-  caps the whole tree instead of each level re-arming its own.
-
-*Realized in `agentkit` + `agentkit/{gate,runtime,openai,tools}`; extraction into its own
-repository is still open (CLAUDE.md §9).*
+**Problem.** Engine and security boundary in one package made the engine un-publishable and blurred
+which half the security lives in.
+**Decision.** The engine is its own module; nocturn is one consumer. Three constraints keep the split
+honest: **zero dependencies in the core** (every provider, transport and storage concern is a port),
+**the core is policy-blind** (gating is a wrapper, ADR-4), and **a sub-agent is a tool**, not a
+subsystem.
+**Why the policy-blindness specifically.** A Gate/Decision type inside the loop would tie every future
+consumer to nocturn's permission model and put the security decision inside the component the LLM's
+output flows through. It also keeps two questions apart that get conflated: WHICH tools an agent has
+(`ToolSet.Select`, static) vs WHAT a tool may do (the gate, per action).
+**Detail:** `agentkit/DOCS.md`, `.agents/docs/architecture.md`.
 
 ## ADR-12 — Retrieval: documents in the mount, the index outside it, embeddings remote
-The corpus lives at `mnt/knowledge/` — INSIDE the file tools' mount — and that is the mirror image
-of ADR-10's treatment of memory. Memory is control plane: its catalog reaches every future prompt,
-so it sits outside the mount where no generic file tool can rewrite it. Documents are **data**: they
-enter the prompt only when a tool goes looking, and putting one there grants nobody anything — the
-same argument ADR-10 makes about a self-written skill. The **index** does not follow them in. It is
-host state (hashes, offsets, vectors), and a model that could edit it could point a search result at
-text that is not in the file, so it sits beside `grants.json`.
+*Realized in `knowledge` (+ `knowledge/embed`).*
 
-**`knowledge_search` is ungated**, on the argument that already leaves `memory_read` and `skill_read`
-ungated: context, never authority, reaching nothing `file_read` could not already reach. The one
-thing worth stating rather than glossing is that answering EMBEDS the query, which sends it to the
-configured provider — host configuration with the same standing as the endpoint already reading
-every message, not a target the model chose. The decision is made once, by configuring an embedder.
-
-**What comes back never claims an author.** Because the corpus is in the mount, `file_write` — and
-therefore a prompt injection — can put a document there. Introducing that to the model as "the
-user's own note" would launder exactly the attack ADR-4 and the out-of-band gate exist to stop, so
-results are framed as quoted file content, explicitly not as instructions and explicitly not as
+**Decision.** The corpus lives at `mnt/knowledge/`; the index does not follow it in.
+**Why.** Documents are *data* — they enter the prompt only when a tool goes looking, and putting one
+there grants nobody anything (ADR-10's argument about a skill body). The index is host state, and a
+model that could edit it could point a search result at text that is not in the file. So the index sits
+beside `grants.json`.
+**`knowledge_search` is ungated** on the argument that already leaves `memory_read` and `skill_read`
+ungated: context, never authority, reaching nothing `file_read` could not. The one thing worth stating
+is that answering EMBEDS the query — host configuration with the same standing as the endpoint already
+reading every message, decided once by configuring an embedder.
+**What comes back never claims an author.** `file_write`, and therefore an injection, can put a document
+in the mount. Results are framed as quoted file content, explicitly not instructions and explicitly not
 something the user wrote.
-
-**The embedder is a port with a REMOTE adapter, and that is a concession.** Indexing sends every
-document to a third party. A local model would remove the trade; `internal/onnx` runs a
-convolutional speaker network in pure Go, and a sentence-transformer needs a transformer's operator
-set plus a tokenizer, which is a project rather than a slice. The honest position is the port, a
-remote adapter behind it, the leak scanner in front of it, and documentation that says so. The
-**document reader is a port for the same reason** — PDF, Office and image extraction each need a
-dependency that has no business inside a package the whole workspace links.
-
-**Hybrid search, fused by rank.** Vectors miss exact identifiers; keywords miss paraphrase. Scores
-from the two share no scale, so reciprocal rank fusion uses only the order each produced. *Realized
-in `knowledge` (+ `knowledge/embed`).*
+**The remote embedder is a conceded trade.** Indexing sends documents to a third party. A local model
+would remove it, but a sentence-transformer needs a transformer's operator set plus a tokenizer — a
+project, not a slice (`internal/onnx` runs a convolutional network, which is a different size of
+problem). The honest position is a port, a remote adapter behind it, the leak scanner in front of it,
+and saying so. The document reader is a port for the same reason.
+**Detail:** `go doc ./internal/knowledge` (chunking, hybrid cosine+BM25 fused by reciprocal rank
+because the two scores share no scale).
 
 ## ADR-13 — The terminal is a full-screen surface, and it OWNS the screen
-The REPL printed the conversation to stdout with `fmt.Print` while slog printed diagnostics to
-stderr, and on one terminal the two interleave: an answer with a timestamp glued into it, an
-approval prompt scrolled away under three lines nobody asked for. The old fix was to run the chat at
-WARN, which is not a fix but a decision to stop looking. The real one is to give the terminal a
-single owner. `internal/tui` is a full-screen alternate-screen app and the only writer to the
-screen; diagnostics go to `nocturn-data/nocturn.log` and, in parallel, to an in-memory ring the log
-pane opens on. Nothing prints while it runs, which is what lets the default level go back up to
-INFO. It refuses to start without a TTY rather than degrading — with the REPL gone there is no
-non-interactive chat to fall back to, and escape sequences in a pipe are worse than a sentence.
+*Realized in `tui` (+ `tui/transcript`, `tui/logring`).*
 
-**It is `serve`'s sibling, not its replacement.** Both sit on the `workspace` facade, both fold the
-same `agentkit` event stream, neither knows the other exists. That symmetry is what keeps the
-terminal from growing a second, quieter model of a chat.
+**Problem.** The REPL printed the conversation to stdout while slog printed diagnostics to stderr; on
+one terminal the two interleave — an answer with a timestamp glued into it, an approval prompt scrolled
+away. Running the chat at WARN was not a fix but a decision to stop looking.
+**Decision.** `internal/tui` is a full-screen alternate-screen app and the only writer to the screen.
+Diagnostics go to a file and an in-memory ring the log pane opens on. It refuses to start without a TTY
+rather than degrading.
+**Why the shape holds.** It is `serve`'s **sibling**, not its replacement: both sit on the `workspace`
+facade, both fold the same event stream, neither knows the other exists — which is what keeps the
+terminal from growing a second, quieter model of a chat. And the fold is a **package, not a renderer**:
+`tui/transcript` is a deliberate port of the mobile client's `chat-model.ts`, pinned by a convergence
+test, because two clients folding one stream is where drift is silent and expensive.
+**Two consequences worth recording.** `Ctrl+C` cancels the turn and does not quit — in a full-screen UI
+"stop what you are doing" and "kill the program" are plainly different requests. And a terminal approval
+has **no timeout**, unlike `hitl`'s two minutes: out of band nobody may be looking, here somebody is,
+and a deadline would only refuse what the reader was still reading.
+**Detail:** `.agents/docs/workflow.md` (keys), `.agents/docs/pitfalls.md` (go-tui and `.gsx`).
 
-**The fold is a package, not a renderer.** `internal/tui/transcript` turns events into blocks with
-no terminal, no clock and no I/O, and it is a deliberate port of the mobile client's
-`chat-model.ts` — same merge rules, same frame nesting, pinned by the same convergence test (fold a
-live turn, seed the snapshot that turn persists, assert they render alike). Two clients folding one
-stream is a place where drift is silent and expensive; one shape, tested from both ends, is the
-answer. It also carries the whole testable surface: go-tui offers no way to drive an App against a
-mock terminal, so the fold, the approver and the log ring are covered without a PTY and the
-assembled layout is verified by running it.
+## ADR-14 — The explainers are rendered from code (Remotion), outside the binary
+*Decided; `media/`.*
 
-**Ctrl+C cancels the turn; it does not quit.** The framework clears `ISIG`, so it arrives as a
-keystroke, and a full-screen UI is the first place where "stop what you are doing" and "kill the
-program" are plainly different requests. That also fixes something the old terminal approver got
-wrong: it ignored `ctx`, so a cancelled turn left the asking goroutine blocked in `ReadString`
-forever. The new one honours it.
+**Problem.** What is hardest to explain is not the structure but the *order*: a turn arrives, the model
+asks, `gate.Check` turns that into an action, the ask leaves the machine, a human answers elsewhere, and
+only then does the effect happen. Static pictures say the nouns and drop the verbs.
+**Decision.** `media/` is a Remotion project rendered to video by CI: its own `package.json`, outside
+`go.work`, never imported, never linked. Rendered files are not committed.
+**Why.** The source is text — reviewable in a pull request, diffable, fixable by editing one line. A
+timeline editor would make the explainers the one part of this repository that cannot be reviewed. A
+composition can also read the schema `docs/` already validates against, so an explainer cannot quietly
+name tools that do not exist.
+**Why outside the build.** Nocturn's identity is a single Go binary with no foreign runtime; a React
+project in the tree reads as a breach of that until someone says otherwise. The claim is about what
+ships, and no explainer ships.
+**Licensing is a headcount question.** Remotion's Free License covers up to three people; from four it
+is a paid Company License, and open source does not enter into it. Re-check when the set of people who
+render changes, not when the code does.
 
-**No timeout on a terminal approval, unlike `hitl`'s two minutes.** Out of band nobody may be
-looking; here somebody is, and `gate.Check` pauses the turn's clock around the ask. A deadline would
-only refuse what the reader was still reading. The option SET is the same as the broker's, in the
-same order, minted from `gate.Action` alone and never from anything the model wrote — but the
-broker's code is not reused: its multi-device presence, re-presentation and push wakeups have no
-meaning at a keyboard. *Realized in `tui` (+ `tui/transcript`, `tui/logring`).*
+## ADR-15 — A workspace is cut in two by what may not exist twice
+*Realized in `internal/workspace/{workspace,snapshot,lifecycle}.go`, `agentkit/session.go`.*
 
-## ADR-14 — The explainers are rendered from code (Remotion), and they live outside the binary
-What nocturn is hardest to explain is not its structure but its *order*: a turn arrives, the model
-asks for a tool, `gate.Check` turns that into an `Action{Kind, Target}`, the ask leaves the machine,
-a human answers on a second device, and only then does the effect happen. Every one of those is a
-box in a diagram and none of them is the point — the point is that they happen in that sequence, and
-that the human sits between the ask and the effect. The same holds for the two threat classes, which
-are only distinguishable by *which* defense catches them, and for zero ambient authority, which is a
-statement about what the guest does not have until the host hands it over. Static pictures say the
-nouns and drop the verbs.
+**Problem.** Discovery ran once at `Open`, so adding a skill or an MCP server meant restarting the
+daemon — untenable the moment a phone can add one. Reopening does not work in either order: close-then-
+open leaves seconds with no workspace, open-then-close puts two vaults on one `vault.enc`.
+**Decision.** Split by what may not exist twice. **Durable** (one vault handle, one timer per reminder,
+one chat store, one index, one injector) is built once by `Open`. **Derived** (agents, skills, plugins,
+MCP servers, the toolset, the per-agent runtimes) is a `snapshot`, published with one atomic store.
+**Why one pointer, not a field per concern.** `Inventory` reads the tool list and the MCP list together;
+two guarded fields let a reader land between the writes and report a workspace that never existed. One
+swap makes that unrepresentable, and a failed rebuild leaves the previous snapshot standing for free.
+**The turn, not the session, is where a new snapshot takes effect.** An open conversation sees a new
+skill in its next message; a turn already running keeps the set it was handed, because the model plans
+against a tool list and a tool must not vanish between two calls it decided to make together. **Agent
+runs are the deliberate exception** — a run keeps the cage it fired under, since widening an authority
+boundary mid-run, unattended, is the one place "immediately" is the wrong answer.
+**Rejected.** A filesystem watcher (a dependency, recursive watch management, events dropped under load
+— and a periodic reconcile needed anyway as the backstop; `internal/knowledge` made this call first) and
+a ticker (it would re-run every MCP handshake against other people's servers on a schedule). So a reload
+is asked for.
 
-`media/` is a Remotion project: React components, one composition per explainer, rendered to video
-by CI. Chosen because the source is text — reviewable in a pull request, diffable, and correctable
-by editing one line rather than by finding whoever still has the project file. A timeline editor
-would make the explainers the one part of this repository that cannot be reviewed. It also lets a
-composition read the same schema `docs/` already validates its tool and capability tables against,
-so an explainer that names the gated tools cannot quietly fall out of step with the ones that exist.
+## ADR-16 — A workspace's folder name is its identity; its title is a label over it
+*Realized in `internal/workspace/{meta,registry}.go`.*
 
-**It is not part of the binary and not part of the Go build.** Nocturn's identity is a single Go
-binary with no foreign runtime, and a React project in the tree reads as a breach of exactly that
-until someone says otherwise — so: its own directory, its own `package.json`, outside `go.work`,
-never imported, never linked. The claim is about what ships, and no explainer ships.
+**Problem.** A workspace shows a name on a screen and somebody will want to change it. Renaming the
+folder is the obvious implementation and it destroys credentials **silently** — the folder name is the
+input to the vault key and to every shard key, so a rename makes them undecryptable with no error until
+something reaches for a token.
+**Decision.** Identity is the folder, permanently: the key input, the `ws` field on every wire command,
+the `ws=` on every log line. The title lives in `workspace.json` and changes freely.
+**Rejected.** A stable id in `workspace.json` with keys derived from it. Renaming would become trivial
+and correct, and key derivation would then depend on a mutable file *inside* the thing it protects. What
+renaming buys is a prettier directory name.
+**Deletion follows.** The folder is every conversation, every note and a vault, and it is being removed
+from a list on a phone — so it is **moved** to `.trash/<name>-<unix>`. A dot-directory, because the
+registry's scan skips those.
 
-**The rendered files are not committed.** `qjs.wasm` and the generated `_gsx.go` are committed
-because the build needs them; nothing needs a video. CI renders the compositions and the docs build
-consumes them in the same run, which keeps tens of megabytes of re-encoded binary out of every edit
-to a caption. Anchor the ignore rule at the root (`/media/out/`) — the unanchored form would match
-any `out/` at any depth, which this repository has already been bitten by once.
+## ADR-17 — Mail: reading is context, sending is its own Kind aimed at the recipient
+*Decided; realized in `mail`.*
 
-**Licensing is a headcount question, not an open-source one.** Remotion's Free License covers
-individuals and companies of up to three people; from four it requires a paid Company License, and
-the project being open source does not enter into it. That is a condition on the people rendering,
-so it is worth re-checking when the set of people who render changes — not when the code does.
+**Decision.** Reading is ungated. Sending gates on `mail.SendKind` with the **recipient address** as
+Target, one check per address, and asks in the base policy too.
+**Why reading is ungated.** Same reading as `memory_read` and `knowledge_search`: context, never
+authority. Asking permission to look into one's own inbox buys nothing — the risk of a mail is not that
+it was read but that it is *foreign text*, the plainest injection channel in the tree, defended where
+the injection would have its effect plus ingress redaction.
+**Why the recipient is the Target.** The Target of a net action is the host, and the host of an SMTP
+submission is one's own provider: a remembered yes for `smtp.provider.de` would cover every future
+message to everyone. This deviates from `FileKind`, where read and write share one Kind, and the
+deviation is the point — there a path bounds both directions, here `mail · chef@firma.de` would not tell
+a person whether something is being read or sent.
+**Why it asks in the base policy.** The argument that an interactive transcript makes approval "before
+instead of after" holds for a note on disk and collapses for a mail: there is no after.
+**Dependencies.** `emersion/go-imap/v2` + `go-message`, pinned, `net/smtp` for submission. Rejected: our
+own client on the `internal/mcp` precedent — the hard part of mail is not the protocol but MIME, which
+we would have had to borrow anyway, leaving the difficult half foreign and the easy half hand-written.
+**Not folded into the knowledge index.** `knowledge_search` is ungated because the corpus is what the
+household itself filed. A mailbox is the opposite: anyone who knows the address can write to it, so
+indexing it hands every sender a write into the retrieval corpus — surfaced at a moment the attacker
+picks, with rank fusion erasing which corpus a hit came from. Keeping an index current would also need UIDVALIDITY, deletions and moves — a sync
+engine, against a directory walk — while server-side `SEARCH` costs one command and copies nothing. Open door: a mail-specific index with its own provenance, never fused into one ranking.
+**Detail:** `go doc ./internal/mail` (the pooled IMAP connection, per-message SMTP, the two vault
+entries, why the username stays out of the vault), `.agents/docs/permissions.md`.
+
+## ADR-18 — A device class is a fact about a device, never a value on the wire
+*Realized in `internal/serve/{capabilities,origin}.go`, `internal/auth`.*
+
+**Decision.** `manage` is a **capability, not a gated action**. A class is **derived** from what a holder
+already sends, interpreted in one function, and never transmitted.
+**Why manage is not gated.** The gate exists for the model acting under smuggled instructions, judged by
+a human on a device the injection cannot reach. A device adding a workspace is the opposite shape — a
+human command from an authenticated device — and routing it through the broker would ask the phone to
+confirm what the phone just tapped. The precedent is `device.forget`.
+**Why the class is not on the wire.** A value the client controls is not a fact about the client.
+**Why the origin check needs the host check first.** Comparing `Origin` to `r.Host` is self-referential,
+since whoever owns a DNS name owns both. That bypass was *measured* before `hostOK` existed. So the Host
+must be un-rebindable first — an IP literal, `localhost`, or `.local` — and a real hostname, being
+indistinguishable from the attack, is named once by configuration.
+**Why every TTL needs a second chance.** The bootstrap code was armed once for five minutes and missing
+it had no exit but deleting `devices.json`. One bit could not tell "join is the way in" from "there is
+no way in", so `daemon.json` carries two.
+**A browser is still not a second device** for the unattended case: no push provider carries one.
+**Detail:** `.agents/docs/permissions.md` (classes, capabilities, the origin rules).
+
+## ADR-19 — Text needs TLS, code needs a key, and the signature covers the pitch
+*Realized in `internal/library`, `internal/serve`.*
+
+**Decision.** Instructions are carried by one configured TLS host with every payload inline. Code is
+additionally refused unless an Ed25519 signature verifies over identity, the digest of every payload,
+**the listing** and **a serial**. The requirement is tied to the SOURCE: a file or loopback needs none, a
+remote catalog does; a signature that is present must verify either way.
+**Why the listing signs too.** A person picks by it, so a taken-over host could otherwise rebrand a
+signed mail plugin as "calendar sync, no mail access" while the artifacts stayed ours.
+**Why the serial signs too.** A signature says "we published these bytes", never "this is current".
+Without something monotonic, a withdrawn entry can be served forever.
+**Why source, not content, decides.** A signature substitutes for a channel, and a file on this machine
+is not a channel — whoever can write it can drop the folder into `extensions/` directly.
+**What it deliberately does not rest on.** A person reading a body first: nobody spots a subtle
+instruction in four thousand tokens on a phone. The controls that hold are ADR-10 and the gate on the
+first call.
+**What it does not cover.** What the manifest *asks for* — `uses`, `credentials`, `oauth`. That triple is
+the review surface a client must show.
+**Two consequences.** The fetch is host egress (no model output flows into it, so no gate) and is lazy,
+which is what lets it be on by default. And `library.install` names an entry, never carries one — a wire
+form with a skill body would be a way to put arbitrary text into every system prompt of every turn.
+**Known limits.** First sight of a plugin has nothing to compare a serial against; a plugin *removed*
+from a catalog would need a signature over the set to detect, which would put the key in the path of
+every publish.
+**Detail:** `.agents/docs/permissions.md`, `internal/library/freshness.go`.
+
+## ADR-20 — A credential belongs to what declared it, and dies with it
+*Realized in `internal/extension`, `internal/workspace/extensions.go`, `internal/secret`.*
+
+**Problem.** A workspace-wide `bindings.json` and `NOCTURN_SECRET_*` env vars both bound a credential to
+a host nobody had declared, and both outlived whatever used them.
+**Decision.** One declaration shape, one registration, one storage — the shard beside the folder — and
+the host is *in* the key, so re-pointing an extension at another host does not find the old token.
+Removing an extension revokes the remembered net grant for that host.
+**Why the revocation.** A grant records what, never why. Once the thing is gone the answer stands alone,
+and the next server on that host would inherit a yes nobody gave it. It cuts both ways, and being asked
+once more is the cheap side of that trade.
+**Why config values are validated on the way out too.** They are substituted into text the model reads
+on every turn.
+**Detail:** `.agents/docs/permissions.md` (the grammar, the discovery-pass ordering).
 
 ---
 
@@ -276,142 +339,22 @@ so it is worth re-checking when the set of people who render changes — not whe
 | Complexity | low, idiomatic Go | high (loop + LLM I/O over the ABI) |
 | Injection defense | **identical** (comes from gate + HITL) | identical |
 
-**Rationale:** injection defense comes from **per-action gating + out-of-band HITL**, not from
-where the loop runs. A is simpler, same net security, and keeps keys out of the sandbox. Build the
-host-function boundary so `agentkit.Session` could later move to B without a rewrite.
+**Why.** Injection defense comes from per-action gating + out-of-band HITL, not from where the loop runs.
+A is simpler, same net security, and keeps keys out of the sandbox. Keep the host-function boundary
+abstract enough that `agentkit.Session` could move to B without a rewrite.
 
 ## wazero over Wasmtime — honest runtime placement
-wazero is **WASIp1-only, no component model** (#2289 "not planned"), **no fuel**. Costs vs.
-Wasmtime: no typed WIT interfaces / no WIT→tool mapping (we supply our own manifest/schema layer,
-Extism-style); coarser WASIp1; CPU bounded only via **context deadline + memory-page cap**;
-component tools from Wassette/wasmCloud won't run without a shim. **Why still right:** a CGo-free
-**single binary** (trivial cross-compile), and **every host import = your Go function** → the
-boundary is maximally auditable, wrappable, revocable. Escape hatch: keep the host-import
-interfaces abstract enough for a later wasmtime-go/component backend.
+**Costs.** wazero is WASIp1-only, no component model (upstream: "not planned"), no fuel. So: no typed
+WIT interfaces and no WIT→tool mapping (we supply our own manifest/schema layer), coarser WASIp1, CPU
+bounded only by context deadline + memory-page cap, and component tools from Wassette/wasmCloud need a
+shim.
+**Why still right.** A CGo-free single binary, and **every host import is your Go function** — the
+boundary is maximally auditable, wrappable, revocable.
+**Escape hatch.** Keep the host-import interfaces abstract enough for a later wasmtime-go/component
+backend.
 
-## ADR-15 — A workspace is cut in two by what may not exist twice, and the turn is where the halves meet
-Discovery ran once, in `workspace.Open`. Adding a skill or an MCP server meant restarting the daemon
-— acceptable while the only way to add one was `mkdir` on the host, untenable the moment a phone can.
-
-The obvious fix is to reopen the workspace, and it does not work in either order: **close then open**
-leaves a window of seconds with no workspace at all (MCP handshakes are bounded at thirty seconds
-each), and **open then close** puts two vaults on one `vault.enc`, two reminder sets on the same
-timers, two indexes on one corpus. That failure names the real question, which is not "what survives
-a reload" but **what may not exist twice**:
-
-- **Durable** — one vault handle, one timer per reminder and per wake, one chat store, one knowledge
-  index, one credential injector. Built once by `Open`, never rebuilt.
-- **Derived** — agents, skills, plugins, MCP servers, the toolset they add up to, the per-agent
-  runtimes. Two of these are harmless side by side, so they are a `snapshot`, built whole and
-  published with one atomic store.
-
-One pointer rather than a field per concern, because `Inventory` reads the tool list and the MCP list
-together: two guarded fields let a reader land between the writes and report a workspace that never
-existed. One swap makes that unrepresentable, and a failed rebuild leaves the previous snapshot
-standing for free.
-
-**The turn, not the session, is where the new one takes effect.** agentkit asks for tools, skills and
-the system prompt once at the top of a turn (`WithToolsFunc` and siblings; the value forms are sugar
-over them, so there is no "which wins" rule). A conversation already open sees a newly installed
-skill in its very next message, while a turn already running keeps the set it was handed — the model
-is given a tool list and plans against it, so a tool must not vanish between two calls it already
-decided to make together. Agent runs are the deliberate exception: a run keeps the cage it fired
-under, because a cage is an authority boundary and widening one mid-run, unattended, is the one place
-where "pick it up immediately" is the wrong answer.
-
-Rejected: **a filesystem watcher.** It would mean a dependency in a tree that keeps its list short,
-recursive watch management for every subdirectory that appears, and platform behaviour that drops
-events under load — after which a periodic reconcile is needed anyway as the backstop.
-`internal/knowledge` made this call first and says so. Also rejected: **a ticker**, which would re-run
-every MCP handshake against other people's servers on a schedule. So a reload is asked for:
-`workspace.reload` from a device, `nocturn reload` from the terminal.
-
-*Realized in `internal/workspace/{workspace,snapshot,lifecycle}.go`, `agentkit/session.go`.*
-
-## ADR-16 — A workspace's folder name is its identity; its title is a label over it
-A workspace shows a name on a screen and a person will want to change it. Renaming the folder is the
-obvious implementation and it destroys credentials silently.
-
-The folder name is the input to `Master.WorkspaceKey`, and to `Master.ShardKey` for every plugin and
-MCP secret shard, with the workspace-relative path bound in as AAD. Renaming the directory therefore
-does not move a workspace: it makes its vault and every shard undecryptable, with **no error at all**
-until something reaches for a credential — the failure appears later, somewhere else, as an absent
-token.
-
-So identity is the folder, permanently: the key input, the `ws` field on every wire command, the `ws=`
-on every log line, and the same rule `discovery.ResolveName` holds for plugins, MCP servers and
-agents. The title lives in `workspace.json`, changes freely because nothing depends on it, and clears
-back to the folder name.
-
-Rejected: **a stable id in `workspace.json` with keys derived from it.** It would make renaming
-trivial and correct, and it was still the wrong trade — key derivation would then depend on a mutable
-file *inside* the thing it protects, and the workspace would be the one identity in the tree that is
-not its folder, forever, in every log line and shard path. What renaming the folder buys is a prettier
-directory name.
-
-Deletion follows from the same reading: the folder is every conversation, every note and a vault, and
-it is being removed from a list on a phone — so it is **moved** to `.trash/<name>-<unix>`, not
-deleted. The trash is a dot-directory because the registry's scan skips those; without that skip the
-next start would open the trash as a workspace, with its own vault and its own schedulers.
-
-*Realized in `internal/workspace/{meta,registry}.go`.*
-
-## ADR-17 — Mail: reading is context, sending is its own Kind aimed at the recipient
-Reading a mailbox is **ungated**, on the same reading as `memory_read`, `knowledge_search` and
-`skill_read`: it is context, never authority. Asking a person for permission to look into their own
-inbox buys nothing, because the risk of a mail is not that it was read — it is that it is *foreign
-text*, and therefore the plainest prompt-injection channel in the tree. That is defended where the
-injection would have its effect (every gated action the model takes afterwards), plus
-`Scanner.RedactIngress` on the way in, not by a prompt in front of the reading.
-
-Sending gates on **`mail.SendKind`, with the recipient address as Target** — deliberately not on
-`NetKind`. The Target of a net action is the host, and the host of an SMTP submission is one's own
-provider: a remembered "yes" for `smtp.mailbox.org` would silently cover every future message to
-everyone. The recipient *is* the decision, so the recipient is the Target, and the widening mirrors
-the host one — `chef@domain.de` offers `*@domain.de`, never a bare `*`. Several recipients are
-several `Check` calls, because "send to 3 people?" is not a question a human on a phone can answer.
-This deviates from `FileKind`, where read and write share one Kind, and the deviation is the point:
-there a path bounds both directions equally, here the ask is rendered from `Action{Kind, Target}` and
-`mail · chef@firma.de` would not tell a person whether something is being read or sent.
-
-Unlike `memory.Kind` it asks in the **base** policy too, not only in `agentPolicy`. The argument that
-an interactive transcript makes an approval "before instead of after" holds for a note on disk and
-collapses for a mail: there is no after in which it can be taken back.
-
-The credential does **not** go through `secret.Injector`. That is the cookie jar for outgoing HTTP —
-a `Binding` stamps one secret into one header — and mail is neither HTTP nor one value. The mail tool
-is host-side Go and resolves from the `Store` directly, the way the LLM and embedding endpoints do;
-the guest still never sees a value, because a plugin's `mail_send` lands in the host tool like every
-other call. Two vault entries rather than one JSON blob, so `scanExact` knows each value separately —
-a blob would register as a single secret and let the bare password through. The **username stays out
-of the vault**: it is the household's own address, appears legitimately in half of what leaves, and as
-a registered secret the scanner would redact it everywhere. The outgoing body runs through
-`ScanEgress` — it is model output going to a third party, the shortest exfiltration path there is —
-and the refusal handed back to the model is generic. Unlike a rejected `http_write` there is nothing
-for it to correct, and the specific error would tell it which text is a stored secret.
-
-Dependencies: **`emersion/go-imap/v2` + `go-message`**, pinned, with `net/smtp` for submission.
-Rejected: our own IMAP client on the `internal/mcp` precedent. Measured, the library costs three
-modules (`go-imap/v2`, `go-message`, `go-sasl`) plus `golang.org/x/text`, all pure Go — and the hard
-part of mail is not the protocol but MIME: encoded-words, quoted-printable, nested multiparts,
-charsets that are not UTF-8. `x/text` is exactly what `go-message` carries for the last of those. An
-own client would have had to borrow `go-message` anyway, leaving the difficult half foreign and the
-easy half hand-written. The cost is that v2 is a beta — `v2.0.0-beta.8`, tagged but pre-1.0 and free
-to move its API; the precedent for pinning such a dependency is `go-tui`, and the library stays behind
-our own facade so it can be swapped.
-
-Searching is **server-side IMAP `SEARCH`**, and mail is deliberately NOT folded into the knowledge
-index. `knowledge_search` is ungated on the argument that it is context and never authority, and that
-argument rests on the corpus being what the household itself filed in `mnt/knowledge`. A mailbox is
-the opposite: anyone who knows the address can write to it. Indexing it would hand every sender a
-write into the assistant's retrieval corpus — worse than reading one mail, because the retrieval
-surfaces it at a moment the attacker picks rather than the moment somebody opens the message, and the
-reciprocal-rank fusion that ranks a search erases which corpus a hit came from. Two further reasons
-point the same way: embedding a mailbox sends the household's whole private correspondence to a remote
-embedder, where today only deliberately filed documents go, and keeping it current needs UIDVALIDITY,
-deletions and moves — a sync engine, against a directory walk. `SEARCH` costs one command and copies
-nothing. What it does not do is semantics, which is the open door: a mail-specific index, its own
-corpus, its own provenance, never fused into the same ranking.
-
-*Decided.*
-
+## LLM provider — go-openai + native tool_calls
+**Decision.** go-openai for the chat call, native `tool_calls` rather than a parsed prompt protocol,
+arguments JSON-Schema-validated with unmarshal-and-retry on error.
+**Why it stays contained.** Since ADR-11 this is the only place the dependency exists: reachable through
+one adapter module and nothing else. *Realized in `agentkit/openai`.*

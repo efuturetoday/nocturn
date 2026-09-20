@@ -1,0 +1,6 @@
+#!/bin/sh
+# The two commit gates. Enable with: git config core.hooksPath .githooks
+set -eu
+root=$(git rev-parse --show-toplevel)
+"$root/scripts/gates/go-review-gate.sh" || exit 1
+"$root/scripts/gates/docs-gate.sh" || exit 1
