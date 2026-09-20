@@ -144,7 +144,7 @@ jobs:
       # No body, body_path or generate_release_notes on purpose: with all three unset the action keeps
       # the existing body (`body = workflowBody || existingReleaseBody`), which is release-please's
       # changelog. Setting any of them would overwrite it.
-      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: dist/*
@@ -208,7 +208,7 @@ jobs:
           mv apk/app-debug.apk "apk/nocturn_${version}.apk"
           ls -l apk
 
-      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: apk/*
@@ -246,7 +246,7 @@ jobs:
           mv images/bootloader/bootloader.bin images/partition_table/partition-table.bin out/
           ls -l out
 
-      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: out/*
