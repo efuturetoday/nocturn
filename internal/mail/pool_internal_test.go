@@ -302,7 +302,8 @@ func TestIsTransport(t *testing.T) {
 func TestBoundRestampsTheDeadline(t *testing.T) {
 	client, server := net.Pipe()
 	go serveOK(server)
-	c, err := NewClient(t.Context(), client, "ich@firma.de", "geheim")
+	rec := &deadlineRecorder{Conn: client}
+	c, err := NewClient(t.Context(), rec, "ich@firma.de", "geheim")
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -315,10 +316,34 @@ func TestBoundRestampsTheDeadline(t *testing.T) {
 	if _, err := c.bound(t.Context()); err != nil {
 		t.Fatalf("bound: %v", err)
 	}
-	// A write must now succeed rather than fail instantly on the stale deadline.
-	if _, err := c.conn.Write([]byte("")); err != nil {
-		t.Errorf("the connection is still past its deadline after bound: %v", err)
+	if got := rec.deadline(); !got.After(time.Now()) {
+		t.Errorf("bound left the deadline at %v, which is not in the future", got)
 	}
+}
+
+// deadlineRecorder is a connection that remembers the last deadline stamped on it.
+//
+// The test asks what bound DID, rather than performing I/O afterwards and inferring it. An expired
+// deadline on a live connection is observed by go-imap's own reader too, which closes the connection
+// when it trips — so a write after bound answers "did the reader get there first", and the answer
+// depends on the machine. That is a coin toss dressed up as an assertion, and it flaked.
+type deadlineRecorder struct {
+	net.Conn
+	mu   sync.Mutex
+	last time.Time
+}
+
+func (d *deadlineRecorder) SetDeadline(t time.Time) error {
+	d.mu.Lock()
+	d.last = t
+	d.mu.Unlock()
+	return d.Conn.SetDeadline(t)
+}
+
+func (d *deadlineRecorder) deadline() time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.last
 }
 
 // TestIdleReaperClosesAnUnusedConnection: an authenticated IMAP session is a slot the household's own
