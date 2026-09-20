@@ -27,7 +27,7 @@ import { WorkspaceService } from '../core/services/workspace.service';
     <ion-header>
       <ion-toolbar>
         <ion-buttons slot="start">
-          <ion-menu-button menu="main"><svg lucideMenu [size]="24" /></ion-menu-button>
+          <ion-menu-button menu="main" aria-label="Open menu"><svg lucideMenu [size]="24" /></ion-menu-button>
         </ion-buttons>
         <ion-buttons slot="end">
           <ion-button class="ws-switch" (click)="choose()" aria-label="Switch workspace">
