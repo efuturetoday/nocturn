@@ -205,6 +205,15 @@ func TestMCP_CredentialInjectedHostSide(t *testing.T) {
 	store.Set(mcp.SecretName("srv", hostOf(t, srv.URL)), []byte("TOK123"))
 	inj := secret.NewInjector(store)
 
+	// The connection does not bind its own credential — the workspace registers every extension's
+	// declaration in one place. Here that composition step stands in for it.
+	decl := mcp.Server{Name: "srv", URL: srv.URL, Auth: "token"}.Decl()
+	bindings, err := decl.Bindings(mcp.Owner("srv"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inj.SetOwned(map[string][]secret.Binding{mcp.Owner("srv"): bindings})
+
 	tool := dialTool(t, mcp.Server{Name: "srv", URL: srv.URL, Auth: "token"}, inj, nil)
 	if _, err := tool.Call(allowAll(), `{}`); err != nil {
 		t.Fatalf("Call: %v", err)

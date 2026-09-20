@@ -62,31 +62,34 @@ func openFreshness(path string, log *slog.Logger) *freshness {
 // check reports whether an entry may be offered: its serial must be at least the highest accepted for
 // that plugin. A nil freshness accepts everything, so a Store built without one is not a refusal
 // machine.
-func (f *freshness) check(it PluginItem) error {
+// checkSerial reports whether an entry may be offered: its serial must be at least the highest
+// accepted under that key.
+func (f *freshness) checkSerial(key string, serial int) error {
 	if f == nil {
 		return nil
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if was, ok := f.seen[it.ID]; ok && it.Serial < was {
+	if was, ok := f.seen[key]; ok && serial < was {
 		return fmt.Errorf("serial %d is older than the %d this daemon already accepted — "+
-			"a signed entry cannot go backwards", it.Serial, was)
+			"a signed entry cannot go backwards", serial, was)
 	}
 	return nil
 }
 
 // accept records an entry's serial as seen. Called only for entries that passed everything else, so
 // a malformed or unsigned entry cannot raise the floor and lock out the real one.
-func (f *freshness) accept(it PluginItem) {
+// acceptSerial records a serial as seen, by key.
+func (f *freshness) acceptSerial(key string, serial int) {
 	if f == nil {
 		return
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if was, ok := f.seen[it.ID]; ok && it.Serial <= was {
+	if was, ok := f.seen[key]; ok && serial <= was {
 		return
 	}
-	f.seen[it.ID] = it.Serial
+	f.seen[key] = serial
 	f.save()
 }
 

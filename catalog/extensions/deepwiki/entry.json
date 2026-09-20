@@ -1,0 +1,10 @@
+{
+  "title": "DeepWiki",
+  "description": "Ask questions about a public GitHub repository's documentation. No account needed.",
+  "homepage": "https://deepwiki.com/",
+  "tags": [
+    "dev",
+    "reading"
+  ],
+  "serial": 1
+}

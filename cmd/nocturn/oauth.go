@@ -122,9 +122,9 @@ func authDiscover(ctx context.Context, master *secret.Master, wsDir, wsName, nam
 		if errors.As(err, &nd) {
 			// The authorization server wants a pre-registered OAuth App (GitHub is one such). Print the
 			// discovered endpoints so the operator only registers an app, gets a client_id, and drops
-			// a manual oauth block into mcp/<name>/mcp.json.
+			// a manual oauth block into extensions/<name>/mcp.json.
 			return fmt.Errorf("%w.\nRegister an OAuth app there, then replace auth:\"oauth\" with this "+
-				"block in mcp/%s/mcp.json and your client_id:\n\n  \"oauth\": {\n    \"auth_url\": %q,\n    \"token_url\": %q,\n    \"client_id\": \"<your client id>\",\n    \"scopes\": %v\n  }\n\n(or just use a token: `nocturn secret set mcp:%s`)",
+				"block in mcp/%s/mcp.json and your client_id:\n\n  \"oauth\": {\n    \"auth_url\": %q,\n    \"token_url\": %q,\n    \"client_id\": \"<your client id>\",\n    \"scopes\": %v\n  }\n\n(or just use a token: `nocturn secret set %s`)",
 				nd, nd.Server, nd.AuthURL, nd.TokenURL, nd.Scopes, nd.Server)
 		}
 		return err

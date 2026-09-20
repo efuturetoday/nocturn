@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"github.com/efuturetoday/nocturn/agentkit"
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/frontmatter"
+	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
 // disabledDir holds the skills a person switched off. A dot-directory, so Discover's own skip keeps
@@ -23,14 +25,18 @@ const disabledDir = ".disabled"
 // deliberately does not return.
 type Entry struct {
 	Name        string // the skill's own name: frontmatter first, folder as fallback
-	Folder      string // the directory it lives in, relative to skills/
+	Folder      string // the directory it lives in, relative to the extensions tree
 	Description string
 	Enabled     bool
 	Bytes       int // size of SKILL.md, so a listing can say how much context it would cost
+	// PartOf is set when the folder carries more than instructions — code, or a server declaration.
+	// Such a skill is not a thing of its own to remove or switch off: doing either would take the
+	// artifact, the declaration and the credentials in that folder with it. Empty for a plain skill.
+	PartOf string
 }
 
-// List reports every skill under dir (a workspace's skills/ folder), enabled and disabled, sorted by
-// name. A directory without a readable SKILL.md is not a skill and is left out.
+// List reports every skill under dir (a workspace's extensions/ folder), enabled and disabled,
+// sorted by name. A directory without a readable SKILL.md is not a skill and is left out.
 func List(dir string) ([]Entry, error) {
 	out, err := listIn(dir, true)
 	if err != nil {
@@ -73,9 +79,26 @@ func listIn(dir string, enabled bool) ([]Entry, error) {
 			Description: strings.TrimSpace(m.Description),
 			Enabled:     enabled,
 			Bytes:       len(data),
+			PartOf:      partOf(filepath.Join(dir, e.Name())),
 		})
 	}
 	return out, nil
+}
+
+// otherPayloads are the files that make a folder more than a skill. Named here rather than imported
+// from internal/extension, because this package must not depend on the composition side: what it
+// needs to know is only "is there something else in here", and the answer is a stat.
+var otherPayloads = []string{"plugin.json", "mcp.json"}
+
+// partOf reports the extension a skill folder belongs to when that folder carries another payload —
+// the folder's own name, since that is what an extension is called. Empty for a plain skill.
+func partOf(dir string) string {
+	for _, file := range otherPayloads {
+		if _, err := os.Stat(filepath.Join(dir, file)); err == nil {
+			return filepath.Base(dir)
+		}
+	}
+	return ""
 }
 
 // nameOf applies the same identity rule Discover does: the frontmatter name wins, the folder is the
@@ -84,8 +107,8 @@ func listIn(dir string, enabled bool) ([]Entry, error) {
 // Parse turns a SKILL.md body into a validated skill, naming it from its frontmatter and falling
 // back to fallbackName (a folder, usually) when the frontmatter does not.
 //
-// It exists because a skill body no longer arrives only as a directory under skills/: a plugin may
-// bundle one, saying WHEN to reach for the tools it brings. Both paths must agree on what a skill is,
+// It exists because a skill body no longer arrives only as an extension folder's own SKILL.md: a
+// plugin may bundle one, saying WHEN to reach for the tools it brings. Both paths must agree on what a skill is,
 // down to the error text, so both call this.
 func Parse(body, fallbackName string) (agentkit.Skill, error) {
 	m, _, err := frontmatter.Parse([]byte(body))
@@ -134,11 +157,31 @@ func Remove(dir, name string) error {
 	if err != nil {
 		return err
 	}
-	return os.RemoveAll(pathOf(dir, e))
+	if e.PartOf != "" {
+		return fmt.Errorf("%q belongs to the extension %q, which also brings code or a server — "+
+			"remove the extension instead of the skill inside it", name, e.PartOf)
+	}
+	// A DISABLED skill sits under the dot-directory, which is not an extension folder — deleting it
+	// is a plain path removal. An enabled one is the extension, and goes through the one remover.
+	if !e.Enabled {
+		return os.RemoveAll(pathOf(dir, e))
+	}
+	return extension.Remove(dir, e.Folder)
 }
 
-// SetEnabled moves a skill between skills/ and skills/.disabled/, which is the whole mechanism: the
-// catalog is what Discover finds, and Discover skips dot-directories.
+// FolderOf resolves a skill NAME to the directory it lives in. The two differ — the frontmatter name
+// wins for the catalog while the folder is what owns the credential and the shard — so anything
+// reaching for a skill's extension identity has to ask for it rather than assume.
+func FolderOf(dir, name string) (string, bool) {
+	e, err := find(dir, name)
+	if err != nil {
+		return "", false
+	}
+	return e.Folder, true
+}
+
+// SetEnabled moves a skill between extensions/ and extensions/.disabled/, which is the whole
+// mechanism: the catalog is what Discover finds, and Discover skips dot-directories.
 //
 // A move rather than a flag in the frontmatter, because the frontmatter is the skill's own file —
 // the agentskills.io format, shared with whoever published it. Writing our own field into someone
@@ -151,6 +194,17 @@ func SetEnabled(dir, name string, on bool) error {
 	}
 	if e.Enabled == on {
 		return nil
+	}
+	if e.PartOf != "" {
+		return fmt.Errorf("%q belongs to the extension %q, which also brings code or a server — "+
+			"switching it off would take those out of service too", name, e.PartOf)
+	}
+	// A secret shard is keyed and AAD-bound to its FOLDER PATH, and switching off moves the folder.
+	// Its credentials would then be unreadable until it came back — and unreadable is indistinguishable
+	// from gone, which is not what "switched off" should mean.
+	if _, err := os.Stat(filepath.Join(pathOf(dir, e), secret.ShardFile)); err == nil {
+		return fmt.Errorf("%q holds a credential, and switching it off would move its folder, which is "+
+			"what its credentials are encrypted against — remove it instead, or delete the credential first", name)
 	}
 	from := pathOf(dir, e)
 	to := filepath.Join(dir, e.Folder)
@@ -166,15 +220,24 @@ func SetEnabled(dir, name string, on bool) error {
 	return os.Rename(from, to)
 }
 
-// Write installs a skill: its body becomes skills/<folder>/SKILL.md.
+// Write installs a skill: its body becomes extensions/<folder>/SKILL.md.
 //
 // It refuses a name that is already taken, rather than overwriting. Discover drops a duplicate name
 // silently (first wins), so installing into a shadow would look like it worked and change nothing —
 // which is the worst of the three possible outcomes.
-func Write(dir, folder, body string) (Entry, error) {
+func Write(dir, folder, body, manifest string) (Entry, error) {
 	sk, err := Parse(body, folder)
 	if err != nil {
 		return Entry{}, err
+	}
+	// A declaration is validated BEFORE anything lands, not when the workspace next reads it. A
+	// manifest that parses but does not validate would install "successfully" and then make the whole
+	// skill disappear at discovery — the opposite of the rule next door, which is that an unfinished
+	// extension stays visible and says what it needs.
+	if manifest != "" {
+		if _, err := extension.ParseDecl([]byte(manifest)); err != nil {
+			return Entry{}, fmt.Errorf("skill %q: %w", folder, err)
+		}
 	}
 	if existing, err := find(dir, sk.Name); err == nil {
 		return Entry{}, fmt.Errorf("skill %q already exists in %q", sk.Name, existing.Folder)
@@ -182,10 +245,20 @@ func Write(dir, folder, body string) (Entry, error) {
 
 	target := filepath.Join(dir, folder)
 	if _, err := os.Stat(target); err == nil {
-		return Entry{}, fmt.Errorf("skills/%s already exists", folder)
+		return Entry{}, fmt.Errorf("extensions/%s already exists", folder)
 	}
 	if err := os.MkdirAll(target, 0o700); err != nil {
 		return Entry{}, err
+	}
+	// The declaration lands FIRST, and the body last. Discovery keys on the body — a folder without a
+	// SKILL.md is not a skill — so a crash between the two writes leaves something that is not
+	// discovered at all, rather than a skill that renders and silently binds nothing because its
+	// declaration never arrived. The declaration is written by the install and never by a person
+	// editing afterwards; config.json is the file a person edits.
+	if manifest != "" {
+		if err := os.WriteFile(filepath.Join(target, extension.ManifestFile), []byte(manifest), 0o600); err != nil {
+			return Entry{}, err
+		}
 	}
 	if err := os.WriteFile(filepath.Join(target, SkillFile), []byte(body), 0o600); err != nil {
 		return Entry{}, err

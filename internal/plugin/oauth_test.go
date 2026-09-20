@@ -5,15 +5,16 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 )
 
 // writePlugin lays down a minimal loadable plugin dir (manifest + a plugin.js stub) under
-// <wsDir>/plugins/<name> and returns wsDir (a single workspace directory).
+// <wsDir>/extensions/<name> and returns wsDir (a single workspace directory).
 func writePlugin(t *testing.T, name, manifest string) string {
 	t.Helper()
 	wsDir := t.TempDir()
-	dir := filepath.Join(wsDir, "plugins", name)
+	dir := filepath.Join(wsDir, "extensions", name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -26,12 +27,26 @@ func writePlugin(t *testing.T, name, manifest string) string {
 	return wsDir
 }
 
-func TestSecretName(t *testing.T) {
-	if got := plugin.SecretName("gmail", "acct"); got != "plugin:gmail/acct" {
-		t.Errorf("SecretName = %q, want plugin:gmail/acct", got)
+// TestSecretNames: a plugin credential's key carries its owner AND the host the manifest declared it
+// for, so two plugins never share a key and a manifest re-pointed at another host cannot reuse the
+// token issued for the old one.
+func TestSecretNames(t *testing.T) {
+	m := plugin.Manifest{
+		Name:    "gmail",
+		Version: "1",
+		Decl: extension.Decl{Credentials: []plugin.CredentialDecl{
+			{Name: "acct", Host: "gmail.googleapis.com", Header: "Authorization"},
+		}},
 	}
-	// Owner-namespaced: a plugin "github" and an MCP-style "github" never share a key.
-	if plugin.SecretName("github", "acct") == "mcp:github@api.github.com/oauth" {
+	keys, err := plugin.SecretNames(m)
+	if err != nil {
+		t.Fatalf("SecretNames: %v", err)
+	}
+	if want := "ext:gmail@gmail.googleapis.com/acct"; keys["acct"] != want {
+		t.Errorf("SecretNames[acct] = %q, want %q", keys["acct"], want)
+	}
+	// Owner-namespaced: a plugin "github" and an MCP server "github" never share a key.
+	if keys["acct"] == "ext2:gmail@gmail.googleapis.com/acct" {
 		t.Error("plugin and mcp key namespaces collide")
 	}
 }
@@ -56,7 +71,7 @@ func TestDiscoverOAuth(t *testing.T) {
 	if p.Name != "acct" {
 		t.Errorf("Name = %q, want acct", p.Name)
 	}
-	if want := plugin.SecretName("gmail", "acct"); p.SecretName != want {
+	if want := "ext:gmail@gmail.googleapis.com/acct"; p.SecretName != want {
 		t.Errorf("SecretName = %q, want %q", p.SecretName, want)
 	}
 	if p.AuthURL != "https://auth.example.com/a" || p.TokenURL != "https://token.example.com/t" {

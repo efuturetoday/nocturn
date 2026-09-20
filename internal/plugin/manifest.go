@@ -20,16 +20,25 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/efuturetoday/nocturn/internal/extension"
 )
 
 // Manifest is a plugin's static declaration (sidecar plugin.json).
+//
+// The embedded extension.Decl is the half every installed thing has — the config a human supplies and
+// the credentials the host injects. Only what is above it is a plugin's own: the tools it exposes,
+// the cage it may call into, and the OAuth flows the host runs for it. Embedding rather than
+// repeating is what makes "this needs a token before it works" one fact across skills, plugins and
+// MCP servers instead of a field somebody added to one manifest.
 type Manifest struct {
-	Name        string           `json:"name"`
-	Version     string           `json:"version"`
-	Tools       []ToolDecl       `json:"tools"`
-	Uses        []string         `json:"uses"`        // base tool names the guest may call ("*" = all); its cage
-	Credentials []CredentialDecl `json:"credentials"` // host-injected credentials it uses
-	OAuth       []OAuthDecl      `json:"oauth"`       // OAuth2 providers the host runs on its behalf
+	Name    string      `json:"name"`
+	Version string      `json:"version"`
+	Tools   []ToolDecl  `json:"tools"`
+	Uses    []string    `json:"uses"`  // base tool names the guest may call ("*" = all); its cage
+	OAuth   []OAuthDecl `json:"oauth"` // OAuth2 providers the host runs on its behalf
+
+	extension.Decl
 }
 
 // OAuthDecl declares an OAuth2 provider the plugin needs — so the plugin brings its own instead of the
@@ -53,25 +62,21 @@ type ToolDecl struct {
 	Parameters  json.RawMessage `json:"parameters"` // JSON-schema object
 }
 
-// CredentialDecl declares a credential the host injects for the plugin (never seen by the plugin),
-// mirroring secret.Binding. Host is the sole scoping dimension — a request credential is inherently a
-// network credential, so the host IS the discriminator; a bearer is injected on any request to it.
-type CredentialDecl struct {
-	Name   string `json:"name"`
-	Host   string `json:"host"`
-	Header string `json:"header"`
-	Prefix string `json:"prefix"`
-}
+// CredentialDecl declares a credential the host injects for the plugin (never seen by the plugin).
+// It is the shared declaration — the same type a skill or an MCP server declares — so what a plugin
+// asks for and what the injector registers cannot drift into two shapes.
+type CredentialDecl = extension.CredentialDecl
 
-// nameRe bounds a plugin name AND a tool name: no dots, because a tool is exposed to the model as
-// <plugin>_<tool>, which must match a strict tool-call provider's ^[a-zA-Z0-9_-]{1,64}$.
+// nameRe bounds a plugin's TOOL name: no dots, because a tool is exposed to the model as
+// <plugin>_<tool>, which must match a strict tool-call provider's ^[a-zA-Z0-9_-]{1,64}$. The
+// plugin's own name is discovery's rule (extension.ValidName) and is not restated here.
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // Validate rejects a malformed manifest fail-closed: a bad name, no tools, duplicate/odd tool names,
 // a non-object schema, or a credential entry with an empty field.
 func (m Manifest) Validate() error {
-	if !nameRe.MatchString(m.Name) {
-		return fmt.Errorf("plugin: invalid name %q (want %s, no dots)", m.Name, nameRe)
+	if !extension.ValidName(m.Name) {
+		return fmt.Errorf("plugin: invalid name %q (a plugin name is an owner and a shard key: lowercase letters, digits, - and _, starting with a letter or digit)", m.Name)
 	}
 	if m.Version == "" {
 		return errors.New("plugin: empty version")
@@ -93,10 +98,24 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("plugin: tool %q parameters must be a JSON object schema", t.Name)
 		}
 	}
+	// The shared half — config types, credential names, config references — is validated once, by the
+	// package that defines it. What follows is the part that is a PLUGIN's own: a plugin's guest only
+	// ever reaches a credential through an HTTP request the host makes for it, so a credential without
+	// a host and a header could never be injected anywhere.
+	if err := m.Decl.Validate(); err != nil {
+		return fmt.Errorf("plugin: %w", err)
+	}
 	credentialNames := map[string]bool{}
 	for _, c := range m.Credentials {
-		if c.Name == "" || c.Host == "" || c.Header == "" {
-			return fmt.Errorf("plugin: credential %q needs name, host and header", c.Name)
+		if c.Host == "" || c.Header == "" {
+			return fmt.Errorf("plugin: credential %q needs a host and a header", c.Name)
+		}
+		// A plugin EXECUTES: its guest carries the plugin's owner on the context, so its credential
+		// can be confined to its own calls. AudienceModel exists for the opposite case — a skill,
+		// which is text with no runtime — and letting a plugin claim it would hand its stored token
+		// to the model's own http_read, which is strictly more than owner scoping ever gave anyone.
+		if c.Audience != extension.AudienceOwner {
+			return fmt.Errorf("plugin: credential %q may not set an audience — a plugin's credential rides its own calls", c.Name)
 		}
 		credentialNames[c.Name] = true
 	}

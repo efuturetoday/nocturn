@@ -3,6 +3,8 @@ package plugin
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/efuturetoday/nocturn/internal/extension"
 )
 
 // OAuthProvider is one plugin OAuth declaration flattened with the vault key its token lives under —
@@ -11,7 +13,7 @@ import (
 // daemon's OAuth wiring, so plugin-manifest knowledge stays in this package.
 type OAuthProvider struct {
 	Name         string // provider id for `nocturn auth <name>` (links to a CredentialDecl.Name)
-	SecretName   string // SecretName(plugin, cred) — the owner-namespaced vault key installPlugins binds to
+	SecretName   string // the owner+host-bound vault key the workspace binds this credential to
 	AuthURL      string
 	TokenURL     string
 	ClientID     string
@@ -25,19 +27,23 @@ type OAuthProvider struct {
 // scoping to a single workspace, so credentials never leak across workspace vaults.
 func DiscoverOAuth(wsDir string) []OAuthProvider {
 	var out []OAuthProvider
-	entries, _ := os.ReadDir(filepath.Join(wsDir, "plugins"))
+	entries, _ := os.ReadDir(filepath.Join(wsDir, extension.Dir))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		loaded, err := Load(filepath.Join(wsDir, "plugins", e.Name()))
+		loaded, err := Load(filepath.Join(wsDir, extension.Dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		keys, err := SecretNames(loaded.Manifest)
 		if err != nil {
 			continue
 		}
 		for _, o := range loaded.Manifest.OAuth {
 			out = append(out, OAuthProvider{
 				Name:         o.Name,
-				SecretName:   SecretName(loaded.Manifest.Name, o.Name),
+				SecretName:   keys[o.Name],
 				AuthURL:      o.AuthURL,
 				TokenURL:     o.TokenURL,
 				ClientID:     o.ClientID,

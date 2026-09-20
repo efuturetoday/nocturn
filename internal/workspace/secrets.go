@@ -1,13 +1,11 @@
 package workspace
 
 import (
-	"encoding/json"
 	"log/slog"
-	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/efuturetoday/nocturn/internal/discovery"
+	"github.com/efuturetoday/nocturn/internal/extension"
+	"github.com/efuturetoday/nocturn/internal/mail"
 	"github.com/efuturetoday/nocturn/internal/secret"
 )
 
@@ -49,7 +47,6 @@ func buildWorkspaceSecrets(master *secret.Master, dir, name string, log *slog.Lo
 	if err != nil {
 		return workspaceSecrets{}, err
 	}
-	seedEnvSecrets(vault, log)
 	// The injector + scanner resolve over a UNION resolution store: the workspace vault's own
 	// secrets PLUS every plugin/mcp shard's (each secrets.enc decrypted with its folder-path key).
 	// This store lives only in memory and is NEVER persisted, so a write to the workspace vault (an
@@ -63,7 +60,6 @@ func buildWorkspaceSecrets(master *secret.Master, dir, name string, log *slog.Lo
 	// this workspace's component=secret logger.
 	injector.SetLogger(log)
 	scanner.SetLogger(log)
-	loadBindings(injector, filepath.Join(dir, "bindings.json"), log)
 	log.Info("secret: workspace vault unlocked", "ws", name)
 	return workspaceSecrets{master: master, vault: vault, resolution: res, injector: injector, scanner: scanner}, nil
 }
@@ -74,57 +70,28 @@ func buildWorkspaceSecrets(master *secret.Master, dir, name string, log *slog.Lo
 //
 // Both halves are idempotent by construction, which is what lets it run on every reload rather than
 // only at startup: LoadShardsInto copies by name into the store, and SetResolver replaces by name on
-// the injector. Plugin bindings are the exception — AddBinding appends — so installPlugins clears
-// each owner's bindings before adding them, and that is where it belongs, next to the discovery that
-// decides which owners still exist.
+// the injector. Bindings are not reconciled here at all — bindExtensions swaps the whole owned set in
+// one call, next to the discovery that decides which owners still exist.
 func (s workspaceSecrets) reconcile(dir, name string, log *slog.Logger) {
 	if s.master == nil || s.resolution == nil {
 		return // locked vault: nothing to resolve over, and nothing to leak
 	}
 	log = log.With("component", "secret")
-	secret.LoadShardsInto(s.resolution, s.master, dir, name, discovery.ValidName, log)
+	// Rebuilt, not accumulated. The store is what the injector resolves through, so a name that is no
+	// longer on disk has to disappear from it — otherwise `nocturn secret rm` deletes a value from its
+	// shard, reports success, and the daemon goes on injecting its copy until the process ends. Built
+	// aside and swapped in one step, so no request ever sees a half-loaded set.
+	next := secret.NewStore()
+	s.vault.Store().CopyInto(next)
+	secret.LoadShardsInto(next, s.master, dir, name, ExtensionDirs(), extension.ValidName, log)
+	// The mailbox is not an extension and its shard is not in that tree, but its passwords still have
+	// to be in the resolution store — that is what the leak SCANNER reads. Without this the mail
+	// password would be the one credential the host holds that nothing would block on its way out.
+	if sv, err := secret.OpenShard(s.master, dir, name, mail.Dir); err == nil {
+		sv.Store().CopyInto(next)
+	}
+	s.resolution.Reset(next)
 	// OAuth tokens live in each plugin/mcp folder's shard (path-encrypted), not the workspace vault —
 	// registerOAuth reads and refreshes them through the shard router, keyed by the credential's name.
 	registerOAuth(s.injector, NewShardTokens(s.master, dir, name, log), dir, log)
-}
-
-// seedEnvSecrets stores each NOCTURN_SECRET_<NAME>=value into the vault under <name> (lowercased) —
-// the input channel for credential values until an interactive add-secret UX exists. The same env is
-// seeded into every workspace's vault (a shared input), but each copy lives in an isolated vault.
-func seedEnvSecrets(vault *secret.Vault, log *slog.Logger) {
-	const prefix = "NOCTURN_SECRET_"
-	for _, kv := range os.Environ() {
-		k, v, _ := strings.Cut(kv, "=")
-		if !strings.HasPrefix(k, prefix) || v == "" {
-			continue
-		}
-		name := strings.ToLower(strings.TrimPrefix(k, prefix))
-		if err := vault.Set(name, []byte(v)); err != nil {
-			log.Warn("secret: seed", "name", name, "err", err)
-		}
-	}
-}
-
-// loadBindings reads a workspace's bindings.json (a list of host-owned credential bindings) and
-// registers each at the workspace level (owner ""), so the model's own network calls inject them.
-// Absent file = none.
-func loadBindings(inj *secret.Injector, path string, log *slog.Logger) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return // no bindings configured
-	}
-	var raw []struct {
-		Secret string `json:"secret"`
-		Host   string `json:"host"`
-		Header string `json:"header"`
-		Prefix string `json:"prefix"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		log.Warn("secret: bindings.json", "err", err)
-		return
-	}
-	for _, b := range raw {
-		inj.AddBinding("", secret.Binding{Secret: b.Secret, Host: b.Host, Header: b.Header, Prefix: b.Prefix})
-	}
-	log.Info("secret: bindings loaded", "count", len(raw))
 }

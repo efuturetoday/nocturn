@@ -84,9 +84,12 @@ func runMailSetup(wsName, user, from, imapAddr, smtpAddr string) error {
 	if _, err := os.Stat(wsDir); err != nil {
 		return fmt.Errorf("no workspace %q at %s", wsName, wsDir)
 	}
-	vault, err := openWorkspaceVault(wsName, wsDir)
+	master, err := openMaster()
 	if err != nil {
-		return err
+		return fmt.Errorf("unlock vault: %w", err)
+	}
+	if master == nil {
+		return errors.New("set NOCTURN_MASTER_PASSPHRASE to unlock the vault")
 	}
 	password, err := readPasswordFromStdin()
 	if err != nil {
@@ -124,13 +127,24 @@ func runMailSetup(wsName, user, from, imapAddr, smtpAddr string) error {
 		return err
 	}
 
-	if err := vault.Set(mail.SecretIMAPPassword, []byte(password)); err != nil {
+	// The mailbox gets its own folder in the workspace, with its own shard beside the account file:
+	// the passwords then belong to the mailbox and go when it goes, instead of sitting in the
+	// workspace vault under a name nothing connects to anything.
+	dir := filepath.Join(wsDir, mail.Dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	shard, err := secret.OpenShard(master, wsDir, wsName, mail.Dir)
+	if err != nil {
+		return fmt.Errorf("open the mailbox's credentials: %w", err)
+	}
+	if err := shard.Set(mail.Owner+"/"+mail.CredentialIMAP, []byte(password)); err != nil {
 		return fmt.Errorf("store the mailbox password: %w", err)
 	}
-	if err := vault.Set(mail.SecretSMTPPassword, []byte(password)); err != nil {
+	if err := shard.Set(mail.Owner+"/"+mail.CredentialSMTP, []byte(password)); err != nil {
 		return fmt.Errorf("store the submission password: %w", err)
 	}
-	if err := mail.SaveAccount(filepath.Join(wsDir, mail.ConfigFile), acct); err != nil {
+	if err := mail.SaveAccount(filepath.Join(dir, mail.ConfigFile), acct); err != nil {
 		return err
 	}
 	fmt.Printf("mailbox %s configured in workspace %q — restart the daemon or run `nocturn reload` to pick it up\n", user, wsName)
@@ -153,18 +167,22 @@ func cmdMailCheck(args []string) int {
 
 func runMailCheck(wsName string) error {
 	wsDir := filepath.Join(wsRoot, wsName)
-	acct, ok, err := mail.LoadAccount(filepath.Join(wsDir, mail.ConfigFile))
+	acct, ok, err := mail.LoadAccount(filepath.Join(wsDir, mail.Dir, mail.ConfigFile))
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return fmt.Errorf("workspace %q has no mailbox — run `nocturn mail setup --user <address> -w %s`", wsName, wsName)
 	}
-	vault, err := openWorkspaceVault(wsName, wsDir)
+	master, err := openMaster()
+	if err != nil || master == nil {
+		return errors.New("set NOCTURN_MASTER_PASSPHRASE to read the mailbox's credentials")
+	}
+	shard, err := secret.OpenShard(master, wsDir, wsName, mail.Dir)
 	if err != nil {
 		return err
 	}
-	password, ok := vault.Get(mail.SecretIMAPPassword)
+	password, ok := shard.Get(mail.Owner + "/" + mail.CredentialIMAP)
 	if !ok {
 		return fmt.Errorf("no password stored for %s — run `nocturn mail setup`", acct.User)
 	}
@@ -189,19 +207,6 @@ func runMailCheck(wsName string) error {
 	h := headers[0]
 	fmt.Printf("newest: %s — %q (%s)\n", h.From, h.Subject, h.Date.Format(time.RFC1123))
 	return nil
-}
-
-// openWorkspaceVault unlocks one workspace's vault under the master key, the same file and key the
-// daemon opens.
-func openWorkspaceVault(wsName, wsDir string) (*secret.Vault, error) {
-	master, err := openMaster()
-	if err != nil {
-		return nil, fmt.Errorf("unlock vault: %w", err)
-	}
-	if master == nil {
-		return nil, errors.New("set NOCTURN_MASTER_PASSPHRASE to unlock the vault")
-	}
-	return secret.OpenVault(filepath.Join(wsDir, "vault.enc"), master.WorkspaceKey(wsName))
 }
 
 // readPasswordFromStdin takes the value the way `secret set` does — off stdin, never argv, so it

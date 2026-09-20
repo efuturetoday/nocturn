@@ -3,11 +3,7 @@ package serve
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"sort"
 
-	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/skill"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
@@ -99,16 +95,12 @@ func (c *conn) skillCmd(ctx context.Context, cmd string, data []byte) {
 		if !ok {
 			return
 		}
+		// One tree, one read: a skill an extension carries alongside code sits in that extension's
+		// folder like any other, so there is no second place to look.
 		body, err := skill.Read(ws.SkillsDir(), m.Name)
 		if err != nil {
-			// A skill a plugin bundled has no folder under skills/, and reading it is the whole point
-			// of listing it: what the model is told is exactly what a person opens this to see.
-			bundled, ok := bundledBody(ws, m.Name)
-			if !ok {
-				c.badRequest(ctx, err.Error())
-				return
-			}
-			body = bundled
+			c.badRequest(ctx, err.Error())
+			return
 		}
 		c.send(ctx, SkillBody{Type: "skill.body", Ws: ws.Name(), Name: m.Name, Body: body})
 		return
@@ -146,15 +138,39 @@ func (c *conn) skillCmd(ctx context.Context, cmd string, data []byte) {
 		if !ok {
 			return
 		}
-		if err := skill.Remove(ws.SkillsDir(), m.Name); err != nil {
-			c.badRequest(ctx, err.Error())
-			return
-		}
-		c.applySkills(ws, "remove", m.Name)
+		c.removeSkill(ctx, ws, m.Name)
 
 	default:
 		c.badRequest(ctx, "unknown action: "+cmd)
 	}
+}
+
+// removeSkill deletes a skill and takes its standing permissions with it.
+//
+// A skill used to be text with no authority, so removing one was a file deletion and nothing more.
+// One that declares a credential has the same shape a plugin has — a host, a token, a remembered
+// NetKind grant — so it gets the same treatment plugin.remove has: read the hosts from the
+// declaration WHILE it still exists, delete, then forget each host's grant. A grant records what,
+// never why; once the skill that prompted the question is gone, the answer would stand alone for
+// whatever reaches that host next.
+func (c *conn) removeSkill(ctx context.Context, ws *workspace.Workspace, name string) {
+	// By FOLDER, because that is what owns the credential — the frontmatter name is what the model
+	// calls it. find() resolves one to the other, so ask the skills list for the folder first.
+	var hosts []string
+	if folder, ok := skill.FolderOf(ws.SkillsDir(), name); ok {
+		hosts = ws.ExtensionCredentialHosts(folder)
+	}
+	if err := skill.Remove(ws.SkillsDir(), name); err != nil {
+		c.badRequest(ctx, err.Error())
+		return
+	}
+	for _, host := range hosts {
+		if ws.ForgetNetAccess(host) {
+			c.log.Info("revoked the remembered network grant of a removed skill",
+				"ws", ws.Name(), "skill", name, "host", host)
+		}
+	}
+	c.applySkills(ws, "remove", name)
 }
 
 // applySkills makes a change to skills/ take effect and tells every device what the set is now.
@@ -199,62 +215,11 @@ func skillList(ws *workspace.Workspace) SkillListResult {
 			Description: e.Description,
 			Enabled:     e.Enabled,
 			Bytes:       e.Bytes,
+			// Set when the folder carries more than instructions. Such a skill is not removable or
+			// switchable on its own: its folder is a plugin's or a server's too, and deleting it
+			// would take the code, the declaration and the credentials with it.
+			Plugin: e.PartOf,
 		})
 	}
-	items = append(items, bundledSkills(ws, items)...)
 	return SkillListResult{Type: "skill.list", Ws: ws.Name(), Items: items}
-}
-
-// bundledBody returns the SKILL.md of a plugin-bundled skill by NAME (which need not be its folder).
-//
-// It answers from the same list the wire shows, so the precedence holds here too: a bundled skill
-// whose name a hand-written one already holds is NOT in that list, and reading it would hand back a
-// body the model never sees.
-func bundledBody(ws *workspace.Workspace, name string) (string, bool) {
-	own, err := skill.List(ws.SkillsDir())
-	if err != nil {
-		own = nil
-	}
-	have := make([]SkillInfo, 0, len(own))
-	for _, e := range own {
-		have = append(have, SkillInfo{Name: e.Name})
-	}
-	for _, s := range bundledSkills(ws, have) {
-		if s.Name != name {
-			continue
-		}
-		body, err := os.ReadFile(filepath.Join(ws.PluginsDir(), s.Plugin, plugin.SkillFile))
-		if err != nil {
-			return "", false
-		}
-		return string(body), true
-	}
-	return "", false
-}
-
-// bundledSkills lists the skills installed plugins brought with them, skipping any whose name a
-// hand-written skill already holds — the same precedence the workspace applies when it folds them
-// into the set, so this list says what the model actually got.
-func bundledSkills(ws *workspace.Workspace, have []SkillInfo) []SkillInfo {
-	taken := make(map[string]bool, len(have))
-	for _, s := range have {
-		taken[s.Name] = true
-	}
-	var out []SkillInfo
-	for folder, body := range plugin.SkillBodies(ws.PluginsDir()) {
-		sk, err := skill.Parse(body, folder)
-		if err != nil || taken[sk.Name] {
-			continue
-		}
-		out = append(out, SkillInfo{
-			Name:        sk.Name,
-			Folder:      "plugins/" + folder,
-			Description: sk.Description,
-			Enabled:     true,
-			Bytes:       len(body),
-			Plugin:      folder,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
 }

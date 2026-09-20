@@ -7,14 +7,27 @@ import (
 	"os"
 )
 
-// The account is a plain readable file in the workspace directory, next to reminders.json and
-// bindings.json, and it holds no password. That split is what lets a household look at where their
-// mail comes from without unlocking anything, and it is why the vault entry names are constants in
-// send.go rather than fields here — a configuration that could NAME its secret would let whoever
-// edits the file point the credential somewhere else.
+// The account is a plain readable file in the workspace directory, next to reminders.json, and it
+// holds no password. That split is what lets a household look at where their mail comes from without
+// unlocking anything, and it is why the vault entry names are constants in send.go rather than fields
+// here — a configuration that could NAME its secret would let whoever edits the file point the
+// credential somewhere else. internal/extension states the general form of that rule: a manifest
+// names the credential, a config only fills in values. Mail is not an extension yet, so the names are
+// constants instead.
 
-// ConfigFile is the account file's name inside the workspace directory.
-const ConfigFile = "mail.json"
+const (
+	// Dir is the mailbox's folder inside the workspace. A folder rather than a bare file, and NOT a
+	// folder under extensions/: mail is built into the host — nothing is installed, there is no
+	// artifact, and a workspace has exactly one mailbox — so it does not belong in the tree of
+	// installed things. What the folder is for is the credential: a secret shard is keyed by its
+	// PATH, so the passwords can only belong to the mailbox if the mailbox has a place of its own.
+	// Delete the folder and the passwords go with it, which is the whole difference from the two
+	// fixed vault names this replaced.
+	Dir = "mail"
+
+	// ConfigFile is the account file's name inside that folder.
+	ConfigFile = "mail.json"
+)
 
 // accountFile is the on-disk form. Separate from Account so the wire names stay short and the Go
 // field names stay explicit.

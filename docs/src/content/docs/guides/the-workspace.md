@@ -47,18 +47,23 @@ nocturn-data/workspaces/main/
 ├─ chats/          ← your conversations
 ├─ agent-runs/     ← transcripts of background agent runs
 ├─ agents/         ← one folder per agent, each with an agent.md
-├─ skills/         ← one folder per skill, each with a SKILL.md
-├─ plugins/        ← one folder per plugin, each with a plugin.json
-└─ mcp/            ← one folder per remote MCP server, each with an mcp.json
+├─ mail/           ← the mailbox: mail.json and its own credentials
+└─ extensions/     ← everything installed, one folder each
+   └─ <name>/      ← what it carries: SKILL.md (instructions) · plugin.json + plugin.js (code) ·
+                     mcp.json (a remote server) — any combination, plus manifest.json (what it
+                     needs), config.json (what you supplied) and secrets.enc (its own credentials)
 ```
 
-`vault.enc` is the workspace's own credentials; plugins and MCP servers additionally keep a
-`secrets.enc` shard inside their own folder, which is why moving or renaming one of those folders
-makes its old secrets unreadable. How that is keyed, how to put a value in, and why the model never
+One tree, because the unit you install is a capability rather than a delivery mechanism: something
+that brings a server AND the instructions for using it is one folder with one name, not two things
+that happen to share one.
+
+`vault.enc` is the workspace's own credentials; every extension additionally keeps a `secrets.enc`
+shard inside its own folder, which is why moving or renaming one makes its old secrets unreadable. How that is keyed, how to put a value in, and why the model never
 sees one is all on [the vault](/nocturn/guides/vault/) — that page is the single source of truth for
 credentials, and this one only says where the files sit.
 
-`nocturn ls` shows a workspace's plugins, servers, agents and skills.
+`nocturn ls` shows a workspace's extensions and agents.
 
 ## The first wall: the file tools see only `mnt/`
 

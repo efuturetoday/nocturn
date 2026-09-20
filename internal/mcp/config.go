@@ -13,16 +13,17 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/internal/discovery"
+	"github.com/efuturetoday/nocturn/internal/extension"
 )
 
 // A server declaration lives in the workspace CONTROL-PLANE as one FOLDER per
-// server (<ws>/mcp/<name>/mcp.json — host-managed, a sibling of the model's mnt/
+// server (<ws>/extensions/<name>/mcp.json — host-managed, a sibling of the model's mnt/
 // mount) because it is authority-relevant (ADR-10): declaring a server grants
 // the model that server's tools and wires YOUR token to its host. The model can
 // neither read nor write it; presence IS the authorization (admin-authored),
-// like the plugins/ directory. One folder per server is the portable/purgeable
+// like everything else under extensions/. One folder per server is the portable/purgeable
 // unit and gives the server a home for its secret shard (secrets.enc): dropping
-// <ws>/mcp/<name>/ removes exactly that server (mirroring a plugin or agent folder).
+// <ws>/extensions/<name>/ removes exactly that server, and everything else in that folder with it.
 
 // Server is one declared remote MCP server.
 //
@@ -127,6 +128,47 @@ func (s Server) OAuthMode() string {
 func isHTTPSURL(s string) bool {
 	u, err := url.Parse(s)
 	return err == nil && u.Scheme == "https" && u.Host != ""
+}
+
+// Decl is the server's shared declaration: the one bearer the host injects on its behalf, bound to
+// the host its URL names. A public server declares nothing.
+//
+// It exists so an MCP server's credential is built from the same shape a skill's or a plugin's is —
+// the connection still registers it itself, because the connection owns the socket's lifetime, but
+// WHAT it registers is no longer this package's private idea of a binding.
+func (s Server) Decl() extension.Decl {
+	if s.OAuthMode() == AuthNone {
+		return extension.Decl{}
+	}
+	u, err := url.Parse(s.URL)
+	if err != nil || u.Host == "" {
+		return extension.Decl{}
+	}
+	return extension.Decl{Credentials: []extension.CredentialDecl{{
+		Name:   credentialName,
+		Host:   u.Host,
+		Header: "Authorization",
+		Prefix: "Bearer ",
+		Label:  "bearer token for " + u.Host,
+	}}}
+}
+
+// Parse reads one server declaration from its bytes, with name as the fallback identity — the same
+// decode Discover performs on a file, exported so the catalog can check an entry against the very
+// parser that will read it on disk.
+func Parse(data []byte, name string) (Server, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var s Server
+	if err := dec.Decode(&s); err != nil {
+		return Server{}, fmt.Errorf("mcp: %s: %w", ConfigFile, err)
+	}
+	resolved, ok := discovery.ResolveName(nil, "mcp", name, s.Name)
+	if !ok {
+		return Server{}, fmt.Errorf("mcp: %q is not a valid server name", name)
+	}
+	s.Name = resolved
+	return s, nil
 }
 
 // Discover reads every <dir>/<name>/mcp.json server declaration into a Set WITHOUT

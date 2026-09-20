@@ -104,11 +104,13 @@ nocturn-data/
     mnt/               ← the ONLY thing the LLM sees: file-tool root + sandbox /work (data plane)
     PERSONA.md         ← the assistant's system prompt (control plane, optional)
     agents/            ← child-agent declarations (host-read, not mounted)
-    skills/            ← procedural knowledge (host-read, not mounted)
-    plugins/  mcp/     ← installed extensions; each may hold its own secrets.enc shard
+    extensions/<name>/ ← everything installed, one folder each: its payloads (SKILL.md ·
+                         plugin.json+plugin.js · mcp.json), manifest.json (what it declares),
+                         config.json (what a human supplied), secrets.enc (its own shard)
+    mail/              ← the mailbox: mail.json + its own shard. Not an extension (nothing is
+                         installed), but a folder for the same reason — a shard is path-keyed
     grants.json        ← host-managed standing permissions, outside the mount
     vault.enc          ← encrypted credentials (this workspace's own key), outside the mount
-    bindings.json      ← host-owned credential bindings
     reminders.json     ← pending reminders
     chats/  agent-runs/ ← persisted transcripts (user chats · agent firings)
 ```
@@ -121,6 +123,20 @@ model could write it, an injection could set itself standing grants → HITL sil
 bypassed). So `grants.json` lives in the workspace (per-workspace, portable), not `~/.config`.
 *Realized in `workspace` (composition + the grant store it owns) + the workspace-confined `file_*`
 tools.*
+
+**Where "a skill grants no authority" stops holding.** A skill's SKILL.md is still text. Its
+`manifest.json` is not: it declares a credential and the host that credential is bound to, which tells
+the HOST to stamp a stored secret onto every request going there — and because a skill has no runtime
+of its own, that binding is ambient (it rides the model's own `http_read`, not "the skill's calls",
+which do not exist). So the severity split above applies to the BODY, and the declaration is on the
+other side of it. What holds the line is the same rule plugins answer to: every catalog entry is
+SIGNED (`nocturn-extension-v1` over identity, the digest of every payload an install writes, the
+listing and a serial), and an unsigned one is refused from a remote catalog while still accepted from a file on this
+machine — whoever can write that file can already drop the folder into `extensions/`. Signing only the
+entries that declare a credential was the first attempt and is not what shipped: it produced two kinds
+of catalog skill with two trust paths, which is a distinction every reader then has to make.
+*Realized in `internal/extension` (the declaration), `internal/library` (`validSkills` +
+`signaturePolicy`), `internal/workspace/extensions.go` (the one registration).*
 
 ## ADR-11 — agentkit is a separate, zero-dependency, policy-blind module
 The turn loop, the ports, the immutable sets, sub-agents, events and guards are **product-

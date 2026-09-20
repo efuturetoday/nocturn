@@ -97,4 +97,4 @@ func (w *Workspace) ForgetGrant(kind, target string) bool {
 }
 
 // MCPDir is where this workspace's MCP server declarations live.
-func (w *Workspace) MCPDir() string { return w.path("mcp") }
+func (w *Workspace) MCPDir() string { return w.ExtensionsDir() }

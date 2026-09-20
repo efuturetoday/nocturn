@@ -1,24 +1,25 @@
 //go:build ignore
 
-// Command sign produces the Ed25519 signature a catalog plugin needs, and can mint the keypair.
+// Command sign produces the Ed25519 signature a catalog entry needs, and can mint the keypair.
 //
-//	go run sign.go -keygen                  print a new keypair (public key goes into signingKeys)
-//	go run sign.go gmail                    sign plugins/gmail, writing plugins/gmail/plugin.sig
-//	go run sign.go                          sign every plugin whose signature is missing or stale
+//	go run sign.go entryread.go -keygen     print a new keypair (public key goes into signingKeys)
+//	go run sign.go entryread.go gmail       sign extensions/gmail, writing its extension.sig
+//	go run sign.go entryread.go             sign every entry in the tree
 //
 // The private key is read from NOCTURN_CATALOG_SIGNING_KEY (base64) or -key <file>. It never enters
-// this repository, and CI never needs it: the signature is committed BESIDE the plugin, and
+// this repository, and CI never needs it: the signature is committed BESIDE the entry, and
 // generate.go only copies it into the catalog. That is what keeps `go generate` reproducible on a
 // machine that cannot sign anything.
+//
+// It reads each entry with the SAME reader generate.go uses (entryread.go), because what is signed
+// must be what is published — a second reader would be a second opinion about what the bytes are, and
+// the signature would vouch for whichever one was wrong.
 package main
 
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -27,13 +28,9 @@ import (
 	"strings"
 
 	"github.com/efuturetoday/nocturn/internal/library"
-	"github.com/efuturetoday/nocturn/internal/plugin"
 )
 
-const (
-	keyEnv  = "NOCTURN_CATALOG_SIGNING_KEY"
-	sigFile = "plugin.sig"
-)
+const keyEnv = "NOCTURN_CATALOG_SIGNING_KEY"
 
 func main() {
 	keygen := flag.Bool("keygen", false, "mint a keypair and print it")
@@ -60,8 +57,8 @@ func fail(err error) {
 	os.Exit(1)
 }
 
-// mint prints a fresh keypair. The private half is printed once and never stored by this tool —
-// putting it on disk here would be the tool deciding where a signing key lives.
+// mint prints a fresh keypair. The private half is printed once and never written: where it belongs
+// is a password manager, not a file in the repository that publishes what it signs.
 func mint() error {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -72,6 +69,7 @@ func mint() error {
 	return nil
 }
 
+// privateKey reads the signing key from a file or the environment.
 func privateKey(path string) (ed25519.PrivateKey, error) {
 	encoded := os.Getenv(keyEnv)
 	if path != "" {
@@ -82,27 +80,27 @@ func privateKey(path string) (ed25519.PrivateKey, error) {
 		encoded = strings.TrimSpace(string(data))
 	}
 	if encoded == "" {
-		return nil, errors.New("no signing key: set $" + keyEnv + " or pass -key <file> (mint one with -keygen)")
+		return nil, errors.New("no signing key: set " + keyEnv + " or pass -key <file>")
 	}
-	raw, err := base64.StdEncoding.DecodeString(encoded)
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
 	if err != nil {
-		return nil, fmt.Errorf("private key is not base64: %w", err)
+		return nil, fmt.Errorf("the key is not base64: %w", err)
 	}
 	if len(raw) != ed25519.PrivateKeySize {
-		return nil, fmt.Errorf("private key is %d bytes, want %d", len(raw), ed25519.PrivateKeySize)
+		return nil, fmt.Errorf("the key is %d bytes, want %d", len(raw), ed25519.PrivateKeySize)
 	}
 	return ed25519.PrivateKey(raw), nil
 }
 
-// signAll signs the named plugins, or every one under plugins/ when none are named.
+// signAll signs the named entries, or every entry in the tree when none are named.
 func signAll(key ed25519.PrivateKey, names []string) error {
 	if len(names) == 0 {
-		entries, err := os.ReadDir("plugins")
+		entries, err := os.ReadDir(src)
 		if err != nil {
 			return err
 		}
 		for _, e := range entries {
-			if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && !strings.HasPrefix(e.Name(), "_") {
 				names = append(names, e.Name())
 			}
 		}
@@ -115,57 +113,22 @@ func signAll(key ed25519.PrivateKey, names []string) error {
 	return nil
 }
 
-// sign writes plugins/<name>/plugin.sig over the same statement the daemon verifies.
+// sign writes extensions/<name>/extension.sig over the same statement the daemon verifies.
 func sign(key ed25519.PrivateKey, name string) error {
-	dir := filepath.Join("plugins", name)
-	manifest, err := os.ReadFile(filepath.Join(dir, plugin.ManifestFile))
+	it, err := readItem(filepath.Join(src, name), name)
 	if err != nil {
 		return err
-	}
-	script, err := os.ReadFile(filepath.Join(dir, plugin.ScriptFile))
-	if err != nil {
-		return err
-	}
-	bundled, err := os.ReadFile(filepath.Join(dir, plugin.SkillFile))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	skillSHA := ""
-	if len(bundled) > 0 {
-		skillSHA = digest(bundled)
-	}
-	var e struct {
-		Title       string   `json:"title"`
-		Description string   `json:"description"`
-		Homepage    string   `json:"homepage"`
-		Tags        []string `json:"tags"`
-		Serial      int      `json:"serial"`
-	}
-	entry, err := os.ReadFile(filepath.Join(dir, "entry.json"))
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(entry, &e); err != nil {
-		return fmt.Errorf("entry.json: %w", err)
-	}
-	if e.Serial < 1 {
-		return errors.New("entry.json: serial must be at least 1, and must be bumped when you publish a change")
 	}
 	msg := library.SignedStatement(library.Signed{
-		ID: name, Folder: name,
-		ManifestSHA: digest(manifest), ScriptSHA: digest(script), SkillSHA: skillSHA,
-		ListingSHA: library.ListingDigest(e.Title, e.Description, e.Homepage, e.Tags),
-		Serial:     e.Serial,
+		ID:         it.ID,
+		SHA256:     it.SHA256,
+		ListingSHA: library.ListingDigest(it.Title, it.Description, it.Homepage, it.Tags),
+		Serial:     it.Serial,
 	})
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(key, msg))
-	if err := os.WriteFile(filepath.Join(dir, sigFile), []byte(sig+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, name, sigFile), []byte(sig+"\n"), 0o644); err != nil {
 		return err
 	}
-	fmt.Printf("signed %s\n", name)
+	fmt.Printf("signed %s (serial %d)\n", name, it.Serial)
 	return nil
-}
-
-func digest(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
 }

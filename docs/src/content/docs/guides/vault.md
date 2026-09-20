@@ -21,17 +21,34 @@ nocturn-data/
 └─ workspaces/
    └─ main/
       ├─ vault.enc                    ← this workspace's own credentials
-      ├─ plugins/
-      │  ├─ my-api/
-      │  │  ├─ plugin.json            (the manifest — names the credential, never holds it)
-      │  │  └─ secrets.enc            ← nocturn secret set plugin:my-api/<credential>
-      │  └─ weather/                  (no secrets.enc — this one needs no credential)
-      │     └─ plugin.json
-      └─ mcp/
+      ├─ mail/                        ← the mailbox, if one is configured
+      │  ├─ mail.json                 (the account — never the password)
+      │  └─ secrets.enc               ← nocturn mail setup
+      └─ extensions/                  ← everything installed, one folder each
+         ├─ home-assistant/
+         │  ├─ SKILL.md               (the text — {{config.base_url}} filled in from below)
+         │  ├─ manifest.json          (the declaration — names the credential, never holds it)
+         │  ├─ config.json            ← nocturn config home-assistant base_url=…
+         │  └─ secrets.enc            ← nocturn secret set home-assistant/token
+         ├─ my-api/
+         │  ├─ plugin.json            (the manifest — names the credential, never holds it)
+         │  ├─ plugin.js              (the code the sandbox runs)
+         │  └─ secrets.enc            ← nocturn secret set my-api/<credential>
+         ├─ weather/                  (no secrets.enc — this one needs no credential)
+         │  └─ SKILL.md
          └─ cloudflare/
             ├─ mcp.json               (the declaration — never holds a token)
-            └─ secrets.enc            ← nocturn secret set mcp:cloudflare, or nocturn auth
+            └─ secrets.enc            ← nocturn secret set cloudflare, or nocturn auth
 ```
+
+**Every installed thing has the same shape, and lives in one tree.** A skill, a plugin and an MCP
+server are all *extensions*: a folder, a declaration of what it needs, the values a person supplied,
+and its own shard. (The mailbox has a folder of its own, `mail/`, for the same credential reason —
+but it is not in that tree, because nothing about it is installed.) What a folder CARRIES is read off the files in it — so an integration
+that brings a server and the instructions for using it is ONE thing, with one owner and one
+credential, rather than three that happen to share a name. The declaration says which credential and which host; the config only ever fills in values it
+declared — so whoever edits the config can point the extension at their own server, and can never
+point somebody else's credential anywhere.
 
 **One passphrase, many keys.** `NOCTURN_MASTER_PASSPHRASE` is stretched with scrypt over
 `master.salt` into a master key, and every file above gets its own key derived from that — per
@@ -39,8 +56,8 @@ workspace for `vault.enc`, per folder path for each `secrets.enc`. So one passph
 everything, and no two of these files share a key.
 
 **A shard is bound to where it sits.** Its key comes from the folder's path, and the path is also
-the AES-GCM associated data — so `plugins/my-api/secrets.enc` decrypts as `plugins/my-api` and
-nothing else. Copy it into another plugin's folder and it is unreadable there; rename the folder and
+the AES-GCM associated data — so `extensions/my-api/secrets.enc` decrypts as `extensions/my-api` and
+nothing else. Copy it into another extension's folder and it is unreadable there; rename the folder and
 its old secrets are gone. That is not a check that could be skipped, it is the decryption failing.
 
 A shard that will not open is **skipped with a warning**, and the workspace vault is never read as a
@@ -49,10 +66,19 @@ substitute. That item simply has no credentials, and the rest of the workspace s
 Without a passphrase Nocturn runs fine — everything stays locked, and no credential can be injected.
 
 ```sh
-printf %s "$TOKEN" | nocturn secret set plugin:my-api/my-api   # a plugin credential
-printf %s "$TOKEN" | nocturn secret set mcp:my-server          # an MCP server's bearer
-nocturn secret ls                                              # names only, never values
+nocturn config home-assistant                            # what does it ask for?
+nocturn config home-assistant base_url=https://hass.example.com
+
+printf %s "$TOKEN" | nocturn secret set home-assistant/token
+printf %s "$TOKEN" | nocturn secret set my-api/my-api    # a plugin credential
+printf %s "$TOKEN" | nocturn secret set my-server        # a server's bearer (its only credential)
+nocturn secret ls                                        # names only, never values
+nocturn secret rm home-assistant/token                   # and back out again
 ```
+
+A credential is stored under `ext:<name>@<host>/<credential>` — the host it was issued for is part of
+its name. Point the extension at a different address and the key changes with it, so a token
+issued for one server is never sent to another.
 
 The value comes from stdin, so it never reaches your shell history or the process list.
 

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/secret"
 	"github.com/efuturetoday/nocturn/internal/workspace"
 )
@@ -19,7 +20,7 @@ func mustMaster(t *testing.T) *secret.Master {
 }
 
 // ShardTokens routes a credential's SecretName to its owner's folder shard — a plugin token to
-// plugins/<name>/secrets.enc, an mcp token (host-bound name) to mcp/<name>/secrets.enc — and never
+// extensions/<name>/secrets.enc, whatever that folder carries — and never
 // touches the workspace vault. A non-shard-owned name is rejected, and an unauthorized credential
 // reads absent (fail-closed, no fallback).
 func TestShardTokens_RoutesToFolderShard(t *testing.T) {
@@ -27,25 +28,28 @@ func TestShardTokens_RoutesToFolderShard(t *testing.T) {
 	wsDir := t.TempDir()
 	tok := workspace.NewShardTokens(m, wsDir, "main", nil)
 
-	// A plugin credential lands in its plugin folder's shard and reads back.
-	if err := tok.Set("plugin:gmail/acct", []byte("PTOK")); err != nil {
+	// A plugin credential lands in its plugin folder's shard and reads back. The key carries the host
+	// it was issued for, exactly like an mcp one — routing that cut only at "/" turned the folder into
+	// "gmail@gmail.googleapis.com", so `nocturn auth` wrote the token where nothing loads it and every
+	// authorized plugin lost OAuth without a word.
+	if err := tok.Set("ext:gmail@gmail.googleapis.com/acct", []byte("PTOK")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(wsDir, "plugins", "gmail", "secrets.enc")); err != nil {
+	if _, err := os.Stat(filepath.Join(wsDir, extension.Dir, "gmail", "secrets.enc")); err != nil {
 		t.Fatalf("plugin token must land in plugins/gmail/secrets.enc: %v", err)
 	}
-	if v, ok := tok.Get("plugin:gmail/acct"); !ok || string(v) != "PTOK" {
+	if v, ok := tok.Get("ext:gmail@gmail.googleapis.com/acct"); !ok || string(v) != "PTOK" {
 		t.Fatalf("get plugin = %q, %v", v, ok)
 	}
 
 	// An mcp credential (host-bound name) lands in its server folder's shard.
-	if err := tok.Set("mcp:github@api.github.com/oauth", []byte("MTOK")); err != nil {
+	if err := tok.Set("ext:github@api.github.com/oauth", []byte("MTOK")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(wsDir, "mcp", "github", "secrets.enc")); err != nil {
+	if _, err := os.Stat(filepath.Join(wsDir, extension.Dir, "github", "secrets.enc")); err != nil {
 		t.Fatalf("mcp token must land in mcp/github/secrets.enc: %v", err)
 	}
-	if v, ok := tok.Get("mcp:github@api.github.com/oauth"); !ok || string(v) != "MTOK" {
+	if v, ok := tok.Get("ext:github@api.github.com/oauth"); !ok || string(v) != "MTOK" {
 		t.Fatalf("get mcp = %q, %v", v, ok)
 	}
 
@@ -75,7 +79,7 @@ func TestOAuthRecord_RoundTripInShard(t *testing.T) {
 	wsDir := t.TempDir()
 	tok := workspace.NewShardTokens(m, wsDir, "main", nil)
 
-	const sn = "mcp:github@api.githubcopilot.com/oauth"
+	const sn = "ext:github@api.githubcopilot.com/oauth"
 	if _, ok := workspace.LoadOAuthRecord(tok, sn); ok {
 		t.Fatal("no record should exist yet")
 	}
@@ -87,7 +91,7 @@ func TestOAuthRecord_RoundTripInShard(t *testing.T) {
 		t.Fatalf("store record: %v", err)
 	}
 	// It lands in the server's own shard, not the workspace vault.
-	if _, err := os.Stat(filepath.Join(wsDir, "mcp", "github", "secrets.enc")); err != nil {
+	if _, err := os.Stat(filepath.Join(wsDir, extension.Dir, "github", "secrets.enc")); err != nil {
 		t.Fatalf("record must live in mcp/github/secrets.enc: %v", err)
 	}
 	got, ok := workspace.LoadOAuthRecord(tok, sn)

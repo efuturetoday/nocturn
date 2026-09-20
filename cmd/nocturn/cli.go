@@ -16,7 +16,7 @@ import (
 
 	"github.com/efuturetoday/nocturn/agentkit"
 	"github.com/efuturetoday/nocturn/internal/agent"
-	"github.com/efuturetoday/nocturn/internal/discovery"
+	"github.com/efuturetoday/nocturn/internal/extension"
 	"github.com/efuturetoday/nocturn/internal/mcp"
 	"github.com/efuturetoday/nocturn/internal/plugin"
 	"github.com/efuturetoday/nocturn/internal/secret"
@@ -112,6 +112,8 @@ func dispatch(args []string) int {
 		return cmdAuth(args[1:])
 	case "secret":
 		return cmdSecret(args[1:])
+	case "config":
+		return cmdConfig(args[1:])
 	case "mail":
 		return cmdMail(args[1:])
 	case "ls":
@@ -145,15 +147,18 @@ Usage:
   nocturn knowledge index      Index the documents in a workspace's knowledge folder
   nocturn auth <provider>      Connect an OAuth account (prints a URL to open)
   nocturn secret set <target>  Seed a static credential (value read from stdin)
+  nocturn secret rm <target>   Remove a seeded credential
   nocturn secret ls            List the credential names a workspace holds (never values)
+  nocturn config <ext> [k=v]   Show or set an installed extension's settings
   nocturn mail setup --user <a> Configure a workspace's mailbox (password read from stdin)
   nocturn mail check           Connect with the configured mailbox and report what it sees
-  nocturn ls                   List workspaces, or one workspace's plugins/mcp/agents/skills
+  nocturn ls                   List workspaces, or one workspace's extensions and agents
   nocturn version              Print the version
   nocturn help                 Show this help
 
 Most commands take -w/--workspace (default: `+workspace.DefaultWorkspace+`).
-A credential target is owner-namespaced: plugin:<name>/<credential> or mcp:<name>.
+An extension is named by its folder — home-assistant, gmail, github. A credential adds its own name:
+gmail/acct.
 `)
 }
 
@@ -178,7 +183,7 @@ func parseFlags(fs *flag.FlagSet, args []string) (code int, done bool) {
 }
 
 // parseArgs parses flags that may appear BEFORE or AFTER the positional arguments. Stdlib flag stops
-// at the first non-flag token, so a natural `secret set plugin:x/y -w main` would drop the flag; here
+// at the first non-flag token, so a natural `secret set gmail/acct -w main` would drop the flag; here
 // we resume parsing after each positional and collect them. Returns the positionals.
 func parseArgs(fs *flag.FlagSet, args []string) (pos []string, code int, done bool) {
 	for {
@@ -258,6 +263,8 @@ func cmdSecret(args []string) int {
 	switch args[0] {
 	case "set":
 		return cmdSecretSet(args[1:])
+	case "rm":
+		return cmdSecretRemove(args[1:])
 	case "ls":
 		return cmdSecretLs(args[1:])
 	case "help", "-h", "--help":
@@ -272,14 +279,16 @@ func cmdSecret(args []string) int {
 
 func secretUsage(w io.Writer) {
 	io.WriteString(w, `usage: nocturn secret set <target> [-w workspace]   (value on stdin)
+       nocturn secret rm  <target> [-w workspace]
        nocturn secret ls          [-w workspace]
 
-  target is owner-namespaced:
-    plugin:<name>/<credential>   a plugin credential (from its manifest)
-    mcp:<name>                   an MCP server's bearer (host-bound; host from its mcp.json)
+  target names an installed extension, and optionally one of its credentials:
+    <extension>/<credential>   the credential its declaration names
+    <extension>                the same, when it declares exactly one
+    mail/imap · mail/smtp      the mailbox, which has a folder but is not installed
 
 The value is read from stdin, so it never enters your shell history or the process list:
-  printf %s "$TOKEN" | nocturn secret set plugin:gmail/acct -w main
+  printf %s "$TOKEN" | nocturn secret set gmail/acct -w main
 `)
 }
 
@@ -297,6 +306,25 @@ func cmdSecretSet(args []string) int {
 	}
 	if err := runSecretSet(*ws, pos[0]); err != nil {
 		fmt.Fprintln(os.Stderr, "secret set:", err)
+		return 1
+	}
+	return 0
+}
+
+func cmdSecretRemove(args []string) int {
+	fs := flag.NewFlagSet("secret rm", flag.ContinueOnError)
+	ws := workspaceFlag(fs)
+	fs.Usage = func() { secretUsage(os.Stderr) }
+	pos, code, done := parseArgs(fs, args)
+	if done {
+		return code
+	}
+	if len(pos) != 1 {
+		fs.Usage()
+		return 2
+	}
+	if err := runSecretRemove(*ws, pos[0]); err != nil {
+		fmt.Fprintln(os.Stderr, "secret rm:", err)
 		return 1
 	}
 	return 0
@@ -337,7 +365,7 @@ func listSecretNames(wsName string) ([]string, error) {
 	}
 	res := secret.NewStore()
 	vault.Store().CopyInto(res)
-	secret.LoadShardsInto(res, master, wsDir, wsName, discovery.ValidName, discardLog())
+	secret.LoadShardsInto(res, master, wsDir, wsName, workspace.ExtensionDirs(), extension.ValidName, discardLog())
 	// Hide the ".provider" sidecar records — they are resolved-OAuth wiring (endpoints, client id,
 	// resource, scopes), not credentials the operator seeds or reasons about.
 	var creds []string
@@ -378,18 +406,18 @@ func cmdLs(args []string) int {
 	base, _ := agentkit.NewToolSet()
 
 	var plugins []string
-	for _, p := range plugin.Discover(filepath.Join(wsDir, "plugins"), base, &diag).All() {
+	for _, p := range plugin.Discover(filepath.Join(wsDir, extension.Dir), base, &diag).All() {
 		plugins = append(plugins, p.Name())
 	}
 	var servers []string
-	for _, s := range mcp.Discover(filepath.Join(wsDir, "mcp"), &diag).All() {
+	for _, s := range mcp.Discover(filepath.Join(wsDir, extension.Dir), &diag).All() {
 		servers = append(servers, s.Name)
 	}
 	var agents []string
 	for _, a := range agent.Discover(filepath.Join(wsDir, "agents"), &diag).All() {
 		agents = append(agents, a.Name)
 	}
-	skills, _ := skill.Discover(filepath.Join(wsDir, "skills"), &diag)
+	skills, _ := skill.Discover(filepath.Join(wsDir, extension.Dir), &diag)
 	printGroup("plugins", plugins)
 	printGroup("mcp", servers)
 	printGroup("agents", agents)

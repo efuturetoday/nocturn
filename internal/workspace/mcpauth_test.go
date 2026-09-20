@@ -61,7 +61,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 // seedDiscoverServer writes a discover-mode mcp.json for a server pointing at base/mcp.
 func seedDiscoverServer(t *testing.T, wsDir, name, base string) {
 	t.Helper()
-	dir := filepath.Join(wsDir, "mcp", name)
+	dir := filepath.Join(wsDir, "extensions", name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -113,11 +113,11 @@ func TestMCPAuth_BeginComplete_PersistsToShard(t *testing.T) {
 	}
 
 	// The token and the resolved provider record now live in the server's folder shard.
-	if _, err := os.Stat(filepath.Join(wsDir, "mcp", "acme", "secrets.enc")); err != nil {
+	if _, err := os.Stat(filepath.Join(wsDir, "extensions", "acme", "secrets.enc")); err != nil {
 		t.Fatalf("token must land in mcp/acme/secrets.enc: %v", err)
 	}
 	tokens := workspace.NewShardTokens(mustMaster(t), wsDir, "main", nil)
-	sn := "mcp:acme@" + mustHost(t, base) + "/oauth"
+	sn := "ext:acme@" + mustHost(t, base) + "/oauth"
 	if _, ok := tokens.Get(sn); !ok {
 		t.Errorf("token not stored under %q", sn)
 	}
@@ -151,7 +151,7 @@ func TestMCPAuth_Complete_Guards(t *testing.T) {
 	if err := auth.Complete(ctx, p.ID, "code", "forged-state"); err == nil {
 		t.Error("a consumed session must not be replayable")
 	}
-	if _, err := os.Stat(filepath.Join(wsDir, "mcp", "acme", "secrets.enc")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(wsDir, "extensions", "acme", "secrets.enc")); !os.IsNotExist(err) {
 		t.Errorf("no token must be written on a guard failure, stat err = %v", err)
 	}
 }

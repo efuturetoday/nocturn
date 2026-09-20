@@ -24,6 +24,7 @@ import {
   DENY_OPTION,
   type ChatMeta,
   type ClientCommand,
+  type LibraryPayload,
   type MCPInfo,
   type PluginInfo,
   type ServerEvent,
@@ -133,7 +134,7 @@ export class DemoDaemon {
         this.soon({ type: 'library.catalog', ...this.catalog });
         break;
       case 'library.install':
-        this.install(cmd.kind, cmd.id);
+        this.install(cmd.id);
         break;
       case 'chat.list':
         this.soon({ type: 'chat.list', ws: WS, kind: cmd.kind, chats: this.metasOf(cmd.kind) });
@@ -402,54 +403,48 @@ export class DemoDaemon {
   }
 
   /**
-   * Install a catalog plugin. The real daemon writes the folder, reloads, and only then can list it
-   * — so the list goes out after, not before, and a duplicate is refused in words.
+   * Install a catalog entry. One folder, whatever it carries — so an entry that brings a server AND
+   * the instructions for it lands as one thing, and each list it belongs to is refreshed. A
+   * duplicate is refused in words, as the daemon does: a silent no-op reads as a broken button.
    */
-  private installPlugin(id: string): void {
-    const item = this.catalog.plugins.find((p) => p.id === id);
+  private install(id: string): void {
+    const item = this.catalog.entries.find((e) => e.id === id);
     if (!item) {
       this.soon({ type: 'error', text: `no catalog entry ${id}` });
       return;
     }
-    if (this.plugins.some((p) => p.name === item.name)) {
-      this.soon({ type: 'error', text: `plugins/${item.name} already exists` });
-      return;
-    }
-    this.plugins = [...this.plugins, { name: item.name, tools: item.tools.length }];
-    this.sendPlugins();
-  }
+    const carries = (p: LibraryPayload) => item.carries.includes(p);
 
-  /** Install a catalog entry. Refuses a duplicate with words, as the daemon does — a silent no-op
-      would read as a broken button. */
-  private install(kind: 'skill' | 'mcp' | 'plugin', id: string): void {
-    if (kind === 'plugin') {
-      this.installPlugin(id);
-      return;
-    }
-    if (kind === 'skill') {
-      const item = this.catalog.skills.find((s) => s.id === id);
-      if (!item) {
-        this.soon({ type: 'error', text: `no catalog entry ${id}` });
+    if (carries('plugin')) {
+      if (this.plugins.some((p) => p.name === item.id)) {
+        this.soon({ type: 'error', text: `${item.id} is already installed` });
         return;
       }
+      this.plugins = [...this.plugins, { name: item.id, tools: item.tools?.length ?? 0 }];
+      this.sendPlugins();
+    }
+    if (carries('skill')) {
       if (this.skills.some((s) => s.name === item.id)) {
         this.soon({ type: 'error', text: `skill "${item.id}" is already installed` });
         return;
       }
       this.skills = [
         ...this.skills,
-        { name: item.id, folder: item.id, description: item.description, enabled: true, bytes: item.body.length },
+        {
+          name: item.id,
+          folder: item.id,
+          description: item.description,
+          enabled: true,
+          bytes: (item.skill ?? '').length,
+        },
       ];
       this.sendSkills();
-      return;
     }
-
-    const item = this.catalog.mcp.find((m) => m.id === id);
-    if (!item) {
-      this.soon({ type: 'error', text: `no catalog entry ${id}` });
-      return;
+    if (carries('mcp')) {
+      // Scopes on the listing are what a sign-in would ask for, so their presence IS the sign that
+      // this server wants one — the entry carries no separate auth field to read.
+      this.addServer(item.id, item.url ?? '', (item.scopes ?? []).length ? 'oauth' : '');
     }
-    this.addServer(item.name, item.url, item.auth);
   }
 
   // ── running a turn ─────────────────────────────────────────────────────────

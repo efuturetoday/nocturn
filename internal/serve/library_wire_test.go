@@ -1,8 +1,6 @@
 package serve
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -18,20 +16,25 @@ import (
 
 const catalogSkill = "---\nname: deploy\ndescription: ships things\n---\n\nDo the deploy.\n"
 
+const catalogServer = `{"url":"https://acme.invalid/mcp"}`
+
 func catalogBody(t *testing.T) string {
 	t.Helper()
-	sum := sha256.Sum256([]byte(catalogSkill))
 	b, err := json.Marshal(map[string]any{
 		"schemaVersion": 1,
 		"version":       "2026-08-10",
-		"skills": []map[string]any{{
-			"id": "deploy", "title": "Deploy", "description": "ships things",
-			"folder": "deploy", "body": catalogSkill, "sha256": hex.EncodeToString(sum[:]),
-		}},
-		"mcp": []map[string]any{{
-			"id": "acme", "title": "Acme", "description": "an example server",
-			"name": "acme", "url": "https://acme.invalid/mcp",
-		}},
+		"items": []map[string]any{
+			{
+				"id": "deploy", "title": "Deploy", "description": "ships things",
+				"skill":  catalogSkill,
+				"sha256": library.ItemDigest(library.Item{Skill: catalogSkill}),
+			},
+			{
+				"id": "acme", "title": "Acme", "description": "an example server",
+				"mcp":    catalogServer,
+				"sha256": library.ItemDigest(library.Item{MCP: catalogServer}),
+			},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -57,13 +60,13 @@ func TestLibrary_BrowseIsOpen_InstallNeedsManage(t *testing.T) {
 
 	send(t, conn, ctx, map[string]any{"cmd": "library.list"})
 	got := awaitType(t, conn, ctx, "library.catalog")
-	skills, _ := got["skills"].([]any)
-	if len(skills) != 1 {
+	entries, _ := got["entries"].([]any)
+	if len(entries) != 2 {
 		t.Fatalf("an appliance could not browse: %v", got)
 	}
 
 	send(t, conn, ctx, map[string]any{
-		"cmd": "library.install", "ws": workspace.DefaultWorkspace, "kind": "skill", "id": "deploy",
+		"cmd": "library.install", "ws": workspace.DefaultWorkspace, "id": "deploy",
 	})
 	if e := awaitType(t, conn, ctx, "error"); e["text"] == "" {
 		t.Fatal("install was refused with no reason")
@@ -77,19 +80,26 @@ func TestLibrary_CatalogCarriesTheBody(t *testing.T) {
 
 	send(t, conn, ctx, map[string]any{"cmd": "library.list"})
 	got := awaitType(t, conn, ctx, "library.catalog")
-	skills, _ := got["skills"].([]any)
-	first, _ := skills[0].(map[string]any)
-	if body, _ := first["body"].(string); body != catalogSkill {
-		t.Fatalf("the catalog entry carried no body: %v", first)
+	entries, _ := got["entries"].([]any)
+	byID := map[string]map[string]any{}
+	for _, e := range entries {
+		m, _ := e.(map[string]any)
+		id, _ := m["id"].(string)
+		byID[id] = m
 	}
-	// An MCP entry is a URL and an auth mode, both shown in full — and never a client secret.
-	servers, _ := got["mcp"].([]any)
-	srv, _ := servers[0].(map[string]any)
-	if srv["url"] != "https://acme.invalid/mcp" {
-		t.Fatalf("the server entry = %v", srv)
+	if body, _ := byID["deploy"]["skill"].(string); body != catalogSkill {
+		t.Fatalf("the entry carried no skill body: %v", byID["deploy"])
 	}
-	if _, leaked := srv["client_secret"]; leaked {
+	// A server entry shows the URL it would dial, in full — and never a client secret.
+	if byID["acme"]["url"] != "https://acme.invalid/mcp" {
+		t.Fatalf("the server entry = %v", byID["acme"])
+	}
+	if _, leaked := byID["acme"]["client_secret"]; leaked {
 		t.Error("the listing carried a client secret")
+	}
+	// What each entry carries is stated, so a client renders one thing rather than guessing a kind.
+	if carries, _ := byID["deploy"]["carries"].([]any); len(carries) != 1 || carries[0] != "skill" {
+		t.Errorf("deploy carries %v, want [skill]", carries)
 	}
 }
 
@@ -100,7 +110,7 @@ func TestLibrary_InstallSkillAndServer(t *testing.T) {
 	ws, _ := spaces.Get(workspace.DefaultWorkspace)
 
 	send(t, conn, ctx, map[string]any{
-		"cmd": "library.install", "ws": workspace.DefaultWorkspace, "kind": "skill", "id": "deploy",
+		"cmd": "library.install", "ws": workspace.DefaultWorkspace, "id": "deploy",
 	})
 	list := awaitType(t, conn, ctx, "skill.list")
 	if !skillEntries(list)["deploy"] {
@@ -113,7 +123,7 @@ func TestLibrary_InstallSkillAndServer(t *testing.T) {
 	waitFor(t, func() bool { return len(ws.Inventory().Skills) == 1 })
 
 	send(t, conn, ctx, map[string]any{
-		"cmd": "library.install", "ws": workspace.DefaultWorkspace, "kind": "mcp", "id": "acme",
+		"cmd": "library.install", "ws": workspace.DefaultWorkspace, "id": "acme",
 	})
 	mlist := awaitType(t, conn, ctx, "mcp.list")
 	if got := mcpStates(mlist)["acme"]; got != string(workspace.MCPConnecting) {
@@ -130,12 +140,12 @@ func TestLibrary_InstallTwiceIsRefused(t *testing.T) {
 	conn, ctx, _, _ := gateDaemonAll(t, auth.ClassApp, withCatalog(t))
 
 	send(t, conn, ctx, map[string]any{
-		"cmd": "library.install", "ws": workspace.DefaultWorkspace, "kind": "skill", "id": "deploy",
+		"cmd": "library.install", "ws": workspace.DefaultWorkspace, "id": "deploy",
 	})
 	awaitType(t, conn, ctx, "skill.list")
 
 	send(t, conn, ctx, map[string]any{
-		"cmd": "library.install", "ws": workspace.DefaultWorkspace, "kind": "skill", "id": "deploy",
+		"cmd": "library.install", "ws": workspace.DefaultWorkspace, "id": "deploy",
 	})
 	if e := awaitType(t, conn, ctx, "error"); e["text"] == "" {
 		t.Fatal("a second install of the same entry reported success")
@@ -148,9 +158,9 @@ func TestLibrary_UnknownIDIsRefused(t *testing.T) {
 	conn, ctx, _, _ := gateDaemonAll(t, auth.ClassApp, withCatalog(t))
 
 	for _, cmd := range []map[string]any{
-		{"cmd": "library.install", "ws": workspace.DefaultWorkspace, "kind": "skill", "id": "nope"},
-		{"cmd": "library.install", "ws": workspace.DefaultWorkspace, "kind": "mcp", "id": "nope"},
-		{"cmd": "library.install", "ws": workspace.DefaultWorkspace, "kind": "plugin", "id": "deploy"},
+		{"cmd": "library.install", "ws": workspace.DefaultWorkspace, "id": "nope"},
+		{"cmd": "library.install", "ws": workspace.DefaultWorkspace, "id": "Bad Name"},
+		{"cmd": "library.install", "ws": workspace.DefaultWorkspace},
 	} {
 		send(t, conn, ctx, cmd)
 		if e := awaitType(t, conn, ctx, "error"); e["text"] == "" {

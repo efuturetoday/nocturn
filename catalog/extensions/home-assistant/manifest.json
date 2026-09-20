@@ -1,0 +1,20 @@
+{
+  "config": [
+    {
+      "name": "base_url",
+      "type": "url",
+      "label": "Address of your Home Assistant",
+      "example": "https://hass.example.com"
+    }
+  ],
+  "credentials": [
+    {
+      "name": "token",
+      "host": "{{config.base_url}}",
+      "header": "Authorization",
+      "prefix": "Bearer ",
+      "label": "Long-lived access token (profile → Long-lived access tokens)",
+      "audience": "model"
+    }
+  ]
+}

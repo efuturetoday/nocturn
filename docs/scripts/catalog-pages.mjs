@@ -42,37 +42,49 @@ function frontmatter(body) {
 /** YAML-safe single-quoted scalar. */
 const quote = (s) => `'${String(s).replaceAll("'", "''")}'`;
 
+/**
+ * Read the source tree: one folder per installable thing, sorted into the three groups the site
+ * shows. A folder carrying several payloads appears in each group it belongs to — that is what it
+ * is, and hiding it from one would misdescribe the shelf.
+ */
 async function collect() {
 	const skills = [];
-	for (const name of await dirs(join(SOURCE, 'skills'))) {
-		const body = await read(join(SOURCE, 'skills', name, 'SKILL.md'));
-		const entry = await readJSON(join(SOURCE, 'skills', name, 'entry.json'));
-		skills.push({ id: name, ...entry, description: entry.description ?? frontmatter(body).description, body });
-	}
-
 	const servers = [];
-	const mcpDir = join(SOURCE, 'mcp');
-	if (existsSync(mcpDir)) {
-		for (const file of await readdir(mcpDir)) {
-			if (!file.endsWith('.json') || /^[._]/.test(file)) continue;
-			servers.push({ id: file.replace(/\.json$/, ''), ...(await readJSON(join(mcpDir, file))) });
-		}
-	}
-
 	const plugins = [];
-	for (const name of await dirs(join(SOURCE, 'plugins'))) {
-		const dir = join(SOURCE, 'plugins', name);
+
+	for (const name of await dirs(join(SOURCE, 'extensions'))) {
+		const dir = join(SOURCE, 'extensions', name);
 		const entry = await readJSON(join(dir, 'entry.json'));
-		const manifest = await readJSON(join(dir, 'plugin.json'));
-		const guidePath = join(dir, 'GUIDE.md');
 		const skillPath = join(dir, 'SKILL.md');
-		plugins.push({
-			id: name,
-			...entry,
-			manifest,
-			guide: existsSync(guidePath) ? await read(guidePath) : '',
-			skill: existsSync(skillPath) ? frontmatter(await read(skillPath)) : null,
-		});
+		const pluginPath = join(dir, 'plugin.json');
+		const mcpPath = join(dir, 'mcp.json');
+		const guidePath = join(dir, 'GUIDE.md');
+		const body = existsSync(skillPath) ? await read(skillPath) : '';
+
+		if (existsSync(pluginPath)) {
+			plugins.push({
+				id: name,
+				...entry,
+				manifest: await readJSON(pluginPath),
+				guide: existsSync(guidePath) ? await read(guidePath) : '',
+				skill: body ? frontmatter(body) : null,
+			});
+		}
+		if (existsSync(mcpPath)) {
+			servers.push({ id: name, ...entry, ...(await readJSON(mcpPath)) });
+		}
+		// A skill that comes WITH code is shown on the plugin's own page (as the instructions it
+		// brings), not a second time in the skills table — there it would read as something you could
+		// install on its own. A skill beside a server is listed in both, because those are two things
+		// a person may want for two different reasons.
+		if (body && !existsSync(pluginPath)) {
+			skills.push({
+				id: name,
+				...entry,
+				description: entry.description ?? frontmatter(body).description,
+				body,
+			});
+		}
 	}
 
 	skills.sort((a, b) => a.id.localeCompare(b.id));

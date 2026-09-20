@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/efuturetoday/nocturn/internal/discovery"
+	"github.com/efuturetoday/nocturn/internal/extension"
 )
 
 // File names inside a plugin's folder. Exported because installing one means writing exactly these.
@@ -20,7 +21,7 @@ const (
 )
 
 // Write installs a JS plugin: <dir>/<folder>/{plugin.json,plugin.js}, where dir is a workspace's
-// plugins/ folder.
+// extensions/ folder.
 //
 // Both files land or neither does, and the manifest is validated first — through Load, the same
 // reader Discover uses, so a plugin that would be skipped at startup is refused here instead. A
@@ -53,7 +54,7 @@ func Write(dir, folder, manifest, script, bundledSkill string) (Manifest, error)
 	target := filepath.Join(dir, folder)
 	if err := os.Mkdir(target, 0o700); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return Manifest{}, fmt.Errorf("plugins/%s already exists", folder)
+			return Manifest{}, fmt.Errorf("extensions/%s already exists", folder)
 		}
 		return Manifest{}, err
 	}
@@ -84,13 +85,4 @@ func Write(dir, folder, manifest, script, bundledSkill string) (Manifest, error)
 // Remove deletes a plugin's folder — its manifest, its artifact, and the secret shard beside them.
 // Dropping the credential material with the code is the point: an uninstall that left a token behind
 // would leave the next plugin of that name inheriting it.
-func Remove(dir, folder string) error {
-	if !discovery.ValidName(folder) {
-		return fmt.Errorf("plugin: invalid folder %q", folder)
-	}
-	target := filepath.Join(dir, folder)
-	if _, err := os.Stat(target); err != nil {
-		return fmt.Errorf("no plugin %q", folder)
-	}
-	return os.RemoveAll(target)
-}
+func Remove(dir, folder string) error { return extension.Remove(dir, folder) }

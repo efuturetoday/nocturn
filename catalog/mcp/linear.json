@@ -1,8 +1,0 @@
-{
-  "title": "Linear",
-  "description": "Issues, projects and cycles from Linear. Signs in with OAuth.",
-  "homepage": "https://linear.app/docs/mcp",
-  "tags": ["work"],
-  "url": "https://mcp.linear.app/mcp",
-  "auth": "oauth"
-}

@@ -2,8 +2,6 @@ package library_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -19,9 +17,10 @@ import (
 	"github.com/efuturetoday/nocturn/internal/library"
 )
 
+// digest is the entry digest of a skill-only item — what the catalog publishes for a plain
+// instructions entry.
 func digest(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
+	return library.ItemDigest(library.Item{Skill: s})
 }
 
 const skillBody = "---\nname: deploy\ndescription: ships things\n---\n\nDo the deploy.\n"
@@ -38,10 +37,14 @@ func serveCatalog(t *testing.T, body string) (*library.Store, *atomic.Int64) {
 	return library.New(library.Source{URL: srv.URL}, t.TempDir(), slog.New(slog.DiscardHandler)), &hits
 }
 
-func catalogJSON(t *testing.T, skills []map[string]any, servers []map[string]any) string {
+func catalogJSON(t *testing.T, items ...[]map[string]any) string {
 	t.Helper()
+	all := []map[string]any{}
+	for _, group := range items {
+		all = append(all, group...)
+	}
 	b, err := json.Marshal(map[string]any{
-		"schemaVersion": 1, "version": "2026-08-10", "skills": skills, "mcp": servers,
+		"schemaVersion": 1, "version": "2026-08-10", "items": all,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +55,7 @@ func catalogJSON(t *testing.T, skills []map[string]any, servers []map[string]any
 func goodSkill() map[string]any {
 	return map[string]any{
 		"id": "deploy", "title": "Deploy", "description": "ships things",
-		"folder": "deploy", "body": skillBody, "sha256": digest(skillBody),
+		"skill": skillBody, "sha256": digest(skillBody),
 	}
 }
 
@@ -61,15 +64,17 @@ func goodSkill() map[string]any {
 func TestCatalog_DropsBadEntriesKeepsTheRest(t *testing.T) {
 	bad := []map[string]any{
 		goodSkill(),
-		{"id": "", "folder": "x", "body": skillBody, "sha256": digest(skillBody)},         // no id
-		{"id": "y", "folder": "Bad Name", "body": skillBody, "sha256": digest(skillBody)}, // invalid folder
-		{"id": "z", "folder": "z", "body": skillBody, "sha256": digest("something else")}, // digest mismatch
-		{"id": "w", "folder": "w", "body": skillBody},                                     // no digest at all
+		{"id": "", "skill": skillBody, "sha256": digest(skillBody)},         // no id
+		{"id": "Bad Name", "skill": skillBody, "sha256": digest(skillBody)}, // invalid id
+		{"id": "z", "skill": skillBody, "sha256": digest("something else")}, // digest mismatch
+		{"id": "w", "skill": skillBody},                                     // no digest at all
+		{"id": "empty", "sha256": library.ItemDigest(library.Item{})},       // carries nothing
 	}
+	const acmeDecl = `{"url":"https://acme.example/mcp"}`
+	const plainDecl = `{"url":"http://plain.example/mcp"}` // not https
 	servers := []map[string]any{
-		{"id": "acme", "name": "acme", "url": "https://acme.example/mcp"},
-		{"id": "plain", "name": "plain", "url": "http://plain.example/mcp"}, // not https
-		{"id": "shout", "name": "Shout", "url": "https://shout.example/mcp"},
+		{"id": "acme", "mcp": acmeDecl, "sha256": library.ItemDigest(library.Item{MCP: acmeDecl})},
+		{"id": "plain", "mcp": plainDecl, "sha256": library.ItemDigest(library.Item{MCP: plainDecl})},
 	}
 	store, _ := serveCatalog(t, catalogJSON(t, bad, servers))
 
@@ -77,18 +82,19 @@ func TestCatalog_DropsBadEntriesKeepsTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Catalog: %v", err)
 	}
-	if len(cat.Skills) != 1 || cat.Skills[0].ID != "deploy" {
-		t.Fatalf("skills = %+v, want only deploy", cat.Skills)
+	ids := make([]string, 0, len(cat.Items))
+	for _, it := range cat.Items {
+		ids = append(ids, it.ID)
 	}
-	if len(cat.MCP) != 1 || cat.MCP[0].ID != "acme" {
-		t.Fatalf("mcp = %+v, want only acme", cat.MCP)
+	if len(ids) != 2 || ids[0] != "deploy" || ids[1] != "acme" {
+		t.Fatalf("entries = %v, want [deploy acme]", ids)
 	}
 }
 
 // A catalog announcing a schema this build does not read is refused whole. Half-understanding a
 // document that decides what gets installed is worse than not reading it.
 func TestCatalog_RefusesAnUnknownSchema(t *testing.T) {
-	body := `{"schemaVersion":99,"version":"x","skills":[],"mcp":[]}`
+	body := `{"schemaVersion":99,"version":"x","items":[]}`
 	store, _ := serveCatalog(t, body)
 	if _, err := store.Catalog(t.Context(), false); err == nil {
 		t.Fatal("a catalog with an unknown schema was accepted")
@@ -97,7 +103,7 @@ func TestCatalog_RefusesAnUnknownSchema(t *testing.T) {
 
 // Unknown fields are an error, the same strictness a plugin manifest and an mcp.json get.
 func TestCatalog_RefusesUnknownFields(t *testing.T) {
-	body := `{"schemaVersion":1,"version":"x","skills":[],"mcp":[],"surprise":true}`
+	body := `{"schemaVersion":1,"version":"x","items":[],"surprise":true}`
 	store, _ := serveCatalog(t, body)
 	if _, err := store.Catalog(t.Context(), false); err == nil {
 		t.Fatal("a catalog with an unknown field was accepted")
@@ -149,7 +155,7 @@ func TestCatalog_FallsBackToTheCachedCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the cached catalog was not served: %v", err)
 	}
-	if len(cat.Skills) != 1 {
+	if len(cat.Items) != 1 {
 		t.Fatalf("cached catalog = %+v", cat)
 	}
 }
@@ -157,7 +163,7 @@ func TestCatalog_FallsBackToTheCachedCopy(t *testing.T) {
 // A body over the cap is a refusal, not a truncation that would then fail to parse for the wrong
 // reason — the size of what a remote sends is a budget it controls, not us.
 func TestCatalog_RefusesAnOversizedBody(t *testing.T) {
-	huge := `{"schemaVersion":1,"version":"` + strings.Repeat("x", 9<<20) + `","skills":[],"mcp":[]}`
+	huge := `{"schemaVersion":1,"version":"` + strings.Repeat("x", 9<<20) + `","items":[]}`
 	store, _ := serveCatalog(t, huge)
 	if _, err := store.Catalog(t.Context(), false); err == nil {
 		t.Fatal("an oversized catalog was accepted")
@@ -266,8 +272,8 @@ func TestCatalog_ReadsAFileOnThisMachine(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Catalog() = %v, want the file to be read", err)
 			}
-			if len(cat.Skills) != 1 {
-				t.Errorf("got %d skills, want the one in the file", len(cat.Skills))
+			if len(cat.Items) != 1 {
+				t.Errorf("got %d skills, want the one in the file", len(cat.Items))
 			}
 		})
 	}

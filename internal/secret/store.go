@@ -34,6 +34,30 @@ func (s *Store) Set(name string, value []byte) {
 	s.secrets[name] = value
 }
 
+// Delete removes a secret from the in-memory store. Persistence is the Vault's — a Store on its own
+// is the resolution surface, and forgetting a name there is what makes an uninstalled extension's
+// credential unresolvable for the rest of the process.
+func (s *Store) Delete(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.secrets, name)
+}
+
+// Reset replaces the store's whole content with src's, under one lock. It is how a resolution store
+// tracks what is actually on disk: a discovery pass builds a fresh store from the vault and every
+// shard and swaps it in here, so a value whose shard entry was deleted — `nocturn secret rm`, an
+// uninstalled extension — stops resolving in the RUNNING process rather than at the next restart.
+//
+// Copying into the existing store rather than swapping the pointer is deliberate: the injector and
+// the leak scanner hold this one, and handing them a new store would mean reconstructing both, which
+// is exactly the "must not exist twice" the workspace's durable half is built to avoid.
+func (s *Store) Reset(src *Store) {
+	next := src.snapshot()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.secrets = next
+}
+
 // Exists reports whether a secret is present. This is the ONLY read a guest is
 // allowed — it reveals presence, never the value.
 func (s *Store) Exists(name string) bool {

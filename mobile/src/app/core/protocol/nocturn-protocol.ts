@@ -105,67 +105,62 @@ export interface MCPInfo {
 }
 
 /**
- * One installable skill in the catalog (library.catalog).
+ * One installable extension in the catalog (library.catalog).
  *
- * The whole `body` rides along with the listing rather than being fetched on demand. That is
- * deliberate: the app shows it before installing, and a second round-trip for something the daemon
- * already holds would only make that step skippable — and it is the step worth not skipping.
+ * `carries` is what it brings — "skill", "plugin", "mcp", or several: an integration that ships a
+ * server AND the instructions for using it is ONE entry, because that is what a household installs.
+ *
+ * What it ASKS FOR is pulled apart by the daemon so a client renders the grant without parsing JSON:
+ * `settings` a person must supply, `hosts` a credential would ride to, `tools` it would expose,
+ * `uses` (the base tools its guest may call — its cage), `scopes` a sign-in would request, and `url`
+ * for a server. That list is the review surface: the sandbox contains what code CAN do, the
+ * declaration is what it wants. Render it before offering the button.
+ *
+ * The bodies ride along whole rather than being fetched on demand — the app shows them before
+ * installing, and a second round-trip for what the daemon already holds would only make that step
+ * skippable. Signatures are checked by the daemon before an entry is ever offered, against a key
+ * compiled into it; the client neither sees nor checks one.
  */
-export interface LibrarySkill {
+export interface LibraryEntry {
   id: string;
   title: string;
   description: string;
   homepage?: string;
   tags?: string[];
-  body: string;
-}
+  carries: LibraryPayload[];
 
-/** One installable MCP server in the catalog. `scopes` is what a sign-in would ask for, shown before
-    the browser opens. The client id and secret are the daemon's and deliberately never on the wire. */
-export interface LibraryServer {
-  id: string;
-  title: string;
-  description: string;
-  homepage?: string;
-  tags?: string[];
-  name: string;
-  url: string;
-  auth?: string;
-  scopes?: string[];
-}
-
-/**
- * One installable plugin in the catalog.
- *
- * A plugin is CODE, so this entry carries more than a listing: `tools`, `uses`, `hosts` and `scopes`
- * are pulled out of its manifest by the daemon so a client can show what installing GRANTS without
- * parsing JSON. That triple is the review surface — the sandbox contains what the code can do, but
- * the manifest is what it asks for. Render it before offering the button.
- *
- * `manifest`, `script` and `skill` ride along whole, the way a skill's body does. The signature is
- * checked by the daemon before an entry is ever offered, so anything listed here verified against a
- * key compiled into it — the client neither sees nor checks one.
- */
-export interface LibraryPlugin {
-  id: string;
-  title: string;
-  description: string;
-  homepage?: string;
-  tags?: string[];
-  /** The folder it installs under, and the prefix on every tool it exposes. */
-  name: string;
-  /** Tool names, already namespaced by the daemon. */
-  tools: string[];
-  /** The base tools its guest may call — its cage. Empty means it reaches nothing. */
-  uses: string[];
+  settings?: LibrarySetting[];
   /** Where a declared credential would ride. */
   hosts?: string[];
+  /** Tool names, already namespaced by the daemon. */
+  tools?: string[];
+  /** The base tools its guest may call — its cage. Empty means it reaches nothing. */
+  uses?: string[];
   /** What a sign-in would ask for. */
   scopes?: string[];
-  manifest: string;
-  script: string;
-  /** Instructions it bundles, which join the prompt catalog on install. */
+  /** The server it would dial. */
+  url?: string;
+
+  /** The whole SKILL.md, when it carries one. */
   skill?: string;
+  /** The shared declaration (manifest.json), when it needs settings or a credential. */
+  manifest?: string;
+  /** The plugin artifact, when it carries code. */
+  script?: string;
+}
+
+/** What an entry carries. Not a kind: an entry may carry several. */
+export type LibraryPayload = 'skill' | 'plugin' | 'mcp';
+
+/** One value an entry needs before it works. It never carries a value — those are typed in after
+    installing, and stored in the workspace, never in the catalog. */
+export interface LibrarySetting {
+  name: string;
+  type: string;
+  label?: string;
+  example?: string;
+  values?: string[];
+  optional?: boolean;
 }
 
 /** One model-issued tool call inside a transcript message. */
@@ -490,9 +485,7 @@ export interface MCPList {
 export interface LibraryCatalog {
   type: 'library.catalog';
   version: string;
-  skills: LibrarySkill[];
-  mcp: LibraryServer[];
-  plugins: LibraryPlugin[];
+  entries: LibraryEntry[];
 }
 
 /**
@@ -828,13 +821,14 @@ export interface LibraryRefreshCmd {
  * arbitrary text into every system prompt of every turn. The content is looked up server-side. Do
  * not add a body or a URL field here — the daemon has an invariant test that says so.
  *
- * Answered with the target domain's list (skill.list, or mcp.list twice). Installing something
- * already held is REFUSED with a message rather than silently ignored.
+ * Answered with one list per payload the entry brought (skill.list, plugin.list, mcp.list — an entry
+ * that carries several answers with several). Installing something already held is REFUSED with a
+ * message rather than silently ignored.
  */
 export interface LibraryInstallCmd {
   cmd: 'library.install';
   ws: string;
-  kind: 'skill' | 'mcp' | 'plugin';
+  /** The catalog entry. What it carries is the entry's business, not the caller's. */
   id: string;
 }
 

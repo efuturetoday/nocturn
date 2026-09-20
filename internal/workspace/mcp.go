@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -64,9 +63,8 @@ const (
 // goroutine writes exactly one element of results, which are distinct memory locations and need no
 // lock. The two things they share are safe by construction: secret.Injector is mutex-guarded, and
 // Scanner is documented as shareable across concurrent scans.
-func (p pass) installMCP(toolset agentkit.ToolSet) []MCPStatus {
+func (p pass) installMCP(toolset agentkit.ToolSet, servers []mcp.Server) []MCPStatus {
 	log := p.log.With("component", "mcp")
-	servers := mcp.Discover(filepath.Join(p.dir, "mcp"), p.diag).All()
 	// An empty list, never nil: this goes out on the wire, where nil is JSON null and an empty
 	// slice is [] — and a client rendering "no servers" should not have to handle both.
 	if len(servers) == 0 {
@@ -121,8 +119,7 @@ func (p pass) connectServer(srv mcp.Server, log *slog.Logger) mcpResult {
 	defer cancel()
 	tools, err := connectMCP(ctx, conn)
 	if err != nil {
-		var needAuth *mcp.AuthRequiredError
-		if errors.As(err, &needAuth) {
+		if _, needAuth := errors.AsType[*mcp.AuthRequiredError](err); needAuth {
 			// The server wants OAuth and isn't authorized yet — not a failure, an action for the
 			// operator. The daemon cannot open a browser; the flow runs from the CLI or the app.
 			log.Info("mcp server needs authorization", "server", srv.Name, "action", "run: nocturn auth "+srv.Name)

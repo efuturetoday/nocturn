@@ -5,66 +5,76 @@ import type { LibraryCatalog } from '../../core/protocol/nocturn-protocol';
 const CATALOG: LibraryCatalog = {
   type: 'library.catalog',
   version: 'test',
-  skills: [
+  entries: [
     {
       id: 'commit-messages',
       title: 'Commit messages',
       description: 'Writes commit messages that say why, not what.',
       tags: ['git', 'writing'],
-      body: '---\nname: commit-messages\n---\n\nA body mentioning Linear, which no query should reach.',
+      carries: ['skill'],
+      skill: '---\nname: commit-messages\n---\n\nA body mentioning Linear, which no query should reach.',
     },
-    { id: 'travel', title: 'Travel planning', description: 'Plans a trip.', body: '# Travel' },
-  ],
-  plugins: [
+    {
+      id: 'travel',
+      title: 'Travel planning',
+      description: 'Plans a trip.',
+      carries: ['skill'],
+      skill: '# Travel',
+    },
     {
       id: 'gmail',
       title: 'Gmail (read-only)',
       description: 'Search and read your mail.',
       tags: ['mail'],
-      name: 'gmail',
+      // One entry carrying two payloads: the code and the instructions for using it.
+      carries: ['plugin', 'skill'],
       tools: ['gmail_search', 'gmail_read'],
       uses: ['http_read'],
       hosts: ['gmail.googleapis.com'],
       scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
-      manifest: '{"name":"gmail"}',
       script: '// a script mentioning Linear, which no query should reach',
     },
-  ],
-  mcp: [
     {
       id: 'linear',
       title: 'Linear',
       description: 'Issues, projects and cycles.',
       tags: ['work'],
-      name: 'linear',
+      carries: ['mcp'],
       url: 'https://mcp.linear.app/sse',
-      auth: 'oauth',
       scopes: ['read'],
     },
-    { id: 'weather', title: 'Weather', description: 'Forecasts.', name: 'weather', url: 'https://weather.example/mcp' },
+    {
+      id: 'house',
+      title: 'Home Assistant',
+      description: 'Control the house.',
+      carries: ['skill'],
+      settings: [{ name: 'base_url', type: 'url', label: 'Address of your server' }],
+      skill: '# House',
+    },
   ],
 };
 
 const ids = (kind: 'all' | 'skill' | 'plugin' | 'mcp', q = ''): string[] =>
-  filterCatalog(CATALOG, q, kind).map((e) => e.id);
+  filterCatalog(CATALOG, q, kind).map((c) => c.entry.id);
 
 describe('filterCatalog', () => {
-  it('shows every kind under all, in catalog order', () => {
-    expect(ids('all')).toEqual(['commit-messages', 'travel', 'gmail', 'linear', 'weather']);
+  it('shows everything under all, in catalog order', () => {
+    expect(ids('all')).toEqual(['commit-messages', 'travel', 'gmail', 'linear', 'house']);
   });
 
-  it('narrows to one kind, and the others are gone rather than dimmed', () => {
-    expect(ids('skill')).toEqual(['commit-messages', 'travel']);
+  // The filter is by what an entry CARRIES, not by a kind of entry — so one that brings code and
+  // instructions belongs under both, rather than having to pick a side.
+  it('narrows by payload, and an entry carrying several appears under each', () => {
+    expect(ids('skill')).toEqual(['commit-messages', 'travel', 'gmail', 'house']);
     expect(ids('plugin')).toEqual(['gmail']);
-    expect(ids('mcp')).toEqual(['linear', 'weather']);
+    expect(ids('mcp')).toEqual(['linear']);
   });
 
-  // A daemon older than the plugin channel sends no `plugins` at all, and so does a catalog that
-  // offers none. Both mean "no plugins"; neither may throw on a screen somebody just opened.
-  it('survives a catalog with no plugins field', () => {
-    const old = { ...CATALOG, plugins: undefined } as unknown as LibraryCatalog;
-    expect(filterCatalog(old, '', 'all').map((e) => e.id)).toEqual(['commit-messages', 'travel', 'linear', 'weather']);
-    expect(filterCatalog(old, '', 'plugin')).toEqual([]);
+  // A daemon that sends no entries at all, and a catalog that offers none, are both "nothing here";
+  // neither may throw on a screen somebody just opened.
+  it('survives a catalog with no entries field', () => {
+    const empty = { ...CATALOG, entries: undefined } as unknown as LibraryCatalog;
+    expect(filterCatalog(empty, '', 'all')).toEqual([]);
   });
 
   it('matches the title regardless of case', () => {
@@ -72,12 +82,12 @@ describe('filterCatalog', () => {
   });
 
   it('matches the description and the tags, not only the title', () => {
-    expect(ids('all', 'forecasts')).toEqual(['weather']);
+    expect(ids('all', 'issues')).toEqual(['linear']);
     expect(ids('all', 'git')).toEqual(['commit-messages']);
   });
 
   it('never matches a skill body or a plugin script — both would match everything', () => {
-    // "Linear" appears in the commit-messages BODY, in the gmail plugin's SCRIPT, and in the Linear
+    // "Linear" appears in the commit-messages BODY, in the gmail entry's SCRIPT, and in the Linear
     // server's title. Only the title is a match.
     expect(ids('all', 'linear')).toEqual(['linear']);
   });
@@ -90,14 +100,15 @@ describe('filterCatalog', () => {
     expect(filterCatalog(null, 'anything', 'all')).toEqual([]);
   });
 
-  it('gives each kind the subtitle that identifies it', () => {
-    const [skill] = filterCatalog(CATALOG, 'travel', 'all');
-    const [plugin] = filterCatalog(CATALOG, 'gmail', 'all');
-    const [server] = filterCatalog(CATALOG, 'linear', 'all');
+  // The third line is the most concrete thing about an entry — and a setting comes before the rest,
+  // because "needs an address" decides whether installing finishes the job or starts a second task.
+  it('gives each entry the subtitle that identifies it', () => {
+    const sub = (q: string) => filterCatalog(CATALOG, q, 'all')[0].sub;
 
-    expect(skill.sub).toBe('');
-    expect(plugin.sub).toBe('2 tools');
-    expect(server.sub).toBe('mcp.linear.app');
+    expect(sub('travel')).toBe('');
+    expect(sub('gmail')).toBe('2 tools');
+    expect(sub('linear')).toBe('mcp.linear.app');
+    expect(sub('home assistant')).toBe('needs base_url');
   });
 });
 

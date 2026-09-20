@@ -48,8 +48,9 @@ internal/…         see §3
 agentkit/…         the engine + gate/runtime/openai/tools
 mobile/            the companion app (Angular + Capacitor, iOS) — the second device
 docs/              the docs site (Astro/Starlight); tool/capability data is schema-validated
-catalog/           the published library catalog's SOURCE — real SKILL.md files, plugin folders and
-                   MCP declarations, generated into docs/public/catalog.json (committed,
+catalog/extensions/<name>/  the published catalog's SOURCE — one folder per installable thing,
+                   holding exactly what an install writes, plus entry.json (listing + serial) and a
+                   committed extension.sig. Generated into docs/public/catalog.json (committed,
                    CI-drift-checked) which is DefaultURL, and into the docs site's Catalog section
 sdk/_template/     the starting point for a plugin (manifest + JS + TS source)
 ```
@@ -104,19 +105,36 @@ connection layer).
 **Context & composition:** `memory` (the assistant's durable notes; catalog DERIVED from the notes
 on disk and folded into every prompt, bodies on demand — control-plane folder, one writer) ·
 `frontmatter` (the shared `---` YAML preamble parser/renderer: skills and memory notes) ·
-`skill` (agentskills.io skills from disk → `agentkit.SkillSet`) ·
+`extension` (ONE tree, `extensions/<name>/`, and nothing else is installable. What a folder CARRIES
+is read off the files in it — `SKILL.md` text · `plugin.json`+`plugin.js` code · `mcp.json` a remote
+server — and a folder may carry several, which is the point: a household
+installs "Home Assistant", not three things sharing a name. Beside the payloads: `manifest.json` (the
+declaration — typed `config` a human supplies, `credentials` the host injects), `config.json` (what
+they typed), `secrets.enc` (its own shard). Owner is `ext:<name>`, credential key
+`ext:<name>@<host>/<cred>` — re-point it at another host and the old token is not found.
+`CredentialDecl.Audience` says who may spend it: the zero value is the extension itself, `model`
+additionally the model's own calls — which is what a SKILL needs, since text has no runtime of its
+own. Declared, not derived: the folder no longer says which payload a credential belongs to) ·
+`skill` (agentskills.io skills from the extensions tree → `agentkit.SkillSet`, with `{{config.x}}`
+substituted from the extension's config; unconfigured = still listed, body replaced by what to run) ·
 `discovery` (the shared name/skip rules for agents, skills, plugins, MCP — skipping for all four,
 name resolution for three: a skill names itself in SKILL.md) ·
 `knowledge` (+`/embed`) (retrieval over `mnt/knowledge`: Markdown-aware chunking behind a `Reader`
 port, an `Embedder` port with a remote OpenAI-compatible adapter, hybrid cosine+BM25 fused by
 reciprocal rank, an index OUTSIDE the mount that records its model and refuses to mix embedders, and
 a one-minute reconcile that costs a directory walk when nothing changed) ·
-`mail` (the household's mailbox over `go-imap/v2`, kept behind a narrow facade: reading and
+`mail` (the household's mailbox over `go-imap/v2`, NOT an extension — nothing is installed, there is
+no artifact, one per workspace — but with a folder of its own (`mail/mail.json` + `mail/secrets.enc`)
+for the one thing a folder buys: a shard is keyed by its PATH, so the passwords belong to the mailbox
+and go when it goes. Built once at Open because it keeps a long-lived IMAP connection, kept behind a
+narrow facade: reading and
 server-side `SEARCH` are ungated, sending gates on `SendKind` with the RECIPIENT as target and one
 check per address. ONE IMAP connection per workspace, serialised and reaped after five minutes idle,
 with a single reconnect-and-retry when the server hangs up — safe only because everything pooled is a
-read; SMTP dials per message, since retrying a half-delivered one sends it twice. The account is a plain `mail.json`; the password lives in the vault under a name
-the file cannot change, and never rides the HTTP `secret.Injector`. Not folded into `knowledge` —
+read; SMTP dials per message, since retrying a half-delivered one sends it twice. The account is a plain `mail.json`; the passwords live in its own shard
+under names the file cannot change (`mail/imap`, `mail/smtp`), and never ride the HTTP
+`secret.Injector` — they are used at the IMAP/SMTP boundary by the host, so there is no binding, no
+host match and no audience question. Not folded into `knowledge` —
 ADR-17 says why) ·
 `chat` (file-backed transcript store + Manager) · `agent` (declaration + cron only; execution is
 injected by the workspace) ·
@@ -130,12 +148,14 @@ the per-workspace wiring, so one created at runtime is not a second-class one) �
 `serve` (WebSocket surface, tagged JSON, one file per domain — `plugin.list` is listing only:
 removing one has to revoke the grant for its credential's hosts first, the way an MCP server's
 removal does, and half of that is worse than none) ·
-`library` (the curated catalog skills and MCP servers are installed from: daemon-wide, fetched lazily
-from ONE configured host over TLS with skill bodies INLINE, so installing never fetches from a second
-place. `DefaultURL` — the catalog this repo publishes — is what an unset `NOCTURN_CATALOG_URL` means;
-`off` is how a person says no library at all, since empty can no longer mean it. Three kinds: skills,
-MCP declarations, and PLUGINS — the last signed with a key compiled into the binary, so a compromised
-catalog host can offer text nobody vouched for and never code) ·
+`library` (the curated catalog extensions are installed from: daemon-wide, fetched lazily from ONE
+configured host over TLS with every payload INLINE, so installing never fetches from a second place.
+`DefaultURL` — the catalog this repo publishes — is what an unset `NOCTURN_CATALOG_URL` means; `off`
+is how a person says no library at all, since empty can no longer mean it. ONE item type: an entry
+carries any combination of instructions, code and a server declaration, digested together
+(`ItemDigest`, each part length-prefixed) and signed together, so nobody can keep the artifact we
+signed and put a different declaration in front of it. A remote source requires that signature; a file
+on this machine does not, because whoever writes it can drop the folder in directly) ·
 `webui` (the browser front-end, `go:embed`ded: the SAME Angular bundle `mobile/` ships, copied in by
 `generate.sh` and gitignored except a load-bearing `.gitkeep`. A file server and nothing else —
 it knows no classes, no capabilities, no bearers, because assets carry no authority. Absent bundle =
@@ -209,6 +229,28 @@ Read this before touching anything security-shaped — it is easy to assume the 
   is omitted when memory is empty or the runner's cage holds no memory tool — a narrowed agent must
   not be handed the user's notes. Agent runs and sub-agents get the same treatment, so a cron agent
   and the evening chat share one picture of the user.
+- **A skill may declare a credential, and that is why ADR-10 now has a boundary.** "A skill carries
+  zero authority" held while a skill was only text. A manifest that declares a credential is not text:
+  it tells the HOST to stamp a stored secret onto every request to a host it names, and the binding is
+  `Ambient` (a skill has no runtime of its own, so it rides the model's own `http_read` — see
+  `secret.Binding.Ambient` for what that cannot separate). Authority needs a key and skills have none,
+  so `library.validSkills` REFUSES a credential-bearing skill from a remote catalog and accepts one
+  from a file or loopback — the same `signaturePolicy` split plugins already use. `go generate
+  ./catalog/` therefore declines to publish one and says so.
+- **A credential belongs to what declared it, and dies with it.** `extension.Decl` is the one shape;
+  `bindExtensions` the one registration; the shard beside the folder the one storage. There is no
+  workspace-wide `bindings.json` and no `NOCTURN_SECRET_*` any more — both bound a credential to a
+  host nobody had declared and outlived whatever used them. Seeding is `nocturn secret set
+  <extension>[/<credential>]` — one grammar with NO kind in it, because an extension is one installed
+  thing whatever it carries, and the credential may be left out when it declares exactly one (the
+  mailbox answers to the same grammar, `mail/imap`, though nothing installs it). Revoking is `secret
+  rm`, and the values a person types are `nocturn config <extension> k=v` — typed and validated on the
+  way in AND on the way out, because they are substituted into text the model reads on every turn.
+  Removing an extension revokes the remembered `NetKind` grant for its credential's host, for skills
+  exactly as for plugins and MCP servers; the resolution store is REBUILT from disk on every discovery
+  pass, so `secret rm` reaches the running daemon instead of the next restart; and the injector is
+  written at the END of a pass, after everything that can fail, cleared by asking the injector what it holds rather than the last
+  published snapshot (which never heard of a pass that failed).
 - **Grants** are durable per workspace (`grants.json`, written 0600 via a temp file) and
   implement `gate.Grants`. Recall: never / session / always.
 - **Agent autonomy** (`internal/agent`): `Strict` (the zero value) gets **no approver**, so a
@@ -243,8 +285,8 @@ Read this before touching anything security-shaped — it is easy to assume the 
   the cheap side of that trade.
 - **A catalog may be a FILE.** `NOCTURN_CATALOG_URL=./my-catalog.json` (or `file://…`) is read off
   disk: a household with its own skills should not run a web server for them, and whoever can write
-  that file can already drop a folder into `skills/`. It is also why the signature rule below is tied
-  to the SOURCE — `Store.signaturePolicy`: remote requires one, a file or loopback does not, because a
+  that file can already drop a folder into `extensions/`. It is also why the signature rule below is
+  tied to the SOURCE — `Store.signaturePolicy`: remote requires one, a file or loopback does not, because a
   signature substitutes for a channel and there is none. A signature that IS present must verify
   either way.
 - **Text needs TLS, code needs a key.** A catalog plugin entry carries its manifest and its plugin.js
@@ -502,12 +544,15 @@ tui generate ./internal/tui/...
 cd docs && npm run build              # generates the Catalog section from catalog/, THEN astro build
 #   (a bare `npx astro build` skips the generator and publishes the site without that section)
 
-# The published library catalog: sources in catalog/, generated into docs/public/catalog.json, which
-# is committed and CI-drift-checked. `go test ./catalog/` installs every entry into a temp dir, so a
-# skill that could not be installed fails before it ships.
+# The published library catalog: sources in catalog/extensions/, generated into
+# docs/public/catalog.json, which is committed and CI-drift-checked. `go test ./catalog/` installs
+# every entry into a temp dir and reads each payload back with its own loader, so something that could
+# not be installed fails before it ships.
 go generate ./catalog/
-(cd catalog && go run sign.go -keygen)        # mint a signing keypair (public half → library.signingKeys)
-(cd catalog && go run sign.go -key ~/key.txt) # sign every plugin; the .sig is committed, CI never signs
+(cd catalog && go run sign.go entryread.go -keygen)        # mint a keypair (public half → library.signingKeys)
+(cd catalog && go run sign.go entryread.go -key ~/key.txt) # sign every entry; the .sig is committed, CI never signs
+#   Nothing UNSIGNED is published — the generator says which file is missing and skips the entry,
+#   because a remote daemon drops an unsigned one anyway.
 (cd catalog && go run import.go notion.com)   # optional: list/probe MCP-registry candidates to curate
 #   NOCTURN_CATALOG_DEV_KEY adds a trusted public key to one daemon, for a locally signed plugin.
 ```
