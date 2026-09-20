@@ -1,0 +1,3 @@
+## 2025-01-20 - Add Screen Reader Support to Connection Pill
+**Learning:** For application-level notifications that float over the UI (like a connection status pill), visually impaired users miss the status change if the element lacks ARIA live region attributes. Adding `role="status"` and `aria-live="polite"` makes these critical state changes announceable without stealing keyboard focus or overly disrupting the current activity.
+**Action:** Whenever a persistent or floating notification element is created to convey system state changes (like network connectivity), ensure it includes appropriate ARIA live attributes.
