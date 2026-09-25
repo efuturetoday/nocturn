@@ -6,8 +6,8 @@ github.com/emersion/go-message v0.18.2 h1:rl55SQdjd9oJcIoQNhubD2Acs1E6IzlZISRTK7
 github.com/emersion/go-message v0.18.2/go.mod h1:XpJyL70LwRvq2a8rVbHXikPgKj8+aI0kGdHlg16ibYA=
 github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 h1:oP4q0fw+fOSWn3DfFi4EXdT+B+gTtzx8GC9xsc26Znk=
 github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6/go.mod h1:iL2twTeMvZnrg54ZoPDNfJaJaqy0xIQFuBdrLsmspwQ=
-github.com/grindlemire/go-tui v0.19.0 h1:4k4MRoYUFChUCfO5Lr4Z05SI3jlTSuH3W1H5/HKVH8s=
-github.com/grindlemire/go-tui v0.19.0/go.mod h1:95oaPy6Iu6MZpiByUqxYz2Wcbckzvaw3K0jgQeI4dD0=
+github.com/grindlemire/go-tui v0.22.1 h1:T9SOyvaRXUTLlthgqI7EYFO+3banULncowmpEKLLI5o=
+github.com/grindlemire/go-tui v0.22.1/go.mod h1:95oaPy6Iu6MZpiByUqxYz2Wcbckzvaw3K0jgQeI4dD0=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
 github.com/libp2p/zeroconf/v2 v2.2.0 h1:Cup06Jv6u81HLhIj1KasuNM/RHHrJ8T7wOTS4+Tv53Q=
